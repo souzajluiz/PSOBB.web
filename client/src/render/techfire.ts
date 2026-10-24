@@ -18,7 +18,8 @@ import {
   FOIE_WALL,
   FoieBolt,
   GifoieRing,
-  foieEmitterOrient,
+  emitterFx,
+  objectEmitterOrient,
   RAFOIE_BLAST_LIFT,
   RafoieBlast,
   rafoieBlastEmitters,
@@ -121,10 +122,10 @@ export class TechFire {
     for (const e of startEmitters(o.kind, o.tier, fixedRafoie)) {
       if (o instanceof GifoieRing) {
         for (let i = 0; i < o.groups; i++) this.follow(fx, e, alive, (v) => this.ringPoint(o, i, l.baseY, v));
-      } else if (e.mode === 'follow') this.follow(fx, e, alive, (v) => v.set(o.x, o.y + l.baseY + (e.dy ?? 0), o.z), e.angles ? foieEmitterOrient(o, e.angles) : null);
+      } else if (e.mode === 'follow') this.follow(fx, e, alive, (v) => v.set(o.x, o.y + l.baseY + (e.dy ?? 0), o.z), e.angles ? objectEmitterOrient(o, e.angles) : null);
       else if (e.mode === 'fixed') {
         const v = new THREE.Vector3(sx + Math.sin(o.heading) * (e.ahead ?? 0), sy + (e.dy ?? 0), sz + Math.cos(o.heading) * (e.ahead ?? 0));
-        void fx.spawn({ id: e.id, scale: [e.scale, e.scale], duration: FOREVER }, v, false, false, alive);
+        void fx.spawn({ id: e.id, scale: [e.scale, e.scale], duration: FOREVER, orient: e.angles ? objectEmitterOrient(o, e.angles) : null, fx: emitterFx(e) }, v, false, false, alive);
       } else this.burst(fx, e, sx, sy, sz);
     }
   }
@@ -140,7 +141,7 @@ export class TechFire {
   private follow(fx: FieldParticles, e: FxEmitter, alive: () => boolean, place: (v: THREE.Vector3) => THREE.Vector3, orient: Orient | null = null): void {
     const v = new THREE.Vector3(); // one per emitter, reused by every update
     place(v);
-    void fx.spawn({ id: e.id, scale: [e.scale, e.scale], duration: FOREVER, orient }, () => place(v), false, true, alive);
+    void fx.spawn({ id: e.id, scale: [e.scale, e.scale], duration: FOREVER, orient, fx: emitterFx(e) }, () => place(v), false, true, alive);
   }
 
   private burst(fx: FieldParticles, e: FxEmitter, x: number, y: number, z: number): void {

@@ -620,6 +620,8 @@ export interface EmitterSpec {
   scale?: number; // flag 0x40: field +0x44 / +0x48
   /** create_particle_effect2 with the object's angles (the table's flag 2); else create_particle_effect4. */
   angles?: boolean;
+  /** Particle flag 0x2000 (the table's 0x1000): destroyed at birth, never drawn (EffectFx.noDraw). */
+  hidden?: boolean;
 }
 
 /** g_pMegidParticleEffectConfigPointers (0x0096da78 + 8 * tier): continuous emitters following the object. */
@@ -629,8 +631,9 @@ export const MEGID_EMITTERS: readonly (readonly EmitterSpec[])[] = [
   [{ id: 0x1c5, scale: 1.8 }, { id: 0x1c8, scale: 1.8 }],
   [{ id: 0x1c4, angles: true }, { id: 0x1c5, scale: 2.2 }, { id: 0x1c8, scale: 2.2 }],
   [{ id: 0x1c4, angles: true }, { id: 0x1c5, scale: 2.6 }, { id: 0x1c8, scale: 2.6 }],
-  // 0x1cf is flags 0x1002: its flag 2 gives the angles, its 0x1000 the particle flag 0x2000 (as create_megid's flags).
-  [{ id: 0x1c4, angles: true }, { id: 0x1c5, scale: 3 }, { id: 0x1c8, scale: 3 }, { id: 0x1c7 }, { id: 0x1cf, angles: true }],
+  // 0x1cf is flags 0x1002: its flag 2 gives the angles, its 0x1000 the particle flag 0x2000 (hidden: create_megid
+  // passes uVar8 | 0x1000, so every Megid emitter carries 0x1000, which only the 0x200 model branch reads).
+  [{ id: 0x1c4, angles: true }, { id: 0x1c5, scale: 3 }, { id: 0x1c8, scale: 3 }, { id: 0x1c7 }, { id: 0x1cf, angles: true, hidden: true }],
 ];
 
 export function megidSpeed(level: number): number {

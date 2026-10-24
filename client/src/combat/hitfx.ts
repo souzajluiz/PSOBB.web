@@ -36,7 +36,7 @@
 // No hit sound beyond the critical's 0x42 was found in any of these paths
 // (the weapon swing sounds are not in the hit code).
 
-import type { Orient } from '../classic/particles.ts';
+import type { EffectFx, Orient } from '../classic/particles.ts';
 
 export type EnemyKind = number; // enemy_attribute: native 1, A.beast 2, machine 4, dark 8
 
@@ -50,6 +50,7 @@ export interface ParticleSpawn {
   at?: 'hit' | 'player'; // the hit point (default) or the attacker's weapon position
   tint?: number; // ARGB colour override (ParticleEffectSingleParticle_SetId_00508ee4)
   orient?: Orient | null; // create_particle_effect2's object angles (the emitter turns its velocity, classic/particles.ts turnStep)
+  fx?: EffectFx; // the effect's flags (classic/particles.ts EffectFx: flag 2, noDraw 0x2000, the matrix 0x20)
 }
 
 export const CRITICAL_SE = 0x42;
