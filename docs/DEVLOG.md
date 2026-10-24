@@ -15283,3 +15283,33 @@ The entry above says the 3D view is not shifted in Chrome. That was a misreading
 **Checks:** `node tests/particleorient.test.ts` (new: GetAnglesZ on axis and 45 degree directions, each axis's quarter turn, the Ry Rx Rz order against an explicit Rz Rx Ry product, the length kept, a particle's step through `ParticleSystem`, the Foie and Megid angle rules, the tables' flags, the Megid follow event's base); `particlespawn`, `particleslope`, `telepipe`, `techfire`, `techlightning`, `hitfx`, `deathfx`, `dragon`, `techniques`, `enemyfsmep2c` pass; `cd client && npx tsc --noEmit -p .` exit 0. Not run in Chrome.
 
 **Left:** the Gibarta / Barta / Rabarta emitters' angles (the exe's `create_particle_effect5` / `3` take none, not checked), the 0x20 texture flag branch of the single particle (`MultiplyMatricesInPlace` with the particle's own matrix; no emitter here uses it), the particle flag 2 branch's order (Rx Ry Rz) and the emitter's per-frame `copy_pos_to_particle`, Foie's and Megid's flag 0x1000 entries (create_particle_effect4 with 0x2000 / 0x3000).
+## 2026-10-23: Gal Gryphon minion throw (launcher, Bezier flight, manager, wiring); the brain is still open
+
+**What changed:** the minion throw object the Gal Gryphon makes (`CreateGalgryphonMinion_004aa808`, 0x70 bytes) is ported as `combat/galgryphon.ts`: the launcher's three states (wait, fly, make the Effect), its quadratic Bezier flight over the launch point, the offset and the target, and its frame count; the minion Effect it makes is the existing `combat/galgryphonminion.ts`. `GalgryphonMinionManager` holds the launchers and Effects, ticks them from `render/combat.ts` (after `tickEnemies`, when something is alive) and feeds their forced 1.5 icons to `minimapIcons()`. `galgryphonAttackParams()` builds the parameter block of `DispatchGalGryphonAttackEffect_004a8690`. The brain that makes the throw is NOT ported, so nothing spawns a minion in play yet.
+
+**Premise correction (the brief said anim 22.0):** the 22.0 event of `HandleGalgryphonState_004a5eec` (dump 225636, S31 kakuin / beam) makes a 0x130-byte particle ring (`CreateGalgryphonMinion_004aabd8`, dump 229084), not the minion. The 0x70 launcher is made by the S7 handler (`HandleOlgaMinionAction_004a1678`, dump 223944, the docs' S7 "shot / beam") at its animation time 20.5 (`check_entity_animation_elapsed_threshold(20.5)`, dump 224036 region), sub-phase 1. The dump names around 0x004a1678 say "Olga", but the handler is the Gryphon's (ProcessState slot 7, `docs/bosses/galgryphon-states-a.md`).
+
+**Exe evidence** (dump `Psobb.exe-05112026.c`; constants from `tools/exedata.py`):
+- S7 call (dump 224036 region): the target `local_44 = (+0x39c, 0, +0x3a4)`, the offset `local_38 = (int_sin(heading) * 150, -(+0x450 - c) * 0.5, int_cos(heading) * 150)` (`0x00903f38` = 150.0, `0x00903f44` = 0.5), `CreateGalgryphonMinion_004aa808(this+0x4cc, this, this+0x44c, local_44, &local_38, slot = +0x394)`.
+- The constructor (dump 228848): control points P0 = origin, P1 = P0 + offset, P2 = target with y = `0x40a00000` (5.0); the duration = `ROUND(0.07 * |P0 - target|)` (`0x00904468` = 0.07), and a value below 31 (0x1f) becomes 30 (0x1e); state 0; slot `+0x28`; Effect pointer `+0x3c` null.
+- `UpdateGalgryphonMinionEffect_004aa968` (dump 228908): state 0 -> 1; state 1 samples `InterpolateMinionEffectPosition_007be6b8(+0x40, 3, timer / duration, 0, +0x2c)` then, if `duration < timer`, timer = 0 and state 2, else timer + 1; state 2 makes the Effect `CreateGalgryphonMinionEffect_004ab138(..., +0x2c, slot)` (sound 0x3ad, particles), state 3 and the dead bit.
+- `InterpolateMinionEffectPosition_007be6b8` (dump 806436): the order-3 curve (3 points) with the flag 0 branch used by the launcher.
+- `DispatchGalGryphonAttackEffect_004a8690` (dump 227054): builds `{g_GalgryphonBaseEffectIntensity, speed of animation row 2 field 2, 15.0 (0x41700000), 10.0 (0x41200000), uint32 0x00903990 (= 1)}` and calls `DispatchSinowberillAttackEffect_0051fc9c`. The attack's area hit is not ported.
+
+**ASSUMED:**
+- The Bezier flag-0 branch is the Bernstein sum C(2, i) t^i (1 - t)^(2 - i) P_i (the float10 chain in the decompile is not read term by term). The last tick samples t = (duration + 1) / duration, so the Effect is made at an extrapolated point, as the exe's order implies.
+- `vec3_safe_normalize` returns the length (the duration scale is applied to it).
+- The Effect is updated from the tick after it is made.
+- The Effect's ground query uses the port's `opts.ground` at height 6, like the other bosses; the absolute height convention is not checked.
+- The intensity global `g_GalgryphonBaseEffectIntensity` has no writer in the dump; the dispatch takes it as a parameter.
+- The launcher's `IsGalgryphonMinionDead` check (bit 0x40 of the Gryphon's `+0x4c8`) is not applied.
+
+**Checks:**
+- `cd client && npx tsc --noEmit -p .` clean (Node 24).
+- `node tests/galgryphon.test.ts` (new): the constants, the Bezier ends and midpoint, the flight length (the 30 floor, 31 kept, 70 for 1000 units), the launcher's control points and the tick count (duration + 3), the Effect on the ground, no Effect above 6, the manager's icons (1.5, shape 1), the dispatch parameters.
+- `node tests/galgryphonminion.test.ts`, `node tests/minimap.test.ts`, `node tests/darkfalz.test.ts` pass.
+- Not run: Playwright (per the brief), Chrome.
+
+**Left:**
+- The Gal Gryphon brain: the 35 state handlers (`docs/bosses/galgryphon-states-a.md`, `-b.md`), the S7 throw at 20.5, and the state records that the docs say come from the network (the authority's 0xA0 stream, `docs/bosses/galgryphon-script.md` section 6). Until the brain drives S7, `galMinions.throw()` has no caller and the Gryphon stays on its generic `EnemyAi`.
+- The launcher's particles and sounds (0x3ad, the frustum sets), the Sinow-style attack's area hit (`0x0051fc9c`, the same helper `derolle.ts` DrlBurst reuses), and the Effect's sound 0x39f.

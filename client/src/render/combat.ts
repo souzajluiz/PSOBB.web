@@ -70,6 +70,7 @@ import { PLAYER_AIM_HEIGHT, PLAYER_RADIUS, TechBolt, type EnemyShot } from '../c
 import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
+import { GalgryphonMinionManager } from '../combat/galgryphon.ts';
 import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
 import { DEMO_WARP_PARTS } from '../formats/enemymodels.ts';
 import { cameraSourceOf, DARKFALZ_CAMERA_FILE, type BossCameraSource } from '../combat/darkfalzcamera.ts';
@@ -950,6 +951,7 @@ export class CombatView {
     this.drlLastHitLocal.clear();
     this.dragonLastHit.clear();
     this.dragonLogged.clear();
+    this.galMinions.clear();
     this.dragonBodies.clear();
     this.sinowClones.clear();
     this.sinowBaseEvp.clear();
@@ -1497,6 +1499,9 @@ export class CombatView {
     ticks = Math.min(ticks, 5); // a long frame must not run the AI away
     for (let i = 0; i < ticks; i++) {
       this.tickEnemies();
+      // The Gal Gryphon's minions (combat/galgryphon.ts): the launchers make the
+      // homing Effects, which home on the party and draw their radar icons.
+      if (this.galMinions.active && this.opts.ground) this.galMinions.update(this.aiTargets(), this.opts.ground);
       this.damage.tick();
       this.tickStatus();
       this.tickRemoteStatus();
@@ -1743,6 +1748,8 @@ export class CombatView {
     // the control.
     const head = this.falzHead;
     if (head?.ai instanceof DarkFalzAi) out.push(...(head.ai.form2?.minimapIcons() ?? []));
+    // The Gal Gryphon minion Effects (combat/galgryphon.ts): forced 1.5 icons in their MOVE state.
+    out.push(...this.galMinions.minimapIcons());
     return out;
   }
 
@@ -3671,6 +3678,9 @@ export class CombatView {
   // mark_falz_as_dead_and_request_drop at the end of OL ENDING, on every client.
 
   private falzHead: EnemyRuntime | null = null;
+  // The Gal Gryphon's thrown minions (combat/galgryphon.ts). Nothing throws them
+  // yet: the Gryphon brain (the S7 handler, animation 20.5) is not ported.
+  private readonly galMinions = new GalgryphonMinionManager();
   // Dark Falz's cutscene camera file (bo04opcam.rel), read on the first call of bossCameraView.
   private bossCameraSource: BossCameraSource | null = null;
   private bossCameraLoad: Promise<void> | null = null;
