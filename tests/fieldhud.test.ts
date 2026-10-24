@@ -383,7 +383,7 @@ const rowsOf = (r: EquipStatRow[]) => r.map((x) => [x.key, x.item, x.color]);
 eq(
   rowsOf(equipStatRows(cur, itemFromHex(WEAPON_G2), null, pmt, false, true)),
   [
-    ['atp', 54, VALUE_COLOR.higher],
+    ['atp', 64, VALUE_COLOR.higher], // exe PlayerRecalculateStats: displayed 40 + the weapon's range max (20 + 2 x 2)
     ['dfp', 20, VALUE_COLOR.same],
     ['mst', 7, VALUE_COLOR.higher],
     ['ata', 80, VALUE_COLOR.higher],
@@ -395,7 +395,7 @@ eq(
 eq(
   rowsOf(equipStatRows(cur, itemFromHex(WEAPON_G2), itemFromHex(WEAPON_G0), pmt, false, true)).slice(0, 1),
   [['atp', 44, VALUE_COLOR.higher]],
-  'old grind-0 weapon removed: ATP 40 + 14 - 10',
+  'old grind-0 weapon removed: ATP 40 + (20 + 4) - 20',
 );
 eq(rowsOf(equipStatRows(cur, itemFromHex(ARMOR_HEX), null, pmt, false, true))[1], ['dfp', 32, VALUE_COLOR.higher], 'armour DFP 20 + 12');
 eq(rowsOf(equipStatRows(cur, itemFromHex(WEAPON_G2), null, pmt, false, false)).map((r) => r[2]), Array(6).fill(VALUE_COLOR.none), 'not equippable: grey candidate values');

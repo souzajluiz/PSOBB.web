@@ -39,6 +39,9 @@
 //   0x800 (dead). Otherwise flag 0x100 (miss / no damage).
 // The red/white number shown is round(d) of each hit box (FUN_0078a5e8).
 
+import { PLAYER_CLASS_ATTACK, splitAttack } from './playerstats.ts';
+
+export { PLAYER_CLASS_ATTACK };
 export type AttackType = 0 | 1 | 2; // normal, heavy, special (player +0x8a4)
 
 export const ATTACK_DAMAGE_MULT = [0.9, 1.7, 0.5] as const; // 0x009cb9d0
@@ -135,11 +138,6 @@ export function applyDamage(defender: DefenderStats, total: number, landed = tot
   return flags;
 }
 
-// Player class AttackData (0x00968a60 + class * 0x30): {min_atp, max_atp, min_ata}.
-export const PLAYER_CLASS_ATTACK = [
-  [5, 10, 650], [5, 10, 610], [5, 10, 610], [1, 5, 760], [1, 5, 710], [1, 5, 730],
-  [1, 3, 620], [1, 3, 600], [1, 3, 600], [5, 10, 680], [1, 3, 620], [1, 5, 680],
-] as const;
 
 export interface WeaponForCombat {
   atpMin: number; // ItemPMT weapon atp_min
@@ -148,22 +146,23 @@ export interface WeaponForCombat {
   ata: number; // ItemPMT weapon ata
 }
 
-// Player attacker stats. ASSUMED composition (the equip path that updates
-// +0x2cc / +0x31c on equip is not decoded): ATP = character ATP (disp stats),
-// spread = weapon max - min (else the class AttackData spread), equipment ATP =
-// weapon min + 2 * grind (the wiki's EQATP, else the class min ATP), ATA =
-// (class min_ata + character ATA) * 0.1 + weapon ATA (FUN_00770da4 for the
-// first part).
+// Player attacker stats (see combat/playerstats.ts for the exe evidence). The attacker's
+// +0x2cc is the base ATP, +0x2ce the variance (the spread) and +0x31c -> atp_range_min the
+// equipment ATP, which the equip adds to the class range (ApplyItemStatsToPlayer_005d1f0c).
+// The displayed ATP is base + variance + rmin, so the split is derived from it (ASSUMED
+// where the file has only the sum). ATA = (class min_ata + character ATA) * 0.1 + weapon ATA
+// (FUN_00770da4 for the first part).
 export function playerAttacker(
   charClass: number,
   stats: { atp: number; ata: number; lck: number },
   weapon: WeaponForCombat | null,
 ): AttackerStats {
   const cls = PLAYER_CLASS_ATTACK[charClass] ?? PLAYER_CLASS_ATTACK[0];
+  const split = splitAttack(stats.atp, charClass, weapon ? { atpMin: weapon.atpMin, atpMax: weapon.atpMax, grind: weapon.grind } : null);
   return {
-    atp: stats.atp,
-    atpSpread: weapon ? weapon.atpMax - weapon.atpMin : cls[1] - cls[0],
-    equipAtp: weapon ? weapon.atpMin + 2 * weapon.grind : cls[0],
+    atp: split.base,
+    atpSpread: split.variance,
+    equipAtp: split.rmin,
     ata: Math.round((cls[2] + stats.ata) * 0.1) + (weapon?.ata ?? 0),
     lck: stats.lck,
     isPlayer: true,

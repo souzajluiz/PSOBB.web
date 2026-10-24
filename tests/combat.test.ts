@@ -98,7 +98,9 @@ check(rollHit(atk, def, 0, 0, () => 0), 'a roll of 0 hits');
 // side (FUN_007868f8: HP = stats.hp + level, EVP / DFP get the resist bonus).
 {
   const a = playerAttacker(0, { atp: 500, ata: 150, lck: 30 }, { atpMin: 40, atpMax: 55, grind: 10, ata: 30 });
-  check(a.atp === 500 && a.atpSpread === 15 && a.equipAtp === 60, `HUmar with a +10 Saber: ${JSON.stringify(a)}`);
+  // Displayed ATP 500 = base + variance + rmin, with rmin = 5 + 40 + 2 x 10 and rmax = 10 + 55 + 2 x 10
+  // (playerstats.ts): base = 500 - 85, variance = 20, equipment ATP = 65.
+  check(a.atp === 415 && a.atpSpread === 20 && a.equipAtp === 65, `HUmar with a +10 Saber: ${JSON.stringify(a)}`);
   check(a.ata === Math.round((650 + 150) * 0.1) + 30, `HUmar ATA: ${a.ata}`);
   const bare = playerAttacker(9, { atp: 100, ata: 100, lck: 10 }, null);
   check(bare.equipAtp === 5 && bare.atpSpread === 5, `HUcaseal bare hands: ${JSON.stringify(bare)}`);

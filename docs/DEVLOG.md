@@ -16577,3 +16577,40 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 3. The sounds (`PlayGameListMenuSelectSound_00707664`, the cursor move sound), the galgryphon effects and the entry flags' drawing.
 4. The ES / FR / DE / US child-list maps (`WordSelectEntity_GetMenuItemId_*`); only the locale 0 map is read.
 5. The wiring: the chat keyboard's Symbol Chat key in word mode and the Shortcut editor's word type, both after (1).
+
+## 2026-10-23: compare ATP from PlayerRecalculateStats (the displayed ATP split, the attacker's ATP); the compare "-> 0" premise is wrong
+
+**Exe evidence** (PsoBB.exe, Ephinea 1.25.13; refsrc `Psobb.exe-05112026.c`, addresses from `objdump -d` on `~/Downloads/psobb-client/PsoBB.exe`):
+- Current ATP row (`UpdateEquipmentStatDisplay_007258dc`, dump 689847, disasm 0x7258dc): `base_atp_with_shifta` (+0x2cc) + `atp_variance_with_shifta` (+0x2ce) + `battleparams_attacks->atp_range_min` (+0x31c -> first i16). The displayed-stats update (dump 728017) writes the same sum. The other current rows: ATA = total_ata (+0x2d4), DFP = +0x2d2, EVP = +0x2d0, MST / LCK = battleparams_stats +2 / +0xc. Set order (disasm, verified with the esp offsets): row ptr slots 0..5 = ATP, DFP, MST, ATA, EVP, LCK.
+- The candidate rows: `PlayerRecalculateStats_0068e030` (dump 569766) fills the out array through `CalculateChallengeDamage_0069807c` (disasm 0x69807c: out[1] DFP = max(0, dfp + local_60 dword +0x1c), out[2] MST = mst, out[3] ATA = round((ata_range_min + ata) * 0.1) (the constant at 0x93ca14 is 0.1), out[4] EVP = max(0, evp + local_60[0]), out[5] LCK = lck). Then the ATP: `out[0] = ROUND(atp*m + rmin + atp) + ROUND((rmax - rmin)*(1 + m))` and `out[1] = ROUND(md*out[1] + out[1])`, m = attack_buff_multiplier, md = defense_buff_multiplier.
+- So the candidate MST / ATA / EVP / LCK are NOT zero (the first draft of the premise). The out array is 0-initialised, but CalculateChallengeDamage writes all six.
+- Panel draw (`UIElement_DisplayItemAttribute_0072d330`, dump 695667) and the flag setters (`set_current_equip_value` (0072d458), `unknown_set_item_stat_in_panel` sets flag 8, `ItemStatDisplayObject_SetVisible_0072d488` sets / clears flag 0x10): flag 4 draws the current value; flag 8 draws `→` and the candidate (+0x20). Flag 0x10 only chooses the colour: set = equal white / lower 0xff77e8ff / higher 0xffdd8c41, clear = grey 0xff909090. Nothing hides a row and nothing prints a dash. So a candidate 0 prints `→ 0` in the exe. The port already does this; the window's "-> 0" is exe behaviour when the value is 0, not a bug.
+- The equip path adds the item's range to the player's copy (`ApplyItemStatsToPlayer_005d1f0c`, dump 425117): `atp_range_min += item +0x124`, `atp_range_max += item +0x126`, `ata_range_min += item +0x128`. So the equipment ATP is additive to the class range (the old note that it replaces the class min was wrong).
+- Buff ticks (`shifta_jellen_effect_tick` dump 750440, `deband_zalure_effect_tick` dump 750500): on expiry `base_atp_with_shifta += ROUND(-m * base_atp)`, `atp_variance_with_shifta += ROUND(-m * atp_variance)`, `attack_buff_multiplier = 0`; Deband moves `field_0x2d2` by `ROUND(-md * total_dfp)`. So the displayed sums already hold the buff, and the candidate's m is applied once more only on the candidate's base.
+
+**Ported:**
+- `client/src/combat/playerstats.ts` (new): `classAttackRange` (the class AttackData table `PLAYER_CLASS_ATTACK`, moved here from `formulas.ts`, which re-exports it), `weaponAttackRange` (min = atp_min + 2 x grind, max = atp_max + 2 x grind), `splitAttack` (displayed ATP -> base, variance, rmin with base + variance + rmin = displayed), `candidateAtp` (PlayerRecalculateStats' ATP output with m; m = 0 in the panel).
+- `combat/formulas.ts` `playerAttacker`: the attacker is now `atp = base (+0x2cc)`, `atpSpread = variance (+0x2ce)`, `equipAtp = rmin (+0x31c)`, taken from the displayed ATP. Before: `atp = displayed` (which already includes rmin and the variance), `spread = weapon max - min`, `equipAtp = weapon min + 2 x grind`. The header of formulas.ts already quoted those offsets, so the port now follows its own evidence. The damage function itself was not re-read; the change is in its inputs.
+- `classic/itemdetail.ts` `equipStatRows`: for a weapon candidate the ATP is `candidateAtp` (the displayed ATP with the weapon's range max swapped: `disp + new max - old max`), not the delta model. Armour / shield candidates keep the displayed ATP. `weaponRange(item, pmt)` is the helper. `candidateStats` (delta) still serves MST / ATA / DFP / EVP / LCK.
+- The "-> 0" premise: no change. The exe shows the candidate value even when it is 0 (flag 8 always set, flag 0x10 only chooses grey), and the port does the same.
+
+**ASSUMED** (marked in code):
+- The displayed ATP is base + variance + rmin, so `base = displayed - rmax` and `variance = rmax - rmin` (the file holds only the sum). Class range = `PLAYER_CLASS_ATTACK` (the battleparams_attacks source for a player is not traced).
+- Item range: rmin += atp_min + 2 x grind (`ApplyItemStatsToPlayer` evidence for the add; the amount is the port's old `equipContribution` value); rmax += atp_max + 2 x grind (the weapon's own item block +0x126 is not decoded; chosen so the spread stays atp_max - atp_min as formulas.ts had it).
+- Buff multiplier m = 0 in the compare panel (the live m is not read there). The combat attacker still applies `selfBuffs` on top of the split as before.
+- Candidate MST / ATA / DFP / EVP / LCK still use the delta model (current + new - old). The exe's absolute values differ (for example its ATA is round((min ata + ata) * 0.1) against the displayed total_ata, a unit question not settled here).
+
+**Tests:**
+- `node tests/playerstats.test.ts`: 15/15 (new file: class range, the weapon range, the split sums back, the attacker split, `candidateAtp` with m = 0 and m = 0.5).
+- `node tests/combat.test.ts`: 5852 checks, 0 failures (HUmar +10 Saber updated to base 415 / spread 20 / equip 65).
+- `node tests/combatdepth.test.ts`: 836 checks, 0 failures.
+- `node tests/fieldhud.test.ts`: all checks passed (the compare ATP expectations updated: no equipped weapon 64 = 40 + max 24; the grind-0 swap 44).
+- `node tests/quickmenu.test.ts`: ALL PASS.
+- `cd client && node node_modules/typescript/bin/tsc --noEmit -p .`: exit 0 (Node 24).
+- No Playwright. `vendor/` and `client/node_modules` were linked from the main checkout for the runs and removed before the commit.
+
+**Left (in order):**
+1. The weapon's vtable 0x5c apply (`ApplyWeaponStats_005d4840`, the set bonus `get_equipment_set_bonus`, `morning_glory_atp_bonus`) and `ApplyEquipmentBonuses_005d330c` (the item's range max +0x126 and the option table) are not decoded. The unit loop in `PlayerRecalculateStats` (`unit1..mag`) is not decoded either.
+2. The candidate's m and md from the live buffs (the panel uses 0); the class max clamp (the exe clamps each stat to `get_player_class_max_stats` after the item).
+3. The absolute candidate for MST / ATA / DFP / EVP / LCK (the delta model is still in use) and the ATA unit (round(... * 0.1) against total_ata).
+4. The damage function (`attacker +0x2cc / +0x2ce / +0x31c`) is not re-read; the new inputs follow the header of formulas.ts.
