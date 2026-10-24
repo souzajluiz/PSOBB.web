@@ -19096,3 +19096,14 @@ Floor 1 totals: 14 groups changed; 3 with a trigger but no change (20/1 idle, 70
 - The trigger's `fired` flag and the placement: 14 of 40 trigger placements read `playerRoom` -1 (the trigger point is outside every section circle). The wave still started (the 6x67 path does not check the room), so the room used for placement is the section circle, not the trigger's.
 
 **Checks:** `client/node_modules/.bin/tsc --noEmit -p client` clean (Node 24). The spec is not in the client tsconfig (playwright compiles it). No source fix in this pass.
+## 2026-10-24: IMAGE_DATA labels printed decompressed (the compressed images round-trip)
+
+**What was there.** The quest disassembler printed every `IMAGE_DATA` label (the `call_image_data` image, newserv's `DataType::IMAGE_DATA`) as `.data` hex, the PRS stream as it sits in the file. newserv's listing (`src/QuestScript.cc`, `disassemble_label_as_image_data`, around line 3312) prints the decompressed image, with an "Extra data after compressed data" block for bytes past the stream, and its reassembly mode prints the raw stream as `.data`.
+
+**What changed.** A label that a `call_image_data` reference types is printed as `.struct IMAGE_DATA` followed by `.data` hex of the decompressed image. The typed form is used only when `prsCompressOptimal` of that image gives back the label's stream at its start. Bytes past the stream follow an `.extra` line. The assembler decompresses nothing: it compresses the `.data` lines with `prsCompressOptimal` and appends the `.extra` bytes, so a typed label re-assembles to its input bytes by construction. Code: `formats/questasm.ts` (`typedLines`, the `.struct` assembler branch, the `.extra` item collection). Docs: `docs/QUESTFILES.md`, the ROADMAP line.
+
+**Result on the shipped quests.** Four BB copies reference an image (q142 and q143, `-bb-e` and `-bb-j`). None types: their streams differ from `prsCompressOptimal`'s parse at byte 18 (the copies were made by another encoder), so they stay hex and still round-trip. The 335-quest round trip (`tests/questwrite.test.ts`) is unchanged and passes. The question for those four, whether a different PRS parse reproduces them, is open.
+
+**Test.** `tests/questimage.test.ts`: a synthetic image (noise, a repeated tile, a flat run) typed and re-assembled byte for byte; a parsed `.bin` gives the same text; an empty image; trailing bytes after the stream (`.extra`); non-PRS bytes stay hex; the `.struct IMAGE_DATA` assembler errors.
+
+**Not done.** The PSO V2 encrypted download format of the non-BB versions (newserv `src/Quest.cc` / `DownloadSession`), which is a separate and larger piece.

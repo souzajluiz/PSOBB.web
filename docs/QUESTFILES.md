@@ -159,9 +159,13 @@ label0096:
     `PlayerSubordinates.hh`.
   - `.struct VECTOR4F_LIST` with `  .vector x y z t` lines (16 bytes each; `get_vector_from_path`, `load_unk_data`: the
     path's points).
-  - `IMAGE_DATA` (PRS-compressed images) and untyped labels stay `.data` hex. The assembler reads the typed forms back
-    with the same encoder, so a typed label round-trips byte for byte; a `.struct` block with a field name out of place,
-    missing or out of range is an error.
+  - `.struct IMAGE_DATA` for `IMAGE_DATA` labels (`call_image_data`, newserv's `DataType::IMAGE_DATA`): the PRS
+    stream decompressed to `.data` hex lines (newserv's `disassemble_label_as_image_data` prints the same). The
+    assembler compresses them with `prsCompressOptimal`, so the label is typed only when that compressor gives back the
+    label's stream at its start. Bytes after the stream (the label's section runs to the next label; newserv's "Extra
+    data after compressed data") follow an `.extra` line as `.data` hex.
+  - Untyped labels stay `.data` hex. The assembler reads the typed forms back with the same encoder, so a typed label
+    round-trips byte for byte; a `.struct` block with a field name out of place, missing or out of range is an error.
   Labels the text cannot express: `.unset_label N` (referenced but 0xFFFFFFFF in the
   table), `.raw_label N 0xV` (a table value outside the code), `.label_count N` (table longer than the last label),
   `.undefined_label N` (referenced beyond the table; shipped q453 does this).
@@ -177,8 +181,9 @@ newserv prints `... args` after F_ARGS opcodes, names sections `labelXXXX@0xNNNN
 prints `// args`, names `labelXXXX:` and does not parse newserv's text (the directive set overlaps, the argument and
 label syntax differ in details such as `.allow_create_item`'s format). `.language`, `.include` and `--qedit` mnemonics
 are not supported (`.language` is ignored). Typed data labels use our `.struct` / `.cstr` / `.vector` forms (above), not
-newserv's `// As PlayerStats` comment listings. Compressed images (`IMAGE_DATA`) stay hex (newserv prints them
-decompressed; ours would need a PRS compressor that reproduces the shipped bytes).
+newserv's `// As PlayerStats` comment listings. A compressed image (`IMAGE_DATA`) whose stream `prsCompressOptimal` does not
+reproduce stays hex: the four shipped BB copies (`call_image_data` in q142 / q143, `-bb-e` and `-bb-j`) were made by an
+encoder that differs from the optimal parse at byte 18 of the stream, so they are not typed.
 
 ## Round-trip results
 
