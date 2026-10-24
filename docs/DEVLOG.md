@@ -15635,3 +15635,42 @@ Follow-up to "Customize (action palette editor) and the save upload (E7) traced 
 - Non-owner clients keep the follow point (FOLLOW_DISTANCE, 3 units) and the local walk until the packets correct them.
 
 **Checks:** `node tests/npcai.test.ts` ok (new cases above); `techniques`, `npcs`, `questflow`, `quests`, `questmisc`, `questboard` pass with Node 24 (`client/node_modules` symlinked to the main checkout's for the run, removed before the commit). `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome, no Playwright.
+
+## 2026-10-23: NPC head wall and map mode (CalculateTarget, the wall counter, TryAttack, CheckPathAndTarget, UpdateAttackTarget, the state-2 Foie cast)
+
+**Question:** the ROADMAP's NPC attack AI line: the state-2 cast (CastTechnique_007b2e20) that damages enemies, its release timing (0x16 / 0x17), the map-mode branch of UpdateState_007b00bc (mode 1), and the wall avoidance / path (AIUpdateMovement_007b1298 wall branch).
+
+**Premise check (exe):**
+- The state-2 premise holds. SinowberillHead_CastTechnique_007b2e20 (`.c:797346`) runs each tick while the head is in state 2 (AIUpdateState_007b2764 dispatch, `.c:797036`). It picks the Foie family from `0x0097dcf8` = [0 Foie, 1 Gifoie, 3 Barta, 4 Gibarta, 6 Zonde, 8 Razonde] by tier (head +0x34: 0x4 -> 0, 0x8 -> 1, 0x10 -> 2) and the strong flag (head +0x80 & 0x2000 and B +0x90 & 0x1000). The roll is `|rand / 32768 * 10|` against the byte +0x53 * 0.1 when not strong. These are the NPC's own Foie-family casts: they hit enemies (the state-8 set, Resta / Anti / Reverser, does not).
+- The release premise is not settled. HandlePlayerTechCastState_007b2bc0 (`.c:797215`) sets the input state (0x16 Resta / Anti, 0x17 Foie / Barta / Zonde, 2 others), runs the eligibility check, and sends the 6x60 cast with the targets B +0x7c / +0x84 (`local_34[0..1]`). It has no release. The 0x16 / 0x17 end handlers were searched in the dump (no `case 0x16` / `case 0x17` in the head's dispatch; the `0x2b` case at `.c:175492` is another table). Not traced; the port keeps the charge ticks.
+- The state-2 trigger is in the map-mode branch: UpdateState_007b00bc, mode 1 (head +0x1c), when CheckPathAndTarget returns 1 with the cooldown +0x8e at 0 (`.c:795546..795558`): flag 0x1000 -> state 2 (flag 0x10), else state 1. So on Pioneer 2 (mode-free branch, `.c:795492`) the state is never 2.
+
+**Exe evidence (dump `src/Psobb.exe-05112026.c`; names are community guesses, bodies used):**
+- CalculateTarget (`.c:796453`): v = -(NPC move), xz-normalised. Its two sides are v turned by +90 and -90 degrees (matrix_rotation_y, `.c:846662`: x' = x cos + z sin, z' = z cos - x sin, so +90 is (z, -x)). The side is +90 when dot(anchor - NPC, +90 side) <= 0, else -90. The target is the NPC +/- 20 along that side: minus when the head's counter (+0x8c byte) is above 0x13. Constant DAT_0097dd6c = 20.
+- AIUpdateMovement wall-free branch (`.c:796257..796290`): flag 1 cleared; when B +0x8c has neither 0x20 nor 0x80: the midpoint for a counter outside 15..29 (with the +0x8d guard), CalculateTarget inside. B +0x8c 0x80 alone: midpoint.
+- Move gate (AIUpdateState_007b267c, `.c:796915..796936`): when the move is needed and the counter (+0x8c byte) is 0x1f or more: counter = 0x1e, flag 0x4000, and no move (the send target is the NPC's position). Below 0x1f with the counter at 0 and flag 0x4000: flag cleared (the input-state writes +0x24 0x18 / 7 and the +0x6a timer are not modelled).
+- TryAttack (`.c:795725`): owner A +0x8c & 2 -> flag 0x100 off, 0. NPC status 8 -> flag 0x100 on, 1. (head +0x44)^2 <= head +0x58 -> flag 0x100 on; with B's targets the counter +0x66 counts to 3, then re-picks: flag 0x8000 cleared, and when the target at B +0x4 is within (head +0x48) of the NPC: flags |= 0x8080. Else return the flag 0x100 state.
+- CheckPathAndTarget (`.c:795775`): B's count < 3 clears 0x2000, else sets it and counts +0x68 to 100. For each candidate in B's triples: ray from the NPC's weapon position (+0x300) to the candidate's position at the NPC's height (+0x304), mask 0x2100; the first clear ray is the locked target: B +0x7c / +0x84 take its ids, the anchor (head +0xdc) is the first candidate's position at the NPC's height, flag 0x1000 when (head +0x4c + 10)^2 > the anchor's distance^2 (DAT_0097dd98 = 10). Flag 0x40 is set when none is clear.
+- UpdateAttackTarget (`.c:796082`): B +0x84 == 0 -> the owner's weapon position. Else with head +0x34 & 0x80 and head +0x88 (the spawn check's squared distance) <= (head +0x54)^2, the anchor is pushed (head +0x54) away from the NPC; else the owner's weapon position.
+- Constants (`tools/exedata.py read 0097dd60 f 40`): 0x97dd6c 20, 0x97dd70 0, 0x97dd74 1.5, 0x97dd78 5, 0x97dd98 10, 0x97dd9c 900, 0x97dda0 0.1, 0x97dda4 32768, 0x97dda8 10, 0x97ddac 2, 0x97ddb0 1.
+
+**Ported (`client/src/quest/npchead.ts`):**
+- `headCalculateTarget` (CalculateTarget, the counter's sign).
+- `NpcHead.update`: the wall-free branch (midpoint, or CalculateTarget at counter 15..29, the +0x8d guard, flag 1 cleared); the move gate's clamp at 0x1f (`moveGate`); `prevNpc` for the move vector (head +0x9c..0xa4, ASSUMED: the last tick's position).
+- `NpcHead.tryAttack` (TryAttack), `checkPathAndTarget` (CheckPathAndTarget), `updateAttackTarget` (UpdateAttackTarget), `fieldUpdate` (the mode-1 branch: the cooldown roll at +0x8e, TryAttack, the chooser calls AIProcessState(1) / (0), the path and state transitions, the 0x200 / 0x80 / 0x1000 flag cases, and the mode exit at B +0x8c & 2 clear).
+- `combat.ts npcCastTechnique`: the Foie family makes its object at the NPC (`spawnFire`, the first 6x47 target still there at release) and hits through `techHitEnemy` with the owner's MST and the NPC's class, after the charge ticks (ASSUMED release timing).
+- `town.ts stepNpcHead` / `stepNpcTwoTech`: a head in state 2 casts `headTwoTech` at the locked target each tick (busy ticks from the cast).
+
+**Not wired (honest):** `fieldUpdate` is not called from town.ts: the mode entry (who sets B +0x8c bit 2) is not traced, so the port runs the Pioneer 2 state everywhere and the state 2 is never reached. The state-2 damage path is therefore implemented and tested but dormant in play.
+
+**ASSUMED:**
+- Mode 1 is never entered (the port keeps mode 0); the B +0x8c bit 2 source is not traced.
+- The wall-hit branch is the midpoint (CalculateAvoidanceTarget, AdjustTargetForCollision and UpdateTargetPosition are not ported).
+- The wall counter's writers are not found (only the reset and 0x1e); the port starts it at 0, so CalculateTarget is only reached through the counter.
+- TryAttack's near test ((head +0x44)^2 <= head +0x58) is an input (its meaning is not traced).
+- The cast's strong flag (B +0x90 & 0x1000) is false, the need byte +0x53 is 0 and the roll is Math.random: the roll then skips the cast for any value above 0, so in practice the state-2 cast does not fire even when reached. The TP gate of CastTechnique (B +0x336 vs cost) is not modelled.
+- The Foie hit is applied on this client with the owner's MST; whether the exe sends a 6x0A for an NPC's hit is not traced.
+- The release is the charge ticks (the exe waits for the motion's release frame).
+- The head's input states (+0x24) and the +0x6a / +0x5c timers are not modelled.
+
+**Checks:** `node tests/npcai.test.ts` ok (new cases: CalculateTarget sides and counter sign, the wall counter's clamp and band, TryAttack's counter cycle and 0x8080, CheckPathAndTarget's pick, anchor and 0x1000, UpdateAttackTarget's stand-off, the field branch's walk / state 2 / state 8 / mode exit, source checks of the fire path and town's state-2 cast). `npcs`, `techniques`, `questflow`, `quests`, `questmisc`, `questboard`, `techfire` pass with Node 24. `cd client && tsc --noEmit -p .` clean. Not run in Chrome, no Playwright.

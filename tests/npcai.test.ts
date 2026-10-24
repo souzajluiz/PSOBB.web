@@ -28,6 +28,7 @@ import {
   headMidpoint,
   headSendDistance,
   headSpawnRange,
+  headCalculateTarget,
   headTwoTech,
   headTwoTier,
   HEAD_STATE_IDLE,
@@ -355,6 +356,108 @@ const cmd = (param1: number, param2: number, command: number, param3 = 0) => ({ 
   check(townSrc2.includes('this.stepNpcHead(slot, p, leader, row.leash, sender)'), 'the owner follows through the head (town.ts stepNpcHead)');
   check(townSrc2.includes("if (send) this.game.sendNpcMove(slot, send === 'run', goal.x, goal.z);"), 'the 6x40 / 6x42 carry the head send target (goal = head.sendTarget)');
   check(townSrc2.includes('combat.npcWallBlocks(a, b, mask)'), 'the head wall ray comes from the combat view');
+}
+
+// --- the map-mode branch and the wall path (quest/npchead.ts; DEVLOG map-mode entry) -------
+{
+  // CalculateTarget (.c:796453): move (1, 0), anchor at (10, 10): the reversed move is (-1, 0),
+  // its +90 side (0, 1) has a dot <= 0 with the anchor direction? The anchor direction is (+, +),
+  // so the dot with (0, 1) is positive and the -90 side (0, -1) is used: z = -20 (counter <= 0x13).
+  const ct = headCalculateTarget({ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 10 }, { x: 1, z: 0 }, 0);
+  check(Math.abs(ct.x) < 1e-9 && Math.abs(ct.z + 20) < 1e-9, 'CalculateTarget: the side away from the anchor, 20 units (-90 of the reversed move)');
+  const ct2 = headCalculateTarget({ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 10 }, { x: 1, z: 0 }, 0x14);
+  check(Math.abs(ct2.z - 20) < 1e-9, 'CalculateTarget: a counter above 0x13 moves the target the other way');
+  const ct3 = headCalculateTarget({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { x: 0, z: 0 }, 0);
+  check(ct3.x === 0 && ct3.z === 0, 'CalculateTarget: no movement keeps the NPC in place (no normalise on zero)');
+
+  // TryAttack (.c:795725): owner busy clears 0x100; the NPC's status 8 sets it; near with targets
+  // cycles the counter (+0x66) and re-picks on the third call, setting 0x8080 when in radius.
+  const ta = new NpcHead();
+  check(!ta.tryAttack({ ownerBusy: true, npcStatus8: true, near: true, hasTargets: true, primaryPos: null, npc: { x: 0, y: 0, z: 0 }, attackRadius: 30 }) && (ta.flags & 0x100) === 0, 'TryAttack: the owner busy returns 0 and clears the attack flag');
+  check(ta.tryAttack({ ownerBusy: false, npcStatus8: true, near: false, hasTargets: false, primaryPos: null, npc: { x: 0, y: 0, z: 0 }, attackRadius: 30 }) && (ta.flags & 0x100) !== 0, 'TryAttack: status 8 on the NPC sets the attack flag');
+  const tp = { x: 10, y: 0, z: 0 };
+  const near3 = { ownerBusy: false, npcStatus8: false, near: true, hasTargets: true, primaryPos: tp, npc: { x: 0, y: 0, z: 0 }, attackRadius: 30 };
+  ta.tryAttack(near3);
+  ta.tryAttack(near3);
+  check(ta.counter66 === 2 && (ta.flags & 0x8000) === 0, 'TryAttack: the first two calls only count');
+  ta.tryAttack(near3);
+  check(ta.counter66 === 0 && (ta.flags & 0x8080) === 0x8080, 'TryAttack: the third call re-picks; a target in attack radius sets 0x8080');
+
+  // CheckPathAndTarget (.c:795775): the first target with a clear ray becomes the locked one; the anchor
+  // is the first candidate; flag 0x1000 when the anchor is beyond far + 10.
+  const cp = new NpcHead();
+  const rayFirstBlocked = (from: { x: number }, to: { x: number; z: number }, mask: number) => {
+    check(mask === 0x2100, 'CheckPathAndTarget: the ray mask is 0x2100');
+    return to.x === 30 && to.z === 0; // the first target is behind a wall
+  };
+  const targets = [
+    { id: 1, id2: 2, pos: { x: 30, y: 0, z: 0 } },
+    { id: 3, id2: 4, pos: { x: 0, y: 0, z: 40 } },
+  ];
+  const lock = { primary: 0, second: 0 };
+  const picked = cp.checkPathAndTarget({ targets, npc: { x: 0, y: 0, z: 0 }, npcWeapon: { x: 0, y: 5, z: 0 }, farRadius: 20, ray: rayFirstBlocked, lockedId: lock });
+  check(picked && lock.primary === 3 && lock.second === 4, 'CheckPathAndTarget: the second target is picked when the first is behind a wall');
+  check((cp.flags & 0x1000) === 0 && cp.anchor.x === 30 && cp.anchor.z === 0, 'CheckPathAndTarget: the anchor is the first candidate; 30 (far + 10) is not beyond 30 (no 0x1000)');
+  const cp2 = new NpcHead();
+  cp2.checkPathAndTarget({ targets, npc: { x: 0, y: 0, z: 0 }, npcWeapon: { x: 0, y: 5, z: 0 }, farRadius: 30, ray: () => false, lockedId: lock });
+  check((cp2.flags & 0x1000) !== 0, 'CheckPathAndTarget: the far anchor (30 + 10 beyond the NPC) sets 0x1000');
+  const cp3 = new NpcHead();
+  check(!cp3.checkPathAndTarget({ targets: [], npc: { x: 0, y: 0, z: 0 }, npcWeapon: { x: 0, y: 0, z: 0 }, farRadius: 20, ray: () => false, lockedId: lock }) && (cp3.flags & 0x40) === 0, 'CheckPathAndTarget: no candidates: no target and no 0x40 (the exe returns before the flag)');
+
+  // UpdateAttackTarget (.c:796082): a second target with the stand-off bit pushes the anchor away from the NPC.
+  const ua = new NpcHead();
+  ua.head34 = 0x80;
+  ua.anchor = { x: 10, y: 0, z: 0 };
+  ua.updateAttackTarget({ ownerWeapon: { x: 1, y: 2, z: 3 }, npc: { x: 0, y: 0, z: 0 }, secondTarget: true, standOff: 5, distSq: 25 });
+  check(Math.abs(ua.anchor.x - 5) < 1e-9 && ua.anchor.y === 2, 'UpdateAttackTarget: the second target pushes the anchor back by the stand-off (y from the owner)');
+  ua.updateAttackTarget({ ownerWeapon: { x: 1, y: 2, z: 3 }, npc: { x: 0, y: 0, z: 0 }, secondTarget: false, standOff: 5, distSq: 25 });
+  check(ua.anchor.x === 1 && ua.anchor.z === 3, 'UpdateAttackTarget: no second target: the owner weapon position');
+
+  // The wall counter: at 0x1f the move is refused and the counter goes to 0x1e (AIUpdateState_007b267c).
+  const clamp = new NpcHead();
+  clamp.wall8c = 0x1f;
+  clamp.anchor = { x: 100, y: 0, z: 0 };
+  clamp.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 100, y: 0, z: 0 }, leash: 13, wall: () => false });
+  check(clamp.wall8c === 0x1e && (clamp.flags & 0x4000) !== 0, 'the wall counter at 0x1f refuses the move, sets 0x1e and flag 0x4000');
+  check(clamp.sendTarget.x === 0 && clamp.sendTarget.z === 0, 'the refused move sends the NPC its own position');
+
+  // The stuck band (15..29) takes CalculateTarget (AIUpdateMovement .c:796237..796244).
+  const band = new NpcHead();
+  band.wall8c = 15;
+  band.anchor = { x: 30, y: 0, z: 30 };
+  band.prevNpc = { x: -1, y: 0, z: 0 };
+  band.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 30, y: 0, z: 30 }, leash: 13, wall: () => false });
+  check(Math.abs(band.moveTarget.z + 20) < 1e-9 && Math.abs(band.moveTarget.x) < 1e-9, 'the wall band (counter 15) uses CalculateTarget for the move target');
+
+  // Field update (UpdateState_007b00bc mode 1). The chooser refuses, nothing is locked: walk to the anchor.
+  const field = new NpcHead();
+  field.mode = 1;
+  const base = {
+    ownerWeapon: { x: 0, y: 0, z: 0 }, owner: { x: 0, y: 0, z: 0 }, npc: { x: 40, y: 0, z: 0 }, npcWeapon: { x: 40, y: 5, z: 0 },
+    npcNeed8c: 0, npcStatus90: 0, npcSecond: false, npcTargets: [] as { id: number; id2: number; pos: null }[], lockedId: { primary: 0, second: 0 },
+    ownerNeed8c: 0, allowed: false, roll: 0, need52: 0, near: false, npcStatus8: false, hasTargets: false, primaryPos: null,
+    attackRadius: 30, farRadius: 20, standOff: 5, ray: () => false, chooser: () => false,
+  };
+  field.fieldUpdate(base);
+  check(field.state === 1 && (field.flags & 0x20) !== 0 && field.anchor.x === 40, 'field: no target and no attack: move to the NPC, flag 0x20');
+  check(field.mode === 0, 'field: the mode exits when B +0x8c & 2 is clear');
+  // A locked target far from the NPC with no wall: the state-2 cast (flag 0x1000 set by the path).
+  const cast2 = new NpcHead();
+  cast2.mode = 1;
+  cast2.fieldUpdate({ ...base, npcNeed8c: 2, npcTargets: [{ id: 9, id2: 0, pos: { x: 50, y: 0, z: 0 } }] });
+  check(cast2.state === 2 && (cast2.flags & 0x10) !== 0 && cast2.mode === 1, 'field: a far target with no wall and no cooldown sets state 2 (cast) and flag 0x10, and mode 1 stays while B +0x8c & 2');
+  check(cast2.anchor.x === 50 && cast2.anchor.z === 0, 'field: the path anchors on the first candidate (the target at 50)');
+  // The chooser's attack (AIProcessState(1) != 0) and the 0x8000 cooldown multiplier.
+  const atk = new NpcHead();
+  atk.mode = 1;
+  atk.fieldUpdate({ ...base, npc: { x: 10, y: 0, z: 0 }, npcWeapon: { x: 10, y: 5, z: 0 }, chooser: (m) => m === 1 });
+  check(atk.state === 8 && atk.anchor.x === 0 && (atk.flags & 0x1000) === 0, 'field: an attack from the chooser (mode 1) within 30 of the owner: state 8, anchor at the owner weapon');
+
+  // The state-2 cast is wired to combat (fire techs go through the fire path) and town (stepNpcTwoTech).
+  const combatSrc2 = readFileSync(join(HERE, '../client/src/render/combat.ts'), 'utf8');
+  check(/npcCastTechnique[\s\S]*?if \(isFireTech\(tech\)\)[\s\S]*?this\.spawnFire\(tech, level, from, me\.angle, listed, first/.test(combatSrc2), 'npcCastTechnique: the Foie family makes its object at the NPC and hits through spawnFire / techHitEnemy');
+  const townSrc3 = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
+  check(townSrc3.includes('if (head.state === HEAD_STATE_CAST) this.stepNpcTwoTech(slot, p, head);') && townSrc3.includes('headTwoTech(head.head34, false'), 'town: the state-2 head casts the headTwoTech pick at the locked target');
 }
 
 if (failures) {

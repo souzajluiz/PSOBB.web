@@ -7158,6 +7158,24 @@ export class CombatView {
     } else if (tech === TECH.reverser) {
       this.opts.log(`${name}: no effect on this client (not ported)`);
     }
+    if (isFireTech(tech)) {
+      // The head's state-2 cast (SinowberillHead_CastTechnique_007b2e20 -> HandlePlayerTechCastState_007b2bc0):
+      // the Foie family is a flying object made at the NPC, aimed at its first 6x47 target that is still
+      // there at release, and its hit uses the caster's MST / class (ASSUMED: the owner's MST, the NPC's
+      // own level 0). The release is the charge ticks (ASSUMED; the exe waits for the motion's release frame).
+      // Another client's copy of the hit comes with its own 6x0A, so only this client's hits land here.
+      const mst = this.selfStats().mst;
+      const listed = targetIds.length > 0;
+      this.techHits.push({
+        ticks: data.charge,
+        apply: () => {
+          const from = view.playerPositions().get(npc.clientId);
+          if (!from) return;
+          const first = targetIds.map((id) => this.enemies.get(id & 0xfff)).find((e) => !!e && !e.dead && this.enemies.has(e.index));
+          this.spawnFire(tech, level, from, me.angle, listed, first, (e) => this.techHitEnemy(tech, level, mst, npc.charClass, e));
+        },
+      });
+    }
     return data.charge + data.cast;
   }
 
