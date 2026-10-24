@@ -573,6 +573,19 @@ export function modelOpaquePassSkipped(nt: boolean, fade: number): boolean {
   return byte / 255 - 1 < 0;
 }
 
+// The colour of a model particle (SetColor_00508958, dump 287693, the non-NT branch): (0, 0, 0) with
+// the alpha above. The draw's vertex diffuse is that colour (set_rs_DiffuseAmbientMaterial_Source_and_
+// xj_vertex_color, dump 850240, the 0x20 branch packs g_CurrentTargetColor into xj_mesh_constant_vertex_
+// color), and the stage-0 colour op is MODULATE (SetupChallengeEntityTextureStates_00839de0, dump
+// 855566: COLOROP = MODULATE, COLORARG1 = texture, COLORARG2 = current = the diffuse), so the texel's
+// colour is multiplied by black: the model is drawn black. With the blend of modelParticleBlend
+// (SRCALPHA / INVSRCALPHA, not ONE) the result is dst * (1 - alpha), a darkening, not an additive
+// black (which would be invisible). NT keeps the packed colour of its +0x94 (SetColor's second branch,
+// not traced into the port's shade: the port keeps rgb for NT).
+export function modelParticleColour(nt: boolean, rgb: readonly [number, number, number]): [number, number, number] {
+  return nt ? [rgb[0], rgb[1], rgb[2]] : [0, 0, 0];
+}
+
 // Additive tint of a texture (vertex color x texel), cached per color step.
 export function makeTinter(): (img: CanvasImageSource, key: string, r: number, g: number, b: number) => CanvasImageSource {
   const cache = new Map<string, OffscreenCanvas>();
