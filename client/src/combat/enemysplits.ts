@@ -825,8 +825,10 @@ export class PanHalfAi extends BrainBase {
 //   12 flinch (0x005985c4, every hit not already in 12) -> 5.
 //   13 death (0x00598648). 14 thrown (0x00598740 / 0x005975e0): lands -> 1.
 // Splits (both throw a copy into the first free slot, 10 above it, a random
-// direction, state 14): a physical hit by an attack of type 2 (0x00597914),
-// a technique of group 2, Gibarta / Rabarta (0x005987c8).
+// direction, state 14): a landed physical hit by a player on combo step 2
+// (0x00597914, the took-damage handler at vtable +0x100: `unknown_get_current_combo_step`
+// of the last hitter == 2, state != 12, the slot scan over the control's slots),
+// and Gibarta / Rabarta (0x005987c8, the technique group 2, before the hit).
 // Flags 0xa000528 (states 0, 1, 2, 12, 13, 14): ASSUMED untargetable.
 // The puddle (state 0, 0x00597b0c) is morph 7: its motion is DAT_009bfda0[rare]
 // (4 normal, 5 rare, the exe table), so the puddle is drawn as that pose; the
@@ -1056,6 +1058,15 @@ const UNTARGETABLE: ReadonlySet<SlimeState> = new Set(['puddle', 'rise', 'sink',
 export type SlimeGround = (x: number, z: number, fromY: number) => number | null;
 export type SlimeWall = (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) => boolean;
 
+// The split's gate (0x00597914, the took-damage handler, vtable +0x100, reached from the
+// generic enemy path when +0x30 & 0x200 is set): a landed hit (damage) by a player
+// (the local one; `comboStep` is the attacker's combo step, +0xc of its attack info) on
+// combo step 2 splits the slime unless it is already in state 12 (flinch) or the hit
+// kills it (the is_dead branch, 0x104). ASSUMED: the hitter is the local player.
+export function slimeSplitsOnHit(state: SlimeState, comboStep: number | undefined, damage: number, byPlayer: boolean, dead: boolean): boolean {
+  return byPlayer && damage >= 1 && comboStep === 2 && state !== 'flinch' && !dead;
+}
+
 export class SlimeAi extends BrainBase {
   state: SlimeState = 'puddle';
   confused = false;
@@ -1096,7 +1107,7 @@ export class SlimeAi extends BrainBase {
   private readonly wall: SlimeWall;
 
   // ground / wall default to flat open ground (ASSUMED for a test without a map).
-  constructor(opts: { x: number; z: number; angle: number; movement: EnemyMovementData | null; thrown?: boolean; rare?: boolean; rng?: () => number; ground?: SlimeGround; wall?: SlimeWall }) {
+  constructor(opts: { x: number; z: number; angle: number; movement: EnemyMovementData | null; thrown?: boolean; throwAngle?: number | undefined; rare?: boolean; rng?: () => number; ground?: SlimeGround; wall?: SlimeWall }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
     this.spawnX = opts.x;
     this.spawnZ = opts.z;
@@ -1105,7 +1116,7 @@ export class SlimeAi extends BrainBase {
     this.wall = opts.wall ?? (() => false);
     this.puddleMotion = opts.rare ? PUDDLE_MOTION.rare : PUDDLE_MOTION.normal;
     this.current = SLIME_ANIM.wait;
-    if (opts.thrown) this.throwFrom(opts.x, opts.z);
+    if (opts.thrown) this.throwFrom(opts.x, opts.z, opts.throwAngle);
     else {
       this.current = { index: this.puddleMotion, speed: PUDDLE_SPEED, loop: true };
       this.timer = this.puddleWait();
@@ -1146,10 +1157,10 @@ export class SlimeAi extends BrainBase {
     return Math.round(this.rng() * SLIME.puddleWait) + SLIME.puddleWait;
   }
 
-  // State 14 from (x, z): ASSUMED a 1.0 a frame hop in a random direction,
-  // 2.5 up, 0.2 gravity.
-  private throwFrom(x: number, z: number): void {
-    const a = this.rng() * Math.PI * 2;
+  // State 14 from (x, z): ASSUMED a 1.0 a frame hop in the heading `angle` (a split
+  // passes the exe's random BAMS heading; a random one otherwise), 2.5 up, 0.2 gravity.
+  private throwFrom(x: number, z: number, angle?: number): void {
+    const a = angle ?? this.rng() * Math.PI * 2;
     this.x = x;
     this.z = z;
     this.warps++;
