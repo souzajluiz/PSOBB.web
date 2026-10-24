@@ -24,6 +24,30 @@
 **Not changed (still open):** the NPC's level / MST (the eligibility does not need them here), the item cast (no NPC inventory), the NPC's HP / TP status flags (ASSUMED full, `npcHeadChooser` input), and the head's move sub-state for the approach to the target (the field's `fieldUpdate` path is ported; the Pioneer 2 state-1 move to an enemy stays as before).
 
 **Tests:** `node tests/npcai.test.ts` ok (new block: TP equal / below the cost, the hub map, level 0xff, the state test, the assumed Resta on an unsafe map, the hub list, the chooser on a hub and on a field map, the town wiring). `questflow`, `quests`, `npcs`, `questmisc`, `questboard` pass with Node 24. `client/node_modules/.bin/tsc --noEmit -p client`: 0 errors. Not run in Chrome, no Playwright.
+## 2026-10-24: Episode 2 idle groups 20/1 and 5/3: detection range against the trigger point (verdicts, no code change)
+
+Question (the watch's open item): the ep2 floor 1 group 20/1 (HILDEBEAR, GRASS_ASSASSIN, DIMENIAN) and the floor 5 group 5/3 (SINOW_BERILL) stay `idle` with the player on the trigger. Is that the exe's idle (the player is out of their range), or a port stall?
+
+**Verdict: 20/1 is NOT exe-correct idle (the exe would notice the player); the port's brain notices when given the target, so the stall is upstream of the FSM (the wiring is not located here). 5/3 IS exe-correct idle (a Sinow Berill cloaked in idle does not leave on a target 185 units away within 30 s).**
+
+Placement (scratch run of the real data, `SetDataTableOn.rel` + `scene/map_*n.rel` + `map_*e.dat` / `o.dat` / `.evt`, placed with `placeEntities`; the watch's layouts):
+- 20/1: ep2 floor 1, layout 1 variant 0 (`map_ruins01_01`). Event 201 (room 20 wave 1, delay 10, flags only) is started by trigger object idx 37 at (360.6, 0, -413.2), radius 105. Enemies (world XZ): Hildebear (436.6, -441.4) 81 units from the trigger; Grass Assassin (389.6, -336.3) 82; Dimenian (285.1, -365.5) 89; Dimenian (325.6, -492.8) 87. The watch's player sat at the trigger +5 in y.
+- 5/3: ep2 floor 5, layout 0 variant 1 (`map_jungle01_01`; event 52 is room 5 wave 3 only here, ASSUMED to be the watch's layout). Trigger idx 7 at (-634.0, 57.2, 636.8), radius 41. Sinow Berill (-814.7, 50, 597.8): 185 units.
+
+Exe facts (PsoBB.exe, dump `src/Psobb.exe-05112026.c`, values read with `tools/exedata.py read`):
+- `EnemyGetNearestTargetInRange_007714cc` (dump line 746220): a candidate is a player on the enemy's floor with `(flags & 0x2000800) == 0` and XZ distance squared < radius squared; the target is kept only when `cast_ray_at_map_collision_geometry2(enemy, player)` returns no hit (line 746282). That ray (dump line 757472) tests the faces of the meshes whose `node_collision_flags & 0x8000` (line 757520), with `line_segment_intersects_triangle(0x8000, ...)` (line 757572). It is `CollisionWorld.segmentHit(.., 0x8000)` in the port.
+- Dimenian (`TObjEneDimedian`, record 0x009bd740 = 225.0, subtype 0): the Booma search. Grass Assassin (record 0x009bbb64 = 400.0, retarget every 30 frames; port `GRASS.search`). The Berill's cloaked idle calls `FindEnemyTarget_00520ea0(this, 200.0)` (dump `unknown_handle_sinowberill_idle_behavior`, line 388140).
+- Berill idle: a target within `g_SinowberillIdleStateTransitionThreshold` (40; the test reads `field452_0x3b4`, which the port calls `tdist`) -> state 0xd (lost). Otherwise the lunge roll: the `vtable+0x1b0` check gates it (the port reads 100..150 units; this vtable slot was not decoded here), then `get_random_float <= g_SinowberillIdleJumpChanceThreshold` (1%), every 60 frames. No target: the frame counter (`sword_move_position.flY`, bumped every frame in state 0) > 0xe0f (3599) -> lost, i.e. about 120 s.
+
+Port check (scratch harness, not committed): `EnemyAi` built as render/combat.ts builds it, given the trigger point as its only target: Dimenian -> `notice` (distance 87 / 89, detect 225); Hildebear -> `chase` (81, detect 225, ASSUMED). The port's GrassAi and SinowBerillAi were not run, but their searches (400 and 200) cover the distances. The LOS probe on `map_ruins01_01c.rel` (`CollisionWorld.segmentHit`, mask 0x8000) is clear from every one of the four enemies to the trigger point, so the exe's ray does not block them.
+
+What this means:
+- 20/1: every enemy of the group is inside the exe's range (Dimenian 225, Grass 400) with a clear ray, so the exe's idle -> notice would fire. The port's FSM would fire too (checked above). The idle state is therefore a stall between the spawn and the brain's targets: the enemies are visible and built (the watch says so), `tickEnemies` gates on `e.state`, `e.status`, and `root.visible`, and `aiTargets()` takes the local player's marker. None of those was traced to a fault, and no runtime run was allowed here, so no fix. Next step: a live log of `aiTargets()` and the group's `EnemyAi.state` in the 20/1 run (the marker position vs `game.self.position`).
+- Hildebear: the exe's ground Hildebear is not the Booma family (its ctor, dump 296090, takes its aggro from `initdata_param2` clamped to `g_HildebearAggroRange`; the port's 225 is ASSUMED). It does not change the verdict: the Dimenian and the Grass Assassin already notice.
+- 5/3: the Berill is 185 units out, outside the 40-unit transition and the lunge band; a 30 s watch sees no change in the exe either, except the 1% lunge roll (about 15 rolls in 30 s, so the port's idle is consistent with a 120 s stay). Exe-correct.
+
+**Not changed:** no port code, no test. The e2e watch was not run (Playwright is not allowed here). The `docs/HANDOFF.md` item 2 is updated with the two verdicts.
+
 ## 2026-10-24: Episode 2 watch: the section-placed Gibbons / Sinows in `spawn` are chained waves, not a brain stall
 
 The long watch (the entry below) reported section-placed Gibbon / Merilltas / Sinow groups staying in `spawn` for 30 s, and suspected the brain's first frame. It is not the brain, and it is not a build bug: those enemies are never built, because the wave that builds them has not started.
