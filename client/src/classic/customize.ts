@@ -91,7 +91,9 @@ const PALETTE_BYTES = 0x38;
 const SLOT_COUNT = 13;
 export const HOTBAR_FIRST = 3; // flat index of hotbar slot 1
 export const SLOT_LIST_POS = { x: 0, y: 256, w: 179 } as const; // GUI entry 0x0F
-export const ACTION_LIST_POS = { x: 214, y: 256, w: 179 } as const; // GUI entry 0x10
+// GUI entry 0x10. Width: three 66-wide cells (render_customize_menu_action_list, 0x973784) plus the
+// frame insets (10 each side), so the third column is not clipped (the window width is not traced).
+export const ACTION_LIST_POS = { x: 214, y: 256, w: 3 * 66 + 2 * 10 } as const;
 export const DESCRIPTION_POS = { x: 450, y: 256, w: 179 } as const; // GUI entry 0x11 (w ASSUMED, see the header)
 
 // Grid geometry (render_customize_menu_action_list, dump 718800; the exe globals read with
