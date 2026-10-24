@@ -475,8 +475,11 @@ export class Lobby {
     // process_chat_message on the sent line: its emote keys queue for this player.
     this.emoteQueue.push(parseEmoteKeys(text));
     // send_chat_message_text sends only when process_chat_message's value is not 0 (formats/emotes.ts).
-    if (!chatLineSends(text)) return;
+    // The value is taken on the line as the exe holds it, with its 2-unit language marker (\tE): the
+    // "- 2" of process_chat_message is that marker, so a short plain line is still sent (ASSUMED: the
+    // marker is in the buffer process_chat_message reads).
     const s = `\tE${text}`;
+    if (!chatLineSends(s)) return;
     const body = new Uint8Array(8 + (s.length + 1) * 2 + 2);
     const dv = new DataView(body.buffer);
     for (let i = 0; i < s.length; i++) dv.setUint16(8 + i * 2, s.charCodeAt(i), true);

@@ -17008,3 +17008,11 @@ dump 698949) does not call PlayerRecalculateStats: the Item Pack keeps the item-
 **Not done:** the arrival kind per join flow; the field's fallback removal; the palette-slot route to the sit; the emote end and `dispatch_action_0x3f`; the remote emote's gate.
 
 **Checks:** `node tests/emotes.test.ts` (chat gate block: values for plain, one token, two tokens, unknown names, empty line, queue kept), `node tests/lobbymain.test.ts` (new block 6: the arrival mapping, the set or origin or fallback, the real lobbies' sources and ids), `tests/chatline.test.ts`, `players`, `townfield`, `collision`, `motions` pass with Node 24. `cd client && tsc --noEmit -p .` clean (Node 24, a temporary link to the main checkout's `client/node_modules`, removed afterwards). Not run in Chrome, no Playwright.
+
+## 2026-10-23: chat send gate on the marked line
+
+Merge review of the chat send gate: `process_chat_message`'s value is length - emote tokens - 2, and
+the port applied it to the bare text, which would drop every two-character line ("hi", "ok"). The
+"- 2" is the 2-unit language marker (`\tE`) the line carries in the exe's buffer, so `Lobby.sendChat`
+now gates on the marked line: a short plain line is sent, a line with only an emote key is not (the
+emote still plays). ASSUMED: the marker is in the buffer process_chat_message reads.

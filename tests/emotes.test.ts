@@ -154,12 +154,12 @@ eq(threw, true, 'a slot that is not a field emote slot throws');
 // the value is the length less each emote token (braces included) less 2; 0 is
 // not sent. Plain two-character lines, and one token with two characters, are not.
 eq(chatSendValue('hello'), 3, 'chat value: plain text is length - 2');
-eq(chatLineSends('hi'), false, 'chat gate: a two-character line is not sent (exe value 0)');
-eq(chatLineSends('hey'), true, 'chat gate: three characters are sent');
+eq(chatLineSends('\tEhi'), true, 'chat gate: a two-character line with its \\tE marker is sent');
+eq(chatLineSends('\tE'), false, 'chat gate: the marker alone (empty line) is not sent');
 eq(chatLineSends(''), false, 'chat gate: an empty line is not sent');
 eq(chatSendValue('{f1}'), -2, 'chat value: a token alone is -2 (sent)');
-eq(chatLineSends('{f1}'), true, 'chat gate: a token alone is sent');
-eq(chatLineSends('{f1}ab'), false, 'chat gate: token + two characters is 0 (not sent)');
+eq(chatLineSends('\tE{f1}'), false, 'chat gate: a token alone with the marker is 0 (only the emote plays)');
+eq(chatLineSends('\tE{f1}ab'), true, 'chat gate: token + text is sent');
 eq(chatLineSends('{f1}abc'), true, 'chat gate: token + three characters is sent');
 eq(chatSendValue('{F1}{Zz}ab'), 4, 'chat value: an unknown name is not a token (its length stays): 10 - 4 - 2');
 eq(chatSendValue('{f1}{f2}ab'), 0, 'chat value: two tokens: 10 - 8 - 2 = 0 (not sent)');
