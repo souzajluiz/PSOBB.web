@@ -150,9 +150,13 @@ worktrees are left.
      Merilltas / Sinow groups in `spawn` are chained waves (DEVLOG "Episode 2 watch: the section-placed
      Gibbons / Sinows in `spawn` are chained waves"): never built, because their event runs only after
      the previous wave is dead. The brain leaves spawn on its first tick (test "Gibbon spawn"). OPEN:
-     the watch spec must resolve the chain root and kill the predecessor's enemies; floor 5 group 5/3
-     and floor 1 group 20/1 idle after their trigger (built; detection range not checked). Floors 7
-     and 10 still to finish;
+     the watch spec must resolve the chain root and kill the predecessor's enemies. Idle after the
+     trigger, checked 2026-10-24 (DEVLOG "Episode 2 idle groups 20/1 and 5/3"): floor 5 group 5/3
+     (Sinow Berill, 185 units out) is exe-correct idle; floor 1 group 20/1 is NOT: Dimenian (range
+     225) and Grass Assassin (400) are in range with a clear ray from the trigger point, so the exe
+     would notice. The port's brain notices when handed the target, so the stall is in the wiring
+     (spawn -> tick -> `aiTargets`), not located; next: a live log of the 20/1 run (the player's
+     marker position and each enemy's `ai.state`). Floors 7 and 10 still to finish;
    - the enemy motion archives ARE in `data.gsl` (the earlier "not on this Mac" note is stale), so
      the animation lengths of groups a / d are still stand-ins in the tests, not from the files
      (checked: every `bm_ene_*` / `bm_boss*` name the port uses is in the GSL); no wall / ground rays;
