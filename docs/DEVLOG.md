@@ -24,6 +24,19 @@
 **Not changed (still open):** the NPC's level / MST (the eligibility does not need them here), the item cast (no NPC inventory), the NPC's HP / TP status flags (ASSUMED full, `npcHeadChooser` input), and the head's move sub-state for the approach to the target (the field's `fieldUpdate` path is ported; the Pioneer 2 state-1 move to an enemy stays as before).
 
 **Tests:** `node tests/npcai.test.ts` ok (new block: TP equal / below the cost, the hub map, level 0xff, the state test, the assumed Resta on an unsafe map, the hub list, the chooser on a hub and on a field map, the town wiring). `questflow`, `quests`, `npcs`, `questmisc`, `questboard` pass with Node 24. `client/node_modules/.bin/tsc --noEmit -p client`: 0 errors. Not run in Chrome, no Playwright.
+## 2026-10-24: Episode 2 watch: the section-placed Gibbons / Sinows in `spawn` are chained waves, not a brain stall
+
+The long watch (the entry below) reported section-placed Gibbon / Merilltas / Sinow groups staying in `spawn` for 30 s, and suspected the brain's first frame. It is not the brain, and it is not a build bug: those enemies are never built, because the wave that builds them has not started.
+
+**The brain is fine.** `GibbonAi` built as render/combat.ts builds a set entry (subtype 0 / 1, param2 0 or 1) leaves `spawn` on its first tick (`spot` or `jump`, as the exe's 0x005690f8 does on its frame, the transition at its param 3 check). New checks in `tests/enemyfsmep2b.test.ts` ("Gibbon spawn").
+
+**Why they never tick.** A floor with wave events hides every enemy (`EnemyLayer.hideAll`, render/gamefield.ts `setupWaves`); render/combat.ts `tickEnemies` skips an invisible enemy, so its brain never runs. An enemy shows only when its wave's handler spawns it (render/waves.ts `step`, the exe's `unknown_enemy_spawn` 0x00811188 with the same (section, wave) match, and `SpawnMonstersBySectionAndWave_00810e54` for the action stream). Some waves are not started by a trigger object: their event is a chained `trigger_event` in the action stream of the previous wave, and it runs only after every enemy of that previous wave is dead (the exe's quest_event_handler state 1 -> 2, `DerolleHasUninitializedSubordinate`; waves.ts state 1).
+
+Checked on the real data (`PSOBB_DATA`, floor 5, variant 1, `map_jungle01_01`): event 21 (room 2 wave 1) runs `trigger_event 211` (room 2 wave 2 constructs sets 0..3); 41 -> 411 (room 4 wave 2); 42 -> 421 (room 4 wave 4); 51 -> 511 (room 5 wave 2); 52 -> 521 (room 5 wave 4). The watch's stuck groups are exactly these: 2/2, 4/2, 4/4, 5/2, 5/4 (and floor 7 2/5, 2/3). A scratch run of `FloorWaves` on that data: trigger 51 spawns 5/1 only; 5/2 appears after the 5/1 enemies are killed (6x76), not before. The watch never killed a wave-1 enemy, so the chained wave never started.
+
+**The watch's label was wrong.** `client/e2e/ep2-floors-watch.spec.ts` `groupsOf` marks a group "section (no event)" when no trigger object carries the group's own event id. The chained events above have a wave event (`type 1`, the right room and wave); only their trigger is another event's action. The group should be "chained from event N", placed on the root trigger, and its predecessor's enemies must be killed for it to start. Not changed here (the spec runs only in Chrome; the change needs a run).
+
+**Still open (not explained by this):** 5/3 (SINOW_BERILL, directly triggered by event 52, so built and ticking) stays `idle` after its trigger, and floor 1 20/1 (HILDEBEAR / GRASS_ASSASSIN / DIMENIAN, trigger radius 105) stays `idle`. Both are built, so the brain runs; the likely cause is the detection radius against the player's placement, not checked. Floors 7 and 10 still to run.
 
 ## 2026-10-24: Barba Ray: the phases 0x0d, 0x0f/0x10, 0x17, 0x19/0x1a and dispatch 0
 
