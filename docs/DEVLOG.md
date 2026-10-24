@@ -17016,3 +17016,36 @@ the port applied it to the bare text, which would drop every two-character line 
 "- 2" is the 2-unit language marker (`\tE`) the line carries in the exe's buffer, so `Lobby.sendChat`
 now gates on the marked line: a short plain line is sent, a line with only an emote key is not (the
 emote still plays). ASSUMED: the marker is in the buffer process_chat_message reads.
+
+## 2026-10-23: lobby arrival entries (the spawn lookup's kind per join flow)
+
+**Goal:** the open part of "Lobby spawn lookup": which arrival kind each join flow gives the lobby's players, so the port passes it. Read first: the 2026-10-23 "lobby spawn lookup" entry above.
+
+**Exe evidence (`reverse/refsrc/.../Psobb.exe-05112026.c`, dump lines):**
+- The floor block is `0x00ac9d4c`. The dump names overlap: `g_prev_floor_id`, `g_current_floor_index_00ac9d4c` and `&block` are the same address, `+0x0` (prev). `g_CurrentFloorId` `+0x4` (cur), `current_floor_3` `+0xc` (staged next, written by `SetFloorAndMapVariant_00815590`, 833238), `g_FloorMapVariantId` `+0x10`, `_DAT_00ac9d64` `+0x18`, `g_FloorStateFlags` `+0x20` (= 0xac9d6c).
+- `MapStateTransitionHandler_008155a8` (833251): prev = cur, cur = staged, variant = staged variant.
+- `get_warp_type` (833294) reads prev `[0]`, cur `[1]`, flag bit 0 of `[8]`; with prev -1 (signed) the floor-order test gives 1 when the flag is clear.
+- The lobby entries that reach a lobby placement, all reset prev to -1 and the flags to 0 before the placement:
+  - `LoginLoadingScreenHandler_007bd97c` (805799; ship select and the first lobby): `g_prev_floor_id = 0xffffffff`, `g_FloorStateFlags = 0`, `current_floor_3 = 0`, `call_map_initializer` (805844..805924).
+  - `unknown_init_lobby` (805727; `g_IsLeavingParty`, the game leave and the lobby warp): `MapStateTransitionHandler`, then `g_prev_floor_id = -1`, flags 0, `call_map_initializer` (805764..805776).
+  - `update_game_in_quest` (805492; the quest end): the same reset (805662..805690).
+- The arrival kind is read in `SinowberillChallengePlayer_UpdatePosition_006884ac` (554167): with the stored `+0x3d4` at -1, `get_warp_type` after that reset is 1, which maps to source 0 (554167..554176).
+- The teleport target path (`GetTeleportTargetDataForPlayer_006e9630`, 647640) is not used by these lobby entries (it needs the player's `+0x91c` target, set by a teleport request).
+
+**Port.**
+- `client/src/formats/lobbyspawn.ts`: `LobbyEntry` (`ship`, `leave`, `teleporter`, `meet`) and `lobbyEntryArrival(entry)`, which is `lobbyArrivalSource(1)` = 0 for all four.
+- `client/src/classic/main.ts`: `enterLobby` / `buildLobby` / `leaveGame` take the entry. Ship select, block change and the 19 answers: `'ship'`. The failed game load and the game leave: `'leave'`. The lobby teleporter (`view.onLobbyWarp`): `'teleporter'`. Meet the User (`meetWith`): `'meet'`. `buildLobby` passes `lobbyEntryArrival(entry)` to `loadLobbyMapData(..., arrival)`.
+- `render/lobbyview.ts` is unchanged (the `arrival` parameter of the previous entry).
+
+**Field `spawnsFor` fallback (settled with the data).** The exe has no fallback: a set is matched by client id and source, else the origin (554194). The data (every `map_*o.dat` in `data.gsl`, player sets by source): 166 files; the lobbies have 12 source-0 sets (ids 0..11), the soccer lobbies 17 (id 11 twice); floors with sets have source 0 with all four ids, except `map_forest01_04o.dat` (source 0 ids 0,0,1,1,2,2,3,3); about half the floors also have source 1 (the 8-set floors); the 4-set floors (boss, crater, ancient03, jungle03..05, forest01_05) have source 0 only; `map_boss09_00_00o.dat` has no sets. So the `[source, 0, 1]` order: the source-0 pass is the only one that ever answers for a missing source, and the source-1 pass never matters (no floor lacks source 0). Kept unchanged: the field's arrival kind is not ported (`warpTo` passes `floor > from ? 0 : 1`, ASSUMED), and an origin for a missing source 1 on a 4-set floor would send a player to (0,0,0) on a wrong guess.
+
+**ASSUMED:**
+- The placement of a lobby player runs after the reset to -1 (the players are built after `call_map_initializer` in those paths).
+- The Meet the User reconnect enters the lobby through the login path (`LoginLoadingScreenHandler_007bd97c`); not traced.
+- The block change (`change_lobby_through_warp_menu`) goes through the same reset.
+- A fresh player's stored `+0x3d4` is not a non-(-1), non-0 value (the port's earlier assumption; the same offset is an input-state pointer in another constructor, dump line 169758).
+- The field's arrival kind (`warpTo`) is not ported; the field keeps the fallback.
+
+**Checks:** `node tests/lobbymain.test.ts` (block 6 adds the four entries: all source 0) ALL PASS with Node 24. `cd client && tsc --noEmit -p .` clean (Node 24; a temporary `client/node_modules` link to the main checkout, removed afterwards). Not run in Chrome, no Playwright.
+
+**Left:** the field arrival kind (`warpTo`) is not traced against the exe (the telepipe / teleport target path and the floor-order warp); the Meet the User path is not traced; the placement timing after the reset is ASSUMED.
