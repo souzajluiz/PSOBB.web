@@ -1,5 +1,50 @@
 # Devlog
 
+## 2026-10-24: Dragon state sounds
+
+**What changed:** `combat/dragon.ts` plays the Dragon's state sounds at their
+exe call sites, each with an `emit({ kind: 'se' })` that cites the call (the
+existing `DRAGON_SE` and intro sounds are the same kind of event). The tests
+are in `tests/dragon.test.ts` ("the state sounds").
+
+| Sound | Exe call | Port state (exe function) | Rule |
+|---|---|---|---|
+| 0x315 | `0x0041d403` in TriggerSinowbeatSoundEffect (`0x0041d3d0`) | walk (`0x00423070`, phase 0) | frame 4 or 24.5 (`passed`) |
+| 0x317 | `0x0042269f` | flyUp (`0x00422430`, phase 0) | frame 42 |
+| 0x318 | `0x00422677` | flyUp, same function | frame 14 (the port had 0x318 only in the entrance before) |
+| 0x318 | `0x004215d5` | flyShoot (`0x00421494`), sub-state 2 | frame 2 |
+| 0x31e | `0x00421601` | flyShoot, sub-state 2 | frame 45 |
+| 0x31a | `0x00420502` | collapse (`0x004203cc`), entry (phase 4) | on entry |
+| 0x31b | `0x0041dde5` | death (`0x0041db28`), counter 0 | frame 60 or 98, no position |
+| 0x31d | `0x00422979` | tail (`0x004227dc`), phase 0 | frame 0 or 12 |
+| 0x325 | `0x0041a69b` | circle (`0x0041a364`), sub-state 1 | every frame |
+| 0x325 | `0x0041f16e` | burrow out (`0x0041ed68`), phase 0 | every frame |
+| 0x325 | `0x0041f5b3` | burrow (`0x0041f238`), phase 0, both sub-states | every frame |
+| 0x326 | `0x00420550` | collapse, sub-state 1 | every frame |
+
+The 5-argument helper of 0x325 / 0x326 is `0x008144b0` (FUN_008144b0 in
+Ghidra, the same SE engine as `0x00814298`, which takes four). The dump's name
+`PlayDirectionalSFX_00814630` points at 0x00814630, which is inside that
+function (the engine's tail call, not an entry) and is called from nowhere, so
+the name is wrong; the calls are to 0x008144b0. The frames are the exe's
+`check_entity_animation_elapsed_threshold` window (`passed`).
+
+**Not wired:** 0x319 has no call in the exe (every `0x319` in the dump is a
+field name). 0x320 has a literal call, `0x004268e5` (the push at `0x004268e0`),
+but it is in a fragment that Ghidra starts at `0x004268df` with no owner
+(reached by fall-through, no jump refers to it), next to the fireball's
+impact code; so it stays unwired, as the 2026-10-21 entry decided. Two more 0x318
+sites (`0x0041ebde`, `0x00421235`) and one 0x314 (`0x0042365d`) are not checked
+against the port's emerge, land and walk paths.
+
+**ASSUMED:** the walk's dust also comes from the input walk
+(`handle_input_state_dragon_walk`, gated by field 0xb8 == 1); the port has one
+walk state, so it plays the sound once per tick. The collapse's 0x326 runs
+for the whole counter (0x1c2 frames), as the exe's loop does, without a stop.
+
+**Tests:** `node tests/dragon.test.ts` ("dragon: ok"), which drives each
+site's private tick at a set frame; `tsc --noEmit -p client` is clean.
+
 ## 2026-10-24: Optimal PRS parser for quest files
 
 **What changed:** `prsCompressOptimal` in `client/src/formats/prscompress.ts`,

@@ -1154,6 +1154,106 @@ for (const n of [1, 2, 5]) {
   }
 }
 
+// The state sounds (DEVLOG 2026-10-24): each site runs one private tick, with the
+// frame after the animation set (speed 0.5, so the crossing is post - 0.5 < f <= post).
+{
+  const call = (ai: DragonAi, name: string) => (ai as unknown as Record<string, () => void>)[name]();
+  // One tick at post-animation frame `post`; returns the sound ids it played.
+  const tickSounds = (ai: DragonAi, name: string, post: number): number[] => {
+    const p = ai as unknown as { setSlot(i: number): void; mframe: number; speed: number };
+    p.setSlot(25);
+    p.speed = 0.5;
+    p.mframe = post - 0.5;
+    ai.events.splice(0);
+    call(ai, name);
+    return ai.events.flatMap((e) => (e.kind === 'se' ? [e.id] : []));
+  };
+  const ids = (a: number[]) => a.map((x) => x.toString(16)).join(',');
+
+  // 0x315: the walk (0x00423070 phase 0 -> TriggerSinowbeatSoundEffect, 0x0041d3d0) at 4 and 24.5.
+  {
+    const ai = brain();
+    const p = ai as unknown as { changing: boolean; mframe: number; speed: number };
+    p.changing = false;
+    const walk = (pre: number) => {
+      p.mframe = pre;
+      ai.events.splice(0);
+      call(ai, 'tickWalk');
+      return ai.events.flatMap((e) => (e.kind === 'se' ? [e.id] : []));
+    };
+    // tickWalk sets its own speed (0.6 x the walk speed), so the frame after the
+    // tick is pre + speed: a pre frame 0.1 short of 4 (or 24.5) passes it when the speed exceeds 0.1.
+    eq(ids(walk(4 - 0.1)), ids([0x315]), 'walk: the frame passes 4, sound 315');
+    check(p.speed > 0.1, `the walk speed is above 0.1 (${p.speed})`);
+    eq(ids(walk(5)), '', 'walk: no sound away from 4 and 24.5');
+    eq(ids(walk(24.5 - 0.1)), ids([0x315]), 'walk: the frame passes 24.5, sound 315');
+  }
+  // 0x317 / 0x318: flyUp (0x00422430 phase 0) at 14 (0x318) and 42 (0x317); the jump start is skipped (c870 = 1).
+  {
+    const ai = brain();
+    const p = ai as unknown as { c870: number };
+    p.c870 = 1;
+    eq(ids(tickSounds(ai, 'tickFlyUp', 14.25)), ids([0x318]), 'flyUp: frame 14 sounds 318');
+    eq(ids(tickSounds(ai, 'tickFlyUp', 42.25)), ids([0x317]), 'flyUp: frame 42 sounds 317');
+    eq(ids(tickSounds(ai, 'tickFlyUp', 30.25)), '', 'flyUp: frame 30 is silent');
+  }
+  // 0x31d: the tail (0x004227dc phase 0, 0x00422974) at 0 and 12.
+  {
+    const ai = brain();
+    (ai as unknown as { c86c: number }).c86c = 1;
+    eq(ids(tickSounds(ai, 'tickTail', 0.25)), ids([0x31d]), 'tail: frame 0 sounds 31d');
+    (ai as unknown as { c86c: number }).c86c = 1;
+    eq(ids(tickSounds(ai, 'tickTail', 12.25)), ids([0x31d]), 'tail: frame 12 sounds 31d');
+    (ai as unknown as { c86c: number }).c86c = 1;
+    eq(ids(tickSounds(ai, 'tickTail', 6.25)), '', 'tail: frame 6 is silent');
+  }
+  // 0x318 at frame 2 and 0x31e at 45: flyShoot sub-state 2 (0x00421494, 0x004215d5 / 0x00421601).
+  {
+    const ai = brain();
+    (ai as unknown as { c86c: number }).c86c = 2;
+    eq(ids(tickSounds(ai, 'tickFlyShoot', 2.25)), ids([0x318]), 'flyShoot: frame 2 sounds 318');
+    eq(ids(tickSounds(ai, 'tickFlyShoot', 45.25)), ids([0x31e]), 'flyShoot: frame 45 sounds 31e');
+  }
+  // 0x31b: the death (0x0041db28 phase 0, counter 0) at 60 and 98, without a position.
+  {
+    const ai = brain();
+    (ai as unknown as { c86c: number }).c86c = 0;
+    eq(ids(tickSounds(ai, 'tickDeath', 60.25)), ids([0x31b]), 'death: frame 60 sounds 31b');
+    eq(ids(tickSounds(ai, 'tickDeath', 98.25)), ids([0x31b]), 'death: frame 98 sounds 31b');
+    eq(ids(tickSounds(ai, 'tickDeath', 80.25)), '', 'death: frame 80 is silent');
+  }
+  // 0x325: every frame of the spiral (0x0041a364 sub-state 1), the burrow (0x0041f238, both
+  // sub-states) and the burrow out (0x0041ed68); not in the spiral's first sub-state.
+  {
+    const ai = brain();
+    const p = ai as unknown as { c86c: number; c870: number; f88c: number; f884: number };
+    p.c86c = 1;
+    p.f88c = 100;
+    p.f884 = 1;
+    eq(ids(tickSounds(ai, 'tickCircle', 10.25)), ids([0x325]), 'spiral: every frame sounds 325');
+    p.c86c = 0;
+    p.c870 = 0;
+    eq(ids(tickSounds(ai, 'tickCircle', 10.25)), '', 'spiral: the first sub-state is silent');
+    p.c86c = 0;
+    p.c870 = 0;
+    eq(ids(tickSounds(ai, 'tickBurrow', 10.25)), ids([0x325]), 'burrow: every frame sounds 325');
+    eq(ids(tickSounds(ai, 'tickBurrowOut', 10.25)), ids([0x325]), 'burrow out: every frame sounds 325');
+  }
+  // 0x326 (0x004203cc sub-state 1): every frame of the counter; 0x31a on the entry (phase 4, 0x00420502).
+  {
+    const ai = brain();
+    const p = ai as unknown as { c870: number };
+    p.c870 = 0;
+    eq(ids(tickSounds(ai, 'tickCollapse', 10.25)), '', 'collapse: sub-state 0 is silent');
+    p.c870 = 1;
+    eq(ids(tickSounds(ai, 'tickCollapse', 10.25)), ids([0x326]), 'collapse: sub-state 1 sounds 326');
+    const enter = brain();
+    enter.events.splice(0);
+    enter.setState(S.collapse);
+    eq(ids(enter.events.flatMap((e) => (e.kind === 'se' ? [e.id] : []))), ids([0x31a]), 'collapse entry sounds 31a');
+  }
+}
+
 // 31. Sids 0x19 (teleport) and 0x1a (fly move) are not reachable in the normal fight
 //     (DEVLOG 2026-10-21 "Dragon: sids 0x19 and 0x1a are pad-only"). Their only writers
 //     are the phase 2 / 0xb handlers, which run only under the pad pick (0x00423f74 gates

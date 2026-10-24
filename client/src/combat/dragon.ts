@@ -228,8 +228,13 @@ export function footNodes(side: number): readonly number[] {
 // breath play it too (0x00422ddb, while the counter after the increment is
 // below 30), and each fireball's constructor (0x004266b0, the call at
 // 0x00426766) plays 0x31f at its own place. The Dragon's other ids in
-// 0x314..0x326 are sound effects in the same way (the burrow, dive, emerge,
-// spiral and rain ones, not wired here).
+// 0x314..0x326 are sound effects in the same way. Wired at their sites (each
+// `emit({ kind: 'se' })` below cites its exe call): 0x315 (walk), 0x317 / 0x318
+// (flyUp, flyShoot), 0x31a (collapse entry), 0x31b (death), 0x31d (tail), 0x31e
+// (flyShoot), 0x325 (circle, burrow, burrowOut), 0x326 (collapse). Not wired: 0x319
+// (no call in the exe), 0x320 (its call at 0x004268e5 is in a fragment with no
+// owner, see the DEVLOG), the 0x318 sites at 0x0041ebde and 0x00421235 (not checked
+// against the port's emerge and land), and 0x314 at 0x0042365d (not checked).
 export const DRAGON_SE = { breath: 0x321, breathAfterFrames: 30, fireball: 0x31f } as const;
 
 // The Dragon's particle ids (create_particle_effect 0x0050b7a4 / 0x0050981c: the
@@ -1246,10 +1251,12 @@ export class DragonAi extends BrainBase {
         this.flags |= 0xe80;
         return;
       case S.collapse:
-        // 0x004203cc: animation 8 (fall), then 9 (lie), 10 (get up).
+        // 0x004203cc: animation 8 (fall), then 9 (lie), 10 (get up). Its phase 4 plays
+        // 0x31a at the Dragon (0x00420502).
         this.setSlot(8);
         this.air = 0;
         this.flags = (this.flags & ~0x800) | 0x680;
+        this.emit({ kind: 'se', id: 0x31a });
         return;
       case S.roar:
         // 0x004201f4: animation 2 (the roar), invulnerable and super armor.
@@ -1724,6 +1731,11 @@ export class DragonAi extends BrainBase {
     const c = this.walkSpeed();
     this.speed = f32(c * (this.changing ? 0.125 : 0.6));
     this.animate();
+    // 0x00423070 phase 0 calls TriggerSinowbeatSoundEffect (0x0041d3d0) after the
+    // animation: 0x315 (the walk's dust, 0x0041d403) at frame 4 or 24.5. ASSUMED: the
+    // input walk (the dump's handle_input_state_dragon_walk, exe address not read) calls
+    // it too under its field 0xb8 == 1 gate; the port has one walk state, so one sound.
+    if (this.passed(4) || this.passed(24.5)) this.emit({ kind: 'se', id: 0x315 });
     this.initVelocity();
     if (this.crossed(3)) this.footStrike(1);
     else if (this.crossed(24)) this.footStrike(-1);
@@ -1833,6 +1845,8 @@ export class DragonAi extends BrainBase {
   private tickTail(): void {
     this.animate();
     this.c86c++;
+    // 0x004227dc phase 0 (after the counter): 0x31d at the Dragon at frame 0 or 12 (call 0x00422979).
+    if (this.passed(0) || this.passed(12)) this.emit({ kind: 'se', id: 0x31d });
     if (this.c86c <= 1) return;
     if (this.crossed(DRAGON_TAIL.resetFrames[0]) || this.crossed(DRAGON_TAIL.resetFrames[1])) this.tailSeen.clear();
     this.tailContact();
@@ -1869,6 +1883,9 @@ export class DragonAi extends BrainBase {
       this.air = 1;
     }
     this.animate();
+    // 0x00422430 phase 0: 0x318 at frame 14 (0x00422677), 0x317 at 42 (0x0042269f).
+    if (this.passed(14)) this.emit({ kind: 'se', id: 0x318 });
+    if (this.passed(42)) this.emit({ kind: 'se', id: 0x317 });
     // 0x004226b7: the body's particle (+0x04) when the lift motion passes frame 46.
     if (this.crossed(46)) this.emitBody(this.ultimate ? DRAGON_PARTICLE_IDS.ultimate.f04 : DRAGON_PARTICLE_IDS.normal.f04);
     if (this.c870 === 1) {
@@ -1903,6 +1920,9 @@ export class DragonAi extends BrainBase {
     this.animate();
     const sub = this.c86c;
     if (sub === 2) {
+      // 0x00421494 sub-state 2: 0x318 at frame 2 (0x004215d5), 0x31e at 45 (0x00421601).
+      if (this.passed(2)) this.emit({ kind: 'se', id: 0x318 });
+      if (this.passed(45)) this.emit({ kind: 'se', id: 0x31e });
       // 0x0042162e: the take-off helper (+0x04) at frame 14 or 53, before the mouth.
       if (this.crossed(14) || this.crossed(53)) this.emitBody(this.pids().f04);
       this.tickMouth();
@@ -2301,6 +2321,8 @@ export class DragonAi extends BrainBase {
       }
       if (this.slotIndex !== 8) this.c870 = 1;
     } else if (this.c870 === 1) {
+      // 0x004203cc sub-state 1 (the counter runs to 0x1c1): 0x326 every frame (0x00420550).
+      this.emit({ kind: 'se', id: 0x326 });
       if (++this.c86c > 0x1c1) {
         this.c870 = 2;
         this.setSlot(10);
@@ -2420,6 +2442,8 @@ export class DragonAi extends BrainBase {
   // the 6x12's point facing the centre and run at it, faster each time.
   private tickBurrow(center: boolean): void {
     void center;
+    // 0x0041f238 phase 0, both sub-states: 0x325 every frame (call 0x0041f5b3).
+    this.emit({ kind: 'se', id: 0x325 });
     if (this.c86c === 0) {
       if (++this.c870 >= 60) {
         this.c870 = 0;
@@ -2441,6 +2465,8 @@ export class DragonAi extends BrainBase {
   // 0x0041ed68 phase 0 (state 0x12): turn to the rim point 0x600 a frame and
   // run at the burrow speed.
   private tickBurrowOut(): void {
+    // 0x0041ed68 phase 0: 0x325 every frame (call 0x0041f16e).
+    this.emit({ kind: 'se', id: 0x325 });
     this.initVelocity();
     if (this.dx !== 0 || this.dz !== 0) this.yaw = clampAngle(this.yaw, bamsOf(this.dx, this.dz), 0x600);
     this.x += sinB(this.yaw) * this.f888;
@@ -2542,6 +2568,8 @@ export class DragonAi extends BrainBase {
   private tickDeath(): void {
     this.animate();
     if (this.c86c === 0) {
+      // 0x0041db28 phase 0 (counter 0): 0x31b, no position, at frame 60 or 98 (call 0x0041dde5).
+      if (this.passed(60) || this.passed(98)) this.emit({ kind: 'se', id: 0x31b });
       if (this.crossed(57)) {
         this.deathRing(-35, 10, 12);
         this.deathBurst(-35, 10);
@@ -2677,6 +2705,8 @@ export class DragonAi extends BrainBase {
       return;
     }
     if (this.c86c !== 1) return;
+    // 0x0041a364 phase 0, sub-state 1 (the spiral): 0x325 every frame (0x0041a69b).
+    this.emit({ kind: 'se', id: 0x325 });
     const dTheta = Math.round(((this.f884 / this.f88c) * 65536) / TWO_PI);
     this.i87c += dTheta;
     this.x = this.f88c * sinB(this.i87c);
