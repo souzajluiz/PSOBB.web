@@ -22,8 +22,11 @@
 //     toggles the lock that sends the chat line to the team (classic/teamchat.ts). Both
 //     take the same Shift test as the menu keys (the TeamChatMenu_Update test on 0x2000000);
 //   - F11 keyboard_controls_toggle (697159,
-//     ChallengePlayerInfoWindow_UpdateTextInputHandler_0072f130, character option
-//     0x1000000): not ported (no mouse control mode);
+//     ChallengePlayerInfoWindow_UpdateTextInputHandler_0072f130) flips the character
+//     option 0x1000000 (Keyboard Controls OFF) and the key layer follows it
+//     (classic/options.ts toggleKeyboardControls, input/keyconfig.ts). The same Shift
+//     test as the menu keys; it is not read while a chat line is open (the exe's
+//     typing path returns before it);
 //   - F12 main_menu_2 opens and closes the main menu, as Home does (no shift test).
 // handle_chat_shortcuts (named dump line 674857) is the other reader of the same
 // option: it is the chat form, so the raw F1..F12 keys send the chat shortcut slots
@@ -81,7 +84,13 @@ export interface KeyLike {
   shiftKey: boolean;
 }
 
-export type FKeyAction = { kind: 'menu'; id: number } | { kind: 'mainMenu' } | { kind: 'help' } | { kind: 'teamChat' } | { kind: 'teamChatLock' };
+export type FKeyAction =
+  | { kind: 'menu'; id: number }
+  | { kind: 'mainMenu' }
+  | { kind: 'help' }
+  | { kind: 'teamChat' }
+  | { kind: 'teamChatLock' }
+  | { kind: 'keyboardToggle' };
 
 // What a function key does (null for none). shiftOption is the character option
 // 0x2000000 (Shift is then required, not forbidden).
@@ -94,6 +103,7 @@ export function functionKeyAction(e: KeyLike, names: readonly string[], shiftOpt
   if (n === 1) return { kind: 'help' };
   if (n === 9) return { kind: 'teamChat' };
   if (n === 10) return { kind: 'teamChatLock' };
+  if (n === 11) return { kind: 'keyboardToggle' };
   const id = FKEY_MENU_ID[n];
   return id === undefined ? null : { kind: 'menu', id };
 }

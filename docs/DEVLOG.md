@@ -15635,3 +15635,72 @@ Follow-up to "Customize (action palette editor) and the save upload (E7) traced 
 - Non-owner clients keep the follow point (FOLLOW_DISTANCE, 3 units) and the local walk until the packets correct them.
 
 **Checks:** `node tests/npcai.test.ts` ok (new cases above); `techniques`, `npcs`, `questflow`, `quests`, `questmisc`, `questboard` pass with Node 24 (`client/node_modules` symlinked to the main checkout's for the run, removed before the commit). `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome, no Playwright.
+## 2026-10-23: F11 Keyboard Controls ON / OFF (option 0x1000000, fixed key table); Tab traced
+
+**Exe.** F11 is `keyboard_controls_toggle` (input enum 30). Its handler,
+`ChallengePlayerInfoWindow_UpdateTextInputHandler_0072f130` (dump 697159), returns early
+while a chat line is open (the typing path, dump 697096). Otherwise it applies the same Shift
+test as the menu keys (option 0x2000000), refuses Ctrl and Alt, and flips option 0x1000000
+with `SessionData_SetCharacterOptionBitfield_007be17c` (set when clear, clear with mask
+0xfeffffff when set). Then it clears the window's focus bit, calls `enable_keyboard_controls()`
+and `send_packet0xed_subcommand1` (0x01ED, the option word). The Options window's row 2
+(Keyboard Controls, `classic/options.ts` OPTION_ROWS) writes the same bit.
+
+**What the bit does.** `ProcessCameraInput_00708bd4` (dump 665913) reads each role's key through
+`get_character_option(..., 0x1000000)`: when set it uses `GetKeyboardInputsWhenDisabled_00791b34`
+(exe 0x00791b34 = `0x0097b8e0 + role * 8`, the 58-entry table `g_KeyboardInputsWhenDisabled`,
+read with `tools/exedata.py read 0097b8e0 u 116`). That table has keycode_1 = 0 for roles 0..44,
+so the key is keycode_2: Enter (6), Backspace (7), Home (8), the arrows (10..13), F1..F12 (20..31),
+and the hotbar on the numpad (35..44: 0x68, 0x69, 0x70..0x76, 0x67). Every other role is 0:
+movement (0..3), the lock moves (4, 5), Space chat (9), End (14), palette (15..17), Ctrl (18), Camera Up (19).
+The manual's "Space only when keyboard enabled" is this table. The runtime gate
+`g_KeyboardControlsEnabled` (ProcessKeyboardInput_00708a68, dump 665837) is a separate flag the
+windows set and clear; it is not ported here.
+
+**Ported.**
+- `client/src/input/keyconfig.ts`: `KEYBOARD_OFF_KEYS` (the table as DOM names, roles 0..44),
+  `OPTION_KEYBOARD_OFF`, `keyboardOffFromFlags`, `keyboardOffOfCharacter`, `setKeyboardControls`,
+  `keyboardControlsOn`. `refreshKeys` fills KEYS / PALETTE_KEYS / HOTBAR_KEYS from the table when OFF;
+  `bindingKey` does the same (F keys stay).
+- `client/src/classic/options.ts`: `toggleKeyboardControls(full, send)` (flip the bit in the save copy,
+  set the keys, send 0x01ED). The Options row's `setFlags` also sets the keys.
+- `client/src/input/shortcuts.ts`: F11 is `keyboardToggle` (was none).
+- `client/src/classic/lobby.ts` and `client/src/render/fieldhud.ts`: F11 calls the toggle (lobby sends
+  through the lobby connection, the field through the view's `send`).
+- `client/src/net/bbsession.ts`: on 00E7 the saved option sets the keys at login.
+- Lobby and field movement: the lobby's WASD map (`MOVE_KEYS`, literal w/a/s/d) and the field's Space
+  check now read the key config (`moveKeyOf`, `KEYS.chat`). Under the default config these are the same keys.
+- `client/src/render/combat.ts`: the module-load copy `MOVE_KEYS` (stale after a rebind) is gone; the
+  freeze mash reads `KEYS` at call time. This was a bug for rebinding, not only for this change.
+- `client/src/render/lobbyview.ts`: the keyboard auto run / walk (Q / E fallback) is off with Keyboard Controls OFF.
+
+**Tab (traced, not ported).** The key is hard-coded: `ProcessCameraInput_00708bd4` (dump 666092,
+666096) sets `g_KeyboardSharedState[0xe]` on TAB (0x51), the bit the palette Left role 16 sets
+(switch case 0x10 at dump 666000). The manual's "Tab menu / character info change" (order of
+techniques in the shortcut menu) was not located as its own window in the dump within this pass.
+Left as missing; CONTROLS.md says so.
+
+**ASSUMED.**
+- The fixed table is the keys in use when the option is set (`KEYBOARD_OFF_KEYS`). That reading is the
+  exe's `GetKeyboardInputsWhenDisabled` call with keycode_1 = 0; the lookup path itself is not decompiled
+  past the switch.
+- The exe's always-on text input with the option set (`ChallengePlayerInfoWindow_UpdateTextInput_0072f248`
+  calls EnableTextInput) is not ported: the port opens a typing line only through a key that is bound.
+- Hotbar in OFF mode matches the numpad by its DOM digit (a top-row digit also answers).
+- Q / E auto run and walk are off with the option set (the exe has no key for them; the port's
+  fallback is ASSUMED from the earlier entry).
+
+**Checks.** `node tests/shortcuts.test.ts` (added: F11 mapping and modifiers; the toggle against the
+option word and the sent 0x01ED; the OFF key set, F keys, hotbar on the ten keys, the menu keys, a rebound
+key that returns when ON; the 00E7 read at 0x4EC). Passing: chatline, chatshortcut, combatdepth, controls,
+customize, emotes, fieldbgm, fieldhud, fkeys, guildcardmenu, homeleaves, lobbymain, lobbymenu,
+mainmenulayout, mobilecontrols, mobileinput, options, playermove, quickmenu, symbolchat, team, teammenu,
+townfield, trademenu, warpmenu. `cd client && npx tsc --noEmit -p .` exit 0. Not run: `tests/combat.test.ts`
+needs `vendor/newserv/build/newserv`, which this worktree does not have (ENOENT before any check). No Playwright.
+
+**Left.**
+- Tab (exe alias of the palette-left bit; the manual's technique-order menu not found).
+- The exe's `g_KeyboardControlsEnabled` runtime gate (set and cleared by the windows) is not modelled.
+- The always-on text input with the option set (above).
+- Mouse controls (option 0x700000), Ctrl+End, PageUp / PageDown, auto disconnect (ROADMAP line).
+- Chrome check of F11 in the field and lobby (no Playwright, per the brief).

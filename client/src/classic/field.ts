@@ -190,7 +190,8 @@ export class FieldScreen implements Screen {
       this.openQuickMenu();
       return;
     }
-    if (e.key === ' ') {
+    // Input Start (role 9, Space by default): none with Keyboard Controls OFF.
+    if (KEYS.chat && e.key.toLowerCase() === KEYS.chat) {
       e.preventDefault();
       this.chat.begin();
       return;

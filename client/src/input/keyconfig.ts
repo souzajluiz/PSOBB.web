@@ -332,25 +332,83 @@ export const PALETTE_KEYS: [string, number][] = [
 export const HOTBAR_BINDING_FIRST = 35;
 export const HOTBAR_KEYS: string[] = Array.from({ length: 10 }, () => '');
 
+// --- Keyboard Controls OFF ----------------------------------------------------
+// The character option 0x1000000 (Options > Keyboard Controls, row 2 of
+// classic/options.ts, the F11 key keyboard_controls_toggle at dump 697159): set = OFF.
+// ProcessCameraInput_00708bd4 (dump 665913) reads the key of each role through
+// GetKeyboardInputsWhenDisabled_00791b34 (exe 0x00791b34 = 0x0097b8e0 + role * 8)
+// instead of the config when the option is set. That table (58 entries, 8 bytes:
+// keycode_1 then keycode_2) has keycode_1 = 0 for roles 0..44, so the key is
+// keycode_2 and the config is not read. The keycode_2 values, by role:
+//   6 Decide 0x61 Enter, 7 Cancel 0x50 Backspace, 8 Menu 0x06 Home,
+//   10..13 the arrows (0x5E up, 0x5D down, 0x5C left, 0x5F right),
+//   20..31 F1..F12 (0x40..0x4B), 35..44 the hotbar on the ten keys (0x68..0x76 and
+//   0x67: 1, 2, 3 .. 9, then 0).
+// Every other role is 0 (no key): Move Forward/Backward/Left/Right (0..3), the lock
+// moves (4, 5), Input Start Space (9, so the chat does not open from the keyboard),
+// Symbol Chat End (14), the action palette and Ctrl (15..18), Camera Up (19), 32..34.
+// The hotbar keys are the numpad (NumLock on reports the digit).
+const KEYBOARD_OFF_CODE: Readonly<Record<number, number>> = {
+  6: 0x61, 7: 0x50, 8: 0x06, 10: 0x5e, 11: 0x5d, 12: 0x5c, 13: 0x5f,
+  35: 0x68, 36: 0x69, 37: 0x70, 38: 0x71, 39: 0x72, 40: 0x73, 41: 0x74, 42: 0x75, 43: 0x76, 44: 0x67,
+};
+const TENKEY_DOM: Readonly<Record<number, string>> = { 0x67: '0', 0x68: '1', 0x69: '2', 0x70: '3', 0x71: '4', 0x72: '5', 0x73: '6', 0x74: '7', 0x75: '8', 0x76: '9' };
+function keyboardOffDom(code: number): string {
+  return TENKEY_DOM[code] ?? domKeyOfCode(code);
+}
+// The DOM key of each role while the option is set ('' = none), roles 0..44.
+export const KEYBOARD_OFF_KEYS: readonly string[] = Array.from({ length: CONFIG_ENTRIES }, (_, i) => {
+  if (i >= 20 && i <= 31) return `f${i - 19}`;
+  const code = KEYBOARD_OFF_CODE[i];
+  return code === undefined ? '' : keyboardOffDom(code);
+});
+// The option word's offset in the 00E7 record (PSOBBCharacterFile option_flags, 0x4EC).
+export const OPTION_KEYBOARD_OFF = 0x1000000;
+const OPTION_FLAGS_AT = 0x4ec;
+
+// True when the option word has Keyboard Controls OFF.
+export function keyboardOffFromFlags(flags: number | null | undefined): boolean {
+  return flags !== null && flags !== undefined && (flags & OPTION_KEYBOARD_OFF) !== 0;
+}
+
+// True when a full character (00E7) has Keyboard Controls OFF; false without one.
+export function keyboardOffOfCharacter(full: Uint8Array | null | undefined): boolean {
+  if (!full || full.length < OPTION_FLAGS_AT + 4) return false;
+  return keyboardOffFromFlags(new DataView(full.buffer, full.byteOffset, full.byteLength).getUint32(OPTION_FLAGS_AT, true));
+}
+
 let active: Uint8Array = defaultKeyConfig();
+// Keyboard Controls ON (the option clear). OFF reads KEYBOARD_OFF_KEYS instead.
+let keyboardOn = true;
 
 // The config in use (a copy).
 export function currentKeyConfig(): Uint8Array {
   return active.slice();
 }
 
-// Makes cfg the config in use (an invalid or missing one becomes the default)
-// and points KEYS / PALETTE_KEYS at its keys. Returns the config in use.
+// Keyboard Controls ON (true) or OFF (false) for the keys in use.
+export function keyboardControlsOn(): boolean {
+  return keyboardOn;
+}
+
+// Sets Keyboard Controls and points KEYS / PALETTE_KEYS / HOTBAR_KEYS at its keys.
+export function setKeyboardControls(on: boolean): void {
+  keyboardOn = on;
+  refreshKeys();
+}
+
 // The DOM key bound to binding i of the config in use ('' when it is not a keyboard key
-// or has no key). Reads the live config, so a rebound function key follows it.
+// or has no key). Reads the live config, so a rebound function key follows it. With
+// Keyboard Controls OFF the fixed keys of KEYBOARD_OFF_KEYS are the ones that answer.
 export function bindingKey(i: number): string {
+  if (!keyboardOn) return KEYBOARD_OFF_KEYS[i] ?? '';
   const b = readBinding(active, i);
   return b.type === 0 ? domKeyOfCode(b.code) : '';
 }
 
-export function applyKeyConfig(cfg: Uint8Array | null | undefined): Uint8Array {
-  active = normalizeKeyConfig(cfg);
+function refreshKeys(): void {
   const keyOf = (i: number): string => {
+    if (!keyboardOn) return KEYBOARD_OFF_KEYS[i] ?? '';
     const b = readBinding(active, i);
     return b.type === 0 ? domKeyOfCode(b.code) : '';
   };
@@ -359,6 +417,13 @@ export function applyKeyConfig(cfg: Uint8Array | null | undefined): Uint8Array {
   PALETTE_KEYS[1] = [KEYS.paletteMiddle, 0];
   PALETTE_KEYS[2] = [KEYS.paletteRight, 2];
   for (let i = 0; i < HOTBAR_KEYS.length; i++) HOTBAR_KEYS[i] = keyOf(HOTBAR_BINDING_FIRST + i);
+}
+
+// Makes cfg the config in use (an invalid or missing one becomes the default)
+// and points KEYS / PALETTE_KEYS at its keys. Returns the config in use.
+export function applyKeyConfig(cfg: Uint8Array | null | undefined): Uint8Array {
+  active = normalizeKeyConfig(cfg);
+  refreshKeys();
   return currentKeyConfig();
 }
 

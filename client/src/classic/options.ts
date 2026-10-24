@@ -77,7 +77,15 @@ import { anchorX } from './ingame.ts';
 import { drawIcon } from './itempack.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
 import { KeyConfigMenu, type KeyConfigEnv } from './keyconfig.ts';
-import { applyKeyConfig, keyConfigFromCharacter, writeKeyConfigToCharacter } from '../input/keyconfig.ts';
+import {
+  applyKeyConfig,
+  keyboardControlsOn,
+  keyboardOffFromFlags,
+  keyConfigFromCharacter,
+  OPTION_KEYBOARD_OFF,
+  setKeyboardControls,
+  writeKeyConfigToCharacter,
+} from '../input/keyconfig.ts';
 import { PadConfigMenu, type PadConfigEnv } from './padconfig.ts';
 import {
   applyPadConfig,
@@ -176,6 +184,22 @@ export function readOptionFlags(full: Uint8Array | null): number | null {
 export function writeOptionFlags(full: Uint8Array | null, flags: number): void {
   if (!full || full.length < OPTION_FLAGS_OFFSET + 4) return;
   new DataView(full.buffer, full.byteOffset, full.length).setUint32(OPTION_FLAGS_OFFSET, flags >>> 0, true);
+}
+
+// F11 keyboard_controls_toggle (dump 697159, ChallengePlayerInfoWindow_UpdateTextInputHandler_0072f130):
+// the option 0x1000000 flips (SessionData_SetCharacterOptionBitfield_007be17c with mask
+// 0xfeffffff), the key layer follows it (input/keyconfig.ts), and the word goes to the
+// server as 0x01ED (send_packet0xed_subcommand1). Returns Keyboard Controls ON after the flip.
+export function toggleKeyboardControls(full: Uint8Array | null, send: (command: number, payload: Uint8Array) => void): boolean {
+  const next = ((readOptionFlags(full) ?? 0) ^ OPTION_KEYBOARD_OFF) >>> 0;
+  writeOptionFlags(full, next);
+  setKeyboardControls(!keyboardOffFromFlags(next));
+  try {
+    send(OPTION_FLAGS_COMMAND, optionFlagsPayload(next));
+  } catch {
+    // the connection is gone: the live keys still follow the flip
+  }
+  return keyboardControlsOn();
 }
 
 // --- brightness ---------------------------------------------------------------
@@ -538,7 +562,11 @@ export function characterOptionsEnv(
   return {
     text,
     flags: () => readOptionFlags(full()),
-    setFlags: (f) => writeOptionFlags(full(), f),
+    setFlags: (f) => {
+      writeOptionFlags(full(), f);
+      // Row 2 (Keyboard Controls) takes effect on the keys at once (input/keyconfig.ts).
+      setKeyboardControls(!keyboardOffFromFlags(f));
+    },
     send: (f) => send(OPTION_FLAGS_COMMAND, optionFlagsPayload(f)),
     padConnected: () => {
       try {
