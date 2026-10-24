@@ -35,6 +35,21 @@ the callback, so a throw cannot leave it stuck.
 entities", Undo enabled, title `*`). The same steps on the old code reproduced
 the reported symptoms (1 of 1, Undo disabled, no page error). `tests/questeditor.test.ts` and
 `tests/questeditorturn.test.ts` pass. `tsc --noEmit -p client` is clean.
+## 2026-10-24: Olga Flow: form 1 brain (partial)
+
+**What changed:** Olga Flow (`TBoss6PlotFalz`, enemy 0xca, area 0x1f) has a brain for form 1: `combat/olgaflowai.ts` (`OlgaFlowAi`, the 6xA4 encode / decode, the 40-row state table of 0x009a70a4, the motion pairs of 0x009a6dc0). `render/combat.ts` wires it like the Gal Gryphon: the spawn branch (`TBoss6PlotFalz`, in the gate with the other brains), the tick (`tickOlga`: the body's motion, the leg on animator 0, the 6xA4 events to `game.sendOlgaPacket`), the hit path (the brain takes the damage and owns the death; the 6x0A goes out without the dead flag), the remote 6x0A (HP = max - damage, a body at 0 starts its death), the receive of 6xA4 (`onOlgaAction` -> `applyRemote`). The kill is the brain's `killed` event, run once (`olgaKilled` -> `bossKilled`: the drop from the leader, EXP, 6x76 flag 8).
+
+**Brain:** the hub (state 1) holds 0x5a frames; the leader chooses the next attack (the dump's Olga1UpdateAttack, ProcessOlga1AttackSelection, StartOlga1Attack, SelectAndSend, the HP-progress 0x17 and 0x18), sends it as 6xA4, and applies it locally first. The exit (0x27) holds 30 frames and falls back to the hub. The sword wave (5..7, 8..10), the sword stab (11..20: 11 -> 0x1c, 16 -> 0x24) and the tail swipe (21) follow the decoded frame fns. Every state has a bounded timer (the no-hang rule). The death: HP 0 starts a 0x1c6-frame hold (the controller's kill timer, ASSUMED), then `killed`.
+
+**Exe evidence:** map `docs/bosses/olgaflow-map.md` section 13 (addresses, the constants read from PsoBB.exe, the wire layout). The bodies come from `reverse/refsrc/.../Psobb.exe-05112026.c` (Olga1ObjectUpdate 0x492a84, Olga1UpdateState 0x497e50, Olga1UpdateAttack 0x498484, ProcessOlga1AttackSelection 0x494678, StartOlga1Attack 0x494290, SetOlga1State 0x494c40 area).
+
+**ASSUMED:** the progress thresholds (200, the exe's BattleParam fallback), the attack chance (0.5), the selection table (the address is not bound), the heading and the height fields (+0x60, +0x3c), the death hold (the controller's 0x1c6), the 30-frame exit, the timers of rows not bound to a dump function (motion-length, capped at 900 frames).
+
+**Left:** the hit geometry (no attack lands: sword stab / wave / tail / lancer / mines), the beast's movement, the controller's sub-states (spawn, fade, kill), form 2 (unreached in this build), the effects and the sounds. The named-only dump functions (`olga1_*_func1/2/3`) are not bound to their rows (map 13.6).
+
+**Tests:** `node tests/olgaflowai.test.ts` (wire, table, entrance -> hub, the leader's sends and applyRemote, the sword chains, no state past the cap over 20000 ticks, the HP and the death hold once, remote damage). `node tests/combat.test.ts`, goldragon, galgryphonai, barbaray, dragon, enemyfsm, enemies, combatdepth, derolle, galgryphonstatesa pass. `tsc --noEmit -p client` clean.
+
+**Not checked:** in Chrome (no room with Olga Flow was run).
 
 ## 2026-10-24: Quest editor rotation gizmo
 

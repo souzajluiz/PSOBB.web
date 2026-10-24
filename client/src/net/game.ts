@@ -1065,6 +1065,11 @@ export class Game extends Lobby {
   // {12, 05, entity} {u16 state, u16 cursor (+0x684), u32 target client id
   // (+0x394, 0xFFFF none), f32 x, f32 z}. combat/dragon.ts.
   /** The Gal Gryphon's 0xA0 (the pattern step) or 0x9F (the target), built by combat/galgryphonai.ts. */
+  // Olga Flow's form 1 state from the leader (combat/olgaflowai.ts encodeOlgaA4): 6xA4, sent as built.
+  sendOlgaPacket(packet: Uint8Array): void {
+    this.conn.send(0x60, 0, packet);
+  }
+
   sendGalgryphonPacket(packet: Uint8Array): void {
     this.conn.send(0x60, 0, packet);
   }
