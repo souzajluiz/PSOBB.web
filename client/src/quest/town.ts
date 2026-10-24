@@ -54,6 +54,7 @@ import { followTick, fromBams, toBams } from '../render/playermove.ts';
 import { followPoint, headStatusFlags, NO_LEADER, NpcAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow } from './npcai.ts';
 import { HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARGET_HIT, HEAD_STATE_ATTACK, HEAD_STATE_CAST, HEAD_STOP_DISTANCE, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
 import { QuestUi } from './questui.ts';
+import { timerText } from './cmode.ts';
 import type { QuestSession } from './session.ts';
 import { QuestVM, type QuestCoordsHandler, type QuestMessage, type QuestNpcRequest, type QuestThread, type QuestVMHost } from './vm.ts';
 
@@ -227,6 +228,10 @@ export class QuestTown {
       npcPlay: (id) => this.npcPlay(id),
       getQuestFlag: (flag) => this.game.getQuestFlag(flag),
       setQuestFlag: (flag, set) => this.game.setQuestFlag(flag, set),
+      // The quest timer window: the status window's lines, at GUI 0x24 (254, 37)
+      // (CreateQuestWindowTimeObject_00717de4 / ListWindowObject_Constructor_00760f78;
+      // the guild card flag variant at 0xb9 is ASSUMED off).
+      timerChanged: (shown, seconds) => this.ui.setHud('quest-timer', shown ? { x: 254, y: 37, lines: [timerText(seconds)] } : null),
     };
   }
 
@@ -947,6 +952,7 @@ export class QuestTown {
     this.quest = session;
     this.insideZones.clear();
     if (!session) {
+      this.ui.setHud('quest-timer', null);
       this.npcAi.clear();
       this.npcMoves.clear();
       this.npcFollowHeads.clear();

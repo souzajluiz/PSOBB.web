@@ -11,6 +11,8 @@ import {
   SHAKE_FRAMES,
   StatusWindow,
   WindowShake,
+  drawStatusIcons,
+  statusIconTexel,
   type HudTextures,
   type PartyValues,
 } from '../client/src/classic/hud.ts';
@@ -176,6 +178,31 @@ const still = () => 0;
   check(!!s && s.clientId === 2 && s.hp === 20 && s.hpMaterials === 6 && s.hpStat === 30 && s.level === 10, '6x70 fields');
   const m2 = h.stats(2, { charClass: 6, level: s!.level, hpStat: s!.hpStat, hpMaterials: s!.hpMaterials }, s!.hp);
   check(m2.hp === 20 && m2.maxHp === maxHpFor(6, 30, 9, 6), '6x70 sets HP and max HP');
+}
+
+// The status icons (QuickMenuUpdateShiftaStatusIcons_007426d8): the texel table
+// 0x0096fd20 (icons 0..9 on texture 1, the photon blast icons 10..13 on texture 2),
+// the slots in order with 16 px steps, and an icon 14 keeps its slot.
+{
+  const eqT = (a: unknown, b: unknown, msg: string) => check(JSON.stringify(a) === JSON.stringify(b), `${msg} (${JSON.stringify(a)})`);
+  eqT([statusIconTexel(9), statusIconTexel(10), statusIconTexel(13), statusIconTexel(14)], [[128, 208], [72, 167], [168, 167], null], 'icon texels 9, 10, 13, 14');
+  const { ctx, draws } = recorder();
+  const t1 = { name: 'tex1' } as unknown as CanvasImageSource;
+  const t2 = { name: 'tex2' } as unknown as CanvasImageSource;
+  const both = { ...tex, status: t1, statusBlast: t2 } as HudTextures;
+  drawStatusIcons(ctx, both, [10, 6, 14, 8], 100, 50);
+  eqT(
+    draws.map((d) => [d.src, d.sx, d.sy, d.dx, d.dy]),
+    [
+      ['tex2', 72, 167, 100 + 226, 50 + 37],
+      ['tex1', 32, 208, 100 + 226 + 16, 50 + 37],
+      ['tex1', 96, 208, 100 + 226 + 48, 50 + 37],
+    ],
+    'blast icon on texture 2, icon 14 keeps slot 2, icon 8 at slot 3',
+  );
+  const none = recorder();
+  drawStatusIcons(none.ctx, tex, [6], 0, 0);
+  check(none.draws.length === 0, 'no status texture: nothing drawn');
 }
 
 console.log(`${checks - failures}/${checks} checks passed`);

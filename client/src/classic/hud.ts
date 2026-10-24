@@ -387,7 +387,8 @@ export interface HudTextures {
   panel: CanvasImageSource; // f256_hyouji.prs texture 13
   icons: CanvasImageSource; // f256_hyouji.prs texture 0
   font: CanvasImageSource; // textureenglish.xvm / texturejapanese.xvm texture 0
-  status?: CanvasImageSource | undefined; // f256_hyouji.prs texture 1 (status icons)
+  status?: CanvasImageSource | undefined; // f256_hyouji.prs texture 1 (status icons 0..9)
+  statusBlast?: CanvasImageSource | undefined; // f256_hyouji.prs texture 2 (photon blast icons 10..13)
 }
 
 export interface StatusValues {
@@ -510,7 +511,7 @@ export class StatusWindow {
       // Element 14: the gauge number, centred on x 68.
       const pb = Math.min(Math.max(0, Math.round(v.pb)), 500);
       text(68, 13, 68 - numberWidth(pb) * 0.5, () => drawGlyphNumber(ctx, tex.font, pb, wx + 68 + numberWidth(pb) * 0.5, wy + 13));
-      if (tex.status) drawStatusIcons(ctx, tex.status, v.statusIcons ?? [], wx, wy);
+      drawStatusIcons(ctx, tex, v.statusIcons ?? [], wx, wy);
     });
   }
 
@@ -553,23 +554,36 @@ export class StatusWindow {
 export const STATUS_ICON_POS = { x: 226, y: 37 } as const;
 export const STATUS_ICON_STEP = 16;
 export const STATUS_ICON_SIZE = { w: 32, h: 28 } as const;
+// The icon texel table 0x0096fd20 (g_TargetWindowStatusTextureOffsetX / Y,
+// 8 bytes per icon): icons 0..9 are on texture 1, the photon blast icons
+// 10..13 (QuickMenuCalculatePhotonBlastIconIndex_00715abc = index + 10) on
+// texture 2. Icon 14 is hidden (ui_target_window_status sets flag 0x2) but
+// still takes its slot.
 // prettier-ignore
 const STATUS_ICON_TEXELS: readonly (readonly [number, number])[] = [
   [0, 180], [32, 180], [64, 180], [96, 180], [128, 180],
   [0, 208], [32, 208], [64, 208], [96, 208], [128, 208],
+  [72, 167], [104, 167], [136, 167], [168, 167],
 ];
+export const STATUS_ICON_BLAST_FIRST = 10; // the first photon blast icon (texture 2)
 
 export function statusIconTexel(icon: number): readonly [number, number] | null {
   return STATUS_ICON_TEXELS[icon] ?? null;
 }
 
-export function drawStatusIcons(ctx: CanvasRenderingContext2D, tex: CanvasImageSource, icons: readonly number[], wx: number, wy: number): void {
+// The status icons of one window: QuickMenuUpdateShiftaStatusIcons_007426d8
+// keeps the occupied slots in order (the photon blast icon first), each one
+// at 16 px after the previous occupied one (unknown_update_shifta_hud_icon_helper),
+// so an icon hidden as 14 keeps its place (its window stays, flag 0x2 set).
+export function drawStatusIcons(ctx: CanvasRenderingContext2D, tex: HudTextures, icons: readonly number[], wx: number, wy: number): void {
   let k = 0;
   for (const icon of icons) {
     const t = statusIconTexel(icon);
-    if (!t) continue;
-    const x = wx + STATUS_ICON_POS.x + k * STATUS_ICON_STEP;
-    drawModulated(ctx, tex, t[0], t[1], STATUS_ICON_SIZE.w, STATUS_ICON_SIZE.h, x, wy + STATUS_ICON_POS.y, STATUS_ICON_SIZE.w, STATUS_ICON_SIZE.h);
+    const src = icon >= STATUS_ICON_BLAST_FIRST ? tex.statusBlast : tex.status;
+    if (t && src) {
+      const x = wx + STATUS_ICON_POS.x + k * STATUS_ICON_STEP;
+      drawModulated(ctx, src, t[0], t[1], STATUS_ICON_SIZE.w, STATUS_ICON_SIZE.h, x, wy + STATUS_ICON_POS.y, STATUS_ICON_SIZE.w, STATUS_ICON_SIZE.h);
+    }
     k++;
   }
 }
@@ -699,7 +713,7 @@ export class PartyWindow {
       text(100, 19, 100 - numberWidth(v.level), () => drawGlyphNumber(ctx, tex.font, v.level, wx + 100, wy + 19));
       drawBar(ctx, tex.panel, this.hp, wx + 44, wy + 7, BAR_COLORS.hp, a.reveal(44, 7, W));
       text(48, 19, 48, () => drawGlyphText(ctx, tex.font, 'Lv', wx + 48, wy + 19));
-      if (tex.status) drawStatusIcons(ctx, tex.status, v.statusIcons ?? [], wx + PARTY_ICON_POS.x - STATUS_ICON_POS.x, wy + PARTY_ICON_POS.y - STATUS_ICON_POS.y);
+      drawStatusIcons(ctx, tex, v.statusIcons ?? [], wx + PARTY_ICON_POS.x - STATUS_ICON_POS.x, wy + PARTY_ICON_POS.y - STATUS_ICON_POS.y);
     });
   }
 }

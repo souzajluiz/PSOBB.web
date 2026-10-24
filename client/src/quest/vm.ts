@@ -186,6 +186,9 @@ export interface QuestVMHost {
   resetMap?: () => void;
   // at_coords_talk / at_coords_call / set_obj_param registered or removed.
   coordsChanged?: (handlers: QuestCoordsHandler[]) => void;
+  // The quest timer window (show_timer / winset_time / hide_timer): shown or
+  // closed, and its seconds (the h'mm"ss text is drawn by quest/town.ts).
+  timerChanged?: (shown: boolean, seconds: number) => void;
   // get_gender: 0 male, 1 female, 2 unknown (quest/miscops.ts genderOfClass).
   playerGender?: (clientId: number) => number;
   // find_inventory_item / _ex: the local player's inventory.
@@ -268,6 +271,10 @@ export class QuestVM {
   areaTotal = 0;
   currentAreaNumber = 0;
   areaTitle = '';
+  // The quest timer window (CreateQuestWindowTimeObject_00717de4 / SetTimerText_00717e28):
+  // its seconds are set only while it is open.
+  timerShown = false;
+  timerSeconds = 0;
   // Challenge Mode state and rules (quest/cmode.ts).
   readonly cmode: ChallengeMode;
   // override_warp_dest_floor (F853): area warps go to current floor + 1.
@@ -1260,6 +1267,29 @@ export class QuestVM {
         this.areaTotal = this.int(a, 0);
         clearArgs();
         return;
+      // show_timer = window_time (0xC7): CreateQuestWindowTimeObject_00717de4 opens the
+      // window once; the text it had is kept. hide_timer = winend_time (0xC8):
+      // close_timer_window. winset_time (0xC9): SetTimerText_00717e28 with the register's
+      // seconds, only while the window is open.
+      case 'show_timer':
+        if (!this.timerShown) {
+          this.timerShown = true;
+          this.host.timerChanged?.(true, this.timerSeconds);
+        }
+        clearArgs();
+        return;
+      case 'hide_timer':
+        this.timerShown = false;
+        this.host.timerChanged?.(false, this.timerSeconds);
+        clearArgs();
+        return;
+      case 'winset_time':
+        if (this.timerShown) {
+          this.timerSeconds = R[this.reg(a, 0)] | 0;
+          this.host.timerChanged?.(true, this.timerSeconds);
+        }
+        clearArgs();
+        return;
       case 'set_area_title':
         this.areaTitle = this.str(a, 0);
         clearArgs();
@@ -1675,9 +1705,9 @@ const ACCEPTED_NO_OPS = new Set([
   'particle', 'particle2', 'particle_id', 'particle_pos', 'add_color_overlay', 'scroll_text',
   'chat_box', 'chat_bubble', 'npc_talk_on', 'npc_talk_off', 'npc_stop', 'npc_nont',
   'p_look_at', 'p_look', 'pl_walk', 'pl_walk_V3', 'p_disablewarp', 'p_enablewarp', 'warp_on', 'warp_off',
-  'winset_time', 'window_time', 'winend_time', 'prevent_item_select', 'keyword_detect',
+  'window_time', 'winend_time', 'prevent_item_select', 'keyword_detect',
   'quest_name', 'set_area_title_number', 'mesend', 'nop',
-  'set_bgm', 'show_timer', 'hide_timer', 'leti_fixed_camera', 'set_slot_invincible', 'set_slot_poison',
+  'set_bgm', 'leti_fixed_camera', 'set_slot_invincible', 'set_slot_poison',
   'npc_param', 'enable_npc_visual', 'prepare_npc_visual', 'pl_pkoff', 'pl_pkon',
   'set_eventflag', 'movement_enable', 'movement_disable', 'reset_timer',
 ]);
