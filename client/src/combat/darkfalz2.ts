@@ -18,11 +18,23 @@
 // (150), 9..12 MD_STOP1..4 (the pauses: 75 / 150 / 225 / 300), 13 MD_RECOVER
 // (150, ends in the enemy Resta).
 //
-// ASSUMED (neither the dump nor the JP C has it): the beam's path (the ball
-// positions are the zigzag of +-20 about a point that runs round the circle of
-// radius 100 at 50 a ball; the exe's steering of it was read only in part),
-// the reach of the technique objects, what MD_RECOVER's drain does to the
-// player (nothing here) and the single hit sphere.
+// The beam (UpdateVoloptForm7Hazard, dump 197587; the beam init at 0x0045A790 /
+// 0x0045A770; the constants written at 0x00459F00): a running point P on the
+// ring of MaxScale 280 (0x00A4577C = 230 + 50), a heading D stepped 50 (the
+// multiplier 0x00A45780) a ball, and a side V (the heading turned 90 degrees:
+// +0x4000 for BEAM_L, -0x4000 for BEAM_R) that flips every ball. Ball = P + V *
+// 20 (0x00900200). Each ball is a Rabarta (BEAM_L) or a fixed Rafoie (BEAM_R)
+// technique object (combat/techfire.ts, the enemy shot path through
+// DfFight.shoot) and gives the forced 2.5 radar icon (0x40200000, dump 197706).
+// ASSUMED: the heading source (the target cell minus the body: the exe copies
+// the words at +0x3bc / +0x3c0 / +0x3c4, which the dump's struct names do not
+// match), the levels (row 54 rabarta / rafoie; the exe passes the Form 1
+// animation rows' field7 / field6 to the same constructors), and the icon's
+// visibility (in the list only on the tick that threw the ball).
+//
+// ASSUMED (neither the dump nor the JP C has it): the reach of the technique
+// objects, what MD_RECOVER's drain does to the player (nothing here) and the
+// single hit sphere.
 
 import {
   DF_ID,
@@ -40,7 +52,8 @@ import {
 } from './darkfalzcommon.ts';
 import { F1, pickWeighted } from './darkfalz1.ts';
 import { TECH, techPower } from './techniques.ts';
-import { techReach } from './techfire.ts';
+import { enemyFire } from './techfire.ts';
+import { ENEMY_ICON_COLOR, type Icon } from '../classic/minimap.ts';
 
 // Animation table 0x009A61E0 (stride 0x10: mode, next, body motion, base motion).
 export const F2_ANIM_ROWS: readonly (DfAnimRow & { readonly motions: readonly number[] })[] = [
@@ -79,9 +92,10 @@ export const F2 = {
   beamAnim: 75, // the beam's animation starts at timer 75
   beamFire: 38, // the first ball at timer 38, then every second tick down to 4
   beamLast: 4,
-  beamStep: 50,
-  beamSide: 20,
-  beamRing: 100,
+  beamStep: 50, // the multiplier 0x00A45780: a step of the running point
+  beamSide: 20, // 0x00900200: a ball's offset from the point
+  beamRing: 280, // 0x00A4577C MaxScale: the running point's radius
+  beamIcon: 2.5, // icon3 0x40200000, forced
   tenchuFrames: 150,
   stopFrames: [75, 150, 225, 300] as readonly number[],
   recoverFrames: 150,
@@ -140,11 +154,15 @@ export class DfForm2 extends DfEntity {
   awake = true;
   private readonly fight: DfFight;
   private readonly target: Vec3 = [0, 0, 0];
-  // The beam's running point and the side it throws the next ball to.
+  // The beam's running point P (+0x418 / +0x420), its heading D (+0x400 /
+  // +0x408) and the side V (+0x40c / +0x414) of the next ball.
   private beamX = 0;
   private beamZ = 0;
-  private beamSide = 1;
-  private beamSign = 1;
+  private beamDx = 0;
+  private beamDz = 0;
+  private beamVx = 0;
+  private beamVz = 0;
+  private beamIcons: Icon[] = [];
   private readonly marks: Vec3[] = [];
   private markCount = 0;
   private marksShown = false;
@@ -205,15 +223,31 @@ export class DfForm2 extends DfEntity {
         break;
       case F2.beamL:
       case F2.beamR: {
-        // 0x0045A792: aim at the target cell; the ball point starts 100 out
-        // toward the body, and the side flips every ball.
+        // The beam init (0x0045A790 / 0x0045A770): P = the body scaled to
+        // MaxScale; D = the unit vector from the body to the target cell
+        // (ASSUMED, see the header; (1, 0) when it is under 0.01 away); V = D's
+        // heading turned by +0x4000 (L) or -0x4000 (R), as (sin, cos).
         this.anim.frame = 0;
         this.timer = F2.beamFrames;
-        this.beamSign = st === F2.beamL ? 1 : -1;
+        this.balls.length = 0;
+        this.ballCount = 0;
         const len = Math.hypot(this.x, this.z) || 1;
         this.beamX = (this.x / len) * F2.beamRing;
         this.beamZ = (this.z / len) * F2.beamRing;
-        this.beamSide = 1;
+        const tx = this.target[0] - this.x;
+        const tz = this.target[2] - this.z;
+        const tl = Math.hypot(tx, tz);
+        if (tl > 0.01) {
+          this.beamDx = tx / tl;
+          this.beamDz = tz / tl;
+        } else {
+          this.beamDx = 1;
+          this.beamDz = 0;
+        }
+        const heading = Math.trunc((Math.atan2(this.beamDx, this.beamDz) * 0x10000) / (2 * Math.PI));
+        const side = norm16(heading + (st === F2.beamL ? 0x4000 : -0x4000));
+        this.beamVx = sinB(side);
+        this.beamVz = cosB(side);
         break;
       }
       case F2.tenchu:
@@ -456,25 +490,8 @@ export class DfForm2 extends DfEntity {
     const f = this.fight;
     if (this.timer === F2.beamAnim) this.anim.set(this.st === F2.beamL ? 6 : 7);
     if (this.timer === F2.beamFire) f.events.push({ kind: 'se', id: 0x370 });
-    if (this.timer <= F2.beamFire && this.timer >= F2.beamLast && (this.timer & 1) === 0) {
-      const len = Math.hypot(this.beamX, this.beamZ) || 1;
-      // The side vector is the tangent of the point.
-      const tx = -this.beamZ / len;
-      const tz = this.beamX / len;
-      const bx = this.beamX + tx * F2.beamSide * this.beamSide;
-      const bz = this.beamZ + tz * F2.beamSide * this.beamSide;
-      const rabarta = this.st === F2.beamL;
-      this.ballAt(bx, bz, rabarta);
-      this.beamSide = -this.beamSide;
-      // Run along the ring.
-      let nx = this.beamX + tx * F2.beamStep * this.beamSign;
-      let nz = this.beamZ + tz * F2.beamStep * this.beamSign;
-      const nl = Math.hypot(nx, nz) || 1;
-      nx = (nx / nl) * F2.beamRing;
-      nz = (nz / nl) * F2.beamRing;
-      this.beamX = nx;
-      this.beamZ = nz;
-    }
+    this.beamIcons.length = 0;
+    if (this.timer <= F2.beamFire && this.timer >= F2.beamLast && (this.timer & 1) === 0) this.throwBall();
     this.blendOut(this.timer, F2.beamFrames);
     if (--this.timer < 0) {
       // 0x00458D99 / 0x00458DB0: the beam's timer runs out; Ultimate makes its
@@ -484,21 +501,42 @@ export class DfForm2 extends DfEntity {
     }
   }
 
-  private ballAt(x: number, z: number, rabarta: boolean): void {
-    if (this.ballCount < 24) {
-      const b = this.balls[this.ballCount] ?? (this.balls[this.ballCount] = { x: 0, z: 0, rabarta: false });
-      b.x = x;
-      b.z = z;
-      b.rabarta = rabarta;
-      this.ballCount++;
+  // One ball (UpdateVoloptForm7Hazard, dump 197587): the ball at P + V * 20 gets
+  // its icon and its technique object; then V flips, P is pulled back onto the
+  // ring when it is outside (its heading then points at the centre: the exe's
+  // b_minus_a(dir, pos) + dir is pos), and P steps 50 along D.
+  private throwBall(): void {
+    const rabarta = this.st === F2.beamL;
+    const bx = this.beamX + this.beamVx * F2.beamSide;
+    const bz = this.beamZ + this.beamVz * F2.beamSide;
+    this.beamIcons.push({ x: bx, z: bz, color: ENEMY_ICON_COLOR, shape: 1, scale: F2.beamIcon, heading: 0 });
+    this.spawnBall(bx, bz, rabarta);
+    this.balls[this.ballCount] = { x: bx, z: bz, rabarta };
+    this.ballCount++;
+    this.beamVx = -this.beamVx;
+    this.beamVz = -this.beamVz;
+    if (Math.hypot(this.beamX, this.beamZ) > F2.beamRing) {
+      const l = Math.hypot(this.beamX, this.beamZ) || 1;
+      this.beamX = (this.beamX / l) * F2.beamRing;
+      this.beamZ = (this.beamZ / l) * F2.beamRing;
+      const k = 0x10000 / (2 * Math.PI);
+      const dirA = Math.round(Math.atan2(this.beamDx, this.beamDz) * k);
+      const posA = Math.round(Math.atan2(this.beamX, this.beamZ) * k);
+      const a = norm16(dirA + angDiff(dirA, posA));
+      this.beamDx = -sinB(a);
+      this.beamDz = -cosB(a);
     }
+    this.beamX += this.beamDx * F2.beamStep;
+    this.beamZ += this.beamDz * F2.beamStep;
+  }
+
+  // The ball's technique object at the ground under it: a Rabarta (BEAM_L) or a
+  // fixed Rafoie (BEAM_R), an enemy's object (combat/techfire.ts) with the Dark
+  // Falz cut-off. It lives its cast frames and hits each player once in its box.
+  private spawnBall(x: number, z: number, rabarta: boolean): void {
     const level = rabarta ? this.row.rabarta : this.row.rafoie;
-    const reach = techReach(rabarta ? TECH.rabarta : TECH.rafoie, level);
-    for (const p of this.fight.alive()) {
-      if (Math.hypot(p.x - x, p.z - z) < reach) {
-        this.fight.events.push({ kind: 'tech', clientId: p.clientId, tech: rabarta ? 'rabarta' : 'rafoie', level, x, z, what: `Dark Falz ${rabarta ? 'Rabarta' : 'Rafoie'}` });
-      }
-    }
+    const shot = enemyFire({ tech: rabarta ? TECH.rabarta : TECH.rafoie, level, x, y: 0, z, heading: 0, fixed: !rabarta, enemy: false });
+    if (shot) this.fight.shoot(shot);
   }
 
   private makeMarks(): void {
@@ -544,6 +582,12 @@ export class DfForm2 extends DfEntity {
 
   get markPoints(): readonly Vec3[] {
     return this.marks;
+  }
+
+  // The forced radar icons of the balls thrown on this tick (render/combat.ts
+  // minimapIcons); none outside the beam.
+  minimapIcons(): Icon[] {
+    return this.st === F2.beamL || this.st === F2.beamR ? this.beamIcons : [];
   }
 
   get shownMarks(): number {

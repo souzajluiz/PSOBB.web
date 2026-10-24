@@ -15,6 +15,8 @@ import { DfForm2, F2, F2_ANIM_ROWS } from '../client/src/combat/darkfalz2.ts';
 import { advanceScale, DfForm3, F3, F3_ANIM_ROWS, HomingBolt, f3Spot } from '../client/src/combat/darkfalz3.ts';
 import { CASKET, CIRCLE, DfAnim, NO_PACKED, SCENE_FRAMES, STALL_TICKS, angDiff, ease, type DfEvent, type DfRow } from '../client/src/combat/darkfalzcommon.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
+import type { EnemyShot } from '../client/src/combat/enemyshots.ts';
+import type { FireShot } from '../client/src/combat/techfire.ts';
 import { bossPhaseOf } from '../client/src/audio/bossbgm.ts';
 
 let failures = 0;
@@ -52,6 +54,7 @@ const player = (clientId: number, x: number, z: number, dead = false): AiTarget 
 
 interface Fight {
   c: DarkFalzAi; // the leader's brain
+  shots: EnemyShot[]; // the shots the leader launched (the beam's balls)
   f: DarkFalzAi | null; // a follower's
   log: DfEvent[];
   sent: number;
@@ -70,6 +73,7 @@ function fight(over: { difficulty?: number; seed?: number; targets?: AiTarget[];
   const queue: Array<{ at: number; phase: number; packed: number }> = [];
   const fi: Fight = {
     c,
+    shots: [],
     f,
     log: [],
     sent: 0,
@@ -81,7 +85,8 @@ function fight(over: { difficulty?: number; seed?: number; targets?: AiTarget[];
         // The follower gets the leader's packets `lag` ticks after they went out
         // (0: in the same tick, before its own).
         if (f) while (queue.length && queue[0].at <= fi.t) f.receive(queue[0].phase, queue.shift()!.packed);
-        c.tick(fi.targets);
+        const frame = c.tick(fi.targets);
+        for (const s of frame.shots ?? []) fi.shots.push(s);
         for (let k = 0; k < c.events.length; k++) {
           const ev = c.events[k];
           fi.log.push(ev);
@@ -586,27 +591,47 @@ function toType2(fi: Fight): void {
   const f2 = fi.c.form2!;
   fi.targets[0].x = 90;
   fi.targets[0].z = 0;
-  // Twelve players about the ring of 100 so the sweep meets some.
-  for (let k = 0; k < 12; k++) fi.targets.push(player(10 + k, Math.sin((k * Math.PI) / 6) * 100, Math.cos((k * Math.PI) / 6) * 100));
+  // Twelve players about the ring of 280 (the beam's MaxScale) so the balls meet some.
+  for (let k = 0; k < 12; k++) fi.targets.push(player(10 + k, Math.sin((k * Math.PI) / 6) * 280, Math.cos((k * Math.PI) / 6) * 280));
   fi.until(() => f2.st === F2.beamL || f2.st === F2.beamR, 40000, 'a beam');
   const rabarta = f2.st === F2.beamL;
   fi.log.length = 0;
-  f2.ballCount = 0;
+  fi.shots.length = 0;
   let balls = 0;
-  const ringErr: number[] = [];
+  let iconTotal = 0;
+  let iconsOk = true;
+  const hitIds = new Set<number>();
+  const shotsSeen = new Set<EnemyShot>();
   while (f2.st === F2.beamL || f2.st === F2.beamR) {
     fi.step();
-    for (let i = balls; i < f2.ballCount; i++) ringErr.push(Math.abs(Math.hypot(f2.balls[i].x, f2.balls[i].z) - 100));
+    for (let i = balls; i < f2.ballCount; i++) {
+      // P stays within the ring of 280 (+50 a step) and the ball 20 off it.
+      check(Math.hypot(f2.balls[i].x, f2.balls[i].z) < 280 + 50 + 20 + 1, 'a ball stays about the ring of 280');
+    }
     balls = f2.ballCount;
+    // The forced 2.5 icon of each ball thrown on this tick (0x40200000, colour 0xffffa24c).
+    const icons = f2.minimapIcons();
+    iconTotal += icons.length;
+    for (const ic of icons) iconsOk = iconsOk && ic.scale === 2.5 && ic.shape === 1 && ic.color === 0xffffa24c;
+    // Each ball's technique object ticks once a game tick, as the fight's shots do.
+    for (const s of fi.shots) shotsSeen.add(s);
+    for (const s of shotsSeen) if (!s.done) for (const h of s.tick(fi.targets)) hitIds.add(h.clientId);
   }
   eq(balls, 18, 'eighteen balls (timer 38, 36 .. 4)');
-  check(ringErr.every((e) => e < 21), 'on the ring of 100 +-20');
+  eq(fi.shots.length, 18, 'each ball is a technique object of the fight');
+  eq(iconTotal, 18, 'one forced 2.5 radar icon a ball');
+  check(iconsOk, 'the icons are forced 2.5 enemy icons');
   eq(f2.balls[0].rabarta, rabarta, 'BEAM_L throws Rabarta');
+  eq(fi.shots.every((s) => (s as FireShot).fire.kind === (rabarta ? 'rabarta' : 'rafoie')), true, 'each ball is the beam\'s technique');
   eq(f2.st, f2.row.stopState, 'and the pause follows');
-  // Players on the ring are hit by the balls.
-  const tech = fi.log.filter((e) => e.kind === 'tech');
-  check(tech.length >= 6, `the balls hit players within their reach (${tech.length})`);
-  eq(tech.every((e) => e.kind === 'tech' && e.tech === (rabarta ? 'rabarta' : 'rafoie') && e.level === (rabarta ? 6 : 9)), true, 'with the beam\'s technique at row 54\'s level');
+  // The balls are removed when their technique ends (the cast frames).
+  for (let k = 0; k < 600 && [...shotsSeen].some((s) => !s.done); k++) {
+    fi.step();
+    for (const s of shotsSeen) if (!s.done) for (const h of s.tick(fi.targets)) hitIds.add(h.clientId);
+  }
+  eq([...shotsSeen].every((s) => s.done), true, 'every ball ends');
+  check(hitIds.size >= 1, `the balls hit players within their reach (${hitIds.size})`);
+  eq(f2.minimapIcons().length, 0, 'no icon once the beam is over');
 }
 
 {

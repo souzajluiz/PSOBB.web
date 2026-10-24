@@ -15092,3 +15092,40 @@ The entry above says the 3D view is not shifted in Chrome. That was a misreading
 - 0xca's own init: the constructor's indirect call through 0x009a6c64 (`call eax`, 0x0048dada) is not followed, and neither are the vtable targets' callees beyond one level.
 - The object type map (`TYPE_COLLISION_TABLES`) changed for about 30 types; if the object pillars ever read it, check it against the old values.
 - The Vol Opt monitors' own HP / hit flow (`VoloptMonitor`, `voloptPartHit`) is unchanged; the rows only change the reach, radius and aim.
+
+## 2026-10-23: Dark Falz form 2 beam balls (forced 2.5 icon) and the Gal Gryphon minion Effect
+
+**What changed:** the Dark Falz form 2 beam (BEAM_L / BEAM_R, `combat/darkfalz2.ts`) now runs the exe's running point and throws each ball as a technique object that lives its cast frames and is removed; the ball gets the forced 2.5 radar icon at its position (`FORCED` icon3 0x40200000, colour 0xffffa24c, shape 1, the `DfForm2.minimapIcons()` read by `render/combat.ts` `minimapIcons()`). The Gal Gryphon minion Effect is ported as `combat/galgryphonminion.ts` (state machine, homing, life, forced 1.5 icon); nothing creates it yet.
+
+**Exe evidence** (dump `Psobb.exe-05112026.c`, the constants from `tools/exedata.py` and the disassembly of `~/Downloads/psobb-client/PsoBB.exe`):
+- Beam init (state 6/7 enter, `objdump` 0x0045A770 / 0x0045A790): the running point P = body position scaled to MaxScale (`+0x418/+0x420` = body x/z, then `normalize * [0x00A4577C]`); the heading D is the unit vector to the target (`+0x400/+0x408`, `vec3_sub` with the body, `0x82F9C4`; the copied source words are `+0x3bc/+0x3c0/+0x3c4`, which do not match the Transform's `+0x3c0`/`+0x3c8` cell centre: ASSUMED, see below); the side V = (`int_sin`, `int_cos`) of the heading (`fpatan` in int units, `65536/2pi`) plus `+0x4000` for state 6 and `-0x4000` for state 7 (`+0x40c/+0x414`).
+- Constants (written by the init at 0x00459F00): MaxScale `[0x00A4577C]` = 230 + 50 = 280, multiplier `[0x00A45780]` = 50, ball scale `[0x00900200]` = 20, the damp of the minion `[0x009044B8]` = 0.995 and accel `[0x009044BC]` = 0.01.
+- Per ball (`UpdateVoloptForm7Hazard`, dump 197587, the branch `+0x3d0 == 6 || 7` with the even counter in 4..38): `local = V * 20 + P`; the icon at `local` (`unknown_add_minimap_icon3(&local_64, 0xffffa24c, 0x40200000, 1, 1)`, dump 197706); the object: `RabartaInit_006ec8ec(local)` (state 6) or `CreateRafoieEffectEntity_006ed87c(local)` (state 7); `V = -V`; if `|P| > 280` then P is put on the ring and D becomes `-(sin, cos)` of the point's own heading (`b_minus_a(dir, pos) + dir = pos`, `b_minus_a` is `second - first`, `0x007A900C`); then `P += D * 50`.
+- Minion (`UpdateGalgryphonMinion_004ab283`, dump 229526): the icon call (dump 229625) is after the state-2 branch returns, so it is in **state 1** (MOVE), not state 2. State 1: no ground under it (`unknown_get_ground_info`) -> dead; height = min(ground, 6) (`0x00903AE0`); timer > 0x168 -> state 2, timer 0; then (on the same tick) the velocity `(dir * 0.01 + v) * 0.995` per axis, the position += velocity, the icon at the new position, timer + 1. `dir` = the unit vector to the target player (`CalculateGalgryphonMinionEffectDirection_004ab4e8`, zero with no target). State 2: timer > 0x3c -> dead, else timer + 1.
+
+**Ported:**
+- `combat/darkfalz2.ts`: the constants (`beamRing` 280, `beamStep` 50, `beamSide` 20, `beamIcon` 2.5), the beam init, `throwBall()` (icon, `spawnBall`, the flip, the ring, the step), `spawnBall()` through `enemyFire({ tech: rabarta | rafoie, level: row.rabarta | row.rafoie, x, y: 0, z, fixed: BEAM_R, enemy: false })` and `DfFight.shoot` (the fight's shot list: the shot ticks, hits (group 2 with the freeze roll for a Rabarta, as an enemy's object) and is removed when done, drawn by `render/combat.ts` `TechFire.attach`). `balls` / `ballCount` are kept for the tests and no longer hold fixed points.
+- `render/combat.ts` `minimapIcons()`: form 2's icons from `falzHead.ai.form2`.
+- `combat/galgryphonminion.ts`: `GalgryphonMinionEffect.create(ground, x, z, slot)` (null without ground at or below 6), `update(players)`, `minimapIcons()`.
+- `classic/minimap.ts`: the GAL_GRYPHON comment (the minion's state 1 and where it is); `FORCED_ICON_RULES` unchanged.
+- `docs/ROADMAP.md`: the "Minimap left to do" line (the beam balls done; the minion open).
+
+**ASSUMED:**
+- The beam's heading source: the target cell minus the body (`this.target`, the cell centre the port already uses for the beam's aim). The exe's copy reads `+0x3bc`, `+0x3c0`, `+0x3c4`, while `TransformVoloptForm7HazardPosition` writes the cell centre to `+0x3c0` and `+0x3c8`; the struct's names in the dump disagree, so the exact source is not settled.
+- The levels: the port's `row.rabarta` / `row.rafoie` (row 54). The exe passes `field7_0x1c` / `field6_0x18` of the Form 1 animation speed row (`get_battleparams_animation_speeds(ep1_DarkFalzForm1...)`) to the same two constructors; the port's row values are assumed equal.
+- The icon's visibility: in the minimap's list only on the tick that threw the ball (the exe adds it inside the update, on the even ticks), not held for the ball's life.
+- The Rabarta / Rafoie hit path: enemy objects (`enemyFire`) with the Dark Falz cut-off (250), so a Rabarta freezes with the 0.75 roll (the exe's enemy Rabarta does; the port's form 1 beams still use the older immediate `techAt` events, unchanged here).
+- The minion's ground query takes the height 6 as its `fromY` (the exe's `unknown_get_ground_info(pos, 0x16ef)` takes the position, the flag, and no height).
+- The minion's direction: the Ghidra decompile passes the direction's x and z as `unaff_retaddr` and `fLerpSpeed`; the read is the one that fits the stored velocities (`+0x34` with x, `+0x3c` with z).
+
+**Checks:**
+- `cd client && npx tsc --noEmit -p .` clean (Node 24).
+- `node tests/darkfalz.test.ts` passes (the beam test now counts 18 balls, 18 shots, 18 forced 2.5 icons, every ball ends, the hits; the old ring-of-100 check is gone).
+- `node tests/minimap.test.ts` passes.
+- `node tests/galgryphonminion.test.ts` (new): creation on the ground (none, above 6, at 6, the height), state 0 -> 1 without a move, the homing step `0.01 * 0.995` and the icon (1.5, shape 1, colour 0xffffa24c), no target, a slot not in the party, the 362 move ticks and the 61 WIND ticks, the icon only in state 1, the ground gone (dead), the height following the ground.
+- Not run: Playwright (per the brief), Chrome.
+
+**Left:**
+- The Gal Gryphon brain (no `GAL_GRYPHON` dispatch in `render/combat.ts`; the port does not drive the Gal Gryphon at all). Its attack state 0 at animation time 22.0 makes the launcher object (`CreateGalgryphonMinion_004aa808`, 0x70 bytes, dump 228848; its path is `InterpolateMinionEffectPosition_007be6b8`) and the launcher's state 2 makes the Effect. Until that exists, the minion's icon never reaches the radar. Also not ported: the minion's sound (0x39f), its particles and its attack dispatch (`DispatchGalGryphonAttackEffect_004a8690` -> `DispatchSinowberillAttackEffect_0051fc9c`, its hits).
+- The Form 1 beams still use the immediate `techAt` events; moving them to the shot path would match the exe's object life the same way.
+- The beam's ASSUMED heading source (above) needs a trace of the writes to `+0x3bc..+0x3c4`, or a read of the target's vector in `UpdateVoloptForm7Hazard`'s caller.

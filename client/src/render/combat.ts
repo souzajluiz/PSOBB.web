@@ -1738,6 +1738,11 @@ export class CombatView {
         out.push(...(owner.form3?.minimapIcons() ?? []));
       }
     }
+    // Form 2's beam balls (combat/darkfalz2.ts minimapIcons): forced 2.5 icons
+    // on the tick that threw them. Form 2 has no part enemy, so it is read from
+    // the control.
+    const head = this.falzHead;
+    if (head?.ai instanceof DarkFalzAi) out.push(...(head.ai.form2?.minimapIcons() ?? []));
     return out;
   }
 

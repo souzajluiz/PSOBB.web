@@ -142,8 +142,10 @@ export const ENEMY_ICON_RULE: EnemyIconRule = { scale: 1, color: ENEMY_ICON_COLO
 // Berill's: the dump's enemy id 212 (0xd4) is the setdata row that gives
 // SINOW_BERILL (formats/setdata.ts, p6 == 0), and the state set (lock-on attack,
 // death) matches it. Sinow Berill is an enemy, not a boss.
-// Not ported: the Gal Gryphon minion (UpdateGalgryphonMinion_004ab283, dump
-// 229625, icon3 1.5 forced in its state 2): the port has no minion object.
+// The Gal Gryphon minion's Effect (UpdateGalgryphonMinion_004ab283, dump 229625)
+// has its own forced icon, 1.5, in its state 1 (MOVE), not state 2: combat/
+// galgryphonminion.ts minimapIcons(). Nothing creates the Effect yet (the Gal
+// Gryphon brain is not in the port), so no icon reaches the radar.
 export const FORCED_ICON_RULES: Readonly<Record<string, EnemyIconRule>> = {
   OLGA_FLOW_1: { scale: 5, color: ENEMY_ICON_COLOR, forced: true },
   OLGA_FLOW_2: { scale: 4, color: ENEMY_ICON_COLOR, forced: true },
