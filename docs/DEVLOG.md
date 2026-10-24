@@ -17263,3 +17263,29 @@ emote still plays). ASSUMED: the marker is in the buffer process_chat_message re
 3. `ApplyWeaponStatsVariant_005d4774` (shields), `ApplyItemStatBonuses_005d41a0` (units), the unit loop's subtraction, `ApplyEquipmentBonuses_005d490c`'s colored rings (`colored_ring_matching_boosts`) and `handle_item_set_bonus`.
 4. The buff multipliers m / md from the live buffs (the compare uses 0).
 5. The Item Pack panel keeps the delta model (`equipStatRows`, `candidateStats`), as the exe's Item Pack path does not call these functions.
+## 2026-10-23: Recons' orbit and launch checked against the exe (already in the brain); no port needed
+
+**Premise check.** The ROADMAP line lists the Recons' orbit / launch as open. The brain already has both: `ReconAi` in `combat/enemyfsmep2d.ts` (state 0 launch: `launchFrame`; state 4 orbit: `orbitFrame` / `orbitCheck`), wired by `render/combat.ts` (`lift`, `tiltX`, `spawnRecon`). Deldepth's disc is done (entry "2026-10-23: Deldepth's disc"). This entry checks each step against the exe and changes no code. Nothing in the orbit or launch was found to differ, except the start height (below).
+
+**Exe evidence** (PsoBB.exe 1.25.13; Ghidra for the bodies via `tools/ghidra/decomp.sh`, `tools/exedata.py` for the constants):
+
+- Launch, `FUN_0058bed4` (the Recon's state table gives 0x0058bed4 as the launch; the named dump's `update_recon` at 373138 is a Sinowberill-named body, not used): sub 0 moves by the velocity, damps horizontal velocity by 0.95 a frame (0x00928948), and eases the vertical speed: above 0.3 it becomes max(0.9 vy, 0.3) (0x00928944 = 0.9, 0x0092893c = 0.3), else min(vy + 0.1, 0.3) (0x00928938 = 0.1); falling, the mirror with -0.3 (0x00928940). The last step is clamped so it lands on the hover height. Sub 1 damps while the squared horizontal speed is above 0.01 (0x0092894c), then sub 2. The heading is atan2 of the velocity at enter. The port matches each branch.
+- Orbit, `FUN_0058b21c`: sub 0 takes the orbit point (`FUN_0058b7cc`: target x / z at radius +0x470, target y = +0x468 = hover; `FUN_0058a0c0` for the height). The test is the length of (dx, dz) (`FUN_007828e4` normalises the vector in place and returns its length, so the test is linear, not squared) < (0.2 r)^2 (0x00928978 = 0.2). The step is ROUND(+-65536 * speed / (r * 2 pi)) with the sign from `FUN_007751b0` <= 0.5 (0x00928974 = 0.5). Sub 1 adds half the step, sub 2 the whole step per frame; sub 1 ends when the length is below the speed (`fStack_1c`). The bob is sin(f8) * 10 (0x0092897c = 10) with f8 += 0x380 after each frame. The height eases with `FUN_0058a0c0`: when |d| >= 0.2 (0x00928a00), step d * 0.1 (0x009289f8), clamped to +-1.5 (0x009289f4, 0x009289fc); otherwise it snaps. The heading is atan2 to the target. The port matches each branch, including the linear length test (`tdist`).
+- Box launch vector (named dump, the spawn code with `local_24`, lines 372190..372226): kind 0 (0, +5, 0); kind 1 (0, -5, 0); kind 2 (2 * sin h, 0, 2 * cos h) with 2.0 at 0x00928634. `RecoboxAi.spawnFrame` matches.
+- Recon constructor `recon_constructor` (named dump 373093): position = the box's spawn (x, y, z); hover (+0x468) += the set entry's param1 (+0x4d8); orbit radius (+0x470) += param2 (+0x4dc); velocity from the spawn vector.
+- Constants read with `tools/exedata.py read <VA> f 1`: 0x928970 = 65536, 0x928968 = -65536, 0x92896c = 2 pi (6.2831850 as a float), 0x928974 = 0.5, 0x928978 = 0.2, 0x92897c = 10, 0x928a00 = 0.2, 0x928a0c = 5, 0x928634 = 2, 0x928938 = 0.1, 0x92893c = 0.3, 0x928940 = -0.3, 0x928944 = 0.9, 0x928948 = 0.95, 0x92894c = 0.01, 0x9289f4 = 1.5, 0x9289f8 = 0.1, 0x9289fc = 1.5.
+
+**Gap found (not changed):**
+
+- Start height. The exe's `DerolleInitializeFields_0058c250` (named dump 374433) sets the lift (+0x450) to the entity's y at construct, i.e. the box's spawn height. The port starts at kind-based values (floor 0, ceiling hover + 40, wall hover). That is ASSUMED in the code, and the exe's start needs the box's world height, which the port does not have (the box's lift is 0 and it is drawn on the ground). Left open.
+- Absolute vs relative height. The exe's hover (+0x468) and +0x450 are absolute heights; the port keeps the lift above the ground and the render adds the ground. The exe's `FUN_00589fdc` clamp (lift >= 5 above y) is the port's `hoverMin` clamp. The sync from +0x450 to the entity's y (+0x3c) was not traced (`FUN_0058c61c` is the flag only).
+- Walls. `FUN_0058ae3c` / `FUN_00520adc` (the wall-blocked move) is not reproduced; the port moves ignoring walls, as the entry above says.
+- The port clamps the hover to >= 5 (`Math.max(..., RECON.hoverMin)`); the exe has no clamp. Only matters if the set entry's param1 is below -40.
+
+**Checks:** `node tests/enemyfsmep2d.test.ts` (Node 24): all checks passed (its launch vectors, floor rise to hover, orbit / attack / room limits and tilt are already covered). `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24): exit 0, with `client/node_modules` linked from the main checkout for the run and removed afterwards. No test added: the existing cases cover the behaviour, and the constants above are pinned by this trace only. Not run in Chrome (no Playwright, per the brief).
+
+**Left (ROADMAP line stays open for these):**
+
+- Recon start height from the box's world y (needs the box's placed height in the port).
+- Morfos: the arm sub-entity's end (status bit 0x10 of +0xb0, setter not traced), the arm's own motion flags (0x4), the laser muzzle (body node 6, +0x4a0 capture), the wall's look while hidden.
+- Pofuilly: state 11 has no writer in the dump.
