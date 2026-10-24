@@ -756,6 +756,8 @@ export interface FxEmitter {
   angles?: 'object' | 'half';
   /** Particle flag 0x2000 (the table's 0x1000): the particles are destroyed at birth and never drawn (EffectFx.noDraw). */
   hidden?: boolean;
+  /** The table's flag 0x20: the particle is the technique BML's model (EffectFx.model; the njcm chunk, and the njm chunk or none). */
+  model?: { chunk: number; motion: number | null };
 }
 
 const E = (id: number, scale: number, mode: FxEmitter['mode'], extra: Partial<FxEmitter> = {}): FxEmitter => ({ id, scale, mode, ...extra });
@@ -789,41 +791,56 @@ export function objectEmitterOrient(o: FireObject, angles: NonNullable<FxEmitter
   return angles === 'half' ? [base[0] + Math.PI, base[1], base[2]] : base;
 }
 
-/** The effect flags an emitter is made with: the table's 0x1000 is particle flag 0x2000 (noDraw). */
+/**
+ * The effect flags an emitter is made with: the table's 0x1000 is particle flag 0x2000 (noDraw),
+ * the table's 0x20 is the model branch (flag 0x200, speed 1: the loops' z2 = 1.0).
+ */
 export function emitterFx(e: FxEmitter): EffectFx {
-  return e.hidden ? { noDraw: true } : {};
+  const fx: EffectFx = {};
+  if (e.hidden) fx.noDraw = true;
+  if (e.model) fx.model = { chunk: e.model.chunk, motion: e.model.motion, speed: 1 };
+  return fx;
 }
 
 // Gibarta (g_TechniqueVisualDefinitions, 0x0096d2f0), InitializeTechniqueVisuals_006e3ba0:
 // flag 2 = create_particle_effect5 at the object with the object's angles (+0x54 / +0x5c,
 // the loop's local_4c; the table's 0x181 has flag 0x2), else create_particle_effect3 3
 // ahead; flag 0x40 sets the scale; flag 0x20 makes the particle a model of the
-// technique BML (not drawn here). update_gibarta never moves them: they stay at
+// technique BML (the static model of njcm chunk flags >> 16, `model` below). update_gibarta never moves them: they stay at
 // the start. Tier 5 also makes particles 0x1e0 / 0x1e1 15 below the start.
 const GIB: FxEmitter[] = [E(0x180, 1, 'fixed', { ahead: 3 })];
 const GIB_ANGLED = { angles: 'object' } as const;
+// The flag 0x20 entries (InitializeTechniqueVisuals_006e3ba0): flag 2 = create_particle_effect5 at
+// the object with its angles, the model is njcm chunk (flags >> 16) and no motion; the model
+// draws its own scale (the effect's +0x44 stays 1.0, so the table scale is not used).
+const gibModel = (chunk: number): Partial<FxEmitter> => ({ angles: 'object', model: { chunk, motion: null } });
 const GIBARTA_FX: readonly (readonly FxEmitter[])[] = [
-  [...GIB, E(0x181, 1, 'fixed', GIB_ANGLED)],
-  [...GIB, E(0x181, 1.2, 'fixed', GIB_ANGLED)],
-  [...GIB, E(0x181, 1.4, 'fixed', GIB_ANGLED)],
-  [...GIB, E(0x181, 1.6, 'fixed', GIB_ANGLED)],
-  [...GIB, E(0x181, 1.8, 'fixed', GIB_ANGLED)],
-  [E(0x181, 2.2, 'fixed', GIB_ANGLED), E(0x1e0, 1, 'burst', { dy: -15 }), E(0x1e1, 1, 'burst', { dy: -15 })],
+  [...GIB, E(0x181, 1, 'fixed', GIB_ANGLED), E(0x182, 1, 'fixed', gibModel(2))],
+  [...GIB, E(0x181, 1.2, 'fixed', GIB_ANGLED), E(0x183, 1, 'fixed', gibModel(2))],
+  [...GIB, E(0x181, 1.4, 'fixed', GIB_ANGLED), E(0x184, 1, 'fixed', gibModel(2))],
+  [...GIB, E(0x181, 1.6, 'fixed', GIB_ANGLED), E(0x185, 1, 'fixed', gibModel(3))],
+  [...GIB, E(0x181, 1.8, 'fixed', GIB_ANGLED), E(0x186, 1, 'fixed', gibModel(3))],
+  [E(0x181, 2.2, 'fixed', GIB_ANGLED), E(0x18e, 1, 'fixed', gibModel(3)), E(0x1e0, 1, 'burst', { dy: -15 }), E(0x1e1, 1, 'burst', { dy: -15 })],
 ];
 
 // Barta (g_AntiTechEffectDefinitions, 0x0096ca84): flag 2 = create_particle_effect5 with
 // the object's angles (AntiTechEntity_Constructor_006dd85c's local_3c = +0x54 / +0x5c),
 // flag 1 (0x198) = create_particle_effect5 with X + 0x8000 (a half turn), else
-// create_particle_effect3 (0x192, not turned). All follow the ball (update_barta), scale
-// from the table unless flag 0x20 (a model: 0x193 / 0x1d7 / 0x1d8, not drawn here).
+// create_particle_effect3 (0x192, not turned). All follow the ball (update_barta). The
+// tier 5 flag 0x20 entries (0x193 / 0x1d8 / 0x1d7, no angles) are the BML model 0 with its
+// motion 0 (BARTA_PARTICLE_MODEL, dump 640489), drawn animated.
 const BARTA_ANGLED = { angles: 'object' } as const;
+const BARTA_MODEL = { model: { chunk: 0, motion: 0 } } as const;
 const BARTA_FX: readonly (readonly FxEmitter[])[] = [
   [E(0x190, 1, 'follow', BARTA_ANGLED), E(0x191, 1, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow')],
   [E(0x190, 1.2, 'follow', BARTA_ANGLED), E(0x191, 1.2, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow')],
   [E(0x190, 1.4, 'follow', BARTA_ANGLED), E(0x191, 1.4, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow')],
   [E(0x190, 1, 'follow', BARTA_ANGLED), E(0x191, 1, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow'), E(0x198, 1, 'follow', { angles: 'half' })],
   [E(0x190, 1.2, 'follow', BARTA_ANGLED), E(0x191, 1.2, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow'), E(0x198, 1, 'follow', { angles: 'half' })],
-  [E(0x190, 1.6, 'follow', BARTA_ANGLED), E(0x191, 1.6, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow'), E(0x198, 1, 'follow', { angles: 'half' })],
+  [
+    E(0x190, 1.6, 'follow', BARTA_ANGLED), E(0x191, 1.6, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow'), E(0x198, 1, 'follow', { angles: 'half' }),
+    E(0x193, 1, 'follow', BARTA_MODEL), E(0x1d8, 1, 'follow', BARTA_MODEL), E(0x1d7, 1, 'follow', BARTA_MODEL),
+  ],
 ];
 
 // Rabarta (g_ParticleEffectDataPointers, 0x0096dc6c): create_particle_effect3 at the

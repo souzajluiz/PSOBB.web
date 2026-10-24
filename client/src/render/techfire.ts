@@ -5,9 +5,9 @@
 // type 0 simulation), the sounds the SE ids of common.pac.
 //
 // ASSUMED / not drawn (see docs/DEVLOG.md "Technique visuals: Foie and Barta
-// families"): the model particles (the entries whose flag 0x20 hands the
-// emitter a model of the technique BML: Gibarta's spikes, Barta's icicle,
-// Rabarta's body, Rafoie's ring and fire sphere), the emitters' orientation
+// families"): the model particles of Barta and Gibarta are drawn (FieldParticles
+// model bursts, DEVLOG 2026-10-23 "Barta and Gibarta model particles"); Rabarta's
+// body, Rafoie's ring and fire sphere are not, the emitters' orientation
 // (the exe turns them by the object's angles; the particle engine here only
 // has a pitch), the dynamic light of the cast, the pitch of the creation
 // sounds, the wall impact of a Foie and the 0x18a stream of a level 25+ Barta.

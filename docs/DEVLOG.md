@@ -16215,3 +16215,44 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 - The safe-map table (`unknown_safe_maps`) and the battle arena's map id, so the sonar gate reads the real map.
 - The skip flag `0x800` on the other players, and the directional sound's position.
 - The Chrome check of the sonar ping and the rows.
+## 2026-10-23: Barta and Gibarta model particles (the table's flag 0x20 is the BML model, drawn animated for Barta)
+
+**What changed.** The model entries of the technique tables are drawn now. The table's flag 0x20 makes the particle a model (`create_particle_effect3` / `5` then `+0x2c |= 0x200`), and the particle's update draws that model instead of a quad:
+- Barta tier 5: 0x193, 0x1d8, 0x1d7 (no angles, follow the ball). Model = njcm chunk 0 of `bm_technic.bml` (`eff_f_bartaturara.xj`) with njm 0 (10 frames, the particle's one frame per update, held at the last frame).
+- Gibarta: 0x182 (tier 0, chunk 2), 0x183 (tier 1, chunk 2), 0x184 (tier 2, chunk 2), 0x185 (tier 3, chunk 3), 0x186 (tier 4, chunk 3), 0x18e (tier 5, chunk 3). The chunk is the table flags' high word (0x20022 / 0x20062 -> 2, 0x30062 -> 3); no motion (the loop sets the effect's njm to 0.0, so the model is static). Both are angled by the object (flag 2 = `create_particle_effect5`). Chunks 2 and 3 are `eff_f_gibartalv1.xj` and `eff_f_gibartalv4.xj`, which fits the tier.
+- Engine (`classic/particles.ts`): `EffectFx.model` (chunk, motion, speed). `Particle.anim` is njm_elapsed: +speed per update (the exe's last statement of the update, dump 291756), the drawer clamps it to the last frame. `ParticleSystem.models` is set for the model bursts (the spin and the floor, as before).
+- Render (`render/hitfx.ts`, `render/hitmodels.ts`): a model burst keeps one copy of the model per live particle (shared geometry, own materials and nodes, `NodeAnimator.pose(anim)` for the motion). Copies return to a pool when their particle dies. The transform is the one already used for the ice shards: T(p) S(size) Rz(z) Rx(x) Ry(spin), with (x, z) = `velocityAngles` of the step.
+- Wiring: `combat/techfire.ts` (the tables, `emitterFx`), `combat/hitmodels.ts` (`TECH_PARTICLE_BML`, `BARTA_PARTICLE_MODEL`, `GIBARTA_PARTICLE_MODEL`), `render/techfire.ts` comment. Barta's and Gibarta's models are no longer 'not drawn'.
+
+**Exe evidence** (named dump `refsrc/.../Psobb.exe-05112026.c`; tables decoded from PsoBB.exe with `tools/exedata.py`: the tier pointers are at `0x0096ca84 + 8t` (Barta) and `0x0096d2f0 + 8t` (Gibarta)):
+- Barta: the loop (`AntiTechEntity_Constructor_006dd85c`, dump 640449..640500): flag 0x20 -> `uVar6 = unknown_get_njcm_chunks(g_CurrentBmlBuffer, 0)`, `uVar7 = get_njm_chunk(g_CurrentBmlBuffer, 0)`, `uVar2 = g_CurrentXvmTexture`; the effect's +0x50 = njcm, +0x54 = xvm, +0x58 = njm, +0x60 = 1.0 (z2), +0x2c |= 0x200 (dump 640489..640500).
+- Gibarta: `InitializeTechniqueVisuals_006e3ba0` (dump 644166..644175): flag 0x20 -> `unknown_get_njcm_chunks(g_CurrentBmlBuffer, uVar4 >> 0x10)`, +0x50 = chunk, +0x54 = xvm, +0x58 = z = 0.0, +0x60 = z2 = 1.0, +0x2c |= 0x200.
+- The buffers: `InitializeTechniqueAnimations_006e2318` (dump 643020..643034) loads `bm_technic.bml` as `g_CurrentBmlBuffer` and `Technic.gvm` (read as `technic.xvm`) as `g_CurrentXvmTexture`.
+- The draw (`update_particle_effect_single_particle`, `ParticleEffectSingleParticle_Update_0050e698`, dump 291966..292000): with 0x200 set and an njcm and xvm present (and not the 0x400 cloak), position = next_position + unk_vec3; `Vector3f_GetAnglesZ(velocity)` -> local_30 (X) and local_28 (Z); the stack is translate, scale(width_scale), `rotate_matrix_by_int_angle(Z)`, `maybe_rotate_matrix_around_x(X)`, `matrix_rotation_y(g_VelocityAngles_y)`, `matrix_rotation_y(spin = (short)unk.angle)` (or the NPC camera yaw with 0x1000); then `render_animated_xj(njcm, njm, njm_elapsed)` when njm is set, `RenderXJModel_008317b6` when not. The quad path is the `(flags & 0x200) == 0` branch of the same test, just before it.
+- The per-frame advance: `njm_elapsed += field_0x114` (+0x114 = the effect's z2), clamped to `njm->dwUnk_0x04 - 1` (dump 291756..291766).
+- Shade: `ParticleEffectSingleParticle_SetColor_00508958` (dump 287693): blend SRCALPHA / INVSRCALPHA for the non-NT path (`SrcDestBlend_Save(1,4,5)`), SRCALPHA / ONE for NT (`(1,4,1)`); the blend table `0x00a219f8` is `1..` (index i = D3DBLEND i+1).
+- Model data check (`tools/exedata.py` + the port's `EnemyArchive` over `data.gsl`, scratch only): `bm_technic.bml` 17 entries, 12 models, 5 motions; model 0 `eff_f_bartaturara.xj` (1 object, no own textures, motion 0 = 10 frames: scale Y 0 -> 1), model 2 `eff_f_gibartalv1.xj`, model 3 `eff_f_gibartalv4.xj` (1 object each).
+
+**ASSUMED:**
+- `technic.xvm` is the texture list of `Technic.gvm` (the exe's `g_CurrentXvmTexture`); the model's textures are looked up by the same ids (the ice shard's convention).
+- The port's model index is the njcm chunk index and `archive.motion(0)` is njm chunk 0 (the same convention as the ice shard and the shatter; the names above fit the tiers).
+- The model's scale is the particle's `q.size`: the exe's `width_scale` is `scale_x * field52`, and both are 1.0 here (the effect's +0x44 is not written by the model loops), but the port's `size` is the quad convention for `width_scale` (already ASSUMED in the quad path), so it is inherited.
+- The colour and fade: the exe passes the particle's colour and alpha to `SetColor` (TFACTOR constants, `_g_ParticleBaseAlpha` = -1 applied to `byte / 255`, which the port does not model). The port keeps the quad's shade: material colour = the particle's RGB, opacity = its fade, the XJ material's own blend. The exact blend (SRCALPHA/INVSRCALPHA vs SRCALPHA/ONE, by the NT flag) is not ported.
+- `g_VelocityAngles_y_angle` is 0 (not written by the draw path; the same as the ice shard).
+- The loops pass no per-entry index, so every Barta model entry shares chunk 0 (the code shows that; recorded as the exe's behaviour, not a guess about the port).
+- The Gibarta table's high word is only read for the chunk (the loop does not read its other bits: 0x10000 in 0x30062 has no use in this loop).
+
+**Checks:**
+- `node tests/particleorient.test.ts` ALL PASS (new checks: the Barta tier 5 and Gibarta tier 0..5 model entries with chunk and motion, `emitterFx` model state, a model particle's motion frame advancing once per update (anim 3 after the spawn update and two more), a quad's anim 0). The Gibarta and Barta table strings in the test carry `$chunk` / `m<motion>` markers.
+- `node tests/techfire.test.ts`: the two checks that expected the model entries absent (`Barta tier 5 without its models`, `Gibarta tier 2 without its spike model`) now expect the model entries (0x193 / 0x1d8 / 0x1d7; 0x184).
+- `particlespawn`, `particleslope`, `telepipe`, `techlightning`, `hitfx`, `deathfx`, `dragon`, `techniques`, `enemyfsmep2c` pass (Node 24).
+- Scratch checks (not committed): the BML models and motion counts above, and a copy of model 0 has its own nodes and animator (the pose at frame 5 and 9 differs from frame 0 in scale).
+- `cd client && npx tsc --noEmit -p .` exit 0 (Node 24; `client/node_modules` linked from the main checkout for the run, removed before the commit).
+- Not run in Chrome, no Playwright (per the brief): the model draw, the copy pool and the blend are not seen on screen.
+
+**Left:**
+- The colour / alpha path (the exe's `SetColor` TFACTOR and the blend by the NT flag) is ASSUMED as above; check on screen against a Barta cast.
+- Rabarta's flag 0x20 entries and Rafoie's ring / fire sphere are still not drawn (the RABARTA_FX comment).
+- The 0x400 cloak branch and the advanced-effects setting (`get_settings_advanced_effect_`) are not modelled: the model is always drawn.
+- A copy per live model particle (the tree is cloned, not instanced): not measured; if the bursts get large, share one pose per burst among particles with the same age.
+- The NJ animator's key interpolation is the enemy motion code's (`NodeAnimator`), not checked against `render_animated_xj` frame by frame.
