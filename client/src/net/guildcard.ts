@@ -22,6 +22,7 @@
 // phosg::crc32, which newserv uses; the test checks the standard check value).
 
 import { readUtf16, type Command } from './bbconnection.ts';
+import { GCF_CARD_RECEIVED, GCF_LIST_ADD, guildCardFlags } from './guildcardflags.ts';
 
 // Sizes and offsets of the guild card file (exe: g_ChallengeModeMainDataBuffer, 0xd590 bytes).
 export const GC_FILE = {
@@ -564,6 +565,7 @@ export class GuildCardClient {
   // same card number is removed first, the list holds 7 (the oldest goes) and the new
   // result is last (ASSUMED: the order is the list's index order).
   addRecent(result: GuildCardSearchResult): void {
+    guildCardFlags.set(GCF_LIST_ADD);
     const i = this.recent.findIndex((r) => r.guildCardNumber === result.guildCardNumber);
     if (i >= 0) this.recent.splice(i, 1);
     if (this.recent.length >= 7) this.recent.shift();
@@ -599,6 +601,9 @@ export class GuildCardClient {
         return 'updated';
       }
     }
+    // The exe sets g_GuildCardFlags bit 2 for any card that is not an update of a listed card
+    // (handle_packet0x60_subcommand0x6, dump 758219), a full group included.
+    guildCardFlags.set(GCF_CARD_RECEIVED);
     const at = this.received.findIndex((c) => c.guildCardNumber === incoming.guildCardNumber);
     if (at >= 0) this.received[at] = incoming;
     else if (this.received.length < RECEIVED_SLOTS) this.received.push(incoming);

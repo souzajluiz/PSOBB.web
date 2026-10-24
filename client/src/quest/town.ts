@@ -56,6 +56,10 @@ import { acquireClosestTargets, HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARG
 import { TECH } from '../combat/techniques.ts';
 import { QuestUi } from './questui.ts';
 import { timerText } from './cmode.ts';
+import { GUI_POSITION, GUI_TIMER_NORMAL, guildCardFlags } from '../net/guildcardflags.ts';
+
+// Text centre of the quest timer box, from the GUI point (the exe's 42 in the element +8 formula).
+const QUEST_TIMER_CENTRE = 42;
 import type { QuestSession } from './session.ts';
 import { QuestVM, type QuestCoordsHandler, type QuestMessage, type QuestNpcRequest, type QuestThread, type QuestVMHost } from './vm.ts';
 
@@ -76,6 +80,8 @@ export interface QuestTownOptions {
 
 export class QuestTown {
   readonly ui: QuestUi;
+  // The GUI index the open quest timer window was built at (null while it is closed).
+  private questTimerGui: number | null = null;
   private game: Game;
   private view: GameView;
   private files: ClientFiles;
@@ -229,10 +235,16 @@ export class QuestTown {
       npcPlay: (id) => this.npcPlay(id),
       getQuestFlag: (flag) => this.game.getQuestFlag(flag),
       setQuestFlag: (flag, set) => this.game.setQuestFlag(flag, set),
-      // The quest timer window: the status window's lines, at GUI 0x24 (254, 37)
-      // (CreateQuestWindowTimeObject_00717de4 / ListWindowObject_Constructor_00760f78;
-      // the guild card flag variant at 0xb9 is ASSUMED off).
-      timerChanged: (shown, seconds) => this.ui.setHud('quest-timer', shown ? { x: 254, y: 37, lines: [timerText(seconds)] } : null),
+      // The quest timer window: the status window's lines. The window is built on show
+      // (CreateQuestWindowTimeObject_00760f42 -> ListWindowObject_Constructor_00760f78 ->
+      // unknown_soccer_scoreboard_positioning): GUI 0x24, or 0xb9 while g_GuildCardFlags & 7 is set
+      // (guildcardflags.ts). The text is centred on the GUI point + 42 (UpdateWindowPositionForText_00761040).
+      timerChanged: (shown, seconds) => {
+        if (!shown) this.questTimerGui = null;
+        else this.questTimerGui ??= guildCardFlags.positionGuiIndex();
+        const gui = GUI_POSITION[this.questTimerGui ?? GUI_TIMER_NORMAL] ?? GUI_POSITION[GUI_TIMER_NORMAL]!;
+        this.ui.setHud('quest-timer', shown ? { x: gui.x, y: gui.y, lines: [timerText(seconds)], centre: QUEST_TIMER_CENTRE } : null);
+      },
     };
   }
 
@@ -998,6 +1010,7 @@ export class QuestTown {
     this.insideZones.clear();
     if (!session) {
       this.ui.setHud('quest-timer', null);
+      this.questTimerGui = null;
       this.npcAi.clear();
       this.npcMoves.clear();
       this.npcFollowHeads.clear();

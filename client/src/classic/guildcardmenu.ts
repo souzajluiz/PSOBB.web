@@ -172,6 +172,7 @@
 //     the overlap in the card list is not decided (which one the exe keeps there is not traced).
 
 import { se, SE } from '../audio/se.ts';
+import { GCF_CARD_RECEIVED, guildCardFlags } from '../net/guildcardflags.ts';
 import type { GuildCard, GuildCardBook, GuildCardClient, GuildCardSearchResult } from '../net/guildcard.ts';
 import { wrapGameText } from './chat.ts';
 import { drawListWindow, INSET, listKey, type ListItem } from './fieldwindows.ts';
@@ -716,7 +717,11 @@ export class GuildCardMenu {
 
   private menuKey(e: MenuKey): UnportedAction | null {
     const r = listKey(e, this.menu, this.menuState);
-    if (r === 'cancel') this.phase = 'closed';
+    if (r === 'cancel') {
+      // QuickMenuObject_CloseGuildCardMenu_00717d10 clears g_GuildCardFlags bit 2.
+      this.phase = 'closed';
+      guildCardFlags.clear(GCF_CARD_RECEIVED);
+    }
     if (r !== 'decide') return null;
     const row = this.menu[this.menuState.cursor]!;
     if (row.value === GUILD_MENU_STATE.cardList) {

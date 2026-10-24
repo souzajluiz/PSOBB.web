@@ -17784,3 +17784,48 @@ Trap Vision (tool, item 8):
 ## 2026-10-23: correction to the tekker Result entry
 
 The tekker Result entry says ItemAttributesPanel_Update_00726ee2 and the page 2/3 panel are unreachable. That is wrong: 0x726ee2 sits inside FUN_00726dc8, which is entry 1 of the weapon row of the kind x page table at 0x009f2520, dispatched by GameList_RenderSelectionDisplay_00727450 (`call *0x9f2520(,%ebx,4)` at 0x7275a7). See the "item detail pages" entry. Which windows draw the paged panel is still being traced.
+
+## 2026-10-23: HUD timer position (flags), timer box centre, remote photon blast icons (follow-up)
+
+**Premise check:**
+- `g_GuildCardFlags & 7` is not "the guild card menu state" alone. The bits positioning reads are set by three different events (see below). The previous entry's "bits 1, 2, 4: the guild card menu state" is wrong for bits 1 and 4.
+- The timer never takes 0xba. `UpdateWindowPositionForText_00761040` (dump 734448) clears the window flag 0x1 right after the constructor, so the 0xba branch of `unknown_soccer_scoreboard_positioning` is not reached for the timer.
+- The timer text is not left-anchored. The exe's element +8 is `textWidth * -0.5 + 42` (floats 0x974cac, 0x974cb0), so the text sits at origin + 42 - width / 2: the box is centred on GUI point + 42.
+- The remote photon blast icon is not driven by 6x39 / 6x3A (see the last item below).
+
+**Exe evidence** (dump `Psobb.exe-05112026.c`; code via `objdump`, `exe.s`; table via `tools/exedata.py`):
+- `ListWindowObject_Constructor_00760f78` (dump 734395) -> `unknown_soccer_scoreboard_positioning` (734415): GUI 0x24 when `(g_GuildCardFlags & 7) == 0`, else 0xb9. The timer is built on show (`CreateQuestWindowTimeObject_00760f42`, dump 734381), so the bits are read then.
+- Bit 0x1: `Entity_CopyFrom_00813930` path (dump 831514; the 0x17 packet handler label 0x0081384c). `ClearEntityFlags_008139a4` (831541) clears it. The port has no entity records, so it is never set here (ASSUMED that the reference state did not have it).
+- Bit 0x2: `handle_packet0x60_subcommand0x6` (dump 758219), a valid 6x06 card that is not an update of a card the exe's list already holds (`HandleGuildCardUpdate_00781acc`, dump 758294, returns 0 when no entry matches; ASSUMED from its loop). Cleared by `QuickMenuObject_CloseGuildCardMenu_00717d10` (dump 678948).
+- Bit 0x4: `GuildCardList_AddOrMoveToFront_00827f58` (dump 841388; handler table entry 0x18 at dump 776274). The port's `addRecent` is this list (its comment says so; ASSUMED). `ResetGuildCardList_00828888` (dump 841938) clears it; no caller traced.
+- Bits 0x8 (trade, `HandleTradeGuildCardPacket_00824c80`), 0x10 (team flag menu close, `QuickMenuObject_CloseTeamFlagMenu_007162e4`), 0x20 / 0x40 (game list / challenge menus), 0x80 (challenge): not read by positioning.
+- Positioning reads GUI 0x24 = (254, 37) and 0xb9 = (366, 37) from the table at 0x00971f40 (read earlier, matched again).
+
+**Ported:**
+- `client/src/net/guildcardflags.ts` (new): `GuildCardFlagWord` (set / clear / reset / `positionGuiIndex`) and the one `guildCardFlags` global; the GUI points `GUI_POSITION`.
+- `client/src/net/guildcard.ts`: `receiveSent` sets bit 2 for every accepted card that is not an update of a listed card (the 'received' and 'dropped' outcomes, a full group included, as the exe sets the bit before the group logic); `addRecent` sets bit 4.
+- `client/src/classic/guildcardmenu.ts`: the menu's cancel (the close) clears bit 2.
+- `client/src/quest/town.ts`: the quest timer's GUI index is read when the window opens (`questTimerGui`, reset when it closes and when the quest ends); the position is `GUI_POSITION[...]`.
+- `client/src/quest/questui.ts`: `setHud` takes an optional `centre`; `drawText` centres the box on `x + centre`. The timer uses centre 42. Other HUD windows are unchanged (no `centre`).
+- `tests/guildcardflags.test.ts` (new): the rule per bit, the GUI points, and a card list add through `GuildCardClient.addRecent` moving the shared word.
+
+**ASSUMED:**
+- The frame (the box) is centred on the text position as the text is: the box is 10 px wider than the text on each side (the port's BORDER), and the exe's list window frame is taken to follow its text element (not traced). With the reference (0xb9), this gives a box left edge near x 363 for a 70 px box, which matches the reference estimate but is not measured.
+- Bit 0x4 comes from `addRecent` (the 0041 search result path), not from packet 0x18 directly.
+- Bit 0x2 for the port's `dropped` outcome (group full) is set, as the exe sets it before the group logic.
+- Bit 0x1 is never set (no entity records in the port); the cmode challenge timer (`cmoderun.ts`, also at 254, 37) keeps GUI 0x24 (its own window constructor not traced).
+
+**Remote players' photon blast icons (not ported; the premise is wrong per the exe):**
+- The status icon is drawn by `QuickMenuUpdateShiftaStatusIcons_007426d8` (dump 712999) when `GetPhotonBlastData_0067e334` (dump 547338) returns 1 or 2 for the player's slot. That state is `something_about_photon_blasts[slot * 9]` (0 = none, 1 / 2 = the slot is in a blast's data). The state 2 writer is `PhotonBlast_Constructor_0067ec51` (dump 547735 onward): it sets 2 for each of the four participant slots (+0x60..+0x6c) and copies the blast data. The reset at dump 547137 clears it. So the icon follows the blast's participant state, not the gauge.
+- 6x39 is table row 0x60/0x39 at 0x00a0fe48 -> handler 0x006a7ff4; 6x3A is row 0x60/0x3a at 0x00a0fe50 -> 0x006a8074. The 6x39 handler's sender check (0x006a97c0) passes for a remote sender; then, if the player's id matches the global at 0xaafca0 and 0x807d60 finds the id is not in the list at 0x0097f1c8, it sets player +0x524 bit 2 and calls 0x006a805c. 6x3A clears bit 2 for the sender. Readers of +0x524 bit 2 were not traced, so the flag is not shown to drive any icon.
+- The port's local icon (`combat.ts` `statusIcons`, `pb.ready`) uses the gauge, which the exe's icon code does not read. This is a likely mismatch, NOT changed here: the fix needs the blast object's lifetime in the port (the local `firePhotonBlast` / remote 6x49 path) and a check of what sets the state for the local player.
+
+**Checks:**
+- `node tests/guildcardflags.test.ts` (new, all pass); `tests/guildcard.test.ts`, `tests/guildcardmenu.test.ts`, `tests/questmisc.test.ts`, `tests/party.test.ts`, `tests/fieldhud.test.ts`, `tests/buffs.test.ts`: exit 0.
+- Client tsc (Node 24, the main checkout's TypeScript): no errors in the changed files except the missing `three` types. The worktree has no `three` package, so `tests/*` that import the HUD need a `three` link (`client/node_modules/three` -> the main checkout; not committed).
+- Not run: Playwright (per the brief); no reference screenshot of the timer box was available to measure.
+
+**Left:**
+- Remote and local photon blast icon source (above): trace the blast object lifetime and the readers of `something_about_photon_blasts` and of +0x524 bit 2; then port the icon.
+- Bit 0x1 (entity records) and the `ResetGuildCardList` caller; the cmode challenge timer's window constructor.
+- The timer frame width (the exe's list window frame) against the reference.
