@@ -2,7 +2,10 @@
 // and taken, the 100 cap and its 6x39 / 6x3A events, every basic blast's
 // power formula and the 6x49 / 6x37 / 6x39 bytes.
 // Run: node tests/photonblast.test.ts
-import { PB_BASE, PB_FULL, PB_SLOT_BLAST, PB_SLOT_ONE, pbBasePower, pbDamage, pbGain, pbPower, PhotonBlastGauge, PhotonBlastSlots, type PbCaster } from '../client/src/combat/photonblast.ts';
+import {
+  PB_BASE, PB_CREATE_TICKS_ASSUMED, PB_FULL, PB_SLOT_BLAST, PB_SLOT_ONE, pbBasePower, pbBlockedBy, pbCounterEndUpdates, pbDamage, pbDelayFor, pbGain,
+  pbLocalEndUpdates, pbParticipants, pbPower, pbTechHitTicks, PhotonBlastGauge, PhotonBlastSlots, type PbCaster,
+} from '../client/src/combat/photonblast.ts';
 import { Game } from '../client/src/net/game.ts';
 
 let failures = 0;
@@ -90,6 +93,30 @@ near(pbDamage(1000, 20), 1000 * 80 * 0.002, 'group 4 damage vs ELT 20');
   s.start([3]);
   eq(s.get(3) === PB_SLOT_ONE, false, 'a started blast is state 2, not 1');
   eq(PB_SLOT_BLAST, 2, 'state 2 constant');
+}
+
+// 8. Joins, the gate and the end timing (CreatePhotonBlast, dump 547409; the
+// constructor's delay 100 + 150 n; SpawnBossEntity phase 2).
+{
+  // The delay: n = the index of the first empty participant; all four filled
+  // leaves n at 0 (the exe's loop), so the delay is 100.
+  eq([0, 1, 2, 3, 4].map((n) => pbDelayFor(n)), [100, 250, 400, 550, 100], 'delay 100 + 150 n, 4 filled gives 100');
+  eq(pbCounterEndUpdates(1), 251, 'counter branch: effect on update delay + 1');
+  eq(pbLocalEndUpdates(1), 4, 'local branch: 2 n + 2 updates for one participant');
+  eq(pbLocalEndUpdates(4), 10, 'local branch: four participants');
+  eq(pbTechHitTicks(1, true), PB_CREATE_TICKS_ASSUMED + 3, 'fire to effect: creation (ASSUMED) + 3 entries');
+  // Participants: same-room players with a weapon field, in slot order.
+  eq(pbParticipants([{ slot: 2, field: 0 }, { slot: 0, field: -1 }, { slot: 1, field: 3 }]), [1, 2], 'no-field players are left out, slot order');
+  eq(pbParticipants([{ slot: 5, field: 0 }, { slot: 3, field: 1 }]), [3], 'slot 5 out of range');
+  eq(pbParticipants([]), [], 'no entries, no participants');
+  // The gate: another player's blast (state != 0) blocks a new one; the caster's own does not count.
+  const s = new PhotonBlastSlots();
+  eq(pbBlockedBy(s, 0), false, 'empty room: not blocked');
+  s.start([1]);
+  eq(pbBlockedBy(s, 0), true, 'slot 1 in a blast blocks slot 0');
+  eq(pbBlockedBy(s, 1), false, 'the caster\'s own blast does not block itself');
+  s.end(1, [1]);
+  eq(pbBlockedBy(s, 0), false, 'after the end, not blocked');
 }
 
 if (failures) {

@@ -157,7 +157,7 @@ import { TRAP_DEATH_PARTICLE, trapPaletteType, type BattleTrap, type TrapEffect 
 import { SONAR_PING_SOUND } from '../quest/battle.ts';
 import type { EnemyHitbox as EnemyBoxHit, PlayerRatioStatus } from '../quest/npcai.ts';
 import { BattleTrapView } from './battletrapview.ts';
-import { PB_INVULN_FRAMES, PB_MAX_TARGETS, PB_NAMES, PB_RANGE, pbDamage, pbGain, pbPower, PhotonBlastGauge, PhotonBlastSlots } from '../combat/photonblast.ts';
+import { PB_INVULN_FRAMES, PB_MAX_TARGETS, PB_NAMES, PB_RANGE, pbBlockedBy, pbDamage, pbGain, pbParticipants, pbPower, pbTechHitTicks, PhotonBlastGauge, PhotonBlastSlots } from '../combat/photonblast.ts';
 import { photonBlasts } from '../net/magfeed.ts';
 import { isAndroid } from '../combat/progression.ts';
 import { BattleParams, battleParamFile, type BattleParamKind, type EnemyAttackData } from '../formats/battleparams.ts';
@@ -6781,18 +6781,24 @@ export class CombatView {
     // The blast object (PhotonBlast_Constructor_0067ec51) starts the slot state; its
     // effect ends the object, which clears the state (ASSUMED: the start is the fire).
     const self = this.game.selfId;
-    this.pbSlots.start([self]);
+    // CreatePhotonBlast: another player's blast in the room blocks this one (no
+    // state, no effect; the release and the gauge still go out, ASSUMED).
+    // The joined players are the caster alone (ASSUMED, photonblast.ts).
+    const blocked = pbBlockedBy(this.pbSlots, self);
+    const participants = pbParticipants([{ slot: self, field: 0 }]);
+    if (blocked) this.opts.log('photon blast: a blast is already in the room, none made');
+    else this.pbSlots.start(participants);
     this.techHits.push({
-      ticks: 30,
+      ticks: pbTechHitTicks(participants.length, true),
       apply: () => {
-        this.photonBlastEffect(type, gauge, targets);
-        this.pbSlots.end(self, [self]);
+        this.photonBlastEffect(type, gauge, targets, !blocked);
+        if (!blocked) this.pbSlots.end(self, participants);
       },
     });
     return true;
   }
 
-  private photonBlastEffect(type: number, gauge: number, targets: EnemyRuntime[]): void {
+  private photonBlastEffect(type: number, gauge: number, targets: EnemyRuntime[], withEffect = true): void {
     const me = this.game.self;
     const mag = this.equippedMag();
     this.game.sendPhotonBlastDone(gauge);
@@ -6802,7 +6808,7 @@ export class CombatView {
       this.attacking.delete(me.clientId);
       this.view?.resetGait(me.clientId);
     }
-    if (!me || !mag) return;
+    if (!me || !mag || !withEffect) return;
     const a = this.attackerStats();
     const s = this.selfStats();
     const power = pbPower(type, { atp: a.atp, equipAtp: a.equipAtp, evp: s.evp, ata: a.ata, synchro: mag.data2[0], iq: mag.data2[1] }, gauge, 1);
@@ -8723,12 +8729,18 @@ export class CombatView {
       else rs.receiveRemove(st.value);
       return;
     }
-    // 6x49 from another player: its blast object starts the slot state (the remote copy
-    // of the blast; ASSUMED the end is the same delay as the local blast's effect).
+    // 6x49 from another player (in this room, so the blast takes the local branch of
+    // CreatePhotonBlast): the same gate and end timing as the local blast (ASSUMED
+    // the remote's blast object is made at the same point as the local one).
     if (sub === 0x49) {
       if (clientId === this.game.selfId) return;
-      this.pbSlots.start([clientId]);
-      this.techHits.push({ ticks: 30, apply: () => this.pbSlots.end(clientId, [clientId]) });
+      if (pbBlockedBy(this.pbSlots, clientId)) {
+        this.opts.log(`player ${clientId}: photon blast ${body[0] ?? '?'} (6x49), blocked by a blast in the room`);
+        return;
+      }
+      const participants = pbParticipants([{ slot: clientId, field: 0 }]);
+      this.pbSlots.start(participants);
+      this.techHits.push({ ticks: pbTechHitTicks(participants.length, true), apply: () => this.pbSlots.end(clientId, participants) });
       this.opts.log(`player ${clientId}: photon blast ${body[0] ?? '?'} (6x49)`);
       return;
     }

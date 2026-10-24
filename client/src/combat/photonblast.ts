@@ -209,3 +209,84 @@ export class PhotonBlastSlots {
     return s === PB_SLOT_ONE || s === PB_SLOT_BLAST;
   }
 }
+
+// The blast object's joins and gate (CreatePhotonBlast, PsoBB.exe dump 547409;
+// the object is built at 0x0067e9e0, the dump's PhotonBlast_Constructor_0067ec51
+// name is off, its vtable store 0x00b38328 is at 0x0067ea4b).
+//   Participants: the same-room players (the caster's room, the caster included)
+//   whose weapon data field is not -1, in slot order (the grouping by field is
+//   not modelled). The port does not track a remote's weapon field, so the
+//   joined blasts are ASSUMED to be the caster alone (the caller passes its entry).
+//   Gate (0x67e6c0 loop, dump 547409 "bVar1"): when any other same-room player's
+//   state (the 0x00a90420 slot byte) is not 0, no blast object is made: the
+//   blast does not start and its effect does not run.
+export interface PbWeaponEntry {
+  slot: number;
+  field: number; // GetWeaponDataField, -1 = none
+}
+
+export function pbParticipants(sameRoom: readonly PbWeaponEntry[]): number[] {
+  const out: number[] = [];
+  for (const e of [...sameRoom].sort((a, b) => a.slot - b.slot)) {
+    if (e.slot < 0 || e.slot >= 4 || e.field === -1 || out.includes(e.slot)) continue;
+    out.push(e.slot);
+  }
+  return out;
+}
+
+// Gate: true when another player's blast state blocks a new blast (the exe's
+// bVar1 in CreatePhotonBlast). `self` is the caster and is skipped.
+export function pbBlockedBy(slots: PhotonBlastSlots, self: number): boolean {
+  for (let i = 0; i < 4; i++) if (i !== self && slots.get(i) !== PB_SLOT_NONE) return true;
+  return false;
+}
+
+// Blast end timing. The delay the constructor stores (CreatePhotonBlast passes
+// (n * 150 + 100) with n = the index of the first empty participant entry; when
+// all four entries are filled n stays 0, so the delay is 100: exe quirk, kept).
+export const PB_DELAY_BASE = 100;
+export const PB_DELAY_STEP = 150;
+export function pbDelayFor(participants: number): number {
+  const n = Math.max(0, Math.min(4, participants));
+  return n >= 4 ? PB_DELAY_BASE : PB_DELAY_BASE + PB_DELAY_STEP * n;
+}
+
+// Counter branch (the object's +0x4c == 0, a blast from a room the local player
+// is not in): UpdatePhotonBlastState_0067eed0 adds 1 to the frame counter (+0x44)
+// each update and runs the effect when the delay (+0x48) is below it, so the
+// effect is on update delay + 1. ASSUMED: one object update per game tick.
+export function pbCounterEndUpdates(participants: number): number {
+  return pbDelayFor(participants) + 1;
+}
+
+// Local branch (+0x4c != 0, the caster's room is the local player's room):
+// SpawnBossEntity_0067f5b4 (dump 548066) spawns one boss entity per participant
+// (phase 0 spawns, phase 1 clears the entity's flags 4 / 0x10), then phase 0 at
+// index == count goes to phase 2, and phase 2 runs the damage (the 0xae sound,
+// HandlePhotonBlastDamage_0067fa2c) and sets due-for-destruction. With one
+// update per tick and no construction wait (ASSUMED: CheckEntityStepConstructed
+// is true at once) the effect is on update 2n + 2.
+export function pbLocalEndUpdates(participants: number): number {
+  const n = Math.max(0, participants);
+  return 2 * n + 2;
+}
+
+// The effect's update number for a blast from `participants` joined players.
+// `sameRoom` picks the branch as CheckPlayerInSameRoom_0067e97c does (the local
+// player is the caster or in the caster's floor and room).
+export function pbEndUpdates(participants: number, sameRoom: boolean): number {
+  return sameRoom ? pbLocalEndUpdates(participants) : pbCounterEndUpdates(participants);
+}
+
+// ASSUMED: the blast object is made about one second after the fire, when the
+// weapon attack state machine reaches state 3 with the special flag
+// (Player__UpdateWeaponAttackAnimation, dump 585590, timed by the animation;
+// not traced). The fire-to-effect delay is that plus the effect's updates.
+export const PB_CREATE_TICKS_ASSUMED = 30;
+
+// tickTechHits runs an entry with `ticks` k on its (k + 1)-th call, so the
+// entry for update N (the first update is the tick after the object exists)
+// holds N - 1.
+export function pbTechHitTicks(participants: number, sameRoom: boolean): number {
+  return PB_CREATE_TICKS_ASSUMED + pbEndUpdates(participants, sameRoom) - 1;
+}
