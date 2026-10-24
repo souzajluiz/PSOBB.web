@@ -39,7 +39,7 @@ tools/exedata.py calls 0044161c 0044172a   # call targets in a range (pins an en
 ```
 
 Clone it anywhere and point `REFSRC` at it (the default is
-`../refsrc/original-psobb-client-source`, outside this repository, and it is
+`../reverse/refsrc/original-psobb-client-source`, outside this repository, and it is
 never committed here):
 
 ```sh
@@ -81,7 +81,7 @@ to the original under the same VC7.1 compiler (one function per file in
 Clone it next to the other one (about 2 GB), outside this repository:
 
 ```sh
-cd ../refsrc
+cd ../reverse/refsrc
 git clone --depth 1 https://gitlab.psobb.io/psobb/psobb-client-source.git
 grep -rl "0x4ec" psobb-client-source/src | head   # find matching C by constant
 ```
@@ -91,3 +91,18 @@ grep -rl "0x4ec" psobb-client-source/src | head   # find matching C by constant
 - **Tethealla** (old server, GPL-3): the data files in the original `map/`, `quest/` and `drop/` folders share the same formats.
 - **Ephinea PSOBB client:** source of the `data/` files used locally for testing. Not committed.
 - **phantasmal-world** (DaanVandenBosch, MIT): https://github.com/DaanVandenBosch/phantasmal-world. A quest editor / viewer; its `FEATURES.md` and its behaviour (open / save .qst, undo / redo, area selection, 3D entity manipulation, events) were the reference for the feature list and UI of our own quest editor (`docs/QUESTEDITOR.md`, `client/src/questeditor/`). No code was ported; if some is, keep its MIT notice in that file.
+
+## Folder layout next to this repository (2026-10-23)
+
+`~/Downloads/psobb-master/` holds three folders, none of them committed here:
+
+- `web/`: this repository (client, bridge + admin panel, site, tests, tools).
+- `reverse/`: the reverse-engineering inputs and outputs: `refsrc/` (the named Ghidra dump and
+  the reference repositories), `ghidra/` (the headless Ghidra project of `tools/ghidra/decomp.sh`),
+  `rea/` (REA state) and `scratch/` (agents' throwaway notes).
+- `tethealla/`: the old Tethealla server files (exe, ini, `map/`, `quest/`, `param/`, `drop/`,
+  `shop/`, `sql/`, ...), kept for reference only; `tests/dragon.test.ts` reads
+  `tethealla/map/map_boss01e.dat` when it is there.
+
+`tools/refsrc.sh` defaults to `../reverse/refsrc/original-psobb-client-source` and
+`tools/ghidra/decomp.sh` to `../reverse/ghidra`; `REFSRC` / `GHIDRA_PROJ` override them.

@@ -9,7 +9,7 @@
 # fallback for what the dump does not name or resolve.
 #
 # The repository is not part of this one. Clone it anywhere and point REFSRC at
-# it (default: ../refsrc/original-psobb-client-source):
+# it (default: ../reverse/refsrc/original-psobb-client-source):
 #   git clone --depth 1 https://gitlab.psobb.io/psobb/original-psobb-client-source.git
 #
 # Usage:
@@ -20,7 +20,7 @@
 #   tools/refsrc.sh files              what the repository holds
 
 set -e
-REFSRC=${REFSRC:-$(cd "$(dirname "$0")/../.." && pwd)/refsrc/original-psobb-client-source}
+REFSRC=${REFSRC:-$(cd "$(dirname "$0")/../.." && pwd)/reverse/refsrc/original-psobb-client-source}
 [ -d "$REFSRC" ] || { echo "no reference checkout at $REFSRC (set REFSRC)" >&2; exit 1; }
 # src/ holds a few dated dumps of the same binary; the largest is the one with
 # the most functions named. Override with REFSRC_DUMP.

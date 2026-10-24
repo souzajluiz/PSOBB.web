@@ -70,7 +70,7 @@ worktrees are left.
    Ghidra provider. REA cannot start Ghidra on this Mac until the Command Line Tools are
    updated (`sudo softwareupdate -i "Command Line Tools for Xcode-16.4"` in Terminal, by
    the user), then restart Claude Code. Until then use `tools/ghidra/decomp.sh <addr>`
-   (project in `~/Downloads/psobb-master/ghidra`, read-only, shared by agents).
+   (project in `~/Downloads/psobb-master/reverse/ghidra`, read-only, shared by agents).
 6. Smaller leftovers of the day (each in its DEVLOG entry): particle tint 0x100 (no copy
    of the owner's tint into the particle found; the port keeps the multiply), Saint-Milion
    laser aim (no writer of +0x44 / +0x38 in the exe; 0x8000 / 620 stay ASSUMED), the

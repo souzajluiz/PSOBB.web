@@ -495,7 +495,7 @@ for (const n of [1, 2, 5]) {
   const { existsSync, readFileSync } = await import('node:fs');
   const { parseEnemySets } = await import('../client/src/formats/setdata.ts');
   const { expandEnemySets } = await import('../client/src/formats/enemyslots.ts');
-  const file = '/Users/junior/Downloads/psobb-master/map/map_boss01e.dat';
+  const file = '/Users/junior/Downloads/psobb-master/tethealla/map/map_boss01e.dat';
   const src = existsSync(file) ? file : new URL('../vendor/newserv/system/maps/xb-v3/map_boss01e.dat', import.meta.url).pathname;
   if (existsSync(src)) {
     const slots = expandEnemySets(parseEnemySets(new Uint8Array(readFileSync(src))), 11);
