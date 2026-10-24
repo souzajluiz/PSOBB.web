@@ -15259,3 +15259,36 @@ The entry above says the 3D view is not shifted in Chrome. That was a misreading
 **Checks:** `node tests/minimap.test.ts` (new: the Komo state's start-of-frame colour, the move to 1 on the flag, the move back to 0, the last frame's green icon). `tests/fieldhud.test.ts`, `tests/objectcollision.test.ts`, `tests/warpmenu.test.ts` and `tests/mobilecontrols.test.ts` pass (Node 24; `client/node_modules` linked from the main checkout for the run, then unlinked). `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome or Playwright (per the brief).
 
 **Left:** the Seabed dolphin / boss / beam door icons (the port has no boss door 0x0103 or beam door 0x0204 object; the 0x80 icon function is the open question above, to settle with a runtime check: REA, or a breakpoint on the vtable call); the Challenge "Area n" title (not read in this pass); the 0x0082 TObjLazerFenceNorm vs Komo naming in `objectmodels.ts`.
+
+## 2026-10-23: Battle mode left: sonar and overlay survey (no code change)
+
+**What changed:** nothing in the client code. This pass traced the two open exe items of the Battle mode left line (sonar use, the overlay on the local inventory) and corrects one lead. The ROADMAP line is updated to say what was found.
+
+**Premise check.** The brief's list (rules, scoring, respawn, result window, time limit, trap stock HUD, PvP tech hits, the 6x packets) is already ported per the 2026-10-20 to 2026-10-23 entries (`quest/battle.ts`, `quest/battlerun.ts`, `quest/battleui.ts`, `combat/pvp.ts`, `quest/battletraps.ts`). Not re-verified in this pass. The line's real open items are the sonar use, the local overlay, and the Chrome check (excluded here: no Playwright).
+
+**Sound 183 is not a sonar ping.** `SE_PL_SONAR` (id 183, `headers/audio.h`) is played in `ChallengeObjectUIPanel_UpdateTimer_004df70c` (dump line 262356): while the countdown at +0x20 is 0 or more and the interval at +0x24 divides it, `play_directional_sound_effect(0xb7,0,0,0)`. The panel updates from `ChallengeObjectUIPanel_Update_004df8e0` (gated by `IsChallengeEligible_004df5ac`) and its progress function sets the timer to 0x5a when a player nears the challenge's end. So 183 is the Challenge countdown beep (ASSUMED from the names; the gate is read). Other 0xb7 sites in `objdump` of PsoBB.exe: 0x6b082c, 0x726e52, 0x731e7e (the sound table load next to 0xb5, 0xb6, 0xb8, storing the handle at 0x9f2eec), 0x731fdf, 0x756b08 (not read). None is a battle item use.
+
+**Sonar: the rule bytes are written, no reader is named.**
+- `opcode_unknownF85E` (ba_enable_sonar, dump line 607621): if the argument is below 2, byte 1 of `g_BaRulesState` = `DAT_009697f0[arg]` (the remap table).
+- `opcode_unknownF85F` (ba_sonar_count, dump line 607633): byte 2 of `g_BaRulesState` = the argument.
+- `g_BaRulesState` has no read in the dump (every hit is a write: 607433..607476, 607625, 607636, 608956, 609114, 612308..612314). The effective copy made by `InitializeSinowberillChallenge_006afd1c` is where a reader would be, but no named function reads its byte 0x11 / 0x12.
+- `SinowberillChallengePlayer_ResetAll_00690674` (dump line 572006, read in full) does not write a sonar count. The dump has no `sonar` identifier at all.
+- `headers/audio.h` names the sound only; the port's `ba_enable_sonar` / `ba_sonar_count` (`quest/battle.ts`) keep the raw argument (`v < 2`, and `& 0xff`), while the exe remaps the enable argument through `DAT_009697f0` first (the table is not read here), so the port's stored value may differ from the exe's byte 1 for arguments other than 0 and 1.
+
+**Overlay: the exe's client-side reset, traced.** `SinowberillChallengePlayer_ResetAll_00690674` (dump 572006..572238, per player, slots 0..11):
+- `ResetSinowberillChallengeSubData_006a91f4`, then the state checks (`is_value_less_than_2` on the Pioneer 2 init data); invincibility word `0x6043` (flags 3) or `0x2003` otherwise; `g_IsBattleMode = 1` when the invincibility flag is 1.
+- `RemoveTechsAndEquipment_006a5998(inventory, player, group)` for weapons and armors_shields_units when `ValidateChallengePhaseIndex_006a8ecc` is 1..3; for mags when `ValidateChallengeSubPhaseIndex_006a8edc` is 1; for tools_techs when `ValidateChallengeWaveIndex_006a8eec` is 1 or 2 (the mapping from these phase values to the rule modes is ASSUMED: the port's `localRestrictions` in `quest/battle.ts` states the modes).
+- The four challenge stat values (`SetChallengeStatValue_006989a0` into +0x89c) when `ClampChallengePlayerField5To1_006a92c4` is 1 (the trap counts, ASSUMED).
+- `apply_base_stats(level)` when `GetSinowberillChallengeState_006a8f0c` is 1; the technique cooldowns reset (`InitializeTechniqueCooldownValues_006ace3c`, 0xff or 0x1d); the buffs, the status counters and the tp / hp restore (`PlayerRestoreHealthAndTP_0068fda4`); `telepipes_disabled` set; `keap_weapon_on_drop` set when the stage index is 1; the player copied to `g_SinowberillChallengeDataVector` (`CopyPlayerToChallengeDataVector_006aa0f8`).
+- `RemoveTechsAndEquipment_006a5998` (dump 590938) walks the inventory list (player +0x1c4, the item chain at +0x18). For an item of the removal group: tools_techs compares the stack count (vtable 0x88) with a limit and either destroys the item (count reduced, `PlayerResetEquipmentStats_0068e8a8` when equipped: flags 4 and 8) or trims it (vtable 0x8c); the other groups destroy an item whose count is 1 or 0 and trim a stack to 1 (vtable 0x8c with 1). Destroy is vtable 0x6c plus `due_for_destruction`, and the inventory count at player +0xdf4 +0x1c is decremented. The recursion into children is `ProcessEquipmentRemovalRecursive_006a5b74` (not read).
+
+**Why nothing ported.** The sonar has no use path in the exe that this pass could name. The overlay needs the exe's item stacks, the equip-stat reset, the cooldown and the stat rebuild (`apply_base_stats`), each keyed by phase values read through dump names that do not say what the rule mode is. The port's challenge overlay (`quest/cmodeoverlay.ts`, `buildChallengeOverlay`) is the pattern to copy, with a backup for the battle end, but the battle rule mapping must be checked first. Porting it half-way would make the local inventory disagree with newserv's copy, so it stays open.
+
+**ASSUMED:** the Challenge countdown identity of sound 183 (names only); the phase-to-rule mapping of the ResetAll branches; the tools_techs limit comparison (read, not named).
+
+**Checks:** no code change, so `tsc` and the unit tests were not re-run in this pass (the last run of `tests/battle.test.ts` is in the 2026-10-23 win particle entry). No Playwright, no Chrome.
+
+**Left:**
+1. Sonar use: find the reader of `g_BaRulesState` byte 1 / 2 in the effective copy (`InitializeSinowberillChallenge_006afd1c`), or the battle item palette that uses it.
+2. The local overlay: port the ResetAll removal (`RemoveTechsAndEquipment` semantics above) into a `buildBattleOverlay` with a backup, after the phase-to-rule mapping is confirmed.
+3. The trap placement and trap objects, the trap stock HUD, the PvP hits and the result window: the DEVLOG entries of 2026-10-21 and 2026-10-23 say they are done, not re-checked here.
