@@ -85,34 +85,34 @@ check('attribute index: special wins over native', targetAttributeIndex(0x40 | E
 check('attribute index: mini-boss bit alone -> 4', targetAttributeIndex(ENEMY_ATTR.miniboss) === 4);
 check('attribute index: native with mini-boss -> 0', targetAttributeIndex(ENEMY_ATTR.native | ENEMY_ATTR.miniboss) === 0);
 
-// 6. Name collection (unitxt_get_monster_name: floors 0..2 -> 8, else 0x10).
-check('monster names: floor 0 uses collection 8', monsterNameCollection(0) === 8);
-check('monster names: floor 2 uses collection 8', monsterNameCollection(2) === 8);
-check('monster names: floor 3 uses collection 0x10', monsterNameCollection(3) === 0x10);
+// 6. Name collection (unitxt_get_monster_name: byte offset 8 -> collection 2, 0x10 -> collection 4 (Ultimate)).
+check('monster names: Normal uses collection 2', monsterNameCollection(0) === 2);
+check('monster names: Very Hard uses collection 2', monsterNameCollection(2) === 2);
+check('monster names: Ultimate uses collection 4', monsterNameCollection(3) === 4);
 
 // 7. Target card text.
 check('card anchor is gui slot 0x1f (8, 437)', TARGET_CARD_ANCHOR.x === 8 && TARGET_CARD_ANCHOR.y === 437);
 check('card height is 93', TARGET_CARD_HEIGHT === 93);
 check('unitxt group 11 ids: native 0xb5, machine 0xb7, label 0xc3', TARGET_TEXT.native === 0xb5 && TARGET_TEXT.machine === 0xb7 && TARGET_TEXT.label === 0xc3);
 
-const fallback = targetCardText({ name: 'Barbarous Wolf', attribute: ENEMY_ATTR.native, floor: 1, texts: null, monsterId: 8 });
+const fallback = targetCardText({ name: 'Barbarous Wolf', attribute: ENEMY_ATTR.native, difficulty: 0, texts: null, monsterId: 8 });
 check('card fallback: port name, Native, Attribute:, green', fallback.name === 'Barbarous Wolf' && fallback.value === 'Native' && fallback.label === 'Attribute:' && fallback.argb === 0xffa5ffaa, JSON.stringify(fallback));
 
-// A fake unitxt table: collection 8 names, collection 11 the attribute labels.
+// A fake unitxt table: collection 2 names, collection 11 the attribute labels.
 const texts: string[][] = [];
-texts[8] = ['', 'Hildebear', 'Hildebear', 'Rappy', 'Monest', 'Savage Wolf', 'Savage Wolf', 'Barbarous Wolf', 'Barbarous Wolf'];
+texts[2] = ['', 'Hildebear', 'Hildebear', 'Rappy', 'Monest', 'Savage Wolf', 'Savage Wolf', 'Barbarous Wolf', 'Barbarous Wolf'];
 texts[11] = [];
 texts[11][TARGET_TEXT.native] = 'Native';
 texts[11][TARGET_TEXT.abeast] = 'A.Beast';
 texts[11][TARGET_TEXT.machine] = 'Machine';
 texts[11][TARGET_TEXT.dark] = 'Dark';
 texts[11][TARGET_TEXT.label] = 'Attribute:';
-const withTable = targetCardText({ name: 'Savage Wolf', attribute: ENEMY_ATTR.native, floor: 1, texts, monsterId: 8 });
-check('card with unitxt: the monster name from collection 8 at the id', withTable.name === 'Barbarous Wolf', withTable.name);
-const darkCard = targetCardText({ name: 'Dark Belra', attribute: ENEMY_ATTR.dark, floor: 3, texts, monsterId: 8 });
-check('card with unitxt: floor 3 reads collection 0x10 (empty here), so the port name stays', darkCard.name === 'Dark Belra', darkCard.name);
+const withTable = targetCardText({ name: 'Savage Wolf', attribute: ENEMY_ATTR.native, difficulty: 0, texts, monsterId: 8 });
+check('card with unitxt: the monster name from collection 2 at the id', withTable.name === 'Barbarous Wolf', withTable.name);
+const darkCard = targetCardText({ name: 'Dark Belra', attribute: ENEMY_ATTR.dark, difficulty: 3, texts, monsterId: 8 });
+check('card with unitxt: Ultimate reads collection 4 (empty here), so the port name stays', darkCard.name === 'Dark Belra', darkCard.name);
 check('card with unitxt: dark value text', darkCard.value === 'Dark' && darkCard.argb === 0xffe1a9ff, darkCard.value);
-const none = targetCardText({ name: 'Rag Rappy', attribute: 0, floor: 1, texts, monsterId: 0xffffffff });
+const none = targetCardText({ name: 'Rag Rappy', attribute: 0, difficulty: 0, texts, monsterId: 0xffffffff });
 check('card: no attribute shows no value', none.value === '' && none.argb === 0xffffffff, JSON.stringify(none));
 
 // 8. The cursor model from data.gsl, when the user's copy is there (skipped otherwise).

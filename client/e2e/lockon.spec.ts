@@ -21,6 +21,9 @@ test('Forest 1: facing an enemy locks on, the cursor and the target card show', 
     await expect
       .poll(() => peek(page, (w) => `${w.classicGame.view.current?.floor}:${w.classicGame.game.loading}`), { timeout: 60_000 })
       .toBe('1:false');
+    // As guns.spec.ts: build the wave of room 2 (constructEnemies), so its enemies are drawn.
+    await page.evaluate(() => (window as any).classicGame.view.constructEnemies(1, 2, 1));
+    await expect.poll(() => peek(page, (w) => [...w.classicGame.view.combat.enemies.values()].some((e: any) => !e.dead && e.instance.root.visible)), { timeout: 60_000 }).toBe(true);
     await page.waitForTimeout(2000);
   });
 
@@ -38,7 +41,7 @@ test('Forest 1: facing an enemy locks on, the cursor and the target card show', 
       let best: any = null;
       let bestD = Infinity;
       for (const e of combat.enemies.values()) {
-        if (!e || e.dead || !e.instance?.root) continue;
+        if (!e || e.dead || !e.instance?.root?.visible) continue;
         const p = e.instance.root.position;
         const d = (p.x - from.x) ** 2 + (p.z - from.z) ** 2;
         if (d < bestD) {
@@ -74,7 +77,15 @@ test('Forest 1: facing an enemy locks on, the cursor and the target card show', 
   });
 
   await test.step('a screenshot for comparison', async () => {
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(3000);
+    console.log('LOCKON', JSON.stringify(await peek(page, (w) => {
+      const c = w.classicGame.view.combat;
+      const e = c.lockOn;
+      const p = e?.instance?.root?.position;
+      let meshes = 0;
+      e?.instance?.root?.traverse((o: any) => { if (o.isMesh && o.visible) meshes++; });
+      return { card: c.hud?.targetCard, kind: e?.kind, visible: e?.instance?.root?.visible, meshes, p: p && [p.x, p.y, p.z] };
+    })));
     mkdirSync(OUT_DIR, { recursive: true });
     await page.screenshot({ path: `${OUT_DIR}lockon.png` });
   });

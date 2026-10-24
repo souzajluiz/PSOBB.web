@@ -14620,3 +14620,15 @@ and `node tests/fieldhud.test.ts` pass; `client`: `npx tsc --noEmit -p .` exit 0
 Playwright: `npx playwright test e2e/lockon.spec.ts` (one spec, run as the user asked)
 fails at the lock-on step as described above; `test-results/lockon-*` has the failure
 screenshot (no enemies drawn).
+
+## 2026-10-23: target card names, unitxt byte offsets
+
+Merge review of the target card in Chrome (`e2e/lockon.spec.ts`): the card named a Booma "RAcaseal".
+`unitxt_get_monster_name` (dump 772723) reads `*(unitxt + 8)` or `*(unitxt + 0x10)`: byte offsets
+into the collection pointer table, so collection 2 (the monster names, "Hildebear", ...) and
+collection 4 (the Ultimate names, "Hildelt", ...); `unitxt_get_technique_name` reads `unitxt + 0x14`
+= collection 5 (the technique names), the same rule. The port had read collection 8 (the class
+names). The switch to 0x10 tests a global the dump calls `g_CurrentFloor` above 2; the Ultimate names
+only fit the difficulty (3), so the port reads the difficulty (ASSUMED, the global's writer not
+traced). The spec now builds the wave of room 2 (`constructEnemies`, as `guns.spec.ts`) so an enemy is
+drawn; checked in Chrome: three green triangles around a Booma, card "Booma / Attribute: Native".

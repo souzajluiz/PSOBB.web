@@ -5799,7 +5799,7 @@ export class CombatView {
     return targetCardText({
       name: base,
       attribute: enemyAttribute(kind),
-      floor: this.floor,
+      difficulty: this.game.info?.difficulty ?? 0,
       texts: this.unitxt,
       monsterId: graveKillerId(kind),
     });

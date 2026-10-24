@@ -43,10 +43,14 @@ export function targetAttributeIndex(attribute: number): number {
   return 4;
 }
 
-// The unitxt collection of monster names: floors 0..2 (g_CurrentFloor <= 2) use
-// collection 8, the rest 0x10 (unitxt_get_monster_name, dump 772723).
-export function monsterNameCollection(floor: number): number {
-  return floor > 2 ? 0x10 : 8;
+// The unitxt collection of monster names (unitxt_get_monster_name, dump 772723): the exe reads
+// the pointer at unitxt + 8 (a byte offset: collection 2, "Hildebear", ...) or, when its global
+// is above 2, unitxt + 0x10 (collection 4, the Ultimate names "Hildelt", ...). The dump names that
+// global g_CurrentFloor, but the Ultimate names only fit the difficulty (3 = Ultimate), so the
+// port reads the difficulty (ASSUMED: the global's writer not traced). unitxt + 0x14 is the
+// technique names (collection 5, unitxt_get_technique_name), the same byte-offset rule.
+export function monsterNameCollection(difficulty: number): number {
+  return difficulty > 2 ? 4 : 2;
 }
 
 export interface TargetCardText {
@@ -61,14 +65,14 @@ export interface TargetCardText {
 export function targetCardText(opts: {
   name: string;
   attribute: number;
-  floor: number;
+  difficulty: number;
   // unitxt collections (parseUnitxt), null until loaded.
   texts: readonly (readonly string[])[] | null;
   // The enemy's unitxt monster id (graveKillerId), GRAVE_NO_KILLER-like when none.
   monsterId: number;
 }): TargetCardText {
   const index = targetAttributeIndex(opts.attribute);
-  const names = opts.texts?.[monsterNameCollection(opts.floor)];
+  const names = opts.texts?.[monsterNameCollection(opts.difficulty)];
   const fromUnitxt = names && opts.monsterId > 0 ? names[opts.monsterId] : undefined;
   const group = opts.texts?.[11];
   const valueId = [TARGET_TEXT.native, TARGET_TEXT.abeast, TARGET_TEXT.machine, TARGET_TEXT.dark][index];
