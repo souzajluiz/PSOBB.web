@@ -9,7 +9,7 @@
 
 import { PlayerCamera } from './playercamera.ts';
 import { njPerspectiveFovy } from '../classic/playerview.ts';
-import { KEYS } from '../input/keyconfig.ts';
+import { KEYS, keyboardControlsOn } from '../input/keyconfig.ts';
 import { autoKey, AUTO_RUN_FALLBACK, AUTO_WALK_FALLBACK, autoMoveAxes, autoMoveStart, stepAutoMove, type AutoMoveState } from '../input/automove.ts';
 import { analogStick, stickAmount, takeCameraTurn } from '../input/analog.ts';
 import * as THREE from 'three';
@@ -754,9 +754,11 @@ export class LobbyView {
     // Auto run / auto walk (input/automove.ts, unknown_handle_movement dump 667141): a
     // press toggles the mode, a direction key turns it off; Alt disables the toggles.
     if (mine && !stick) {
+      // Keyboard Controls OFF: no keyboard auto run or walk (the exe's table has no key for them).
+      const kb = keyboardControlsOn() && !keys.has('alt');
       this.auto = stepAutoMove(this.auto, {
-        run: !keys.has('alt') && keys.has(autoKey(KEYS.autorun, AUTO_RUN_FALLBACK)),
-        walk: !keys.has('alt') && keys.has(autoKey(KEYS.autowalk, AUTO_WALK_FALLBACK)),
+        run: kb && keys.has(autoKey(KEYS.autorun, AUTO_RUN_FALLBACK)),
+        walk: kb && keys.has(autoKey(KEYS.autowalk, AUTO_WALK_FALLBACK)),
         direction: keys.has(KEYS.moveForward) || keys.has(KEYS.moveBackward) || keys.has(KEYS.moveLeft) || keys.has(KEYS.moveRight),
       });
     }

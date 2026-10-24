@@ -22,7 +22,7 @@ the port). File references are to `client/src/`.
 | F8 | team_menu_shortcut (27) -> 0x25 | wired (needs a team) | `classic/homeleaves.ts` (Team Member List, `classic/teammenu.ts`) | Field and lobby. Greyed out of a team (ValidateMenuItemCondition, `classic/fieldmenu.ts` validateMenuEntry). |
 | F9 | team_chat (28) | wired | `classic/teamchat.ts` (window), `classic/lobby.ts`, `render/fieldhud.ts` | Lobby and field. Exe: `TeamChatMenu_Update_00717260` (dump 678207, called from 677720): toggles the team log window (the quick menu's +0x48 list, position (8, 380) as literals at dump 677488). Opening sets the lock too (0x180). No team test, as in the exe. Same Shift test as the menu keys (option 0x2000000 clear: no Shift). |
 | F10 | team_chat_toggle (29) | wired (window open) | `classic/teamchat.ts` (lock), `classic/chat.ts` ChatLine.sendText | Lobby and field, only while the team window is open. Exe: dump 678385 toggles the lock bit 0x80; `SendChatMessageDispatcher_0077d710` (754225) then sends the typed or shortcut line as team chat (07EA via `HandleTeamOperationSuccessFromChat_0077d784`, 754294, scene logged_in 0x0b). Received 07EA lines are kept in the team log (handler 0x007c1a4c). |
-| F11 | keyboard_controls_toggle (30) | missing | not ported | Exe: `ChallengePlayerInfoWindow_UpdateTextInputHandler_0072f130` (dump 697159), character option 0x1000000. The port has no mouse-control mode. |
+| F11 | keyboard_controls_toggle (30) | wired | `input/shortcuts.ts` functionKeyAction (kind 'keyboardToggle'); `classic/options.ts` toggleKeyboardControls; `input/keyconfig.ts` setKeyboardControls | Exe: `ChallengePlayerInfoWindow_UpdateTextInputHandler_0072f130` (dump 697159) flips character option 0x1000000 (Options row 2, Keyboard Controls ON / OFF) and sends 0x01ED. Same Shift test as the menu keys; not read while a chat line is open. The keys then follow the option (see Keyboard Controls OFF below). |
 | F12 | main_menu_2 (31) | wired | `render/fieldhud.ts` key(), `classic/lobby.ts` key() | Read through `bindingKey(BINDING.mainMenu2)`, so a rebound F12 follows the config. |
 | Shift+F1..F12 | handle_chat_shortcuts (dump 674857): the raw F keys, slots 0..11 | partial | `input/shortcuts.ts` chatShortcutIndex; `render/fieldhud.ts` key(); `classic/lobby.ts` key(); `classic/chat.ts` ChatLine.useShortcut; `net/chatshortcut.ts` | Option 0x2000000 clear (the default): Shift+F sends the slot, plain F is the menu key. Option set: plain F sends the slot and Shift+F is the menu (the Options window's Function Key row). A slot is the save's record at 0x1FAC (text or symbol chat), sent with the chat cooldown (dropped while it runs). Not ported: the Chat > Shortcut leaf (0x11) editor. A word-select record (type 2) sends 6x74 (`Lobby.sendWordSelect`, 2026-10-23). |
 | Alt+F1..F12 | lobby emotes (`EMOTE_KEYS` f1..f12) | wired | `render/lobbyview.ts` (altEmoteKey, line ~707); `formats/emotes.ts` line 33 | Alt keeps the F keys off the shortcuts (the exe's `is_alt_pressed_` check). |
@@ -30,11 +30,11 @@ the port). File references are to `client/src/`.
 | Alt+A..Z | lobby emotes (letters) | wired | `render/lobbyview.ts`; `formats/emotes.ts` | Letters in `EMOTE_KEYS`; the set is the port's (ASSUMED to match the exe's emote table). |
 | 1..0 | palette_bar_slot_1..0 (35..44) | wired | `render/combat.ts` ~1405 (HOTBAR_KEYS) | Skipped while Shift, Alt or Ctrl is held (dump 555862). |
 | Numpad 0..9 | the same bindings (keycode pairs) | partial | `render/combat.ts` ~1405 | Works only when the browser reports the digit (NumLock on). With NumLock off the numpad keys report their navigation names and do not match. |
-| Tab | not an input enum role | missing | `classic/gamelist.ts` line 224 (the game list only) | The manual's "Tab menu / character info change" is not a configurable role in the enum; the exe handler was not located. |
+| Tab | not an input enum role (hard-coded key 0x51) | missing | `classic/gamelist.ts` line 224 (the game list only) | Exe: `ProcessCameraInput_00708bd4` (dump 666092 / 666096) reads TAB (`unknown_is_key_pressed(0x51)`, `was_key_pressed(0x51)`) and sets `g_KeyboardSharedState[0xe]`, the same bit the action palette Left role (16) sets (case 0x10 of the switch). So in the exe Tab is a second key of the palette-left channel (ASSUMED reading of that bit's consumers; not ported). The manual's "Tab menu / character info change" (change the order of techniques in the shortcut menu) was not located as its own window in the dump. |
 | Q | autorun (4), default row unbound | wired (manual key) | `input/automove.ts`; `render/lobbyview.ts` ~754 | The exe's preset rows 4 and 5 are 0 in every preset (`input/keyconfig.ts` PRESET_CODES), so the manual's Q and E are the fallback when the row has no key (ASSUMED). |
 | E | autowalk (5), default row unbound | wired (manual key) | `input/automove.ts`; `render/lobbyview.ts` ~754 | Same as Q. |
-| W / A / S / D | move_forwards..move_right (0..3) | wired | `render/combat.ts` line 243; `render/lobbyview.ts` ~757 | |
-| Space | begin_chat_input (9) | wired | `classic/field.ts` line 203; `classic/lobby.ts` line 673 | |
+| W / A / S / D | move_forwards..move_right (0..3) | wired | `render/combat.ts` (`render/combat.ts` ~1408, read at call time); `classic/lobby.ts` moveKeyOf; `render/lobbyview.ts` ~757 | Off with Keyboard Controls OFF (no key for roles 0..3). |
+| Space | begin_chat_input (9) | wired | `classic/field.ts` (Input Start, `KEYS.chat`); `classic/lobby.ts` (same) | Off with Keyboard Controls OFF: the manual's "only when keyboard enabled". |
 | Ctrl | switch_palette (18) | wired | `render/fieldhud.ts` line 694 | Flips the palette; the menu locks it. |
 | Esc | Cancel (always) | wired | `input/keyconfig.ts` menuKeyOf | ASSUMED: the exe keeps Escape as a second Cancel (the caption says ESC/BACK SPACE). |
 | Backspace | menu_back (7) | wired | `input/keyconfig.ts` menuKeyOf; `classic/fieldwindows.ts` listKey | |
@@ -50,12 +50,31 @@ the port). File references are to `client/src/`.
 
 ## Summary
 
-- **Wired:** movement, the menu keys, Home, F12, F2..F8 (F5..F8 in the field and the lobby), Space, Ctrl, End (field), the action palette, the hotbar 1..0, the camera,
+- **Wired:** movement, the menu keys, Home, F11 (Keyboard Controls), F12, F2..F8 (F5..F8 in the field and the lobby), Space, Ctrl, End (field), the action palette, the hotbar 1..0, the camera,
   Alt emotes, Q / E auto run and walk (the manual's keys, see the ASSUMED list).
 - **Partial:** F1 (help list, field only), numpad (NumLock on only), Shift+F chat shortcuts
   (no slot editor; word select sends 6x74, receive is not ported), PageUp / PageDown (lobby Log Window only).
-- **Missing:** F11 (keyboard control mode), Ctrl+End (quick menu),
-  Tab, Print Screen.
+- **Missing:** Ctrl+End (quick menu), Tab (an alias of the palette-left channel in the exe, not ported),
+  Print Screen, the mouse controls (option 0x700000).
+
+## Keyboard Controls OFF
+
+The character option 0x1000000 (Options > Keyboard Controls row, F11) is the switch. Set = OFF.
+ProcessCameraInput_00708bd4 (dump 665913) reads each role's key through
+`GetKeyboardInputsWhenDisabled_00791b34` (exe 0x00791b34: `0x0097b8e0 + role * 8`) when the
+option is set, instead of the key config. That table (keycode_1 is 0 for roles 0..44, so
+keycode_2 is the key) keeps:
+
+- Decide Enter (6), Cancel Backspace (7), Menu Home (8), the arrows (10..13);
+- F1..F12 (20..31);
+- the hotbar 1..0 (35..44) on the numpad: 1..9 and 0 (keycodes 0x68..0x76 and 0x67).
+
+Every other role is 0 (no key): Move Forward / Backward / Left / Right (0..3), the lock
+moves (4, 5), Input Start Space (9), Symbol Chat End (14), the action palette (15..17),
+Ctrl (18) and Camera Up (19). So with Keyboard Controls OFF the keyboard does not move,
+does not open the chat with Space, and does not open the palette: the menus, the function
+keys and the numpad hotbar still answer. The table lives in `input/keyconfig.ts`
+(`KEYBOARD_OFF_KEYS`); `setKeyboardControls` swaps the keys in use.
 
 ## ASSUMED
 
@@ -86,4 +105,12 @@ the port). File references are to `client/src/`.
 - Disabled shortcut entries do nothing (the exe's ValidateMenuItemCondition path).
 - F1 help list: 320 x 240 anchor, width 360, 12 rows of 20 px (the exe builds its list at 320 x 240 with width 0.1; the row step and text colour were not read). F1 toggles only; the exe's close key (`g_KeyboardSharedState[0x12]`, ASSUMED Escape) is not confirmed.
 - F1 is field only (the lobby's F-key path does not handle the help kind).
+- F11 is not read while a chat line is open (the exe's typing path in the same handler
+  returns before the F-key test, dump 697096). The exe's text input is always on with the
+  option set (`ChallengePlayerInfoWindow_UpdateTextInput_0072f248`, EnableTextInput_008411f8);
+  the port does not open a typing line from the keyboard in that mode (not ported).
+- Keyboard Controls OFF: the hotbar digits are the numpad keys (the table's 0x67..0x76 names);
+  the port matches them by the digit's DOM key, so a top-row digit also answers (NumLock on
+  reports the digit; with NumLock off the numpad names do not match).
+- Q / E auto run and walk follow Keyboard Controls too (off with the option set; the exe has no key for them).
 - The Home leaves in the field use the game's connection (a Game is a Lobby) and the lobby's team client.

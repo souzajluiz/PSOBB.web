@@ -59,12 +59,15 @@ import { ItemListWindow, MAIN_MENU, MainMenu, type MainMenuTextures } from './ma
 import { applyMenuViewShift } from '../render/viewshift.ts';
 import { KEYS } from '../input/keyconfig.ts';
 import type { ItemRow } from './itempack.ts';
-import { characterOptionsEnv, cursorSaved, OptionsMenu, readOptionFlags, restoreBrightness } from './options.ts';
+import { characterOptionsEnv, cursorSaved, OptionsMenu, readOptionFlags, restoreBrightness, toggleKeyboardControls } from './options.ts';
 import { bandsOf, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
 
-// Default key config slots 0..3 (W, S, A, D) mapped to the keys LobbyView
-// reads for its movement.
-const MOVE_KEYS: Record<string, string> = { w: 'w', s: 's', a: 'a', d: 'd' };
+// The movement key of a key press: Move Forward / Backward / Left / Right of the key
+// config in use (input/keyconfig.ts KEYS), read at call time so a rebound key or the
+// Keyboard Controls OFF option (no movement keys) takes effect. undefined when it is not one.
+function moveKeyOf(k: string): string | undefined {
+  return k !== '' && (k === KEYS.moveForward || k === KEYS.moveBackward || k === KEYS.moveLeft || k === KEYS.moveRight) ? k : undefined;
+}
 const FRAME = 1 / 30;
 const HEAD_FACTOR = 0.92; // FUN_00716204: model bound * 0.92 (0x0096fe90)
 // ping_server (0x007bd288, called by the logged-in game loop 0x007bcc4c, which
@@ -555,6 +558,12 @@ export class LobbyScreen implements Screen {
     const full = this.hud.fullCharacter?.() ?? null;
     if (!this.menu.open && !this.counter.open) {
       const a = functionKeyAction(e, functionKeyNames(), chatFormOption(full));
+      // F11: Keyboard Controls ON / OFF (classic/options.ts toggleKeyboardControls, dump 697159).
+      if (a?.kind === 'keyboardToggle') {
+        e.preventDefault();
+        toggleKeyboardControls(full, (c, p) => this.lobby.conn.send(c, 0, p));
+        return;
+      }
       // F9 / F10: the team chat window and its lock (classic/teamchat.ts).
       if (this.hud.teamChat && (a?.kind === 'teamChat' || a?.kind === 'teamChatLock')) {
         e.preventDefault();
@@ -601,11 +610,13 @@ export class LobbyScreen implements Screen {
       return;
     }
     const k = e.key.toLowerCase();
-    if (MOVE_KEYS[k]) {
-      this.keys.add(MOVE_KEYS[k]);
+    const mk = moveKeyOf(k);
+    if (mk) {
+      this.keys.add(mk);
       return;
     }
-    if (e.key === ' ') {
+    // Input Start (role 9, Space by default): none with Keyboard Controls OFF.
+    if (KEYS.chat && k === KEYS.chat) {
       e.preventDefault();
       this.keys.clear();
       this.chat.begin();
@@ -618,7 +629,7 @@ export class LobbyScreen implements Screen {
   }
 
   keyUp(e: KeyboardEvent): void {
-    const k = MOVE_KEYS[e.key.toLowerCase()];
+    const k = moveKeyOf(e.key.toLowerCase());
     if (k) this.keys.delete(k);
     this.trade?.keyUp(e);
   }

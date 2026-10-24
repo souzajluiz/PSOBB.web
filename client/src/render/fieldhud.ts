@@ -42,7 +42,7 @@ import { TRADE_STATUS, type TradeSession } from '../net/trade.ts';
 import { createCounter, type Counter, type CounterKind, type CounterMusic } from '../classic/shop.ts';
 import { ReturnPrompt, RETURN_NO, RETURN_TEXT, RETURN_YES } from '../classic/returnprompt.ts';
 import { applyMenuViewShift } from './viewshift.ts';
-import { characterOptionsEnv, readOptionFlags, restoreBrightness } from '../classic/options.ts';
+import { characterOptionsEnv, readOptionFlags, restoreBrightness, toggleKeyboardControls } from '../classic/options.ts';
 import { currentPalette, CONFIG_OFFSET, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
 import { CONFIG_SIZE } from '../classic/customize.ts';
 import { drawHotbar, HOTBAR_POS, hotbarY } from '../classic/hotbar.ts';
@@ -748,6 +748,13 @@ export class FieldHud {
         e.preventDefault();
         e.stopImmediatePropagation();
         this.helpOpen = !this.helpOpen;
+        return;
+      }
+      // F11: Keyboard Controls ON / OFF (classic/options.ts toggleKeyboardControls, dump 697159).
+      if (a?.kind === 'keyboardToggle') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        toggleKeyboardControls(this.opts.fullCharacter(), this.opts.send ?? (() => {}));
         return;
       }
       // F9 / F10: the team chat window and its lock (classic/teamchat.ts).

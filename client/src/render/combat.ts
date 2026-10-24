@@ -247,10 +247,6 @@ const STAR_TARGET_PARTICLE = 0xc2;
 
 const ENEMY_BASE_FLAGS = 0x20000000 | 0x00800000 | 0x00100000;
 
-// The four movement bindings (Move Forward / Backward / Left / Right: the
-// freeze mash counts presses of these, FUN_0078fd68 over bindings 0..3).
-const MOVE_KEYS = [KEYS.moveForward, KEYS.moveBackward, KEYS.moveLeft, KEYS.moveRight] as const;
-
 // The techniques whose targeting record picks a party member (the reticle's light-blue row):
 // Resta (dump's resta, the GetTechniqueData(resta, 0xe) record of
 // unknown_update_equipment_properties_from_pmt, reticle type 4 / 10), Reverser (type 4 / 9)
@@ -1405,7 +1401,8 @@ export class CombatView {
     const view = this.view;
     // The freeze mash (combat/status.ts mash): a movement key newly down this frame,
     // or a flick of the touch stick (the exe's stick branch of the same check).
-    const moveDown = MOVE_KEYS.filter((k) => keys.has(k));
+    // The key config's movement keys, read now (not at load): none with Keyboard Controls OFF.
+    const moveDown = [KEYS.moveForward, KEYS.moveBackward, KEYS.moveLeft, KEYS.moveRight].filter((k) => k !== '' && keys.has(k));
     const moved = moveDown.some((k) => !this.heldMove.has(k));
     this.heldMove = new Set(moveDown);
     const flicked = this.stickFlick.step(analogStick());

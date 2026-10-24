@@ -9,9 +9,18 @@ import {
   BINDING,
   currentKeyConfig,
   defaultKeyConfig,
+  HOTBAR_KEYS,
+  isRepeatingKey,
+  KEYS,
+  keyboardControlsOn,
+  keyboardOffFromFlags,
+  keyboardOffOfCharacter,
+  menuKeyOf,
   readBinding,
+  setKeyboardControls,
   writeBinding,
 } from '../client/src/input/keyconfig.ts';
+import { toggleKeyboardControls } from '../client/src/classic/options.ts';
 import {
   FIELD_SHORTCUT_LEAVES,
   FKEY_COUNT,
@@ -51,7 +60,10 @@ const want: Record<number, number> = { 2: 0x09, 3: 0x03, 4: 0x17, 5: 0x0e, 6: 0x
 for (const n of Object.keys(want)) check(FKEY_MENU_ID[Number(n)] === want[Number(n)], `F${n} -> 0x${want[Number(n)].toString(16)}`);
 check(functionKeyAction(key('f9'), names)?.kind === 'teamChat', 'plain F9 toggles the team chat window (TeamChatMenu_Update, dump 678299)');
 check(functionKeyAction(key('f10'), names)?.kind === 'teamChatLock', 'plain F10 toggles the team lock (dump 678385)');
-check(functionKeyAction(key('f11'), names) === null, 'F11 is not ported (null)');
+check(functionKeyAction(key('f11'), names)?.kind === 'keyboardToggle', 'plain F11 toggles Keyboard Controls (ChallengePlayerInfoWindow_UpdateTextInputHandler, dump 697159)');
+check(functionKeyAction(key('f11', { shiftKey: true }), names) === null, 'Shift+F11 is refused with the option clear');
+check(functionKeyAction(key('f11', { shiftKey: true }), names, true)?.kind === 'keyboardToggle', 'Shift+F11 with the option set');
+check(functionKeyAction(key('f11', { ctrlKey: true }), names) === null, 'Ctrl+F11 is refused');
 check(functionKeyAction(key('f9', { shiftKey: true }), names) === null, 'Shift+F9 is refused with the option clear (the menu keys\' test)');
 check(functionKeyAction(key('f10', { ctrlKey: true }), names) === null, 'Ctrl+F10 is refused');
 check(functionKeyAction(key('f9', { shiftKey: true }), names, true)?.kind === 'teamChat', 'Shift+F9 with the option set (TeamChatMenu_Update reads Shift)');
@@ -143,6 +155,58 @@ check(walk !== null && (walk.fb * walk.fb) / (128 * 128) < 0.75, 'auto walk is b
 
 check(autoKey('', AUTO_RUN_FALLBACK) === 'q' && autoKey('', AUTO_WALK_FALLBACK) === 'e', 'unbound rows fall back to the manual keys Q and E');
 check(autoKey('x', AUTO_RUN_FALLBACK) === 'x', 'a bound row keeps its key');
+
+// 4. Keyboard Controls (option 0x1000000, F11; input/keyconfig.ts KEYBOARD_OFF_KEYS from
+// the exe table at 0x0097b8e0, classic/options.ts toggleKeyboardControls).
+{
+  const full = new Uint8Array(0x600);
+  const dv = new DataView(full.buffer);
+  dv.setUint32(0x4ec, 0x00040058, true); // the default option word (options.ts DEFAULT_OPTION_FLAGS)
+  applyKeyConfig(null);
+  setKeyboardControls(true);
+  check(keyboardControlsOn() && !keyboardOffOfCharacter(full), 'default: Keyboard Controls ON');
+  check(bindingKey(BINDING.moveForward) === 'w' && KEYS.chat === ' ', 'default keys: W moves, Space chats');
+
+  const sent: [number, number[]][] = [];
+  const send = (c: number, p: Uint8Array) => sent.push([c, [...p]]);
+  const on1 = toggleKeyboardControls(full, send);
+  const flags1 = dv.getUint32(0x4ec, true);
+  check(!on1 && (flags1 & 0x1000000) !== 0 && flags1 === (0x00040058 | 0x1000000), `F11 sets 0x1000000 (flags 0x${flags1.toString(16)})`);
+  check(sent.length === 1 && sent[0][0] === 0x01ed && sent[0][1].length === 4 && sent[0][1][3] === 0x01, 'F11 sends 0x01ED with the new option word');
+  check(keyboardOffOfCharacter(full) && !keyboardControlsOn(), 'OFF: the keys report OFF');
+  check(KEYS.moveForward === '' && KEYS.moveLeft === '' && KEYS.chat === '' && KEYS.symbolChat === '', 'OFF: movement, Space chat and End have no key');
+  check(KEYS.camera === '' && KEYS.paletteLeft === '' && KEYS.paletteChange === '' && KEYS.autorun === '', 'OFF: camera, palette, Ctrl and the lock moves have no key');
+  check(KEYS.decide === 'enter' && KEYS.cancel === 'backspace' && KEYS.menu === 'home', 'OFF: Enter, Backspace and Home still answer');
+  check(KEYS.selectUp === 'arrowup' && KEYS.selectRight === 'arrowright', 'OFF: the arrows still answer');
+  check(bindingKey(BINDING.functionKeyInfo) === 'f1' && bindingKey(BINDING.mainMenu2) === 'f12', 'OFF: F1..F12 still answer');
+  check(bindingKey(BINDING.moveForward) === '' && functionKeyNames().join(',') === names.join(','), 'OFF: a movement binding reads no key, the F names are unchanged');
+  check(HOTBAR_KEYS.join('') === '1234567890', `OFF: hotbar on the ten keys (${HOTBAR_KEYS.join('')})`);
+  check(menuKeyOf(key('enter')) === 'decide' && menuKeyOf(key('w')) === null, 'OFF: menu keys follow the table; W is not a menu key');
+  check(isRepeatingKey('arrowleft') && !isRepeatingKey('w'), 'OFF: select arrows still repeat');
+
+  const on2 = toggleKeyboardControls(full, send);
+  check(on2 && dv.getUint32(0x4ec, true) === 0x00040058 && keyboardControlsOn(), 'second F11 clears the bit and restores ON');
+  check(sent.length === 2 && sent[1][1][3] === 0x00, 'second F11 sends the cleared word');
+  check(KEYS.moveForward === 'w' && KEYS.chat === ' ' && HOTBAR_KEYS[0] === '1', 'ON again: the config keys are back');
+
+  // A rebound config is kept while OFF and used again when ON.
+  const cfg = defaultKeyConfig();
+  writeBinding(cfg, BINDING.moveForward, { type: 0, code: 0x10 }); // a
+  applyKeyConfig(cfg);
+  check(KEYS.moveForward === 'a', 'rebound Move Forward is the key a');
+  setKeyboardControls(false);
+  check(KEYS.moveForward === '' && bindingKey(BINDING.moveForward) === '', 'rebound key is off with Keyboard Controls OFF');
+  setKeyboardControls(true);
+  check(KEYS.moveForward === 'a', 'rebound key returns with Keyboard Controls ON');
+  applyKeyConfig(null);
+  setKeyboardControls(true);
+
+  // The saved option of a character (00E7 record) decides at login.
+  const saved = new Uint8Array(0x600);
+  new DataView(saved.buffer).setUint32(0x4ec, 0x1000000, true);
+  check(keyboardOffOfCharacter(saved) && !keyboardOffOfCharacter(new Uint8Array(0x10)), 'keyboardOffOfCharacter reads 0x1000000 at 0x4EC');
+  check(keyboardOffFromFlags(0x1000000) && !keyboardOffFromFlags(0x40058) && !keyboardOffFromFlags(null), 'keyboardOffFromFlags');
+}
 
 if (failures) {
   console.log(`${failures} failure(s)`);
