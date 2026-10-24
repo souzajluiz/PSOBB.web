@@ -119,6 +119,8 @@ export class GameView {
   // While this returns true the local player cannot move, attack or pick up
   // (an NPC talk, a quest message or list waits; UIState_SetLockedState).
   inputBlocked: () => boolean = () => false;
+  // A chat shortcut slot (0..11) was pressed; the field's chat line sends it (classic/field.ts).
+  chatShortcut: ((index: number, full: Uint8Array | null) => void) | null = null;
   // The Action Palette Middle key's interact (quest/town.ts): true when an NPC or floor item
   // in the weapon's reach took the key, so the key does not attack (render/combat.ts).
   middleInteract: (reach: WeaponReach | null) => boolean = () => false;
@@ -212,6 +214,7 @@ export class GameView {
       quest: () => this.quest,
       questKey: (e) => this.questKey?.(e) ?? false,
       blocked: () => this.field.menu.open,
+      chatShortcut: (index) => this.chatShortcut?.(index, character.fullCharacter()),
       cast: (t) => this.combat.castTechnique(t),
       telepipeAllowed: () => this.telepipes.allowed(),
       statusFlags: () => this.combat.status.flags,

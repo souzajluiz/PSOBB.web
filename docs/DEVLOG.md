@@ -14671,3 +14671,47 @@ Brief: the user's GameCube reference of the field main menu (Home): dimmed strip
 - Root cause of the 3D view not shifting in the field: run the probe in the spec once login works, and check which camera and onFrame draw the field.
 - The Status window (0x19): no BB route found. If one is found, port its three pages (Total EXP / To Next Lv / Money, the stats, battle / challenge) from the labels above.
 - The GC overlay and the GC info panel: not ported (not in the exe).
+
+## 2026-10-23: chat shortcuts (Shift+F), Log Window page keys, text chat cooldown
+
+**What changed.** The F keys in the chat form and Shift+F send the save's chat shortcut slots (text or symbol chat), with the shared chat cooldown. PageUp / PageDown scroll the lobby's Log Window by a page. Text chat (typed lines) now waits for the same cooldown, and the End-key picker shares the timer with it. `input/shortcuts.ts` (`chatShortcutIndex`, `chatFormOption`, the corrected comment on the option), `net/chatshortcut.ts` (new: the 16 BB records at 0x1FAC), `classic/chat.ts` (`ChatLog.page` / `back` / `wrapped`, `logWindowRows`, `ChatLine.cooldownOver` / `startCooldown` / `tickCooldown` / `useShortcut` / `sendSymbol`, the held typed line), `classic/field.ts` (the picker uses the chat line's timer; `sendSymbolChat`), `classic/lobby.ts` (the tick, the Log Window keys, the shortcut keys), `render/fieldhud.ts` (the chat slot key, the option on the menu path), `render/gameview.ts` (the `chatShortcut` hook). Not done: the Chat > Shortcut leaf editor.
+
+**Premise corrections (per the exe).**
+- `CONTROLS.md` said PageUp / PageDown had no exe handler. The keys are raw keycodes, not input roles: `pso_keycode` page_up = 8, page_down = 9 (dump line 2810), read with `was_key_pressed_no_modifiers` in the list-window input (dump 724833 / 724837, `ChallengePlayerListWindow_HandleInput_00752238`, 724757). The Log Window is built by `chat_log_menu` (dump 700284), which calls `ChallengePlayerListWindow_Constructor_00752114`, whose vtable 0x00b42448 has slot 1 = 0x00752238 (`tools/exedata.py read 0x00b42448 u 16`).
+- The Shift+F option was taken as "not in the port". It is the character option 0x2000000 (Function Key), and the port reads it now (option_flags at 0x4EC; bit 0x1000000 is keyboard controls, `newserv` SaveFileFormats.hh 586..590).
+- Text chat had no cooldown (DEVLOG 2026-10-23, the End picker entry). The exe gates it: the chat window's send row calls `send_chat_message_with_cooldown` (724794, with the row's 0x10 flag retried each frame). ASSUMED that the typed line uses that row (see below).
+- The dump's class names are wrong in places: the Log Window is a "ChallengePlayerList" constructor, and the "ChatShortcutMenuYesNoListWindow" family is the generic list window. The behaviour above is from the code paths, not the names.
+
+**Exe evidence** (`refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`):
+- `handle_chat_shortcuts` (674857): returns when the 0x8 flag is set, a UI panel is visible, a menu is open, Ctrl or Alt is held. The option test: option 0x2000000 clear requires Shift, set requires no Shift. Then `was_key_pressed(f1..f12)` in order, `use_chat_shortcut(0..10)` and `(0xb)` for F12. The chat reader uses raw F keys (pso_keycode f1 = 64 .. f12 = 75), not the key config's bindings.
+- `unknown_handle_fkey_inputs` (682260), the menu reader, has the mirror test on Shift (clear: no Shift; set: Shift). So the two readers split the same keys by the option: the default (clear) gives plain F = menu and Shift+F = chat; set gives plain F = chat and Shift+F = menu. This matches newserv's comment ("0 = menu shortcuts; 1 = chat shortcuts").
+- `use_chat_shortcut` (754183) -> `get_chat_shortcut_optcall` (754134: a 0xa4 stride from the session block) -> `send_chat_message_with_cooldown_optcall` (754207). The timer is set before `send_chat_message` (754259), so an empty record starts it too (type 0 sends nothing).
+- `send_chat_message` dispatches type 1 to `send_chat_message_text` (754354: an empty line returns; otherwise `send_packet6` in the logged-in scene), type 2 to `send_chat_message_word_select` (664328, not ported), type 3 to `send_chat_message_symbol_chat` (754781).
+- The cooldown: `is_chat_message_cooldown_over` (679808: the short at `g_pUITextColorTable + 0x22` below 1), `set_chat_message_cooldown_timer` (679819: 0x2d). The shortcut path does not retry: a refused record is dropped.
+- The shortcut records: `get_chat_shortcut_optcall` = `&puVar1[0xc].field_0x180 + index * 0xa4`. newserv's `SaveFileShortcutEntryBB` is 0xA4 bytes: u32 type at +0, the definition at +4 (UTF-16 text 0x50 chars, or a SymbolChatT). `PSOBBCharacterFile.shortcuts` at 0x1FAC, 0x10 entries (0x1ACC + 12 x 0x68 = 0x1FAC).
+- The Log Window's page step: `ListWindow_UpdateRenderProgress_0073c554` (707846) adds to +0xa4 and the keys add -380.0 / +380.0. `ChatShortcutMenuYesNoListWindow_AddItem_0073c228` (707658) -> `SyncRenderState_0073b5e0` sets +0xa4 to 0, so a new line returns the view to the newest (the port's `ChatLog.add`). The clamp is `ClampRenderPosition_0073f8a4` (710748); the animation (the +0x50 state) is not traced into the port.
+
+**Ported:**
+- Chat shortcuts: a slot is sent with the cooldown (text: `lobby.sendChat` / `game.sendChat`; symbol: `game.sendSymbolChat` in the field with the sender's balloon). The field HUD's key handler checks the slot before the menu, the lobby's key handler after the menu shortcuts. Ctrl / Alt: none. A menu or the chat input open: none.
+- Typed text: Enter sends and starts the cooldown. Enter during the cooldown holds the line (the input stays open with its text, Space does nothing, Escape drops it); it goes when the cooldown ends.
+- The End-key picker's timer is the chat line's (`ChatLine.cooldownOver`), so one timer gates all sends.
+- PageUp / PageDown in the lobby's Log Window: a page (380 px = 19 rows of 20 px) per press, clamped to the lines that exist; PageUp shows older lines.
+
+**ASSUMED** (also in `docs/CONTROLS.md`):
+- The typed line uses the chat window's send row (724794, the 0x10 flag): the hold and its Escape are the port's reading of that path.
+- The cooldown ticks every 30 Hz frame in the lobby and the field. The exe ticks it only while the quick menu's chat panel is up (677732, the existing ASSUMED).
+- The Log Window's animation is applied at once; the page is 380 px = 19 rows (one visible page); PageUp is older lines.
+- The shortcut records are the ones the server sent at login (the save): the port has no editor and does not send E7 upstream.
+- Raw F keys for the chat slots (`was_key_pressed(f1..f12)`).
+- Word-select records send nothing; the lobby sends no symbol chat (the port's lobby has no symbol sender, the field has one).
+- The field has no Log Window leaf (menu 0x15 is not in the port's field menu), so the page keys do nothing there.
+
+**Checks.** `node tests/chatline.test.ts` (added: the cooldown and held line, Escape, blank line, the shortcut records and their cooldown, the Log Window paging; all pass). `node tests/chatshortcut.test.ts` (new: the records, the option, the key mapping for both forms, the menu mirror; all pass). Existing and passing under Node 24: `symbolchat`, `fkeys`, `fieldhud`, `lobbymenu`, `controls`, `emotes`. `cd client && npx tsc --noEmit -p .` exit 0 (with client/node_modules linked from the main checkout for the run, removed before the commit). Not run in Chrome (no Playwright, per the brief).
+
+**Left (in order):**
+1. The Chat > Shortcut leaf (menu 0x11): the editor for the 16 records (text entry, the option list, the symbol editor). Its writer was not traced; the leaf is still a logged no-op.
+2. Word select (type 2): `send_chat_message_word_select` (664328) and the word-select window.
+3. The lobby symbol sender (none in the port; the End picker and the shortcut have the field's only).
+4. The cooldown's real guard (the quick menu panel `+0x38`), and the quick menu for End (stand-in picker, as before).
+5. The Log Window's list animation (the +0x50 state) and the Up / Down progress keys (g_KeyboardSharedState 8 / 9, +-6).
+6. The field's Log Window leaf (menu 0x15 in the field menu) if the exe opens it there.

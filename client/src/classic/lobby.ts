@@ -29,7 +29,8 @@
 // are kept as on the psobb.io capture (fitted, see DEVLOG).
 
 import { BINDING, bindingKey, menuKeyOf } from '../input/keyconfig.ts';
-import { functionKeyAction, functionKeyNames, LOBBY_SHORTCUT_LEAVES } from '../input/shortcuts.ts';
+import { chatFormOption, chatShortcutIndex, functionKeyAction, functionKeyNames, LOBBY_SHORTCUT_LEAVES } from '../input/shortcuts.ts';
+import { parseChatShortcut } from '../net/chatshortcut.ts';
 import * as THREE from 'three';
 import type { GuildCardBook, GuildCardClient } from '../net/guildcard.ts';
 import type { InfoBoardClient } from '../net/infoboard.ts';
@@ -471,6 +472,7 @@ export class LobbyScreen implements Screen {
   private tick(): void {
     this.frame++;
     if (this.frame % PING_FRAMES === 0) this.lobby.conn.send(0x1d, 0);
+    this.chat.tickCooldown();
     this.menu.tick();
     this.options?.tick();
     // Meet the User's 450 frames end in the owner callback, which closes the list (teammenu.ts tick).
@@ -589,6 +591,10 @@ export class LobbyScreen implements Screen {
       if (menuKeyOf(e) === 'cancel' || menuKeyOf(e) === 'decide') {
         this.logWindow = false;
         this.menu.leafOpen = false;
+      } else if ((e.key === 'PageUp' || e.key === 'PageDown') && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+        // The Log Window's page keys (ChallengePlayerListWindow_HandleInput_00752238, dump 724833).
+        e.preventDefault();
+        this.chat.log.page(e.key === 'PageUp');
       }
       return;
     }
@@ -638,13 +644,21 @@ export class LobbyScreen implements Screen {
       return;
     }
     // The function-key shortcuts (input/shortcuts.ts): F5..F8 open the lobby's leaves.
+    const full = this.hud.fullCharacter?.() ?? null;
     if (!this.menu.open && !this.counter.open) {
-      const a = functionKeyAction(e, functionKeyNames());
+      const a = functionKeyAction(e, functionKeyNames(), chatFormOption(full));
       if (a?.kind === 'menu' && LOBBY_SHORTCUT_LEAVES.has(a.id) && validateMenuEntry(a.id, lobbyMenuRules(!!this.hud.team && teamMember(this.hud))).enabled) {
         e.preventDefault();
         this.keys.clear();
         this.menu.toggle(MAIN_MENU);
         this.menuAction(a.id);
+        return;
+      }
+      // The chat shortcuts (handle_chat_shortcuts, dump 674857): the raw F keys send a slot.
+      const slot = chatShortcutIndex(e, chatFormOption(full));
+      if (slot >= 0) {
+        e.preventDefault();
+        this.chat.useShortcut(parseChatShortcut(full, slot));
         return;
       }
     }

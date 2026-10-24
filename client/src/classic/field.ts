@@ -27,7 +27,9 @@ import { KEYS } from '../input/keyconfig.ts';
 import { ChatBubble, ChatLine, projectHead, type BubbleTextures } from './chat.ts';
 import { PING_FRAMES } from './lobby.ts';
 import { inGameSpace } from './ingame.ts';
-import { CHAT_COOLDOWN_FRAMES, chatCooldownOver, chatCooldownTick, symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
+import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
+import { parseChatShortcut } from '../net/chatshortcut.ts';
+import type { SymbolChat } from '../net/symbolchat.ts';
 import { SymbolChatList } from './symbolchatlist.ts';
 import { bandsOf, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
 
@@ -54,8 +56,7 @@ export class FieldScreen implements Screen {
   private frame = 0;
   private symbolEnv: FieldSymbolEnv;
   symbolList: SymbolChatList | null = null;
-  // The chat cooldown timer (is_chat_message_cooldown_over) and the row waiting for it.
-  private chatCooldown = 0;
+  // The row of the End-key picker that waits for the chat cooldown (ChatLine.cooldownOver).
   private pendingSymbol: SymbolRow | null = null;
   private extra = 0;
   // Virtual height of the frame (480, or the phone's tall fill: stage.ts vh).
@@ -75,7 +76,12 @@ export class FieldScreen implements Screen {
     this.bubble = bubble;
     this.symbolEnv = symbol;
     this.chat = new ChatLine((text) => this.game.sendChat(text));
+    this.chat.sendSymbol = (chat) => this.sendSymbolChat(chat);
     view.inputBlocked = () => this.chat.open || this.symbolList !== null;
+    // The chat shortcuts (Shift+F or the F keys in the chat form, render/fieldhud.ts key()).
+    view.chatShortcut = (index, full) => {
+      this.chat.useShortcut(parseChatShortcut(full, index));
+    };
     this.game.on('chat', (from, gc, text) => this.chat.receive(from, gc, text, (id) => this.distanceTo(id)));
     this.game.on('symbolChat', (clientId, chat) => this.chat.receiveSymbol(clientId, this.game.playerName(clientId), chat, (id) => this.distanceTo(id)));
     // A press on the 3D canvas keeps the focus here: the canvas focuses itself
@@ -100,8 +106,8 @@ export class FieldScreen implements Screen {
 
   private tick(): void {
     if (++this.frame % PING_FRAMES === 0) this.game.conn.send(0x1d, 0);
-    this.chatCooldown = chatCooldownTick(this.chatCooldown);
-    if (this.pendingSymbol && chatCooldownOver(this.chatCooldown)) {
+    this.chat.tickCooldown();
+    if (this.pendingSymbol && this.chat.cooldownOver()) {
       const row = this.pendingSymbol;
       this.pendingSymbol = null;
       this.sendSymbol(row);
@@ -166,7 +172,7 @@ export class FieldScreen implements Screen {
   // Returns true when the row was sent now (the picker closes); false when it waits.
   private decideSymbol(row: SymbolRow): boolean {
     if (!row.chat) return false;
-    if (!chatCooldownOver(this.chatCooldown)) {
+    if (!this.chat.cooldownOver()) {
       this.pendingSymbol = row;
       return false;
     }
@@ -176,9 +182,14 @@ export class FieldScreen implements Screen {
 
   private sendSymbol(row: SymbolRow): void {
     if (!row.chat) return;
-    this.chatCooldown = CHAT_COOLDOWN_FRAMES;
-    this.game.sendSymbolChat(row.chat);
-    this.chat.receiveSymbol(this.game.selfId, this.game.playerName(this.game.selfId), row.chat, (id) => this.distanceTo(id));
+    this.chat.startCooldown();
+    this.sendSymbolChat(row.chat);
+  }
+
+  // The 6x07 to the room and the sender's own balloon (the shortcut and the picker share it).
+  private sendSymbolChat(chat: SymbolChat): void {
+    this.game.sendSymbolChat(chat);
+    this.chat.receiveSymbol(this.game.selfId, this.game.playerName(this.game.selfId), chat, (id) => this.distanceTo(id));
   }
 
   key(e: KeyboardEvent): void {

@@ -45,7 +45,7 @@ import { AFSArchive } from '../formats/archives.ts';
 import { ITEM_KT_FILE, itemPictureEntry } from '../formats/itemkt.ts';
 import { parseXvm } from '../formats/xvm.ts';
 import { BINDING, bindingKey, KEYS } from '../input/keyconfig.ts';
-import { functionKeyAction, functionKeyNames } from '../input/shortcuts.ts';
+import { chatFormOption, chatShortcutIndex, functionKeyAction, functionKeyNames } from '../input/shortcuts.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { MESETA_ITEM_ID, stackSize, type GameItems } from '../net/items.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -121,6 +121,8 @@ export interface FieldHudOptions {
   trade?: () => { session: TradeSession; partners: () => { id: number; name: string }[] } | null;
   // Another window (a warp menu) has the keyboard.
   blocked: () => boolean;
+  // A chat shortcut slot (0..11) was pressed (handle_chat_shortcuts, input/shortcuts.ts).
+  chatShortcut?: (index: number) => void;
   // Sends a command to the game server (the Options window's 0x01ED).
   send?: (command: number, payload: Uint8Array) => void;
   minimap?: MinimapSource;
@@ -675,10 +677,21 @@ export class FieldHud {
     }
     // The function-key shortcuts (input/shortcuts.ts): F2..F4 open the field's leaves.
     if (!this.menu.isOpen && this.tex) {
-      const a = functionKeyAction(e, functionKeyNames());
+      const a = functionKeyAction(e, functionKeyNames(), chatFormOption(this.opts.fullCharacter()));
       if (a?.kind === 'menu' && this.menu.openShortcut(a.id)) {
         e.preventDefault();
         e.stopImmediatePropagation();
+        return;
+      }
+    }
+    // The chat shortcuts (handle_chat_shortcuts, dump 674857): the raw F keys send a slot
+    // when no menu is open. Which keys depend on the Function Key option (chatFormOption).
+    if (!this.menu.isOpen && this.opts.chatShortcut) {
+      const slot = chatShortcutIndex(e, chatFormOption(this.opts.fullCharacter()));
+      if (slot >= 0) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this.opts.chatShortcut(slot);
         return;
       }
     }
