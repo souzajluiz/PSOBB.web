@@ -57,7 +57,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    with the points window, row 1 sends 19EA with the reward names and descriptions; the points window's
    header and layout are not traced, see DEVLOG). Send Mail and Meet the User are done 2026-10-23 (Meet the
    User reconnects to the searched member's server with the 0041 reply: 19 sent, 93 phase 6 with the lobby;
-   not run against a live server). Left: Sent Item (state 0x15, the trade item window), Team Log (0x27: its labels are unitxt group 11 0x157..0x159, the answer is not traced), Point Regist (0x2d),
+   not run against a live server). Sent Item (state 0x15) is done 2026-10-23 (6xCB: the item goes to the searched member's bank by mail, the trade-zone bit of the local slot gates it, in a game only; the mail follows the server's 16EA answer; not run live). The Guild Card search result's Send Mail / Meet the User rows (option list 0x8e) are done 2026-10-23 (`classic/homeleaves.ts` searchAction; Meet the User reuses `BBSession.meetUser`; the 0x6b label is ASSUMED). Left: Team Log (0x27: its labels are unitxt group 11 0x157..0x159, the answer is not traced), Point Regist (0x2d),
    Master Transfer (6x handshake), Buying Privileges / Flag Records windows, Invite (0x29:
    sends a 6x62 C1 17 peer message, not 03EA; DEVLOG 2026-10-23), banned team names, team
    chat line. No captures exist for any of it.

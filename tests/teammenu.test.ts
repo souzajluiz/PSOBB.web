@@ -650,6 +650,62 @@ async function openMaster(h: TeamHost) {
   await tick();
   eq(own.actionRows?.map((r) => r.enabled), [true, false, true], 'own card: Sent Item stays greyed');
 
+  // Sent Item (state 0x15): the item list over the local inventory (the meseta row out), a single
+  // item to the keyboard with 1, a stack to the amount list first; the send goes to the host with
+  // the item, the amount and the searched card; Cancel steps back; the send's end closes to the list.
+  const sent = { sends: [] as [number, number, number][], answer: 1 };
+  const withItems = (tradeState: boolean) => ({
+    ...host(team(PRIVILEGE.master), { found: true }).host,
+    tradeState: () => tradeState,
+    itemRows: () => [
+      { id: 0x00010203, name: 'Mag', count: 1 },
+      { id: 0x00010300, name: 'Ration', count: 3 },
+      { id: 0xffffffff, name: 'Meseta', count: 1 },
+    ],
+    sendItem: async (card: number, itemId: number, amount: number) => (sent.sends.push([card, itemId, amount]), sent.answer),
+  });
+  const si = new TeamMemberListWindow(withItems(true), text);
+  si.show();
+  await tick();
+  si.key(k('ArrowDown'));
+  si.key(k('Enter'));
+  await tick();
+  eq(si.actionRows?.map((r) => r.enabled), [true, true, true], 'Sent Item enabled with the host trade state (Meet the User in the lobby)');
+  si.key(k('ArrowDown'));
+  si.key(k('Enter'));
+  eq([si.lastLeaf, si.state], [1, 'items'], 'Sent Item chosen: the item list');
+  eq(si.itemListRows?.map((r) => r.label), ['Mag', 'Ration'], 'the item list leaves the meseta row out');
+  si.key(k('Escape'));
+  eq(si.state, 'actions', 'Cancel in the item list goes back to the action list');
+  si.key(k('Enter'));
+  eq(si.state, 'items', 'the item list again');
+  si.key(k('Enter'));
+  eq([si.state, si.giveItem], ['mail', { itemId: 0x00010203, name: 'Mag', amount: 1 }], 'a single item goes to the keyboard with 1');
+  eq(si.mailTarget, 901, 'the keyboard is for the searched card');
+  si.mailDone();
+  eq(si.state, 'items', 'the keyboard cancelled: a fresh item list');
+  si.key(k('ArrowDown'));
+  si.key(k('Enter'));
+  eq(si.state, 'quantity', 'a stack opens the amount list');
+  si.key(k('Escape'));
+  eq(si.state, 'items', 'Cancel in the amount list goes back to the item list (cursor on the stack)');
+  si.key(k('Enter'));
+  si.key(k('ArrowDown'));
+  si.key(k('ArrowDown'));
+  si.key(k('Enter'));
+  eq([si.state, si.giveItem?.amount], ['mail', 3], 'the amount list gives 3');
+  si.giveDone();
+  eq([si.state, si.giveItem, si.mailTarget], ['list', null, null], 'the answer closes to the member list');
+  eq(sent.sends.length, 0, 'the window itself sends nothing (the host sends at Yes)');
+
+  const gate = new TeamMemberListWindow(withItems(false), text);
+  gate.show();
+  await tick();
+  gate.key(k('ArrowDown'));
+  gate.key(k('Enter'));
+  await tick();
+  eq(gate.actionRows?.map((r) => r.enabled), [true, false, true], 'host trade state off: Sent Item greyed');
+
   // Cancel during the search: the answer that comes later is dropped.
   let answer: (v: boolean) => void = () => {};
   const slow = new TeamMemberListWindow({ ...h, searchMember: () => new Promise<boolean>((r) => (answer = r)) }, text);

@@ -566,6 +566,12 @@ function chooseAction(menu: GuildCardMenu, value: number): ReturnType<GuildCardM
   check('the 0x6a row reports state 0x21 for the recent row 0, the list stays', pick?.state === 0x21 && pick.card === 0 && filled.menu.phase === 'searchOpts', JSON.stringify(pick));
   filled.menu.key(key('Escape'));
   check('Escape in the option list returns to the recent list (state 0x1d)', filled.menu.phase === 'text');
+  // The Meet row (0x6b, state 0x25) reports the same recent index; the list stays for the owner (homeleaves).
+  filled.menu.key(key('Enter'));
+  filled.menu.key(key('ArrowDown'));
+  const meet = filled.menu.key(key('Enter'));
+  check('the 0x6b row reports state 0x25 for the recent row 0 (Meet the User, ASSUMED label)', meet?.state === 0x25 && meet.card === 0 && filled.menu.phase === 'searchOpts', JSON.stringify(meet));
+  check('the option list rows are enabled in the lobby', searchOptionRows(text).every((r) => r.enabled));
 }
 
 // 21b. The rename (state 9): Enter writes the own card's description (06E8, the book's copy); no own card in the book: nothing sent.

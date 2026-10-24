@@ -124,6 +124,14 @@ export const VISIBLE_ROWS = 8; // ASSUMED
 export const MEMBER_ACTIONS = ['promote', 'demote', 'dismiss'] as const;
 export type MemberAction = (typeof MEMBER_ACTIONS)[number];
 
+// One row of the Sent Item list: a local inventory item (the meseta row is not one), its name
+// and its stack count (1 for an unstacked item).
+export interface TeamItemRow {
+  id: number;
+  name: string;
+  count: number;
+}
+
 // What the menus ask of the connection (net/team.ts TeamClient plus the lobby).
 export interface TeamHost {
   membership(): TeamMembership;
@@ -140,6 +148,15 @@ export interface TeamHost {
   // Meet the User on the searched member (state 0x12): the host reconnects to the member's
   // server with the last search reply (ProcessPhaseLabel_0074f028). Called once on Enter.
   meetMember?(guildCard: number): void;
+  // Sent Item (state 0x15, see the member list header): the trade-state flag of the local
+  // player's slot (IsTradeStateFlagSet_00825abc on +0x20). Read when the action list is built.
+  tradeState?(): boolean;
+  // The local inventory rows for the Sent Item list (ChallengePlayer_CreateItemList_00751ae0).
+  itemRows?(): TeamItemRow[];
+  // The Sent Item send at Yes (state 0x1a, Player_UnequipWeapon_0068ecf8: 6xCB). Resolves to
+  // the server's 16EA flag (1 = the item went to the member's bank), or -1 when the trade-state
+  // gate is shut (no packet; exe state 0x1a, the 0x16f answer).
+  sendItem?(guildCard: number, itemId: number, amount: number): Promise<number>;
   // Team Info (0x2b, see TeamInfoWindow below): 18EA and 19EA / 1AEA answers.
   intraRanking?(): Promise<IntraRanking>;
   rewards?(owned: boolean): Promise<TeamReward[]>;
@@ -756,6 +773,24 @@ export function drawRanking(ctx: CanvasRenderingContext2D, skin: WindowSkin, row
 //     reply's port (ShipConnectionManager_HandlePacket0x19_007d7640, dump 812031; the
 //     port side is host.meetMember -> BBSession.meetUser). 450 frames (MEET_FRAMES),
 //     then the owner callback (vtable +0x1c) closes the list.
+//   Sent Item (state 0x15, ChallengePlayerInfoWindow_SetupGuildCardSearch_0074e394, dump 721423):
+//     the item list (ChallengePlayer_CreateItemList_00751ae0, dump 724311: the local inventory
+//     of the slot at +0x20, which is the local player: the trade gate reads that slot too) with
+//     the title unitxt (11, 0x37). The greyed rows (the five empty status rows and the meseta
+//     row, the -0x10..-0xc and -0xff values of the two SetMenuItems passes) are not offered.
+//     The chosen item: a single item (the count is below 2) goes to the keyboard
+//     with amount 1 (state 0xe6d4, dump 721616); a stack opens the amount list (state 0x17,
+//     CreateNumericDisplayListWindow_00728ac4, dump 721690) and the keyboard with its value.
+//     Keyboard -> Enter asks "Are you sure?" (the same confirm as Send Mail; state 0x19) ->
+//     Yes (value 0) -> state 0x1a (e1f0, dump 721335): Player_UnequipWeapon_0068ecf8 (dump
+//     570311) sends the 6x60 subcommand 0xCB (size 4 words, the local client id, the item id,
+//     the amount and the searched card, newserv's 6xCB) unless the player is in the lobby. When
+//     the trade-state bit of the slot is clear the item is not sent: the answer is unitxt
+//     (11, 0x16f) (state 0x1a, e060 / e0a4). The mail (SendActionError_0074e154, 0x81) follows
+//     only when the server's answer (16EA, SetCallbackParam_0074eb60) is set; the send is
+//     unitxt (11, 0x16e). Cancel in the keyboard goes back to the item list (state 0x18 -> the
+//     setup, e574); the list closes to the member list after the answer (e060 -> ResetState and
+//     InitializeSubList, not the action list). The result text is not drawn (ASSUMED).
 //   The confirm list Sort (11, 0x3a) with By Number / By Rank (11, 0x15f / 0x160) is
 //     state 7, which only SetState_0074e9f4(3) enters; this list has no row 3, so the
 //     member list does not reach it. Not ported.
@@ -773,7 +808,14 @@ export const TEAM_SEARCH_MSG_POS = { x: 418, y: 344, w: 206 } as const; // the s
 export const T11_TEAM_LIST = { title: 0x156, action: 0x30, notFound: 0x15b, sendMail: 0x15c, sentItem: 0x15d, meetUser: 0x15e } as const;
 export const T12_TEAM_LIST = { pressX: 0x4b } as const;
 
-export type MemberPhase = 'list' | 'searching' | 'notFound' | 'actions' | 'mail' | 'meet';
+export type MemberPhase = 'list' | 'searching' | 'notFound' | 'actions' | 'items' | 'quantity' | 'mail' | 'meet';
+
+// The Sent Item constants: the item list's title (unitxt (11, 0x37): the guild card search
+// window's title, GuildCardSearchWindow_Constructor_00751a10) and the answers (0x16e sent,
+// 0x16f not sent). The labels of 0x16e / 0x16f are not checked against the text.
+export const T11_TEAM_ITEM = { title: 0x37, sent: 0x16e, notSent: 0x16f } as const;
+// The meseta row's id in the inventory rows (items.ts MESETA_ITEM_ID); it is not an item.
+export const TEAM_MESETA_ROW_ID = 0xffffffff;
 
 // The action rows' values (memberActionRows).
 export const MEMBER_LEAF = { sendMail: 0, sentItem: 1, meetUser: 2 } as const;
@@ -810,11 +852,17 @@ export class TeamMemberListWindow {
   private phase: MemberPhase = 'list';
   private actions: PickList | null = null;
   private leaf: number | null = null;
+  // Sent Item: the item list, the amount list (stacks only) and the chosen item.
+  private items: PickList | null = null;
+  private quantity: PickList | null = null;
+  private give: { itemId: number; name: string; count: number; amount: number } | null = null;
+  private itemRows: TeamItemRow[] = [];
   // The searched member's card (+0x24): the Send Mail target and the Meet the User card.
   private target: number | null = null;
   private frames = 0;
   private readonly title: string;
   private readonly actionTitle: string;
+  private readonly itemTitle: string;
   private readonly pressX: string;
   private readonly notFound: string;
   private readonly actionText: Text;
@@ -827,6 +875,7 @@ export class TeamMemberListWindow {
     this.host = host;
     this.title = text.t11(T11_TEAM_LIST.title);
     this.actionTitle = text.t11(T11_TEAM_LIST.action);
+    this.itemTitle = text.t11(T11_TEAM_ITEM.title);
     this.notFound = text.t11(T11_TEAM_LIST.notFound);
     this.pressX = text.t12(T12_TEAM_LIST.pressX);
     this.actionText = text.t11;
@@ -901,6 +950,7 @@ export class TeamMemberListWindow {
           if (!row?.enabled) return true;
           this.leaf = row.value as number;
           if (row.value === MEMBER_LEAF.sendMail) this.phase = 'mail';
+          else if (row.value === MEMBER_LEAF.sentItem) this.openItems();
           else if (row.value === MEMBER_LEAF.meetUser) {
             this.phase = 'meet';
             this.frames = 0;
@@ -909,10 +959,68 @@ export class TeamMemberListWindow {
         }
         return true;
       }
+      case 'items':
+        this.items?.key(e);
+        return this.pickDone('items');
+      case 'quantity':
+        this.quantity?.key(e);
+        return this.pickDone('quantity');
       case 'mail':
       case 'meet':
         return true; // the keyboard (the lobby) or the phase label takes the keys
     }
+  }
+
+  // Sent Item (state 0x15): the item list over the local inventory. The meseta row is not an
+  // item and is left out (the exe greys it, see the header).
+  private openItems(): void {
+    const rows = (this.host.itemRows?.() ?? []).filter((r) => r.id !== TEAM_MESETA_ROW_ID);
+    this.items = new PickList(rows.map((r) => ({ label: r.name, value: r.id, enabled: true })));
+    this.itemRows = rows;
+    this.give = null;
+    this.phase = 'items';
+  }
+
+  // The item list and the amount list: Cancel goes back (the item list to the action list, the
+  // amount list to the item list); Enter on an item asks the amount (a stack) or goes to the
+  // keyboard with 1 (a single item). Returns whether the window is still open.
+  private pickDone(from: 'items' | 'quantity'): boolean {
+    const list = from === 'items' ? this.items : this.quantity;
+    if (!list) return true;
+    const r = list.result;
+    list.result = null;
+    if (r === 'cancel') {
+      if (from === 'items') {
+        this.items = null;
+        this.phase = 'actions';
+      } else {
+        this.quantity = null;
+        this.phase = 'items';
+      }
+    } else if (r === 'decide') {
+      const row = list.selected;
+      if (!row?.enabled) return true;
+      if (from === 'items') {
+        const item = this.itemRows.find((x) => x.id === row.value);
+        if (!item) return true;
+        this.give = { itemId: item.id, name: item.name, count: item.count, amount: 1 };
+        if (item.count >= 2) {
+          const amounts: ListItem[] = [];
+          for (let n = 1; n <= item.count; n++) amounts.push({ label: String(n), value: n, enabled: true });
+          this.quantity = new PickList(amounts);
+          this.phase = 'quantity';
+        } else {
+          this.items = null;
+          this.phase = 'mail';
+        }
+      } else {
+        if (this.give) this.give.amount = row.value as number;
+        this.quantity = null;
+        this.items = null;
+        this.phase = 'mail';
+      }
+    }
+    return true;
   }
 
   // Enter on the member row: the Guild Card search (state 3 -> 0xf -> 0x10).
@@ -933,7 +1041,8 @@ export class TeamMemberListWindow {
     if (ep !== this.searchEpoch || this.phase !== 'searching' || !this.visible) return;
     if (found) {
       const self = target === this.host.selfGuildCard();
-      this.actions = new PickList(memberActionRows(this.actionText, { tradeState: this.rules.tradeState, self, lobby: this.rules.lobby }));
+      const tradeState = this.host.tradeState?.() ?? this.rules.tradeState;
+      this.actions = new PickList(memberActionRows(this.actionText, { tradeState, self, lobby: this.rules.lobby }));
       this.target = target;
       this.phase = 'actions';
     } else {
@@ -947,6 +1056,9 @@ export class TeamMemberListWindow {
     this.visible = false;
     this.phase = 'list';
     this.actions = null;
+    this.items = null;
+    this.quantity = null;
+    this.give = null;
     this.target = null;
   }
 
@@ -957,14 +1069,34 @@ export class TeamMemberListWindow {
     if (this.frames > MEET_FRAMES) this.close();
   }
 
-  // Send Mail: the card the mail goes to while the keyboard runs (null otherwise).
+  // Send Mail and Sent Item: the card the keyboard's text goes to (null otherwise).
   get mailTarget(): number | null {
     return this.phase === 'mail' ? this.target : null;
   }
 
-  // The keyboard is done (sent or cancelled): the action list comes back (state 4).
+  // Sent Item: the chosen item while its keyboard runs (null for Send Mail).
+  get giveItem(): { itemId: number; name: string; amount: number } | null {
+    return this.phase === 'mail' && this.give ? { itemId: this.give.itemId, name: this.give.name, amount: this.give.amount } : null;
+  }
+
+  // The keyboard is cancelled: Send Mail returns to the action list (state 4); Sent Item
+  // returns to a fresh item list (state 0x18 -> the setup, e574).
   mailDone(): void {
-    if (this.phase === 'mail') this.phase = 'actions';
+    if (this.phase !== 'mail') return;
+    if (this.give) this.openItems();
+    else this.phase = 'actions';
+  }
+
+  // Sent Item is answered (sent or not): the list closes to the member list (state 0x1a ->
+  // ResetState and InitializeSubList, e060).
+  giveDone(): void {
+    if (this.phase !== 'mail' || !this.give) return;
+    this.give = null;
+    this.items = null;
+    this.quantity = null;
+    this.actions = null;
+    this.target = null;
+    this.phase = 'list';
   }
 
   // The rows as the answer gave them (test and draw helpers).
@@ -983,6 +1115,11 @@ export class TeamMemberListWindow {
 
   get actionRows(): readonly ListItem[] | null {
     return this.actions?.items ?? null;
+  }
+
+  // The Sent Item list's rows (test helper).
+  get itemListRows(): readonly ListItem[] | null {
+    return this.items?.items ?? null;
   }
 
   get lastLeaf(): number | null {
@@ -1009,6 +1146,16 @@ export class TeamMemberListWindow {
       const labels = this.actions.items.map((i) => gameTextWidth(i.label));
       const aw = Math.max(gameTextWidth(this.actionTitle), ...labels) + 2 * INSET;
       drawListWindow(ctx, skin, TEAM_ACTION_POS.x, TEAM_ACTION_POS.y, aw, this.actionTitle, this.actions.visible, this.actions.cursor - this.actions.top, true);
+    }
+    // Sent Item: the item list, then the amount list over it (ASSUMED: the amount list's
+    // position, get_gui_position(5), is not read; it is drawn at the action list's place).
+    if (this.phase === 'items' && this.items) {
+      const labels = this.items.items.map((i) => gameTextWidth(i.label));
+      const iw = Math.max(gameTextWidth(this.itemTitle), ...labels) + 2 * INSET;
+      drawListWindow(ctx, skin, TEAM_ACTION_POS.x, TEAM_ACTION_POS.y, iw, this.itemTitle, this.items.visible, this.items.cursor - this.items.top, true);
+    }
+    if (this.phase === 'quantity' && this.quantity) {
+      drawListWindow(ctx, skin, TEAM_ACTION_POS.x, TEAM_ACTION_POS.y, 2 * INSET + 40, null, this.quantity.visible, this.quantity.cursor - this.quantity.top, true);
     }
     ctx.restore();
   }
