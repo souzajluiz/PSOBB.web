@@ -150,6 +150,25 @@ function generatedRowBox(base: number, index: number): ObjectCollision {
   return generatedBox(base + ROW_BYTES * index);
 }
 
+// Field objects with no port model whose constructor still sets a static box (the blocking
+// shape only; nothing is drawn). Factory and constructor from the exe's type rows (0x0191 ->
+// 0x00667ec8 -> ctor 0x00667f44, 0x0193 -> 0x00668194 -> ctor 0x00668210, 0x0205 -> 0x00658eac ->
+// init 0x00658f28), each calling InitEnemyCollisionBoxes_007b9a88 with one row: 0x0191 and 0x0193
+// the 16 x 6 box 0x009c9430 / 0x009c945c (flags 0x10003), 0x0205 the sphere r5 at 10 up 0x009c7e0c
+// (flags 0x30003). ASSUMED: the box stays enabled (their states and the door toggle are not ported).
+export function unmodelledSolidBox(type: number): ObjectCollision | null {
+  switch (type) {
+    case 0x0191:
+      return generatedBox(0x009c9430);
+    case 0x0193:
+      return generatedBox(0x009c945c);
+    case 0x0205:
+      return generatedBox(0x009c7e0c);
+    default:
+      return null;
+  }
+}
+
 const spec = (name: string, bml: string, parts: ObjectPartSpec[], extra: Partial<ObjectModelSpec> = {}): ObjectModelSpec => ({ name, bml, parts, ...extra });
 
 // A door whose single model opens with motion 0 (Cave, Mine, Ruins, VR, Seabed,

@@ -64,7 +64,7 @@
 import * as THREE from 'three';
 import type { PlacedEntity, ObjectSet } from '../formats/setdata.ts';
 import { OBJECT_BOX_FLAGS, type CollisionWorld, type Obstacle } from './collision.ts';
-import { objectModelFor, type ObjectCollision, type ObjectModelContext } from '../formats/objectmodels.ts';
+import { objectModelFor, unmodelledSolidBox, type ObjectCollision, type ObjectModelContext } from '../formats/objectmodels.ts';
 import {
   DerolleEmitter,
   msvcRand,
@@ -290,10 +290,17 @@ const BOX_TYPES = new Set([0x0088, 0x0091, 0x0092, 0x0093, 0x0161, 0x0162, 0x020
 // (their boxes are rows of their table picked by param4, or one box for 0x0303), the beehive 0x038f
 // (row by param4) and the falling stalactite 0x038b (its box is on while it hangs; the fall and the
 // shatter are not ported, objectmodels.ts) are added the same way (ASSUMED: a static box is a block).
+// The types with no port model (0x0191 and 0x0193, the Derolle variants 2 and 3; 0x0205, the jungle
+// door key) block by their constructor's box only (objectmodels.ts unmodelledSolidBox): nothing is drawn.
 const SOLID_TYPES = new Set([
   ...BOX_TYPES, 0x0206, 0x0207, 0x0208, 0x0154, 0x0167, 0x0152, 0x0229, 0x0380, 0x038d,
-  0x0301, 0x0302, 0x0303, 0x0386, 0x038b, 0x038f,
+  0x0301, 0x0302, 0x0303, 0x0386, 0x038b, 0x038f, 0x0191, 0x0193, 0x0205,
 ]);
+
+// The box's enable bit (bit 0x1 of its flag word). A broken box loses it: the exe's break
+// handler unk_on_box_break (dump 516643) calls unknown_unset_entity_flags(this, 0, movement_disabled)
+// with movement_disabled = 1, and CheckTwoHitboxCollision_007b5e40 needs bit 0x1 in both boxes.
+const BOX_ENABLE_BIT = 0x1;
 
 // A non-door field object with a collision box: its set entry's world place and
 // the box table it was built with (objectmodels.ts ObjectCollision).
@@ -313,18 +320,21 @@ export function collectFieldSolids(placed: PlacedEntity[], ctx: ObjectModelConte
   for (const p of placed) {
     if (p.entity.kind !== 'object' || !SOLID_TYPES.has(p.entity.type)) continue;
     const spec = objectModelFor(p.entity, ctx);
-    if (!spec?.collision || spec.door) continue;
+    const collision = spec ? spec.collision : unmodelledSolidBox(p.entity.type);
+    if (!collision || spec?.door) continue;
     const [x, y, z] = p.world;
-    out.push({ index: p.entity.index, x, y, z, yaw: p.yaw, collision: spec.collision });
+    out.push({ index: p.entity.index, x, y, z, yaw: p.yaw, collision });
   }
   return out;
 }
 
 // The collision box of a solid in world space (the same frame as the doors':
 // the table's offset turned by the entity's yaw).
-export function solidObstacle(s: FieldSolid): Obstacle {
+export function solidObstacle(s: FieldSolid, broken = false): Obstacle {
   const c = s.collision;
   const cos = Math.cos(s.yaw), sin = Math.sin(s.yaw);
+  // A broken box has its enable bit cleared (BOX_ENABLE_BIT), so the pair gate refuses it.
+  const flags = broken ? c.flags & ~BOX_ENABLE_BIT : c.flags;
   return {
     key: s.index,
     x: s.x + c.offset[0] * cos + c.offset[2] * sin,
@@ -335,7 +345,7 @@ export function solidObstacle(s: FieldSolid): Obstacle {
     halfZ: c.halfZ,
     height: 50,
     sphere: c.type === 0,
-    flags: c.flags,
+    flags,
     ex: s.x,
     ez: s.z,
   };
@@ -977,8 +987,8 @@ export class FieldObjects {
     }
     const broken = new Set(this.all.boxes.filter((b) => b.broken).map((b) => b.index));
     for (const s of this.solids) {
-      if (this.delayed.has(s.index) || broken.has(s.index) || this.shattered.has(s.index)) continue;
-      out.push(solidObstacle(s));
+      if (this.delayed.has(s.index) || this.shattered.has(s.index)) continue;
+      out.push(solidObstacle(s, broken.has(s.index)));
     }
     return out;
   }
