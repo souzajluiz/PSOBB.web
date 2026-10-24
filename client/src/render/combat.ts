@@ -72,6 +72,7 @@ import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import { GalgryphonMinionManager } from '../combat/galgryphon.ts';
 import { GalgryphonAi } from '../combat/galgryphonai.ts';
+import { OlgaFlowAi, decodeOlgaA4 } from '../combat/olgaflowai.ts';
 import { galgryphonAttackBurst, GALFX_RING, GALFX_RING_PARTICLES } from '../combat/galgryphonfx.ts';
 import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
 import { DEMO_WARP_PARTS } from '../formats/enemymodels.ts';
@@ -1028,7 +1029,7 @@ export class CombatView {
         monest = new MonestSpawner(head.slot.set.params[1], head.slot.set.params[2]);
       }
       // The Gal Gryphon has its own brain (the branch below) and no AI_PROFILES row, so it is let in here.
-      if (profile || OWN_FSM.has(className) || className === 'TBoss5Gryphon') {
+      if (profile || OWN_FSM.has(className) || className === 'TBoss5Gryphon' || className === 'TBoss6PlotFalz') {
         // initdata_param6 (set entry params[5]) is the subtype, as
         // formats/enemymodels.ts reads it.
         const subtype = Math.max(0, Math.trunc(head.slot.set.params[5]));
@@ -1225,6 +1226,23 @@ export class CombatView {
             rng: () => this.rng(),
             // The 0x2b phase 9 waits while the copies' slots hold living entities (FUN_004ce970).
             extrasFree: () => this.golExtrasFree(head.index),
+          });
+        } else if (className === 'TBoss6PlotFalz') {
+          // Olga Flow, form 1 (combat/olgaflowai.ts; map docs/bosses/olgaflow-map.md). The room leader's
+          // brain chooses the attack states and sends each as 6xA4; the others apply them (onOlgaAction).
+          // ASSUMED: the body stays at its spawn (the beast's movement is not ported), its height is the
+          // spawn height (the exe's +0x3c) and its heading is the spawn yaw in BAMS.
+          ai = new OlgaFlowAi({
+            entityId,
+            x: at.x,
+            z: at.z,
+            height: instance.placed.world[1],
+            heading: Math.round((at.angle * 65536) / (Math.PI * 2)) & 0xffff,
+            hp: stats.hp,
+            maxHp: stats.maxHp,
+            leader: () => this.game.selfId === this.game.leaderId,
+            frames: this.motionFrames(instance, null),
+            rand: () => this.rng(),
           });
         } else if (className === 'TBoss3Volopt') {
           // The control builds the arena: MovementData rows 33 (core), 34
@@ -1900,6 +1918,10 @@ export class CombatView {
       }
       const ai = e.ai;
       if (!ai) continue;
+      if (ai instanceof OlgaFlowAi) {
+        this.tickOlga(e, ai, targets);
+        continue;
+      }
       if (ai instanceof GalgryphonAi) {
         ai.setHp(e.stats.hp, e.stats.maxHp);
         this.tickGalgryphon(e, ai, targets);
@@ -2837,6 +2859,54 @@ export class CombatView {
   // each 0xA0 (its pattern step, through GalgryphonAi.emit) and each 0x9F (its target); the
   // followers apply them (onGalgryphonSub) and run phase 0 only. ASSUMED: the body is placed at
   // its own height (no ground follow); the motion plays on each change of row.
+  // --- Olga Flow, form 1 (combat/olgaflowai.ts) ------------------------------------
+  // The brain owns the body and its attack states; the leader's sends go out as 6xA4 (events), and the
+  // death is the brain's: 'killed' runs the kill once (bossKilled: the drop, EXP, the 6x76 flag).
+  private olgaLastHit = new Map<number, boolean>();
+
+  private tickOlga(e: EnemyRuntime, ai: OlgaFlowAi, targets: AiTarget[]): void {
+    const inst = e.instance;
+    const root = inst.root;
+    const r = ai.tick(targets);
+    root.position.set(r.x, root.position.y, r.z);
+    root.rotation.y = r.angle;
+    const body = r.motion;
+    if (body) {
+      // The leg model (animator 0 in the spec order) plays the row's leg motion; the others the body's.
+      const leg = ai.legMotion;
+      inst.animators.forEach((a, k) => {
+        const m = k === 0 && leg ? leg : body;
+        try {
+          a.play(inst.archive.motion(m.index, a.nodeCount), m.speed, m.loop);
+        } catch (err) {
+          this.opts.log(`Olga Flow motion ${m.index}: ${(err as Error).message}`);
+        }
+      });
+    }
+    for (const ev of ai.drainEvents()) {
+      if (ev.kind === 'send') this.game.sendOlgaPacket(ev.packet);
+      else this.olgaKilled(e, ai.x, ai.z);
+    }
+  }
+
+  private olgaKilled(e: EnemyRuntime, x: number, z: number): void {
+    e.dead = true;
+    e.stats.hp = 0;
+    if (this.lockOn === e) this.lockOn = null;
+    this.bossKilled(e, x, z, this.olgaLastHit, 'Olga Flow');
+  }
+
+  // A 6xA4 from the leader: the form 1 state and its attack fields (the exe's 0x00497e50). The leader
+  // applied its own packet already (tickOlga's send), so it ignores the loopback.
+  private onOlgaAction(body: Uint8Array): void {
+    if (this.game.selfId === this.game.leaderId) return;
+    const m = decodeOlgaA4(body);
+    if (!m) return;
+    const e = this.enemies.get(m.entity - 0x1000);
+    if (!(e?.ai instanceof OlgaFlowAi) || e.dead) return;
+    e.ai.applyRemote(m);
+  }
+
   private tickGalgryphon(e: EnemyRuntime, ai: GalgryphonAi, targets: AiTarget[]): void {
     const r = ai.tick(targets);
     // S34 (remove) marked the body gone: it leaves the room (Gol Dragon's gone case).
@@ -7003,6 +7073,22 @@ export class CombatView {
       this.sorcererBitHit(e, e.ai, damage, critical, baseFlags, what);
       return;
     }
+    if (e.ai instanceof OlgaFlowAi) {
+      // Olga Flow (combat/olgaflowai.ts): the brain owns the death. The hit takes the HP (clamped at 0)
+      // and the 6x0A goes out without the dead flag; the death hold runs in the brain and the kill
+      // (6x76, drop, EXP) comes at its end (tickOlga's 'killed' event).
+      const ai = e.ai;
+      if (damage >= 1) {
+        ai.hit(damage);
+        this.olgaLastHit.set(e.index, byPlayer);
+      }
+      e.stats.hp = ai.hp;
+      this.sendEnemy(e, baseFlags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, ai.maxHp - ai.hp));
+      const p = e.instance.root.position;
+      this.num(damage, critical, p.x, p.y + 40, p.z);
+      this.opts.log(`${what}hit Olga Flow for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}`);
+      return;
+    }
     if (e.ai instanceof GalgryphonAi) {
       // The Gal Gryphon's brain owns its death: the hit takes the HP (clamped at 0) and the 6x0A goes out
       // without the dead flag, so no kill (6x76, drop, EXP) here. The brain's death gate (hp <= 0, the
@@ -8483,6 +8569,10 @@ export class CombatView {
       this.onGalgryphonSub(sub, body);
       return;
     }
+    if (sub === 0xa4) {
+      this.onOlgaAction(body);
+      return;
+    }
     if (sub === 0xa8) {
       this.onGolAction(body);
       return;
@@ -8593,6 +8683,16 @@ export class CombatView {
         return;
       }
       if (e.ai instanceof VoloptAi) return;
+      if (e.ai instanceof OlgaFlowAi) {
+        // restore_enemy_status (6x0A from another client): the total damage sets the HP; a body at 0 starts its
+        // death hold in the brain (hit(0)), as the hit path does.
+        if (s.flags & FLAG_HIT && s.totalDamage > 0 && !e.dead) {
+          e.ai.setHp(e.ai.maxHp - s.totalDamage, e.ai.maxHp);
+          e.ai.hit(0);
+          e.stats.hp = e.ai.hp;
+        }
+        return;
+      }
       if (e.ai instanceof GoldDragonAi) {
         // restore_enemy_status (6x0A from another client), as the Dragon's.
         if (s.flags & FLAG_HIT && s.totalDamage > 0 && !e.dead) {

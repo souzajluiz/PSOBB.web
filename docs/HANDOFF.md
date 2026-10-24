@@ -33,8 +33,8 @@
 - Episode 2 bosses: Barba Ray ported (brain, 10 parts as hit targets, Pig Ray minions;
   body movement open; map in docs/bosses/barbaray-map.md). Gol Dragon has its brain
   (combat/goldragon.ts). Gal Gryphon has its brain (combat/galgryphonai.ts and the states
-  files; its death goes through the brain since 2026-10-24). Olga Flow has no brain yet
-  (map in docs/bosses/olgaflow-map.md).
+  files; its death goes through the brain since 2026-10-24). Olga Flow has a partial brain,
+  form 1 (combat/olgaflowai.ts, 2026-10-24; map in docs/bosses/olgaflow-map.md).
 - tools/ghidra/decomp.sh now works from git worktrees.
 
 Rewritten 2026-10-21 at the end of the day (the user: "pare tudo e documente pra
@@ -132,7 +132,11 @@ worktrees are left.
    in no data source here), so they load with no enemies. Open:
    - the Episode 2 bosses: Barba Ray, Gol Dragon and Gal Gryphon have brains (wired in
      render/combat.ts; the Gryphon's death through its brain was added 2026-10-24, DEVLOG).
-     Olga Flow (`TBoss6PlotFalz`, 0x1f) still has no brain: state `none`, it stands still;
+     Olga Flow (`TBoss6PlotFalz`, 0x1f) has a partial brain, form 1 only (2026-10-24,
+     combat/olgaflowai.ts, map docs/bosses/olgaflow-map.md section 13): the hub, the attack
+     choice, the sword chains and the HP / death are ported; left: hit geometry (sword,
+     tail, lancer, mines), the beast's movement, the controller's sub-states, form 2 (unreached
+     in this build). The body stays at its spawn;
    - Tower / Epsilon not seen in Chrome (no enemies there);
    - floors 1, 5, 7, 10 saw no state change in 10 s (their waves did not fire); a longer watch
      per room is needed to see their FSMs;

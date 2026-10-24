@@ -3,7 +3,7 @@
 First mapping pass, 2026-10-22. Area 0x1f, Episode 2 floor 13 (boss flag 0x57 on area 0x1f).
 Addresses are PsoBB.exe VAs. "dump" is the named Ghidra dump in original-psobb-client-source
 (names often wrong). Tags: PROVEN (read in asm / table bytes), ASSUMED, UNCLEAR.
-No brain is ported yet. Read-only pass: no code change.
+Pass 1 and 2 were read-only. Pass 3 (2026-10-24, section 13) ports form 1 as `client/src/combat/olgaflowai.ts`.
 
 Sources: `objdump` on PsoBB.exe (`calll` lines grepped from a 0x0048c000..0x0049f000 dump),
 Ghidra headless (`tools/ghidra/decomp.sh`), `tools/exedata.py read` for tables, the repo's
@@ -502,3 +502,98 @@ Blockers after pass 2:
 8. The beast state 2 (the only A4 announced) and 0x494ae0 / 0x494678 (transitions) not decoded.
 
 Tags used: PROVEN, ASSUMED, UNCLEAR, BLOCKER.
+
+## 13. Pass 3 (2026-10-24): form 1 brain (`client/src/combat/olgaflowai.ts`)
+
+Sources: the dump `reverse/refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c` (its Olga1* / olga1_*
+names; the line numbers below are that file's), `tools/exedata.py read` for the tables and constants. The
+dump's function names with no address (`olga1_*_func1/2/3`) are not bound to table rows (UNCLEAR, see 13.6).
+
+### 13.1 State table (PROVEN)
+
+- 0x009a70a4, 40 rows of 0x18 (rows 0..39): w0 motion-pair row (-1 keeps), w1 value (+0x420), w2 enter, w3 leader,
+  w4 frame (exe). Row 40 (0x009a7364) is not a row of this table (its first word is an address): the port ignores 40.
+- Dispatch (dump 213320 Olga1ObjectUpdate_00492a84): frame fn first, then the leader fn when owner +0x37c == 0.
+  SetOlga1State (dump 214761) shifts a 32-entry history (+0x380.., newest first), sets the motion pair and calls enter.
+- 0x009a6dc0, 16 motion-pair rows (mode, next, leg, body), as in 4.3.
+
+### 13.2 The hub and the attack choice (PROVEN bodies; dump 217090 and 214488)
+
+- Olga1UpdateAttack_00498484 (the row 1 leader): return while +0x418 != 0. If +0x41c != 0: CheckOlga1AttackProgress_00496880
+  (+0x498 <= snapshot - hp) is false -> ProcessOlga1AttackSelection_00494678, true -> SelectAndSendOlga1Attack_00494b20.
+  Else: CheckOlga1AttackProgress_00496910 (+0x494 <= snapshot - hp) -> send 0x17. Else GetOlga1AttackCount_00496b54(2, 16)
+  != 0 -> (count 3 + count 5 in 10) and rand < g_Olga1AttackInitiationChance -> StartOlga1Attack_00494290, else the
+  selection; count 0 -> StartOlga1Attack.
+- "snapshot" = +0x4b8 (the HP at a reset; the write site is not bound, ASSUMED: the hub entry).
+- StartOlga1Attack_00494290: state 2, the direction byte from GetOlga1AttackDirection_0049448c (target heading byte +
+  rand*160 - 80, kind 0x1c if rand < 0.5, else 0x12; 0x0090258c = 0.5, 0x00902ba0 = 160).
+- ProcessOlga1AttackSelection_00494678, flag 0x41c == 1: close (height < 40): state 0x15 with param -2, or 2 when
+  count(0x15 in 8) != 0 and rand >= 0.4 / count (0x00902594). Far (> 140): state 4. Else a 5-entry table
+  (g_Olga1AttackSelectionTable, address not bound: ASSUMED {2,4,0x16,5,8}).
+- Flag 0x41c == 0: within 230 (0x00902b94) of the origin: state rand*1.99+5 (0x00902b70 / 0x00902b68), i.e. 5..7.
+  Else the history: 3 found -> 5 (send 5..7), 5 found -> 3, none -> rand >= 0.5 ? 5 : 3 (0x00902b6c).
+- SendOlga1AttackPacket_00494ae0(x) (state x) and SelectAndSendOlga1Attack_00494b20 (state 0x18 or 0x14/0xfb extra) are
+  the same packet, FillOlga1AttackPacket_00494a78 (dump 214670).
+
+### 13.3 The 6xA4 wire (PROVEN, 4 senders and the receive)
+
+Sender fills (FillOlga1AttackPacket_00494a78): u16 entity @2 (this+0x1c), the 0x440 flag @8, the 0x41c flag @9, a random
+byte @10 (this+0x424 via the rand). Size word 5 (20 bytes). The state byte @4; the attack fields @5..@7.
+Receive (Olga1UpdateState_00497e50, 0x00497e50): state = byte @4, range 0..40; then Olga1SetCollisionBoxDimensions
+(0x004981a0): +0x440 = byte @8, +0x41c = byte @9, +0x424 = byte @10. The table row 0xa4 (0x00a0fba0, row 115) = 0x497e50.
+
+### 13.4 Timer writes (PROVEN, named enter fns; which row each is: UNCLEAR)
+
+RND_FLOAT (enter, dump ~218121) 0x5a; RND_MOVE 0x1e; GOTO_CENTOP 0x3c; CENTOP_D 0x1e; BOMB_CENTOP 0x1e; GOTO_CENBTM 0x3c;
+CENBTM_D 0x1e; RET_RND_UD 0x3c; RET_RND_DU 0x3c; KAKUSAN_MV 0x5a; KAKSUAN 0x5a; SWORD_U_2_3 0x5c or 0x3e; PUT_MINE 0x22b;
+HandleOlga1ChallengeUD 0x5a. The frame writes (dump 217065..217820): GOTO_CENTOP -> state 0x1b; CENTOP_D -> 0x0f or 0x10 (by
++0x424 & 1); CENTOP_U -> 0x1d; DOWN_CENTOP -> 0x1e; BOM_CENTOP -> 0x20; TKOF_CENTOP -> 0x27; GOTO_CENBTM -> 0x23; CENBTM_D
+-> 0x14 or 0x15; RET_RND_UD / RET_RND_DU -> 1; Olga1ChalUD / ChalFloat phase 3 -> 0x27.
+
+### 13.5 Sword chains and tail (PROVEN frame bodies, rows bound by address)
+
+- Row 5..7 frame 0x00498634 (Olga1HandleSwordWaveAttack): state 5 -> 1, else n-1.
+- Row 8..10 frame 0x00498674 (Olga1HandleSwordWaveMoveAttack): state 8 -> 1, else n-1.
+- Row 11..20 frame 0x004986c8 (Olga1HandleSwordStabAttack): 11 -> 0x1c, 16 -> 0x24, else n-1.
+- Row 21 frame 0x0049872c (Olga1HandleTailSwipeAttack): timer end -> 1. Row 22 frame 0x0049876c: its transition is in
+  Olga1HandleFireLancerMoveAttack (partial: ASSUMED -> 1).
+- Row 1 frame 0x00498554 (Olga1HandleRandomFloatAttack): timer end -> 0x27. Row 0 frame: timer end -> 1. Row 24 frame
+  0x004988e8: timer end -> 0x27 (the leader of row 24 sends 0x19, 0x004988d4, map 12.5).
+
+### 13.6 Not bound (UNCLEAR)
+
+The named-only functions (`olga1_*_func1/2/3`, the CENTOP / CENBTM / SWORD / KAKUSAN / RND_MOVE families) have no address in
+the dump, so their rows are not bound. The enter addresses in the table fall in address order by row for rows 21..38, which
+suggests the mapping, but it is not proven. The port uses the decoded bindings only, and a motion-length timer for the rest.
+
+### 13.7 Constants (PROVEN values, exedata)
+
+0x00902b54 / 0x00902b80 / 0x00902b98 = 32768 (rand divisor), 0x00902b5c = 128, 0x00902ba0 = 160, 0x00902b70 = 1.99,
+0x00902b74 = 6, 0x00902b68 = 5, 0x00902b84 = 4.99, 0x00902b6c = 0.5, 0x0090258c = 0.5, 0x00902594 = 0.4, 0x00902590 = -20
+(the packet 0x26 / 0x21 height split, not ported), 0x00902b88 = 40, 0x00902b8c = 140, 0x00902b94 = 230 (the dump's
+IsOlga1* globals hold the same numbers).
+
+### 13.8 ASSUMED in the port
+
+- The snapshot and the progress thresholds 0x494 / 0x498 = 200 (the exe reads BattleParam fields 6..11 via
+  get_battleparams_animation_speeds; not bound, the exe's own fallback).
+- The chance g_Olga1AttackInitiationChance = 0.5; the selection table {2,4,0x16,5,8}; the offset multiplier of
+  CalculateOlga1AttackParameters (not bound: the port uses the direction's +-80).
+- +0x3c (height) = the spawn height; +0x60 (heading) = the body's heading; the IsOlga1* distances are measured from the
+  world origin, as the exe does (+0x38 / +0x40).
+- The death hold 0x1c6 = the controller's sub-state 8 kill timer (0x0048f0b8, 12.4); the kill then runs the brain's
+  `killed` once.
+- Row 39 (0x27) with no frame fn: a 30-frame hold, then the hub (its leader decides first).
+- Motion: the body model plays the row's body motion, the leg model (animator 0) the leg motion; the playback speed 1.
+
+### 13.9 Left (not ported)
+
+1. Hit geometry: CheckOlga1SwordStab_00495508, CheckOlga1SwordWaveHit_0049592c, CheckOlga1ProximityHit_00495fe0, the tail
+   swipe 0x00495684, the lancer, the sword wave effect 0x004960a4 and the mines (0x00490058 / 0x00490090). No attack lands.
+2. The beast's movement and rotation: UpdateOlga1Position_004931c0, UpdateOlga1Rotation_00493080.
+3. The controller's sub-states (0x0048f30c..0x0048f100 rows, the spawn 0x0048d188, the fade, the kill 0x0048d4b0): the brain
+   is the beast only. The HP pool is the one entity's.
+4. Form 2 (6xA5, 0x0049e3e8): unreached in this build (12.2).
+5. Effects and sounds (0x0080575c, 0x0048eb24, 0x004970a0 particle, 0x00494120 render).
+6. Named rows: the 13.6 binding; the 0x1c / 0x24 targets and the row 36 / 38 leaders (0x00498e48, 0x00498f4c) are not run.
+7. The 6xA4 send for state 0x17 (the progress attack) has no decoded body: it runs as a timer state.
