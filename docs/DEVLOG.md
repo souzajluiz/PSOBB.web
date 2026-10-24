@@ -14671,3 +14671,32 @@ Brief: the user's GameCube reference of the field main menu (Home): dimmed strip
 - Root cause of the 3D view not shifting in the field: run the probe in the spec once login works, and check which camera and onFrame draw the field.
 - The Status window (0x19): no BB route found. If one is found, port its three pages (Total EXP / To Next Lv / Money, the stats, battle / challenge) from the labels above.
 - The GC overlay and the GC info panel: not ported (not in the exe).
+
+## 2026-10-23: EXP and HP floating texts (exe check)
+
+Brief: the magenta "EXP+5" over a killed enemy and the green "HP+602" over healed players (vanilla references `images/5.png`, `images/6.png`). The premise was partly wrong per the exe, and both texts were already in the port (`classic/hud.ts` expText / hitText / FloatingTexts, `combat/hitfx.ts` restaFloat, `render/combat.ts` expPopup / Resta). This entry checks them against the exe and pins the timings in `tests/level.test.ts`.
+
+**Exe evidence (PsoBB.exe, dump `Psobb.exe-05112026.c`).**
+- EXP text: `handle_experience` (`.c:762698`) calls `display_special_attack_text_effect(&this->unknown_lockon_cursor_position, 0xffff00ff, 0x14, 0x14, u_EXP_009783a0, amount, player_idx)` (`.c:762739`). ARGB 0xffff00ff is magenta. Duration 0x14 is param 3; the delay 0x14 is param 4 (stored at object +0x60). The text is "EXP" + "+" when the amount is >= 0 + the number (`display_special_attack_text_effect` `.c:765648`).
+- Amount (`.c:762716`..`762741`): bp xp * 13 when `g_CurrentEpisode == 1`, else * 10; then * 10 for the last attacker, * 8 for a tagger; the challenge multiplier; then `(iVar3 / 100) * unknown_xp_multiplier`. The port's `killExp` takes the same factors.
+- 6xBF: `handle_packet0x60_subcommand0xbf` (`.c:574001`) calls vtable +0x30 = `add_to_player_exp_and_clamp` (`.c:575658`), which only adds and clamps. No text. The port's `onGiveExp` shows none either (correct).
+- Object: `unknown_display_floating_text_effect` (`.c:765541`) stores colour & 0xffffff, duration at +0x5c, delay at +0x60, and the player index at +0x66 (< 4: drawn only on that slot's screen, else 0xffff: always). Update (`FloatingTextObject_Update_0078ab74`, `.c:765690`): counts the delay down, then rises and ages. Render (`FloatingTextObjectRender_0078abd0`, `.c:765712`): culled by a distance threshold (not on boss maps) and by a dot-product threshold (behind the camera), per glyph reveal and fade (alpha = age * 255 * 0.5, 0xff from the max distance).
+- Green HP: `entity_hit_by_tech`, case `resta` (`.c:748189`): `CreateFloatingTextObject_0078a944(pos, 0xff00ff00, 0x14, 0, "HP"+"+"+n, n)`, so the delay is 0 and the duration 0x14, over the healed entity. The same call sits in the Volopt form-2 heal (`.c:187401`, 0x1e frames, boss only) and the Saint Milion drain (`.c:751448`, delay 10, `SaintEmilionMissile_SpawnFloatingText`, name from the dump, may be wrong).
+- Items: the heal paths (`.c:437968`..`437986`, `.c:574615`..`574619`, `add_player_hp` in the 6x packet handler) make no floating text. The item heal shows no "HP+" text in the exe. (The level-up "HP+n" line, `display_levelup_stats` `.c:710876`, is a message-window line, not a floating text.)
+
+**Port (already in place).** `expText` (magenta, delay 0x14, duration 0x14, sign), `hitText` (delay 0, duration 0x14, the damage number and Resta), `restaFloat` (green 0x00ff00), `expPopup` on the killer's client at the enemy's kill (`render/combat.ts`, both the boss and the normal kill), Resta's green text over the other healed players (`render/combat.ts` `resta`, `remoteResta`). Nothing changed in the drawer.
+
+**Changes.** `tests/level.test.ts`: EXP colour and sign; a hit text (Resta / number) lives 0x14 frames with no delay. `docs/ROADMAP.md` (the HUD line), this entry.
+
+**ASSUMED.**
+- The EXP text's anchor: the exe uses the enemy's lock-on cursor position (`unknown_lockon_cursor_position`, the bloodstain-based height), the port uses the enemy's root + 22 (kept).
+- The Resta text's anchor: the exe uses the hit entity's `position` argument; the port uses the player's position + 26 (kept).
+- The local caster's own Resta: the port shows no green text over the caster (its comment says "every other healed player"); the exe's self-hit path was not traced.
+- The render's distance cull and slot gate (the threshold floats are in the binary; their addresses are not in the dump) are not ported; with one local player the slot gate is always open.
+
+**Checks.** `node tests/level.test.ts` (60 checks pass; the PlyLevelTbl cases skip without the table), `node tests/hitfx.test.ts` (pass), `cd client && npx tsc --noEmit -p .` (exit 0). No Playwright.
+
+**Left.**
+- The distance cull and the boss-map exception of the floating text render (the float constants' addresses).
+- The HP steal (weapon special) and the Volopt / Saint Milion green texts: no port counterpart checked.
+- The caster's own Resta text (see ASSUMED).
