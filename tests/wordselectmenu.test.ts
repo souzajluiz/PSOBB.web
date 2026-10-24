@@ -7,6 +7,19 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { loadWordSelectTable, type WordSelectTable } from '../client/src/net/wordselect.ts';
 import {
+  addSelection,
+  canConfirmSelection,
+  isItemInSpecialCategory,
+  isValidSelection,
+  newSelectionEffectState,
+  newWordSelectSelection,
+  openWordSelectPicker,
+  popSelection,
+  pushSelection,
+  stringIdGroup,
+  updateSelectionEffect,
+  wordSelectCategory,
+  wordSelectRootTransition,
   populateWordSelectItemLists,
   wordSelectItemList,
   wordSelectListAt,
@@ -126,6 +139,85 @@ if (existsSync(dataFile) && existsSync(textFile)) {
   eq(r.listA.length > 0 && r.listA.length <= 0x20, true, 'JP item 0x7F: list A within the cap');
 } else {
   console.log('SKIP wordselectmenu real JP table: client data not found');
+}
+
+// ---- selection buffer (0x1C at +0xC4) ----
+{
+  const s = newWordSelectSelection();
+  eq([s.count, s.targetType, s.tokens], [0, 0, [-1, -1, -1, -1, -1, -1, -1, -1]], 'init: count 0, type 0, tokens free');
+  addSelection(s, 5);
+  eq(s.count, 0, 'add on an empty buffer does nothing');
+  pushSelection(s, 0x10);
+  pushSelection(s, 0x11);
+  pushSelection(s, 0x12);
+  eq([s.count, s.tokens.slice(0, 4)], [3, [0x10, 0x11, 0x12, -1]], 'push: tokens go on top and the count rises');
+  addSelection(s, 0x20);
+  eq(s.tokens.slice(0, 3), [0x10, 0x11, 0x20], 'add overwrites the top token');
+  popSelection(s);
+  eq([s.count, s.tokens[2]], [2, -1], 'pop clears the top and lowers the count');
+  for (let i = 0; i < 10; i++) pushSelection(s, i);
+  eq(s.count, 8, 'push stops at the 8-token cap');
+  popSelection(newWordSelectSelection());
+  eq(newWordSelectSelection().count, 0, 'pop on an empty buffer does nothing');
+}
+
+// ---- IsValidSelection / category / string groups ----
+eq([isValidSelection(0x2c8), isValidSelection(0x40), isValidSelection(0x36), isValidSelection(0x46), isValidSelection(0x37)],
+  [false, false, true, true, false], 'valid: not 0x2C8 and not 0x37..0x45');
+eq([stringIdGroup(0x2e4), stringIdGroup(0x300), stringIdGroup(0x45d), stringIdGroup(0x46d), stringIdGroup(0x4f3), stringIdGroup(0x635), stringIdGroup(0x650), stringIdGroup(0x100)],
+  [0, 1, 2, 7, 3, 4, 5, 7], 'string id groups (0x46D is excluded from group 2)');
+eq([canConfirmSelection(0x2e4), canConfirmSelection(0x100)], [true, false], 'confirm needs a group other than 7');
+eq([isItemInSpecialCategory(0x5ab), isItemInSpecialCategory(0x5ac), isItemInSpecialCategory(0x5f9), isItemInSpecialCategory(0x5fa)],
+  [false, true, true, false], 'special category: 0x5AB < id < 0x5FA');
+
+// ---- UpdateSelectionEffect toggle (0x706fb0) ----
+{
+  const s = newWordSelectSelection();
+  const fx = newSelectionEffectState();
+  updateSelectionEffect(s, fx, 0x40); // invalid (category), toggle 0: add (count 0, nothing)
+  eq([s.count, fx.toggle, fx.last], [0, 0, 0x40], 'invalid with toggle 0 on an empty buffer: nothing pushed');
+  updateSelectionEffect(s, fx, 0x100); // valid: push, toggle 1
+  eq([s.count, s.tokens[0], fx.toggle], [1, 0x100, 1], 'valid value pushes and sets the toggle');
+  updateSelectionEffect(s, fx, 0x101); // valid with toggle 1: add over the top
+  eq([s.count, s.tokens[0]], [1, 0x101], 'valid value with toggle 1 overwrites the top');
+  updateSelectionEffect(s, fx, 0x40); // invalid with toggle 1: pop, toggle 0
+  eq([s.count, fx.toggle], [0, 0], 'invalid value with toggle 1 pops and clears the toggle');
+  updateSelectionEffect(s, fx, 0x40);
+  eq(s.count, 0, 'unchanged value does nothing');
+}
+
+// ---- ProcessID category and the root table (0x707f40, 0x96EA38) ----
+eq([wordSelectCategory(0x0b, true), wordSelectCategory(0x0c, true), wordSelectCategory(0x0c, false), wordSelectCategory(0x0d, true)],
+  [0, 1, 2, 3], 'categories: token 0x0B -> 0, 0x0C -> 1 (JP) or 2, 0x0D -> 3');
+eq([2, 15, 24, 47].map((t) => wordSelectCategory(t, true)), [4, 4, 4, 4], 'tokens 2, 0x0F, 0x18, 0x2F -> category 4');
+eq(wordSelectCategory(0x100, true), 5, 'no match: category 5');
+eq(wordSelectRootTransition(0x0b, true), { targetType: 2, next: 5, category: 0 }, 'root 0: type 2, next 5');
+eq(wordSelectRootTransition(0x0c, true), { targetType: 3, next: 7, category: 1 }, 'root 1 (JP): type 3, next 7');
+eq(wordSelectRootTransition(0x0c, false), { targetType: 4, next: 12, category: 2 }, 'root 2: type 4, next 12');
+eq(wordSelectRootTransition(0x0d, true), { targetType: 6, next: 2, category: 3 }, 'root 3: type 6, next 2');
+eq(wordSelectRootTransition(0x0f, true), { targetType: 1, next: 3, category: 4 }, 'root 4: type 1, next 3');
+eq(wordSelectRootTransition(0x100, true), { targetType: 1, next: 1, category: 5 }, 'root 5: type 1, next 1');
+
+// ---- the picker model: open, cursor, root accept, close / cancel ----
+{
+  const p = openWordSelectPicker({ type: 1 });
+  eq([p.state, p.status, p.itemType, p.sel.count], [0, 0, 1, 0], 'open: root state, open status, type 1, empty');
+  p.cursor(0x100);
+  p.cursor(0x101);
+  eq([p.sel.count, p.sel.tokens[0]], [1, 0x101], 'cursor moves update the buffer');
+  p.cursor(0x40);
+  eq(p.sel.count, 0, 'cursor on a category row pops the toggled word');
+  eq(p.acceptRoot(0x0b, true), true, 'root accept');
+  eq([p.sel.targetType, p.next], [2, 5], 'root accept sets the target type and next state');
+  p.sel.tokens[0] = 0x100;
+  p.sel.count = 1;
+  const msg = p.close();
+  eq([p.status, msg.numTokens, msg.targetType, msg.tokens[0], msg.tokens[1]], [2, 1, 2, 0x100, 0xffff], 'close: accepted, message is the buffer (free slots 0xFFFF)');
+  eq(msg.tokens.length, 8, 'close: 8 token slots');
+  const q = openWordSelectPicker({ type: 9, numericParameter: 7 });
+  q.cancel();
+  eq([q.status, q.sel.count], [3, 0], 'cancel: cancelled status, nothing copied');
+  eq(q.acceptRoot(0x0b, true), false, 'accept after cancel: the picker is no longer open, so no transition');
 }
 
 if (failures) {
