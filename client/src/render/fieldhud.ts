@@ -36,7 +36,8 @@ import { ROW as HELP_ROW } from '../classic/fieldwindows.ts';
 import { type HomeLeafServices } from '../classic/homeleaves.ts';
 import { isInTeam } from '../classic/teammenu.ts';
 import { equipProblems, itemRowName, itemRows, undroppable, type RowContext } from '../classic/itempack.ts';
-import { equipStatRows, type EquipStatRow, type StatBlock } from '../classic/itemdetail.ts';
+import { compareStatRows, type EquipStatRow, type StatBlock } from '../classic/itemdetail.ts';
+import { equippedCandidate, recalculateCandidate } from '../combat/playerstats.ts';
 import type { ToolCheckContext } from '../classic/quickmenu.ts';
 import { magStats } from '../formats/itemnames.ts';
 import { techMenuOrder } from '../net/charfile.ts';
@@ -485,8 +486,8 @@ export class FieldHud {
     };
   }
 
-  // The compare list's rows for a weapon row: the equipment stat panel's rows (itempack
-  // drawPanelRows) for the cursor item against the weapon in its slot.
+  // The compare list's rows for a weapon row: the current stats against the candidate the exe
+  // computes (combat/playerstats.ts; the Item Pack panel keeps equipStatRows).
   private compareRows(instanceId: number): EquipStatRow[] | null {
     const pmt = this.names()?.pmt;
     const c = this.opts.character();
@@ -505,7 +506,11 @@ export class FieldHud {
     const d = it.data.data1;
     const old = c.inventory.find((o) => o.equipped && o.data.data1[0] === d[0] && (d[0] !== 1 || o.data.data1[1] === d[1])) ?? null;
     const problems = equipProblems(it.data, rc);
-    return equipStatRows(current, it.data, old && old !== it ? old.data : null, pmt, it.equipped, problems === 0);
+    // PlayerRecalculateStats_0068e030 (not worn) / PlayerCalculateItemStats_0068e4e8 (worn).
+    const cand = it.equipped
+      ? equippedCandidate(current, it.data, pmt)
+      : recalculateCandidate(current, it.data, old && old !== it ? old.data : null, pmt);
+    return compareStatRows(current, cand, problems === 0);
   }
 
   private rowContext(): RowContext {
