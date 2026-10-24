@@ -45,9 +45,10 @@
 //   - the mag's DEF / POW / DEX / MIND labels (plain text; no group 11 label
 //     was found).
 //
-// Not evidenced: the page keys. ChallengePlayerListWindow_HandleInput_007526c8
-// has no Left / Right handling (its only key is the cancel, g_KeyboardSharedState
-// [0xd]); the earlier Left / Right pages of this port were removed.
+// The pages (the panel's kind per item and page) are at the end of this file. The earlier
+// note that the pages had no evidence was wrong: the page byte is set by the state machine
+// (states 5 and 0xC), not by Left / Right keys, which ChallengePlayerListWindow_HandleInput_
+// 007526c8 does not read.
 
 import type { ItemData } from '../formats/itemnames.ts';
 import { magStats } from '../formats/itemnames.ts';
@@ -211,4 +212,92 @@ export function magRows(item: ItemData): MagRows {
     iq: `${m.iq}`,
     stats: MAG_STAT_NAMES.map((name, i) => ({ name, text: magStatText(raw[i]), bar: raw[i] % 100 })),
   };
+}
+
+// --- The panel's pages (GUI 0xC, ChallengePlayerListWindow family) ---
+//
+// Correction (2026-10-23): the attribute page is reachable. Its function is 0x726dc8, and
+// 0x726ee2 is not a start: Ghidra and the dump (ItemAttributesPanel_Update_00726ee2) are the
+// same body, the dump split it. The dispatcher is GameList_RenderSelectionDisplay_00727450
+// (dump 690228 area), called from the list's selection changes. It picks a table by the
+// item's kind (data1[0]; data1[1] for armour / shield) and calls entry [page] of that table:
+//   table DAT_009f2520 (weapon):          [0x727220 stats, 0x726dc8 attributes, 0x726780 info]
+//   table DAT_009f252c (shield, sub 2):   [0x727078 stats, 0x726c7c resist,     0x726780 info]
+//   table DAT_009f2538 (armour, sub 1):   [0x727078 stats, 0x726cb0 resist+slot, 0x726780 info]
+//   unit (sub 3):                         0x726780 directly (all pages)
+//   table DAT_009f2544 (mag):             [0x726ff0 stats, 0x726864 mag status, 0x7267dc photon]
+//   tool: 0x726608 / 0x7265f0 (not decoded)
+// The page is the byte at the list's navigation object (this+0x64, read as `**(byte **)`),
+// written only by UpdateListNavigationDirection_0073e954 through HandleGameListNavigation_
+// 007260e8, which has two callers in ChallengePlayerListWindow_HandleInput_007526c8: state 5
+// (opens the item list, direction 1 -> page 1) and state 0xC (a photon blast gained,
+// direction 2 -> page 2). No Left / Right key calls it (the key handler's only use of the
+// navigation object is the state change). ASSUMED: the page resets to 0 only when the window
+// is built (the constructor was not traced). The sub-page direction also runs a slide (+10 / -10
+// in the object's +8 field), not ported.
+// Each table is 4-byte entries: the call is `*(DAT_xxx + page * 4)`.
+
+export type PanelKind =
+  | 'weaponStats'
+  | 'weaponAttributes'
+  | 'shieldResist'
+  | 'armourResist'
+  | 'stats'
+  | 'magStats'
+  | 'magStatus'
+  | 'magPhoton'
+  | 'info'
+  | 'none';
+
+// The exe's kind for (data1[0], data1[1]) on a page; `null` for a page the table does not have.
+export function panelKind(data1: Uint8Array, page: number): PanelKind | null {
+  if (page < 0 || page > 2) return null;
+  const type = data1[0];
+  const sub = data1[1];
+  const pick = (kinds: readonly PanelKind[]) => kinds[page];
+  if (type === 0) return pick(['weaponStats', 'weaponAttributes', 'info']);
+  if (type === 1) {
+    if (sub === 3) return 'info';
+    if (sub === 2) return pick(['stats', 'shieldResist', 'info']);
+    return pick(['stats', 'armourResist', 'info']);
+  }
+  if (type === 2) return pick(['magStats', 'magStatus', 'magPhoton']);
+  return 'none';
+}
+
+// The Attributes page (0x726dc8 / 0x726cf0): labels unitxt group 11 0xb5..0xb9, in the
+// order of the element pairs (type 1 Native .. type 5 Hit). The item's pairs are data1[6..11]
+// (type, value), three of them. The character's own values come from GetItemTechBoostAddress_
+// 00770d6c(player, 0), not in the web client: ASSUMED 0. An equipped item's candidate is 0
+// (the exe passes no pairs then), otherwise the candidate's pair value. The row's colour is
+// grey (flag 0x10 is not set by this page). The fifth row (Hit) is not cleared by the exe's
+// first pass (only the first four are): ASSUMED 0 here.
+export const ATTRIBUTE_LABELS = [0xb5, 0xb6, 0xb7, 0xb8, 0xb9] as const;
+export interface AttributeRow {
+  label: number;
+  current: number;
+  candidate: number;
+  color: string;
+}
+export function attributeRows(data1: Uint8Array, equipped: boolean): AttributeRow[] {
+  const cand = [0, 0, 0, 0, 0];
+  if (!equipped) {
+    for (let i = 0; i < 3; i++) {
+      const type = data1[6 + i * 2];
+      if (type >= 1 && type <= 5) cand[type - 1] = data1[7 + i * 2];
+    }
+  }
+  return ATTRIBUTE_LABELS.map((label, i) => ({ label, current: 0, candidate: cand[i], color: VALUE_COLOR.none }));
+}
+
+// The shield / armour resist page (0x726aa8 via 0x726c7c / 0x726cb0): unitxt group 11
+// 0xa2..0xa6 = EFR, EIC, ETH, EDK, ELT. The current values are the player's efr..elt (not in
+// the web client: ASSUMED 0). The candidate comes from PlayerRecalculateStats_0068e030's out
+// array [6..10] (not decoded here: ASSUMED no candidate). The exe's candidate order is
+// EFR <- [6], EIC <- [7], ETH <- [8], EDK <- [10], ELT <- [9] (dump 690776..690780).
+export const RESIST_LABELS = [0xa2, 0xa3, 0xa4, 0xa5, 0xa6] as const;
+// The armour's Slot line (0x726cb0): label 0xbf, value data1[5] (the slot count).
+export const SLOT_LABEL = 0xbf;
+export function slotValue(data1: Uint8Array): number {
+  return data1[5];
 }
