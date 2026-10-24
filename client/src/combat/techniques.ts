@@ -280,6 +280,21 @@ export function restaHeal(level: number, mst: number, charClass = 0): number {
   return Math.round(Math.max(0, mst) * RESTA_MST_SCALE + f32(d.power + d.vPower * level));
 }
 
+// Another player's Resta on this client (PsoBB.exe, dump names: unknown_cast_tech case resta,
+// dump 642090, makes the Resta entity; TechniqueEntity_Update_006ef3b8 hits each 6x47 target
+// through the target's vtable +0x60 = entity_hit_by_tech (0x00773afc, dump 747782) with the
+// caster as the attacker). Its resta case heals the target by round(caster MST *
+// g_DamageMultiplier_NonPlayer + power); the multiplier is ASSUMED to be the 0.5 at 0x00978278
+// (RESTA_MST_SCALE). The MST is the caster's battleparams_stats->mst, kept by the 6x30 handler
+// UpdatePlayerStatsAndLevelMessage_006928e4 (dump 574022). The entity's first hit is the primary
+// target only below level 3 (0-based level < 2: `(short)+0xa4 < 2`, the caster itself), so a
+// list target is healed from level 3 on. A dead entity takes nothing (the top check, not a
+// reverser). Returns the heal this client gives its own player (0 when none).
+export function remoteRestaHeal(targets: readonly number[], selfId: number, selfDead: boolean, level: number, casterMst: number, casterClass: number): number {
+  if (selfDead || level < 2 || !targets.includes(selfId)) return 0;
+  return restaHeal(level, casterMst, casterClass);
+}
+
 // Which targets 6x47 carries (InitializeTechniqueTargetingParams_006e1a48).
 export function targetListKind(tech: number): 'one' | 'list' | 'none' {
   if (tech === TECH.gifoie || tech === TECH.rabarta || tech === TECH.razonde || tech === TECH.ryuker) return 'none';
