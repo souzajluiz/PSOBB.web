@@ -1,25 +1,32 @@
 // Chat shortcuts (BB): the 16 saved shortcut records in the character file, read for
 // the Shift+F / F-key chat form (classic/chat.ts ChatLine.useShortcut), written by the
-// Chat > Shortcut leaf (menu 0x11) and saved with 03ED.
+// Chat > Shortcut leaf (menu 0x11, classic/chatshortcutmenu.ts) and saved with 03ED.
 //
-// Layout: newserv src/SaveFileFormats.hh SaveFileChatShortcutEntryT<false, UTF16, 0x50>
-// (SaveFileShortcutEntryBB, 0xA4 bytes): u32 type (1 = text, 2 = word select,
-// 3 = symbol chat) at +0, the definition at +4 (UTF-16 text of 0x50 chars, a SymbolChatT
-// at +4, or a WordSelectMessageT at +4, 0x1C bytes: u16 num_tokens, u16 target_type,
-// u16 tokens[8], u32 numeric_parameter, u32 unknown_a4). PSOBBCharacterFile.shortcuts at
-// 0x1FAC, 0x10 entries (0x1ACC + 12 x 0x68 = 0x1FAC: the symbol chats come first). MIT license.
+// Layout (PsoBB.exe 1.25.13, named dump Psobb.exe-05112026.c; the record is the exe's
+// chat_message, 0xA4 bytes, 0x29 dwords copied by ChatMessage_CopyData_0077d694): u32 type
+// (1 = text, 2 = word select, 3 = symbol chat) at +0, the definition at +4:
+//   - text (1): UTF-16 text of 0x50 units (the editor keeps 0x4F characters).
+//   - word select (2): the 0x1C-byte WordSelectMessageT (u16 num_tokens, u16 target_type,
+//     u16 tokens[8], u32 numeric_parameter, u32 unknown_a4). The word table is not in the port.
+//   - symbol chat (3): a u32 INDEX into the 12 saved symbol chats (the exe's
+//     GetChatMessagePtrByIndex_0077d8c0 reads it as `chat_message.text`, and the list shows
+//     the saved chat's name, ChatShortcutMenu_SubList_Refresh_00755640). The symbol chats are
+//     the 0x68-byte entries at PSOBBCharacterFile 0x1ACC (net/symbolchat.ts). Newserv's
+//     SaveFileShortcutEntryBB documents a SymbolChatT copy here instead; the exe reads an index,
+//     so this port writes the index (ASSUMED that the exe's save is what the server keeps).
+// PSOBBCharacterFile.shortcuts at 0x1FAC, 0x10 entries (0x1ACC + 12 x 0x68 = 0x1FAC: the
+// symbol chats come first). MIT license.
 //
-// Exe (PsoBB.exe 1.25.13, named dump Psobb.exe-05112026.c): get_chat_shortcut_optcall
-// (line 754134) returns `&puVar1[0xc].field_0x180 + index * 0xa4` of the session block
-// (get_00a95df8), the save copy. ChatMessage_CopyData_0077d694 (754145) writes a 0xA4
-// record there (0x29 dwords), ChatMessage_ClearType_0077d6bc (754167) sets type 0.
+// Exe (PsoBB.exe 1.25.13): get_chat_shortcut_optcall (754134) returns `&puVar1[0xc].field_0x180
+// + index * 0xa4` of the session block (get_00a95df8), the save copy. ChatMessage_CopyData_0077d694
+// (754145) writes a 0xA4 record there, ChatMessage_ClearType_0077d6bc (754167) sets type 0.
 // send_packet0xed_subcommand3 (813730) sends 03ED: the 16 records from that block, 0xA40
 // bytes (the header's size word is 0xA48, the 8-byte frame). It is called from the leaf's
-// destructor (ChatShortcutMenu_Destructor, dump 726726) when the leaf's change flag (+0x28)
-// is set.
+// destructor (CloseAllListMenusAndCleanup_00754ba4, dump 726700) when the leaf's flag (+0x28,
+// set when an action row is picked) is set.
 
 import { readUtf16 } from './bbconnection.ts';
-import { parseSymbolChat, writeSymbolChat, type SymbolChat } from './symbolchat.ts';
+import { parseSymbolChats, SYMBOL_CHAT_COUNT, type SymbolChat } from './symbolchat.ts';
 
 export const CHAT_SHORTCUT_FILE_OFFSET = 0x1fac;
 export const CHAT_SHORTCUT_STRIDE = 0xa4;
@@ -54,8 +61,16 @@ export interface WordSelectMessage {
 export interface ChatShortcut {
   type: number; // 0 or other = empty
   text: string; // type 1: the line as typed (the \tE marker stripped)
-  symbol: SymbolChat | null; // type 3
+  symbolIndex?: number; // type 3: the record's +4, an index into the saved symbol chats (0..11)
+  symbol: SymbolChat | null; // type 3: the saved chat at symbolIndex (null when it is not valid); sent as is
   word: WordSelectMessage | null; // type 2
+}
+
+// The saved symbol chat a type 3 record points at (ChatMessage_IsValid_0077d948: present bits 0 or 1).
+function savedSymbol(full: Uint8Array, index: number): SymbolChat | null {
+  if (index < 0 || index >= SYMBOL_CHAT_COUNT) return null;
+  const entry = parseSymbolChats(full)[index];
+  return entry && (entry.present & 3) !== 0 ? entry.chat : null;
 }
 
 export function emptyWordSelect(): WordSelectMessage {
@@ -100,9 +115,10 @@ export function parseChatShortcut(full: Uint8Array | null, index: number): ChatS
   if (full.length < o + CHAT_SHORTCUT_STRIDE) return null;
   const type = new DataView(full.buffer, full.byteOffset, full.byteLength).getUint32(o, true);
   const text = type === CHAT_SHORTCUT_TEXT ? readUtf16(full, o + 4, CHAT_SHORTCUT_TEXT_CHARS).replace(/^\t[A-Z]/, '') : '';
-  const symbol = type === CHAT_SHORTCUT_SYMBOL ? parseSymbolChat(full, o + 4) : null;
+  const symbolIndex = type === CHAT_SHORTCUT_SYMBOL ? new DataView(full.buffer, full.byteOffset, full.byteLength).getUint32(o + 4, true) : 0;
+  const symbol = type === CHAT_SHORTCUT_SYMBOL ? savedSymbol(full, symbolIndex) : null;
   const word = type === CHAT_SHORTCUT_WORD_SELECT ? parseWordSelectMessage(full, o + 4) : null;
-  return { type, text, symbol, word };
+  return { type, text, symbolIndex, symbol, word };
 }
 
 // One record as the save stores it (0xA4 bytes). A text record keeps its line as typed
@@ -114,14 +130,24 @@ export function encodeChatShortcut(s: ChatShortcut): Uint8Array {
     dv.setUint32(0, CHAT_SHORTCUT_TEXT, true);
     const t = s.text.slice(0, CHAT_SHORTCUT_TEXT_MAX);
     for (let i = 0; i < t.length; i++) dv.setUint16(4 + i * 2, t.charCodeAt(i), true);
-  } else if (s.type === CHAT_SHORTCUT_SYMBOL && s.symbol) {
+  } else if (s.type === CHAT_SHORTCUT_SYMBOL) {
     dv.setUint32(0, CHAT_SHORTCUT_SYMBOL, true);
-    writeSymbolChat(out, 4, s.symbol);
+    dv.setUint32(4, (s.symbolIndex ?? 0) >>> 0, true);
   } else if (s.type === CHAT_SHORTCUT_WORD_SELECT && s.word) {
     dv.setUint32(0, CHAT_SHORTCUT_WORD_SELECT, true);
     writeWordSelectMessage(out, 4, s.word);
   }
   return out;
+}
+
+// Sets record `index` to type 0 (empty), as ChatMessage_ClearType_0077d6bc does: only the type
+// word changes. Returns false when the buffer has no such record.
+export function clearChatShortcut(full: Uint8Array | null, index: number): boolean {
+  if (!full || index < 0 || index >= CHAT_SHORTCUT_COUNT) return false;
+  const o = CHAT_SHORTCUT_FILE_OFFSET + index * CHAT_SHORTCUT_STRIDE;
+  if (full.length < o + 4) return false;
+  new DataView(full.buffer, full.byteOffset, full.byteLength).setUint32(o, 0, true);
+  return true;
 }
 
 // Replaces record `index` of a full character in place (the save copy). Returns false

@@ -237,6 +237,7 @@ async function main(): Promise<void> {
       fullCharacter: () => session?.fullCharacter ?? null,
       character: () => session?.character ?? null,
       saveFile: () => session?.sendSaveFile(),
+      sendShortcuts: () => session?.sendChatShortcuts(),
     };
   };
   // Item names for the Item List window (ItemPMT from the stream file, as the
@@ -321,6 +322,7 @@ async function main(): Promise<void> {
           mailbox: () => session?.mailbox ?? null,
           fullCharacter: () => session?.fullCharacter ?? null,
           team: () => teamHost(game.conn) ?? null,
+          sendShortcuts: () => session?.sendChatShortcuts(),
         }),
       });
       gameView = view;

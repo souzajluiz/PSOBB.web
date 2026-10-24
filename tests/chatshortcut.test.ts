@@ -9,6 +9,7 @@ import {
   CHAT_SHORTCUTS_COMMAND,
   CHAT_SHORTCUTS_FLAG,
   chatShortcutsPayload,
+  clearChatShortcut,
   emptyWordSelect,
   encodeChatShortcut,
   parseChatShortcut,
@@ -16,7 +17,7 @@ import {
   writeChatShortcut,
   type ChatShortcut,
 } from '../client/src/net/chatshortcut.ts';
-import { parseSymbolChat } from '../client/src/net/symbolchat.ts';
+import { SYMBOL_CHAT_FILE_OFFSET } from '../client/src/net/symbolchat.ts';
 import { chatFormOption, chatShortcutIndex, functionKeyAction } from '../client/src/input/shortcuts.ts';
 
 let failures = 0;
@@ -28,7 +29,7 @@ const eq = (a: unknown, b: unknown, what: string) => {
 };
 
 // A full character with records written the way the save stores them: u32 type, then
-// UTF-16 text (text) or a SymbolChatT (symbol) at +4, 0xA4 bytes per record.
+// UTF-16 text (text) or a u32 index of a saved symbol chat (symbol) at +4, 0xA4 bytes per record.
 const FULL_SIZE = CHAT_SHORTCUT_FILE_OFFSET + 16 * CHAT_SHORTCUT_STRIDE;
 function character(optionFlags = 0): Uint8Array {
   const full = new Uint8Array(FULL_SIZE);
@@ -41,10 +42,16 @@ function character(optionFlags = 0): Uint8Array {
   };
   writeText(0, 'hi all');
   writeText(5, '\tEtagged');
-  // Slot 3: a symbol chat (type 3) with spec 0x120 at SymbolChatT +0 (record +4).
+  // Saved symbol chat 0 is present, with spec 0x120 (SymbolChatT at its entry +0x2c).
+  dv.setUint32(SYMBOL_CHAT_FILE_OFFSET, 1, true);
+  dv.setUint32(SYMBOL_CHAT_FILE_OFFSET + 0x2c, 0x120, true);
+  // Slot 3: a symbol chat (type 3) that points at saved chat 0 (record +4 = the index).
   const s = CHAT_SHORTCUT_FILE_OFFSET + 3 * CHAT_SHORTCUT_STRIDE;
   dv.setUint32(s, 3, true);
-  dv.setUint32(s + 4, 0x120, true);
+  dv.setUint32(s + 4, 0, true);
+  // Slot 8: a symbol chat that points at saved chat 5, which is not present.
+  dv.setUint32(CHAT_SHORTCUT_FILE_OFFSET + 8 * CHAT_SHORTCUT_STRIDE, 3, true);
+  dv.setUint32(CHAT_SHORTCUT_FILE_OFFSET + 8 * CHAT_SHORTCUT_STRIDE + 4, 5, true);
   // Slot 7: word select (type 2): no text, no symbol.
   dv.setUint32(CHAT_SHORTCUT_FILE_OFFSET + 7 * CHAT_SHORTCUT_STRIDE, 2, true);
   return full;
@@ -52,12 +59,15 @@ function character(optionFlags = 0): Uint8Array {
 
 // The records.
 const full = character();
-eq(parseChatShortcut(full, 0), { type: 1, text: 'hi all', symbol: null, word: null }, 'record 0: text');
-eq(parseChatShortcut(full, 5), { type: 1, text: 'tagged', symbol: null, word: null }, 'record 5: the \\tE marker is stripped');
+eq(parseChatShortcut(full, 0), { type: 1, text: 'hi all', symbolIndex: 0, symbol: null, word: null }, 'record 0: text');
+eq(parseChatShortcut(full, 5), { type: 1, text: 'tagged', symbolIndex: 0, symbol: null, word: null }, 'record 5: the \\tE marker is stripped');
 eq(parseChatShortcut(full, 1)?.type, 0, 'record 1: empty (type 0)');
-eq(parseChatShortcut(full, 3)?.symbol?.spec, 0x120, 'record 3: a symbol chat keeps its spec');
+eq(parseChatShortcut(full, 3)?.symbol?.spec, 0x120, 'record 3: the symbol is the saved chat its index names (0)');
+eq(parseChatShortcut(full, 3)?.symbolIndex, 0, 'record 3: the index is the record +4');
 eq(parseChatShortcut(full, 3)?.text, '', 'record 3: no text');
-eq(parseChatShortcut(full, 7), { type: 2, text: '', symbol: null, word: emptyWordSelect() }, 'record 7: word select, all-zero message');
+eq(parseChatShortcut(full, 8)?.symbol, null, 'record 8: a symbol that names an empty saved chat has no chat to send');
+eq(parseChatShortcut(full, 8)?.symbolIndex, 5, 'record 8: the index is kept');
+eq(parseChatShortcut(full, 7), { type: 2, text: '', symbolIndex: 0, symbol: null, word: emptyWordSelect() }, 'record 7: word select, all-zero message');
 eq(parseChatShortcut(null, 0), null, 'no character: no record');
 eq(parseChatShortcut(full, 16), null, 'slot 16 is past the save array');
 eq(parseChatShortcut(new Uint8Array(0x100), 0), null, 'a short buffer: no record');
@@ -104,19 +114,24 @@ eq(parseChatShortcut(save, 7)?.word, word, 'word select round trip');
 eq(new DataView(save.buffer).getUint16(CHAT_SHORTCUT_FILE_OFFSET + 7 * CHAT_SHORTCUT_STRIDE + 4, true), 2, 'word select: num_tokens at record +4');
 eq(new DataView(save.buffer).getUint32(CHAT_SHORTCUT_FILE_OFFSET + 7 * CHAT_SHORTCUT_STRIDE + 0x18, true), 0x11223344, 'word select: numeric parameter at message +0x14');
 eq(writeChatShortcut(save, 2, { type: 1, text: 'a line typed', symbol: null, word: null }), true, 'write: text slot 2');
-eq(parseChatShortcut(save, 2), { type: 1, text: 'a line typed', symbol: null, word: null }, 'text round trip, no marker');
+eq(parseChatShortcut(save, 2), { type: 1, text: 'a line typed', symbolIndex: 0, symbol: null, word: null }, 'text round trip, no marker');
 eq(encodeChatShortcut({ type: 1, text: 'x'.repeat(0x60), symbol: null, word: null }).length, CHAT_SHORTCUT_STRIDE, 'a long text is cut to the record');
 writeChatShortcut(save, 2, { type: 1, text: 'x'.repeat(0x60), symbol: null, word: null });
 eq(parseChatShortcut(save, 2)?.text, 'x'.repeat(0x4f), 'a long text keeps 0x4F characters and the terminator');
 eq(writeChatShortcut(save, 16, { type: 1, text: 'no', symbol: null, word: null }), false, 'write: slot 16 is refused');
 eq(writeChatShortcut(null, 0, { type: 1, text: 'no', symbol: null, word: null }), false, 'write: no character is refused');
 
-// The symbol record: the SymbolChatT written at record +4 reads back the same.
-const sym = parseSymbolChat(save, CHAT_SHORTCUT_FILE_OFFSET + 3 * CHAT_SHORTCUT_STRIDE + 4);
-const symRecord: ChatShortcut = { type: 3, text: '', symbol: { ...sym, spec: 0x2a5 }, word: null };
+// The symbol record: the index written at record +4 reads back, and the saved chat it names is
+// the symbol (the picker's value, ChatShortcutMenu_CheckListWindowState).
+const symRecord: ChatShortcut = { type: 3, text: '', symbolIndex: 0, symbol: null, word: null };
 eq(writeChatShortcut(save, 4, symRecord), true, 'write: symbol slot 4');
-eq(parseChatShortcut(save, 4)?.symbol?.spec, 0x2a5, 'symbol record round trip: the spec');
+eq(new DataView(save.buffer).getUint32(CHAT_SHORTCUT_FILE_OFFSET + 4 * CHAT_SHORTCUT_STRIDE + 4, true), 0, 'symbol record: the index is at record +4');
+eq(parseChatShortcut(save, 4)?.symbol?.spec, 0x120, 'symbol record round trip: the saved chat');
 eq(parseChatShortcut(save, 3)?.symbol?.spec, 0x120, 'symbol record of slot 3 is untouched by the slot 4 write');
+// A clear sets only the type word (ChatMessage_ClearType_0077d6bc).
+eq(clearChatShortcut(save, 4), true, 'clear: slot 4');
+eq(parseChatShortcut(save, 4)?.type, 0, 'clear: the type is 0 (empty)');
+eq(clearChatShortcut(save, 16), false, 'clear: slot 16 is refused');
 
 // The 03ED body (send_packet0xed_subcommand3, dump 813730): 0xA40 bytes from the record
 // block, the frame is command 0xED flag 3.

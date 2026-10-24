@@ -15156,3 +15156,47 @@ The entry above says the 3D view is not shifted in Chrome. That was a misreading
 1. The Chat > Shortcut editor window (menu 0x11): the slot list (16 rows, `ChatShortcutMenu_SubList_Refresh_00755640`), the action rows, the text window at +0x44 (the keyboard control, the 0x50-character limit), the type choice (text / symbol / word select: not traced), the confirm and clear sub-windows, and the leaf's destructor send (`sendChatShortcuts`, to be called on the leaf's close when changed). The leaf stays a logged no-op.
 2. The receive of 6x74 (`handle_packet0x60_subcommand0x74`, the word-select window): needs the word table (newserv's `ws_data.bin` per version, not in the port's data).
 3. The lobby symbol sender (the record's type 3 in the lobby still sends nothing).
+
+## 2026-10-23: Chat > Shortcut editor (menu 0x11) ported; a symbol record is a saved-chat index
+
+**What changed.** The Chat > Shortcut leaf is a window now: the 16 slots (4 pages of 4), the action list (edit / clear), the text keyboard, the symbol picker, the Yes / No confirms, and the 03ED save when the leaf closes after an action was picked. `classic/chatshortcutmenu.ts` (new): `ChatShortcutMenu`. `classic/homeleaves.ts`: id 0x11 is a shared leaf (lobby and field); `HomeLeafServices.sendShortcuts`. `net/chatshortcut.ts`: a type 3 record stores a u32 index at +4 (not a SymbolChatT copy); `parseChatShortcut` resolves it to the saved chat; new `clearChatShortcut`. Wiring: `classic/lobby.ts` (the hud's `sendShortcuts` and one line in the leaf services), `classic/main.ts` (the lobby hud and the field's home services call `session.sendChatShortcuts`). Tests: `tests/chatshortcutmenu.test.ts` (new), `tests/chatshortcut.test.ts` (symbol semantics, clear). `tsc --noEmit` clean.
+
+**Premise check (per the exe).** The brief said the leaf's writer was traced; it is. Two things differ from the earlier notes:
+- A symbol record's +4 is an index, not a SymbolChatT. The list refresh (`ChatShortcutMenu_SubList_Refresh_00755640`, 727195) and the picker (`UIPanel_CheckListWindowState`, 674799, which writes `get_value_from_selected_list_item` into the buffer's +4) both pass that word to `GetChatMessagePtrByIndex_0077d8c0` (754425), which indexes the 0x68-byte saved symbol chats (`GetChatMessagePtr_0077d8d0`, 754434, stride 0x68). The earlier layout came from newserv's `SaveFileShortcutEntryBB` comment, which the exe does not follow here.
+- The type choice is not a menu of text / symbol / word. The text keyboard's Symbol Chat key (keyboard control 0xe, which is `BINDING.symbolChat` = 14 in the port) opens the picker of the buffer's mode. The initial mode is word (`probably_return_word_select_supported` returns 0 because `CreateItemObject_006dc358` (639142) is a stub that returns 0), so the exe's first picker is the word select one.
+
+**Exe evidence** (named dump `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`; the sub-window names in the dump are wrong, the flow below is from the code paths):
+- `handle_player_menu_select` case 17 (700247) -> `ChatShortcutMenu_Constructor_00754c8c` (726737): +0x28 (the change flag) = 0, +0x1c = state 0.
+- `ChatShortcutMenu_Process_00754cd8` (726760), the state at +0x1c:
+  - 0/1: the slot list `ChatShortcutMenu_CreateSubList_007553d8` at `get_gui_position(0x75)` = (13, 256), title unitxt(11, 0x40). 4 rows a page (`SubList_Constructor_00755460`, `SubList_Refresh_00755640`: 4 rows per refresh, first slot = page * 4). Cancel -> state 0xb (the owner closes the leaf).
+  - 3/4: the action list `ChatShortcutMenu_CreateShortcutList_007551d0` (726993) at 0x77 = (420, 256), title 0x3f; row 0x97 value 5 (enabled); row 0x6d value 9, disabled (`AddListItem_00735ee0`) when the slot's type is 0. A pick sets +0x28 = 1 (state 4, line 726849).
+  - 5/6: the text window (`ChallengePlayerInfoWindow_Constructor_00713540`, 674443: keyboard `TWindowKeyboardBase` SetSize 200, max length 0x4F, flag 0x1e = 2, buffer +0x44). The slot list is closed here (state 5). Enter sets flag 0x10 -> state 7; Escape sets 0x20 -> state 1 (`UIPanel_ProcessChatShortcuts_00713eb4`, 674964: the keyboard's text goes to buffer +4, the type to +0 = 1).
+  - 7/8: the Yes / No confirm `ChatShortcutMenu_CreateGameList_00755274` (727026) at 0x78 = (420, 256), width 205, title 0x33, message 0x50, Yes first. Yes: `ChatMessage_CopyData_0077d694` (754145, 0x29 dwords) into the slot; Yes and No both go to state 1.
+  - 9/10: the clear confirm `ChatShortcutMenu_CreateShortcutListSub_007552bc` (727047) at 0x79 = (420, 314), message 0x51, No selected (`SetSelectedIndex(1)`). Yes: `ChatMessage_ClearType_0077d6bc` (754167, sets the type only) -> 1; No and cancel -> 3.
+- The keyboard's mode key: `UIPanel_Update` (674540): with the keyboard shown and keyboard control 0xe, the picker of the buffer's mode opens (`LAB_0071371a`). In the picker, holding 0xe cycles word <-> symbol (`LAB_00713830`), only while the keyboard is hidden.
+- The symbol picker: `ChatShortcutMenu_Constructor_007148c0` (675688): the 12 saved chats through `GetChatMessagePtr_0077d8d0`, labels `GetChatMessageStringId_0077d910` (754469: unitxt 0xea invalid, 0xeb unnamed), valid rows 0x66 / invalid 0x46 (disabled), position DAT_0096fc50 = (30, 314), width 0x435c0000 = 220 (`ListWindowObject_Initialize`). The pick value is the index (`UIPanel_CheckListWindowState`, 674799).
+- The destructor `CloseAllListMenusAndCleanup_00754ba4` (726690, vtable 0xB426D0): `send_packet0xed_subcommand3` (726726) when +0x28 is set. (The brief's 726700 is a line inside this function.)
+- The row kind bytes `ListWindowObject_AddItemString_00737754` (703968): the 0x36 / 0x12 / 0x10 / 0x11 in `SubList_Refresh` are the row's kind, not a text id; the empty row has no text (NULL). The text row shows the record's text, the symbol row the saved chat's name.
+- GUI positions (`tools/exedata.py read`, 0x00971f40 + 8 * id): 0x75 (13, 256), 0x76 (13, 256), 0x77 (420, 256), 0x78 (420, 256), 0x79 (420, 314), 0xc9 (7, 397).
+
+**Port.** The leaf's states map onto `phase`: slots, actions, keyboard, picker, confirm, clearConfirm, closed. The slot list reopens on the edited slot after the text window (the exe closes and recreates the list, with +0x24). `dispose()` (the owner's leave) runs the destructor too. The save copy is written in place (`writeChatShortcut`), so the next Shift+F reads it.
+
+**ASSUMED / not ported:**
+- The symbol key opens the symbol picker directly. The exe's first picker is the word select one, and the port has no word table, so the word select picker is not ported. In the symbol picker the Symbol key does nothing (the exe would cycle to the word picker).
+- A word select record (type 2) shows an empty label in the slot list; it can be kept and sent (6x74), but not created here.
+- The preview box between the keyboard and the confirm (InformationCounterListWindow at 0x76, title unitxt(11, 0x48)) is not drawn.
+- The keyboard starts empty (the exe copies nothing from the slot into the buffer). Enter / Escape confirm / cancel; Left / Right page the slot list (the exe's page keys are keyboard controls 0x10 / 0x11, not mapped here).
+- The keyboard sits at 0xc9 (7, 397) with the 200 px width; the picker shows 5 rows (the exe's visible count is not traced); window widths are the widest label plus the inset (min 120).
+- The confirm shows the message only (the Question window); the title 0x33 is not drawn.
+- The symbol record writes the index at +4 and zeroes the rest of the 0xA4 bytes (the exe's buffer keeps the leftovers of the previous edit; ASSUMED equivalent).
+- 03ED is sent whenever an action row was picked, even when the confirm was refused (the exe sets +0x28 on the pick alone).
+- The Yes / No strings are unitxt(11, 0x6e) / (11, 0x6f), the teams' strings.
+- Save format: newserv keeps the bytes it gets, so the index is what the server stores. The earlier note (SymbolChatT at +4) came from newserv's struct comment; it is not what the exe writes.
+
+**Checks.** `node tests/chatshortcutmenu.test.ts` (new: the slot pages, the action rows, the keyboard's Enter / Escape, the copy and clear confirms, the symbol picker and its disabled row, the picker's cancel, the save writes, 03ED on close and on the owner's close, no save copy); `node tests/chatshortcut.test.ts` (the symbol index, the saved chat it names, the clear); `node tests/chatline.test.ts`, `homeleaves`, `fieldhud`, `lobbymenu`, `fkeys`, `controls`, `emotes`, `options`, `symbolchat`, `shortcuts`, `simplemail`, `teammenu` pass under Node 24. `cd client && npx tsc --noEmit -p .` exit 0 (with `client/node_modules` linked from the main checkout for the run, removed before the commit). Not run in Chrome (no Playwright, per the brief).
+
+**Left (in order):**
+1. The word select picker (`CreateWordSelectMenuEntity_00701d00`, the word table: newserv's `ws_data.bin` per version) and the type 2 record's label. The exe opens it first; the port opens the symbol picker.
+2. The preview box (0x76, title 0x48) between the keyboard and the confirm.
+3. The receive side of 6x74 (the word-select window), as before.
+4. The keyboard's control mapping (page keys 0x10 / 0x11; 0xe as the Symbol Chat key) to check in Chrome.
