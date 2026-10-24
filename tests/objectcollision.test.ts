@@ -179,6 +179,52 @@ check(!!stal && stal.collision.address === 0x009c9fb8 && stal.collision.type ===
 check(ep(0x038f, 0)?.collision.offset[1] === 5 && ep(0x038f, 1)?.collision.offset[1] === 9, 'the beehive is the row at y 5 for param4 0 and at y 9 for 1');
 check(ep(0x038f, 0)?.collision.flags === 0x38003, 'the beehive box has the container flags');
 
+// 3c-4. The field objects with no port model (0x0191 / 0x0193 Derolle variants 2 and 3, 0x0205 the
+// jungle door key): their constructors set one static box each (factory 0x00667ec8 -> ctor 0x00667f44 ->
+// table 0x009c9430; 0x00668194 -> 0x00668210 -> 0x009c945c; 0x00658eac -> init 0x00658f28 -> 0x009c7e0c).
+// Nothing is drawn; the box blocks like a container (ASSUMED: static, enabled).
+const bare = collectFieldSolids([place(0x0191, 30, [0, 0, 0]), place(0x0193, 31, [0, 0, 0]), place(0x0205, 32, [0, 0, 0])], { area: 0x18, episode: 1 });
+const bareAddr: Record<number, number> = { 30: 0x009c9430, 31: 0x009c945c, 32: 0x009c7e0c };
+check(bare.length === 3, `the three unmodelled types are solids (got ${bare.length})`);
+for (const s of bare) check(s.collision.address === bareAddr[s.index], `solid ${s.index} uses table ${bareAddr[s.index].toString(16)}`);
+check(TYPE_COLLISION_TABLES[0x0191]?.some((l) => l.table === 0x009c9430 && l.depth === 1) === true, 'type 0x0191 reaches table 0x009c9430 at depth 1');
+check(TYPE_COLLISION_TABLES[0x0193]?.some((l) => l.table === 0x009c945c && l.depth === 1) === true, 'type 0x0193 reaches table 0x009c945c at depth 1');
+check(TYPE_COLLISION_TABLES[0x0205]?.some((l) => l.table === 0x009c7e0c && l.depth === 1) === true, 'type 0x0205 reaches table 0x009c7e0c at depth 1');
+const tuitate = bare.find((s) => s.index === 30);
+if (tuitate) {
+  const o = solidObstacle(tuitate);
+  check(o.sphere === false && o.halfX === 16 && o.halfZ === 6 && o.flags === 0x10003, 'the 0x0191 box is 16 x 6 with flags 0x10003');
+  world.obstacles = [o];
+  check(!!world.blockedBy(18, 0, 0, PLAYER_RADIUS) && !world.blockedBy(22, 0, 0, PLAYER_RADIUS), 'the 0x0191 box blocks 2 units past its long side and not 6 units past');
+  check(!!world.blockedBy(0, 0, 10, PLAYER_RADIUS) && !world.blockedBy(0, 0, 12, PLAYER_RADIUS), 'the 0x0191 box blocks 4 units past its short side and not 6 units past');
+  world.obstacles = [];
+}
+const jungleKey = bare.find((s) => s.index === 32);
+if (jungleKey) {
+  const o = solidObstacle(jungleKey);
+  check(o.sphere === true && o.halfX === 5 && o.y === 10 && o.flags === 0x30003, 'the 0x0205 box is a sphere of radius 5, 10 up, flags 0x30003');
+  check(boxPairActive(PLAYER_BOX_FLAGS, o.flags), "the 0x0205 box passes the player's flag gate");
+}
+
+// 3c-5. The break flag. The exe's break handler clears bit 0x1 (movement_disabled = 1) of the box's
+// flags (unk_on_box_break, dump 516643, via unknown_unset_entity_flags), so the pair gate refuses the
+// broken box: a broken container does not block, and the step test skips it.
+const brokenContainer = collectFieldSolids([place(0x0088, 40, [100, 0, 50])], { area: 0x18, episode: 1 });
+check(brokenContainer.length === 1, 'a placed item container is a solid (the break test needs it)');
+if (brokenContainer.length === 1) {
+  const intact = solidObstacle(brokenContainer[0], false);
+  const gone = solidObstacle(brokenContainer[0], true);
+  check(gone.flags === (intact.flags & ~0x1) && (intact.flags & 0x1) === 1, 'a broken container keeps its flags but loses bit 0x1');
+  check(boxPairActive(intact.flags, PLAYER_BOX_FLAGS) && !boxPairActive(gone.flags, PLAYER_BOX_FLAGS), 'the gate passes the intact box and refuses the broken one');
+  // The player 4 units from the box's centre along x (inside the sphere's reach, whatever the table's offset).
+  const px = intact.x + 4, pz = intact.z;
+  world.obstacles = [intact];
+  check(!!world.blockedBy(px, intact.y, pz, PLAYER_RADIUS), 'an intact container blocks a player 4 units from its centre');
+  world.obstacles = [gone];
+  check(!world.blockedBy(px, intact.y, pz, PLAYER_RADIUS, [-1, 0]), 'a broken container does not block, not even a step toward it');
+  world.obstacles = [];
+}
+
 // 4. Drop spot body test on a sphere (FUN_0083dbd4 with the spot radius 3).
 const sphereBody = { x: 10, z: 0, yaw: 0, halfX: 9, halfZ: 9, sphere: true };
 check(spotHitsBody({ x: 0, y: 0, z: 0 }, sphereBody), 'a spot 10 from a sphere of radius 9 is hit (3 + 9 = 12)');
