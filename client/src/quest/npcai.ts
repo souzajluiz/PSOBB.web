@@ -550,3 +550,35 @@ export class NpcHeadChooser {
     return none();
   }
 }
+
+// --- the NPC's cast eligibility (CheckPlayerTechCastEligibility_0069a088 -> CanPlayerCastTechnique_0069a0c4,
+// dump .c:580401 / .c:580408; AIProcessState_007b0a7c asks it for B's player at .c:795931, .c:795962, .c:795989, .c:796002) --
+//
+// The NPC's +0x32c is 7 (the constructor, .c:552337), not 1, so CheckPlayerTechCastEligibility goes straight to
+// CanPlayerCastTechnique. That needs, in order:
+//   - the player's state word (character_flags & 0x20006 and & 0x2000000 clear; unknown_movement_state has one of
+//     casting / running / unknown / walking / standing). The NPC's character_flags are 0x10000000 from the
+//     constructor (.c:552338), which passes; its movement is standing or walking (ASSUMED, not read per tick);
+//   - the technique's effective level is not 0xff (IsTechniqueLevelUnlimited_006ad158 is 0; 0xff is the level the
+//     technique does not have, from CalculateEffectiveTechniqueLevel_006ad17c);
+//   - the map is unsafe (is_player_in_unsafe_map, render/playermove.ts inUnsafeMap; the hub list 0, 15, 18, 45);
+//   - tp2 - tech_cost >= 0 (`-1 < tp2 - tp_cost`, GetTechniqueData_006ded14 at that level).
+// The exe's Telepipe (0xe) and the challenge quest's Reverser (0x11) rules are not used by the head (it asks for
+// 0xf / 0x10 only). ASSUMED: the NPC's technique levels and TP are not in the port; the caller passes them.
+export interface NpcCastEligibility {
+  unsafeMap: boolean; // is_player_in_unsafe_map of the NPC's area
+  techLevel: number | null; // CalculateEffectiveTechniqueLevel for the technique; null = 0xff (not usable)
+  tp: number; // B's tp2
+  tpCost: number; // GetTechniqueData(tech, techLevel).tp_cost
+  stateClear: boolean; // the state word test of CanPlayerCastTechnique (ASSUMED true for the NPC)
+}
+
+// ASSUMED: the NPC's tp2 is not in the port. The u16 maximum keeps the TP test from refusing a cast.
+export const NPC_TP_ASSUMED = 0xffff;
+
+export function npcCanCastTech(e: NpcCastEligibility): boolean {
+  if (!e.stateClear) return false;
+  if (e.techLevel === null) return false;
+  if (!e.unsafeMap) return false;
+  return e.tp - e.tpCost >= 0;
+}

@@ -50,10 +50,10 @@ import { ChallengeQuestSelectionDialog } from './challengedialog.ts';
 import type { GameView } from '../render/gameview.ts';
 import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
-import { followTick, fromBams, toBams } from '../render/playermove.ts';
-import { followPoint, headStatusFlags, NO_LEADER, NpcAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow } from './npcai.ts';
+import { followTick, fromBams, inUnsafeMap, toBams } from '../render/playermove.ts';
+import { followPoint, headStatusFlags, NO_LEADER, NpcAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, npcCanCastTech, NPC_TP_ASSUMED } from './npcai.ts';
 import { acquireClosestTargets, HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARGET_HIT, HEAD_OWNER_ACQUIRE, HEAD_STATE_ATTACK, HEAD_STATE_CAST, HEAD_STATE_IDLE, HEAD_STOP_DISTANCE, headProbeEnemies, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
-import { TECH } from '../combat/techniques.ts';
+import { TECH, techTpCost } from '../combat/techniques.ts';
 import { QuestUi } from './questui.ts';
 import { timerText } from './cmode.ts';
 import { GUI_POSITION, GUI_TIMER_NORMAL, guildCardFlags } from '../net/guildcardflags.ts';
@@ -908,7 +908,19 @@ export class QuestTown {
       head84: head.lockedSecond,
       hasTarget: head.targets.length > 0,
       hasItem: () => false,
-      canCast: () => true,
+      // CheckPlayerTechCastEligibility(B player, tech) (npcai.ts npcCanCastTech). The area is the quest area's map id
+      // (unknown with no area script: the map is then taken as unsafe, the port's old behaviour). The NPC's technique
+      // level (0) and TP (NPC_TP_ASSUMED) are ASSUMED, not read.
+      canCast: (tech: number) => {
+        const area = this.area?.area ?? null;
+        return npcCanCastTech({
+          unsafeMap: area === null ? true : inUnsafeMap(area),
+          techLevel: 0,
+          tp: NPC_TP_ASSUMED,
+          tpCost: techTpCost(tech, 0),
+          stateClear: true,
+        });
+      },
       lockedInRadius: () => !!first && !!pos && (first.x - pos.x) ** 2 + (first.z - pos.z) ** 2 < head.attackRadius * head.attackRadius,
     };
     const c = ch.choose(mode, input);

@@ -21,8 +21,12 @@ import {
   followPoint,
   npcAttackRow,
   NpcMoveSender,
+  NPC_TP_ASSUMED,
+  npcCanCastTech,
   pickAttackTarget,
 } from '../client/src/quest/npcai.ts';
+import { techTpCost } from '../client/src/combat/techniques.ts';
+import { inUnsafeMap } from '../client/src/render/playermove.ts';
 import {
   headCastInputState,
   headMidpoint,
@@ -721,6 +725,25 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
     const qSrc = readFileSync(join(HERE, '../client/src/quest/questui.ts'), 'utf8');
     check(qSrc.includes('readonly headBubbles = new ChatBubbles();') && qSrc.includes('this.headBubbles.tick(headOf)') && qSrc.includes('this.headBubbles.draw(ctx,'), 'questui: the head lines are ticked and drawn over the NPC heads');
   }
+
+  // The NPC's cast eligibility (CanPlayerCastTechnique_0069a0c4): the unsafe map, the technique level, TP >= cost.
+  const elig = { unsafeMap: true, techLevel: 0, tp: 10, tpCost: 4, stateClear: true };
+  check(npcCanCastTech(elig) === true, 'eligibility: unsafe map, level present, TP above the cost: castable');
+  check(npcCanCastTech({ ...elig, tp: 4 }) === true, 'eligibility: TP equal to the cost is enough (-1 < tp2 - cost)');
+  check(npcCanCastTech({ ...elig, tp: 3 }) === false, 'eligibility: TP below the cost: no cast');
+  check(npcCanCastTech({ ...elig, unsafeMap: false }) === false, 'eligibility: a hub map (safe) never casts');
+  check(npcCanCastTech({ ...elig, techLevel: null }) === false, 'eligibility: effective level 0xff (not usable): no cast');
+  check(npcCanCastTech({ ...elig, stateClear: false }) === false, 'eligibility: the state word test fails: no cast');
+  check(npcCanCastTech({ ...elig, tp: NPC_TP_ASSUMED, tpCost: techTpCost(NPC_TECH_RESTA, 0) }) === true, 'eligibility: Resta at level 0 with the assumed TP is castable on an unsafe map');
+  check(inUnsafeMap(0) === false && inUnsafeMap(18) === false && inUnsafeMap(0x0e) === true, 'eligibility: the hub list 0, 15, 18, 45 is safe, the field (14) is unsafe');
+  const hubInput: HeadChooseInput = {
+    owner90: 0x2, owner8c: 0x4, npc90: 0, npc8c: 0, head34: 0, head84: 0, hasTarget: false,
+    hasItem: () => false, canCast: () => npcCanCastTech({ ...elig, unsafeMap: false }), lockedInRadius: () => false,
+  };
+  check(!new NpcHeadChooser().choose(1, hubInput).attack, 'eligibility: on a hub map the chooser gives no Anti for the owner\'s status (no cast)');
+  check(new NpcHeadChooser().choose(1, { ...hubInput, canCast: () => npcCanCastTech(elig) }).attack, 'eligibility: on a field map the same status gives Anti');
+  const townSrc2 = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
+  check(townSrc2.includes('unsafeMap: area === null ? true : inUnsafeMap(area)') && townSrc2.includes('canCast: (tech: number) => {'), 'town: the chooser\'s canCast is the NPC eligibility with the area\'s unsafe test');
 
   // The state-2 cast's gates and the field wiring in town.ts.
   const src = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');

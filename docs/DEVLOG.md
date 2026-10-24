@@ -1,5 +1,30 @@
 # Devlog
 
+## 2026-10-24: NPC attack AI: the cast eligibility of the head's chooser (CanPlayerCastTechnique)
+
+**Question:** the ROADMAP's "NPC players' attack AI" line lists the NPC's own level / MST / eligibility as open. The chooser (`NpcHeadChooser`, AIProcessState) asked `canCast` and the town answered `true`. What does the exe's eligibility test check for B's player?
+
+**Exe decision (the attack decision, traced 2026-10-24):**
+- The chooser is `SinowberillHead_AIProcessState_007b0a7c` (dump `.c:795871`). Its Resta / Anti asks are `CheckPlayerTechCastEligibility_0069a088(B's player, 0xf / 0x10)` at `.c:795931`, `.c:795962`, `.c:795989`, `.c:796002`.
+- The state dispatch that runs the chosen attack is `SinowberillHead_AIUpdateState_007b2764` (`.c:796961`, state 8 -> `ExecuteAttack_007b2ae8`); the cast gate is the eligibility above, not the dispatch.
+- `CheckPlayerTechCastEligibility_0069a088` (`.c:580401`): if the player's `+0x32c` (the `unknown_flags_invincibility` short) is 1, it needs the menu closed and the player active, else it returns 0; for any other value it calls `CanPlayerCastTechnique_0069a0c4` (`.c:580408`). The NPC's `+0x32c` is 7 (the constructor, `.c:552337`), so the NPC goes straight to the second function.
+- `CanPlayerCastTechnique_0069a0c4`: returns 1 only when (a) `currently_casting_tech_info +0x10 & 2` is 0, `character_flags & 0x20006` is 0 and `& 0x2000000` is 0 and `unknown_movement_state` has one of casting / running / unknown / walking / standing; (b) for tech 0xe / 0x11 the telepipe and challenge rules; (c) `IsTechniqueLevelUnlimited_006ad158` (the effective level is 0xff) is 0 AND `is_player_in_unsafe_map` (`0x0068a3fc`, the hub list 0 / 15 / 18 / 45 of `render/playermove.ts`); and (d) `tp2 - GetTechniqueData(tech, level).tp_cost >= 0` (`-1 < tp2 - cost`).
+- The NPC's character flags are `0x10000000` from the constructor (`.c:552338`), which passes (a); the NPC's movement state is standing or walking, which passes too (ASSUMED per tick).
+
+**Port:**
+- `client/src/quest/npcai.ts` `npcCanCastTech({ unsafeMap, techLevel, tp, tpCost, stateClear })`: the (a) / (c) / (d) gates as the exe orders them. `techLevel: null` is the 0xff case. `NPC_TP_ASSUMED` (0xffff) is the NPC's TP, not in the port.
+- `client/src/quest/town.ts` `headChooses`: `canCast(tech)` is `npcCanCastTech` with the quest area's map id through `inUnsafeMap` (no area script: taken as unsafe, the old behaviour), the technique level 0 (ASSUMED learned), TP `NPC_TP_ASSUMED`, and the cost `techTpCost(tech, 0)`.
+- Behaviour change: on a hub map (Pioneer 2, the Lab, the Ep4 hub) the head no longer casts Resta / Anti, as the exe does. On the field the cast is unchanged.
+
+**ASSUMED:**
+- The NPC's technique levels (learned at level 0, no cooldown) and TP (never short): neither is in the port.
+- The NPC's `character_flags` stay `0x10000000` and its movement state is standing or walking whenever the head asks.
+- The telepipe (0xe) and the challenge quest's Reverser (0x11) rules are not ported: the head only asks for 0xf / 0x10.
+
+**Not changed (still open):** the NPC's level / MST (the eligibility does not need them here), the item cast (no NPC inventory), the NPC's HP / TP status flags (ASSUMED full, `npcHeadChooser` input), and the head's move sub-state for the approach to the target (the field's `fieldUpdate` path is ported; the Pioneer 2 state-1 move to an enemy stays as before).
+
+**Tests:** `node tests/npcai.test.ts` ok (new block: TP equal / below the cost, the hub map, level 0xff, the state test, the assumed Resta on an unsafe map, the hub list, the chooser on a hub and on a field map, the town wiring). `questflow`, `quests`, `npcs`, `questmisc`, `questboard` pass with Node 24. `client/node_modules/.bin/tsc --noEmit -p client`: 0 errors. Not run in Chrome, no Playwright.
+
 ## 2026-10-24: Barba Ray: the phases 0x0d, 0x0f/0x10, 0x17, 0x19/0x1a and dispatch 0
 
 **What changed:** `combat/barbaray.ts` now ports five more body phases and the dispatch 0 idle, each with a test in `tests/barbaray.test.ts`. The leader's table step (event 9) runs for them the way it does for the corner transitions: once the phase's own sequence is done, not on the 30-tick pace. Ported:
