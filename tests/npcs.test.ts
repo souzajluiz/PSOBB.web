@@ -34,7 +34,10 @@ import {
   P2_MENU_GOVERNMENT,
   P2_MENU_GUILD,
   parseNpcTownMotions,
+  QUEST_NPC_MOTION_FILE,
+  QUEST_NPC_MOTION_SPEED,
   QUEST_NPC_TYPE,
+  questNpcMotionEntry,
   questNpcTemplate,
   TEKKER_MODELS,
   type NpcModelSource,
@@ -48,7 +51,7 @@ import { NPC_PLAYER_COUNT } from '../client/src/formats/npcplayerchar.ts';
 import { floorFiles, freePlayVariations, parseSetDataTable } from '../client/src/formats/setdatatable.ts';
 import { floorToArea } from '../client/src/net/game.ts';
 import { QuestVM, type QuestMessage } from '../client/src/quest/vm.ts';
-import { NodeAnimator } from '../client/src/render/enemymodel.ts';
+import { EnemyArchive, NodeAnimator } from '../client/src/render/enemymodel.ts';
 import { NpcAssets } from '../client/src/render/npcview.ts';
 import { bodyBlocks, CollisionWorld, PLAYER_RADIUS } from '../client/src/render/collision.ts';
 import { parseMapCRel } from '../client/src/formats/crel.ts';
@@ -569,6 +572,28 @@ console.log(`area script: labels without code ${noLabel.join(', ') || 'none'}; $
   check(questTalk.script === 'quest' && questTalk.label === 300, 'quest NPC 0x118 talks through the NPC path');
 
   console.log(`enemy-modelled NPCs: Rappy ${rappy?.bml}, Hildebear ${hilde?.bml} (motion ${hm?.index} at ${hm?.speed}), Chaos Bringer ${bringer?.bml} (motion ${motion?.index} at ${motion?.speed}); stage NPC 0x33 slot 12 ${hilde33?.bml}; quest NPC records ${NPC_PLAYER_COUNT}`);
+}
+
+// 11. The Episode 4 quest NPC's idle motion (0x118, the dispatcher's
+// Player__ApplyWeaponAnimationData row 0 of npcapcmot.bml, formats/npcmodels.ts): the
+// class picks the NJM action (FOmarl 110, the others 112), the motions are 64-node NJM
+// with 16-byte angle keys (the short form reads frames that run past the motion).
+{
+  check(questNpcMotionEntry(6) === 110 && questNpcMotionEntry(0) === 112 && questNpcMotionEntry(2) === 112 && questNpcMotionEntry(11) === 112, 'quest NPC idle row by class');
+  check(QUEST_NPC_MOTION_SPEED === 1 && QUEST_NPC_MOTION_FILE === 'NpcApcMot.bml', 'quest NPC motion file and speed');
+  const apc = new EnemyArchive(QUEST_NPC_MOTION_FILE, read(QUEST_NPC_MOTION_FILE)!, 0);
+  check(apc.bml.entries.length === 120 && apc.motionCount === 120, `npcapcmot.bml: ${apc.bml.entries.length} entries, expected 120 motions`);
+  check(apc.bml.entries[110].name === 'pxuZ00_A01_F_body.njm' && apc.bml.entries[112].name === 'pxuZ00_A01_W_body.njm', 'npcapcmot.bml entries 110 and 112 are the F and W idle sets');
+  for (const j of [110, 112]) {
+    const m = apc.motion(j, NPC_NODES, true);
+    check(m.nodes.length === NPC_NODES && m.frameCount === 30, `npcapcmot ${j}: ${m.nodes.length} nodes, ${m.frameCount} frames`);
+    // 16-byte keys: the first node's rotation keys run in order from frame 0 to the last frame.
+    const frames = (m.nodes[0].rotation ?? []).map((k) => k.frame);
+    check(frames.length > 1 && frames[0] === 0 && frames.every((f, i) => i === 0 || f > frames[i - 1]) && frames[frames.length - 1] === m.frameCount - 1, `npcapcmot ${j}: node 0 key frames ${frames.join(',')}`);
+    const short = apc.motion(j, NPC_NODES, false);
+    const shortFrames = short.nodes.flatMap((n) => (n.rotation ?? []).map((k) => k.frame));
+    check(shortFrames.some((f) => f >= m.frameCount), `npcapcmot ${j}: the short-angle reading runs past the motion (wrong form)`);
+  }
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

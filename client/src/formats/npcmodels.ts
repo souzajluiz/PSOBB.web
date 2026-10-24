@@ -250,13 +250,41 @@ export function npcModelFor(type: number, ctx: NpcModelContext): { cls: NpcClass
 // reads the quest state). So the model is the player class's own body set
 // (`pl<letter>nj.bml`, the same file the player models load), dressed with the
 // record's appearance (ASSUMED: the dispatcher's texture setup is not traced; the NPC
-// players of 6x69 use the same appearance). The motion row (idle / walk) of the
-// dispatcher is not traced: the town idle / walk of the class stands in (ASSUMED).
+// players of 6x69 use the same appearance). The walk row is not traced (the town walk
+// of the class stands in, ASSUMED); the idle row is the one below.
 export const QUEST_NPC_TYPE = 0x118;
 
 // The npcplayerchar.dat record of a 0x118 entry (6 bits of param6's u16 from bit 8).
 export function questNpcTemplate(param6: number): number {
   return ((param6 & 0xffff) >> 8) & 0x3f;
+}
+
+// --- the Episode 4 quest NPC's idle motion (0x118, traced 2026-10-24) ---------
+//
+// The dispatcher's states 1 and 2 (0x00602c1c, .c:463562 / .c:463676) start the NPC's
+// motion with Player__ApplyWeaponAnimationData(obj, table, njm_actions, 0): the
+// animation id 0 (row 0 of the table, Enemy__InitAnimation .c:791348), the
+// unknown_enemy_animation_data table of the weapon index (`&DAT_009c2b80 +
+// idx * 0x4c0`, the rows of 16 bytes {u16 type, u16 -, u32 njm_action_idx,
+// f32 frames per tick, u32 flags}, Enemy__GetAnimationDataPtr .c:790912) and the
+// NJM action array of npcapcmot.bml (g_ChallengeEntityWeaponAnimDataBase + 0x430,
+// the file name at 0x009c3e40, .c:465624). Enemy__SetCurrentNjmMotion (.c:791108)
+// takes the motion as njm_actions[njm_action_idx], so the motion is entry
+// njm_action_idx of npcapcmot.bml (ASSUMED: the array is the file's motion entries
+// in order, the convention the enemy BMLs use, formats/enemymodels.ts).
+// Row 0 of the three tables: 0x009c2b80 -> action 111, 0x009c3040 -> 112,
+// 0x009c3500 -> 110; each {type 1 (loop), speed 1.0, flags 0} (exedata.py read).
+// The weapon index (GetCurrentWeaponAnimationIndex_00603bc8, .c:464088) is 0 when
+// the object's +0x34 bit 0 is set (+0x34 is the NJCM model pointer, so bit 0 is clear),
+// else 1, or 2 when the class byte +0x31 is 6 (FOmarl). So the class picks the row:
+// FOmarl -> action 110 (the *_F_ motion), every other class -> 112 (the *_W_ motion).
+// The motions are 64-node NJM with 16-byte angle keys (the frames of the keys are
+// 0, 2, 4, ...; the short form gives garbage frames, checked on entry 112).
+export const QUEST_NPC_MOTION_FILE = 'NpcApcMot.bml';
+export const QUEST_NPC_MOTION_SPEED = 1.0; // the row's frames per tick (f32 1.0)
+
+export function questNpcMotionEntry(charClass: number): number {
+  return charClass === 6 ? 110 : 112;
 }
 
 // --- set entry parameters -----------------------------------------------------

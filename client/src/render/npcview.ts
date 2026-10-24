@@ -36,7 +36,11 @@ import {
   npcModelFor,
   npcParams,
   npcShown,
+  NPC_NODES,
+  QUEST_NPC_MOTION_FILE,
+  QUEST_NPC_MOTION_SPEED,
   QUEST_NPC_TYPE,
+  questNpcMotionEntry,
   questNpcTemplate,
   parseNpcTownMotions,
   type NpcClass,
@@ -50,7 +54,7 @@ import { LOCOMOTION_FACTOR, locomotionSlot, PLAYER_MOTION_FILE, PlayerMotions, t
 import { RelFile } from '../formats/rel.ts';
 import type { PlacedEntity } from '../formats/setdata.ts';
 import { EnemyArchive, NodeAnimator, texturesFromXvm } from './enemymodel.ts';
-import { PlayerAnimator } from './playeranim.ts';
+import { depthFirstNodes, PlayerAnimator } from './playeranim.ts';
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { NjcmModelBuilder } from './njcmmesh.ts';
@@ -92,6 +96,7 @@ export class NpcAssets {
   private motions: Promise<NjMotion[]> | null = null;
   private templates: Promise<NpcPlayerTemplate[]> | null = null;
   private playerMotionsP: Promise<PlayerMotions> | null = null;
+  private questMotionsP: Promise<EnemyArchive> | null = null;
   private playerAssetsByClass = new Map<number, Promise<PlayerAssets>>();
 
   constructor(files: ClientFiles) {
@@ -107,6 +112,13 @@ export class NpcAssets {
   questTemplates(): Promise<NpcPlayerTemplate[]> {
     this.templates ??= this.files.read(NPC_PLAYER_FILE).then((d) => parseNpcPlayerTemplates(d));
     return this.templates;
+  }
+
+  // The quest NPCs' idle motions (npcapcmot.bml; every entry is a motion, so the
+  // archive has no models).
+  questNpcMotions(): Promise<EnemyArchive> {
+    this.questMotionsP ??= this.files.read(QUEST_NPC_MOTION_FILE).then((d) => new EnemyArchive(QUEST_NPC_MOTION_FILE, d, 0));
+    return this.questMotionsP;
   }
 
   playerMotions(): Promise<PlayerMotions> {
@@ -192,7 +204,10 @@ export interface NpcInstance {
   root: THREE.Object3D;
   // NodeAnimator: the 64-node NPC skeleton; PlayerAnimator: a quest NPC's player model;
   // null for an enemy-built NPC, whose enemy layer animator plays its motion.
+  // A quest NPC plays its idle on the NodeAnimator (questAnimators.idle) and its walk on
+  // the PlayerAnimator (questAnimators.walk); `animator` is the one playing now.
   animator: NodeAnimator | PlayerAnimator | null;
+  questAnimators?: { idle: NodeAnimator; walk: PlayerAnimator };
   // An enemy-built NPC (TObjNpcEnemy / Rappy / Hildebear / Chaos Bringer NPC): it talks
   // but does not wander (ASSUMED: the wander modes of its vtable are not traced).
   fixed: boolean;
@@ -372,7 +387,11 @@ export class NpcLayer {
     const templates = await this.assets.questTemplates();
     const t = templates[questNpcTemplate(e.params[5])];
     if (!t) return null;
-    const [assets, motions] = await Promise.all([this.assets.playerAssets(t.charClass), this.assets.playerMotions()]);
+    const [assets, motions, apc] = await Promise.all([
+      this.assets.playerAssets(t.charClass),
+      this.assets.playerMotions(),
+      this.assets.questNpcMotions(),
+    ]);
     const built = buildPlayerModel(assets, t.appearance);
     const body = assets.parts.get(`pl${classLetter(t.charClass)}bdy00.nj`);
     if (!body) return null;
@@ -383,7 +402,18 @@ export class NpcLayer {
     group.position.set(p.world[0], p.world[1], p.world[2]);
     group.add(built.root);
     group.userData.entity = p;
-    const animator = new PlayerAnimator(built.partBones[0]!, body, motions);
+    // The idle row of the 0x118 dispatcher (formats/npcmodels.ts QUEST_NPC_MOTION_FILE):
+    // the NJM of npcapcmot.bml plays on the body's nodes, speed 1.0, looping.
+    const bones = built.partBones[0]!;
+    const idle = new NodeAnimator(
+      bones,
+      depthFirstNodes(body).map((n) => n.flags),
+      apc.motion(questNpcMotionEntry(t.charClass), NPC_NODES, true),
+      QUEST_NPC_MOTION_SPEED,
+      true,
+      0,
+    );
+    const walk = new PlayerAnimator(bones, body, motions);
     const angle = toBams(p.yaw);
     const npc: NpcInstance = {
       placed: p,
@@ -392,7 +422,8 @@ export class NpcLayer {
       charClass: t.charClass,
       params: npcParams(e.params),
       root: group,
-      animator,
+      animator: idle,
+      questAnimators: { idle, walk },
       fixed: false,
       angle,
       height: Number.isFinite(box.max.y) ? box.max.y : 16,
@@ -401,7 +432,6 @@ export class NpcLayer {
       brain: npcBrain(p.world[0], p.world[1], p.world[2], angle, e.params),
       motion: 0,
     };
-    animator.play(townMotion(t.charClass, locomotionSlot(t.charClass, 'idle')), LOCOMOTION_FACTOR.idle, (slot) => townMotion(t.charClass, slot));
     group.rotation.y = fromBams(angle);
     return { npc, missingTextures: built.stats.missingTextures };
   }
@@ -499,6 +529,17 @@ export class NpcLayer {
     if (n.motion === m) return;
     n.motion = m;
     if (!n.animator) return; // an enemy-built NPC: its enemy layer animator plays
+    if (n.questAnimators) {
+      // A quest NPC: the idle row of npcapcmot.bml (traced), the walk stays the town walk (ASSUMED).
+      const c = n.charClass ?? 0;
+      if (m === 1) {
+        n.animator = n.questAnimators.walk;
+        n.questAnimators.walk.play(townMotion(c, locomotionSlot(c, 'walk')), LOCOMOTION_FACTOR.walk, (slot) => townMotion(c, slot));
+      } else {
+        n.animator = n.questAnimators.idle;
+      }
+      return;
+    }
     if (n.animator instanceof PlayerAnimator) {
       // A quest NPC: the player's town idle / walk of its class (ASSUMED, see buildQuestNpc).
       const c = n.charClass ?? 0;

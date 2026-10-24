@@ -1,5 +1,53 @@
 # Devlog
 
+## 2026-10-24: NPC motions: the Episode 4 quest NPC's idle row, the 0x33 slot
+
+**What changed:** the 0x118 quest NPC plays its idle from npcapcmot.bml
+(`formats/npcmodels.ts` `questNpcMotionEntry`, `QUEST_NPC_MOTION_FILE`;
+`render/npcview.ts` `buildQuestNpc` builds a `NodeAnimator` on the body's bones
+and keeps the town walk on a `PlayerAnimator`, `questAnimators`). The 0x33
+comment in `formats/enemymodels.ts` now states what the slot does.
+
+**Traced (PsoBB.exe, dump `Psobb.exe-05112026.c` line numbers; Ghidra for 0x607ea4 and 0x603bc8 and 0x605950):**
+- 0x118: the dispatcher's states 1 and 2 (.c:463562, .c:463676) call
+  `Player__ApplyWeaponAnimationData(obj, &DAT_009c2b80 + idx*0x4c0,
+  g_ChallengeEntityWeaponAnimDataBase+0x430, 0)`: animation id 0 (row 0),
+  Enemy__InitAnimation (.c:791348) and Enemy__SetCurrentNjmMotion (.c:791108).
+- The motion BML is `npcapcmot.bml` (string at 0x009c3e40, .c:465624, loaded
+  type 1 in the same function).
+- The row (exedata.py read, 16-byte rows {u16 type, u16, u32 njm action, f32
+  speed, u32 flags}): 0x009c2b80 -> action 111, 0x009c3040 -> 112, 0x009c3500 -> 110;
+  each type 1 (loop), speed 1.0, flags 0 (so no root-Z flag).
+- The table index: GetCurrentWeaponAnimationIndex_00603bc8 (.c:464088) returns
+  0 if obj+0x34 bit 0 (+0x34 is the NJCM model pointer, so the bit is clear), else
+  1, or 2 when the class byte +0x31 is 6 (FOmarl). So FOmarl -> action 110 (`*_F_`),
+  the other classes -> 112 (`*_W_`).
+- The motions are 64-node NJM with 16-byte angle keys: node 0's key frames run
+  0, 1, ..., 29 (110) or 0, 2, ..., 28, 29 (112) in order; the short form reads
+  frames like 60837 (`tests/npcs.test.ts` section 11).
+
+**Traced for 0x33 (TObjNpcEnemy):** the init 0x00607ea4 (Ghidra FUN_00607ea4,
+dump name ConstructDerolleBossObject_00607ea4 .c:466941; vtable 0x00b1e680,
++0x164 = 0x606a34, +0x160 = 0x60648c) ends with the slot setter
+(unknown_set_stage_npc_data_specified_entry, .c:467705): model +0x34 = slot+8,
+texture list +0x24 = slot+0xc, collision radius +0xa4+0xc = slot+0x10, and
+Player__ApplyWeaponAnimationData(this, slot+0x18, slot+0x14, u16 slot+0x1c). The
+registration (RegisterStageNpcModelData_00608470, .c:467281) sets unk_in_use = 1
+for every slot, so the setter always takes the animation branch. So the slot's
+motion is row <id> of the registrant's own table, from frame 0.
+
+**ASSUMED still:** the per-class id (u16 at slot+0x1c) and the registrant's table
+(each registration passes its own njm struct; the decompiled stack layout is not
+reliable), so the 0x33 keeps the enemy's idle row; the 0x118 texture setup
+(LoadChallengeEntityData_00605950 loads `plAsmp.rel` .. `plDsmp.rel` by class
+into obj+0x3ec, its use is not traced; the appearance stays the player's); the
+0x118 walk row (the town walk stands in); the njm_actions index = the BML's
+motion entry index (the enemy BMLs' convention).
+
+**Verified:** `tests/npcs.test.ts` section 11 (idle row by class, file and speed,
+120 motions, entries 110 / 112 names, 64 nodes, 30 frames, 16-byte key frames,
+the short form out of range); the whole file passes; `client` typecheck clean.
+
 ## 2026-10-24: Optimal PRS parser for quest files
 
 **What changed:** `prsCompressOptimal` in `client/src/formats/prscompress.ts`,
