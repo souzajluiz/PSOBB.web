@@ -17016,3 +17016,26 @@ the port applied it to the bare text, which would drop every two-character line 
 "- 2" is the 2-unit language marker (`\tE`) the line carries in the exe's buffer, so `Lobby.sendChat`
 now gates on the marked line: a short plain line is sent, a line with only an emote key is not (the
 emote still plays). ASSUMED: the marker is in the buffer process_chat_message reads.
+## 2026-10-23: technique visuals on Forest 1 (`client/e2e/techvisuals.spec.ts`): frames reviewed, no code change
+
+**What changed.** A Playwright pass over the effects ported today. The spec makes a fresh field, warps to Forest 1, builds room 2 wave 1 (`constructEnemies(1, 2, 1)`), sets the techniques to level 30 in the combat's character file (`combat.opts.character()`, the object the cast reads), tops up the TP before each cast, places the player 25 units (12 on a retry) from the nearest enemy and waits for the lock-on, then calls `combat.castTechnique` for Foie, Gifoie, Barta, Gibarta, Rabarta, Zonde, Gizonde and Megid. Frames at 300, 600, 1000, 1500 and 2200 ms after each cast go to `client/test-results/techvisuals-<technique>-<ms>.png` (git-ignored). A killed wave is built again only after a warp through Pioneer 2 (the floor's wave is not rebuilt in place). No trace or failure screenshot is kept (the disk was full during the run).
+
+**Verdicts** (by eye, from the frames; no measurement):
+- Foie: an orange flame at the target at 1000 to 1500 ms. Plausible.
+- Gifoie: from 600 ms to 1500 ms the view is covered by flat yellow sheets with hard edges and dotted squares, above the tree and around the caster. Looks like opaque or mis-textured sprites, not a flame ring. NOT traced.
+- Barta: a translucent blue cube at 600 to 1000 ms, well above the enemies' height and above the tree top. Its height is not traced (the cast point and the `BARTA_FX` offsets are ASSUMED). NOT traced.
+- Gibarta: white speckled blocks at 600 to 1000 ms (model or sprites), with a hard edge. NOT traced.
+- Rabarta: at 600 ms the view is covered by large white and grey planes with cyan edges. Looks like opaque sprites. NOT traced.
+- Zonde: yellow-white jagged bolts from above the target at 600 ms, with sparks. Plausible.
+- Gizonde: a small yellow flash at the target at 600 ms; the chain is not visible in these frames.
+- Megid: a cluster of pink-white orbs at the target at 600 ms and a violet vertical streak above it. Plausible; small.
+
+**Harness notes.** During the Gibarta and Gizonde frames the "Do you wish to return to Pioneer 2?" prompt is open: the player stood on the field's warp pad (the yellow cone) after the 12-unit retry. It does not stop the casts. The first run failed at login because newserv (PID 27920) had exited (the disk was full); it was started again from `vendor/newserv` as the e2e README says. The worktree's `vendor` and `client/node_modules` were linked from the main checkout for the run and removed before the commit.
+
+**Checks.**
+- `cd client && npx tsc --noEmit -p .`: exit 0 (Node 24).
+- `PW_BASE_URL=http://127.0.0.1:5180 npx playwright test e2e/techvisuals.spec.ts`: 1 passed (8 casts, 40 frames). The screenshots are for review, not compared.
+
+**ASSUMED / not traced.** The Gifoie, Rabarta and Gibarta suspects above. The next step for each: the effect ids in `GIFOIE_FX` (0x22, 0xac, 0x19e), `RABARTA_FX` and `GIBARTA_FX` in `combat/techfire.ts` (their texture index, scale and the particle's type from `particleentry.dat`), and the table's model entries for Gibarta (flag 0x20). The Barta height needs the `BARTA_FX` offsets against the exe's `create_particle_effect5` position (dump 640449 ff.).
+
+**Left.** No fix in this pass: the suspects are not yet tied to an exe address, so no change is made to the render code. The Gizonde chain and the Megid orb's flight are not seen in the captured frames (the cast was too short to show them); a later pass should capture the enemy at 25 units with more frames after 1000 ms.
