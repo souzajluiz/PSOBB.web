@@ -993,7 +993,14 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // TObjNpcEnemy (0x33): the model of stage NPC slot angle.x of the area (see
     // STAGE_NPC_LISTS). The slot's enemy is built with the enemy's own model rules
     // (the variant parameter is set as stageNpcModel gives it); the name is the
-    // NPC's. ASSUMED: the slot's motion is the enemy's own idle row.
+    // NPC's. The slot's motion is traced in part (2026-10-24): the setter
+    // unknown_set_stage_npc_data_specified_entry (0x00608bfc, dump .c:467705) calls
+    // Player__ApplyWeaponAnimationData with the slot's table (+0x18), njm_actions
+    // (+0x14) and animation id = the u16 at +0x1c, and the slot's unk_in_use is 1 for
+    // every registered slot (RegisterStageNpcModelData_00608470 .c:467396), so the
+    // motion is row <id> of the registrant's own animation table (Enemy__InitAnimation,
+    // from the start). The id per class is not traced (each registration passes its
+    // own njm struct), so the enemy's own idle row stands in: ASSUMED.
     case 0x33: {
       const slot = (Math.trunc(e.rotation[0]) << 16) >> 16; // angle.x as a signed short
       const id = stageNpcSlotId(ctx.area, slot);
