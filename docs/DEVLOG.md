@@ -15704,3 +15704,29 @@ needs `vendor/newserv/build/newserv`, which this worktree does not have (ENOENT 
 - The always-on text input with the option set (above).
 - Mouse controls (option 0x700000), Ctrl+End, PageUp / PageDown, auto disconnect (ROADMAP line).
 - Chrome check of F11 in the field and lobby (no Playwright, per the brief).
+## 2026-10-23 - player weapon position (exe 0077a1f4): feet + 0.5 * bloodstain, the targeting origin and the attacker's particle
+
+**What changed:** `weaponPositionY(feet, bloodstain)` in `client/src/combat/weaponorigin.ts` is the exe's weapon position height (feet + 0.5 * the bloodstain offset, `BLOODSTAIN_OFFSET` 0, ASSUMED). Two port sites used the old guesses and now use it: `render/combat.ts` `pickFireTargets` (the origin of the technique target pick was the feet + `WEAPON_HEIGHT` 20; it is the weapon position, the feet) and the attacker's special-handler particle in `specialFx` (was the feet + 20, now the feet). The technique's cast point (the Foie / Barta objects' spawn) still uses `WEAPON_HEIGHT` 20: the exe takes it from the weapon model node, which is not traced (see Left).
+
+**Exe evidence (PsoBB.exe; dump `refsrc/.../Psobb.exe-05112026.c`):**
+- `UpdatePlayerWeaponPosition_0077a1f4` (dump 751644; objdump 0x0077a1f4..0x0077a23c): x = +0x38, z = +0x40, and with `battleparams_stats` (+0x2b4) non-null y = `float(battleparams_stats + 0x10) * 0.5 + player.y` (the constant 0.5 at 0x009780a8); with the pointer null, y = player.y. `battleparams_stats + 0x10` is player +0xe3c (the stats are the player's embedded row at +0xe2c, `LoadPlayerEntityBattleParams_006960e4`). So the real weapon position is the feet plus half the bloodstain offset, as the ROADMAP line said.
+- The bloodstain offset: the load reads it, writes it from the character record and restores the value read first (0x6960e8, 0x69614c, 0x696176). Nothing else in the file sets player +0xe3c (the other `0xe3c` stores are on a base +0x930 object). The object's initial contents are not read, so it stays ASSUMED zero, and the weapon position is the feet.
+- The technique target pick measures from the player's weapon position (`find_targets_for_weapons_and_techs` / `check_enemy_is_targetable`, dump 785xxx; the vertical cone's apex is weapon_position, see `pickTechTargets` in `combat/techfire.ts`), so the pick origin's height is the weapon position, not the cast point.
+- Dump 285491..285492: the character-preview ground probe uses `player_weapon_pos.y = g_WeaponYOffset + weapon_position.y`. `g_WeaponYOffset` (dump 129014) has no writer in the dump, so it is 0 and gameplay is not affected. Not ported.
+- Dump 295370..295397 (enemy Megid, ultimate): the Megid's origin is the caster's weapon_position plus (0, 3, 17) rotated by the caster's heading (`local_7c`), and its aim is the target's weapon_position (`create_megid`, 295397 / 295461). The port's enemy Megid (`combat/enemyfsmruins.ts`) starts at the boss's bolt origin, so this is not ported (Left).
+
+**Port:**
+- `weaponPositionY` (`combat/weaponorigin.ts`), used by `pickFireTargets` and the attacker's special particle (`render/combat.ts`).
+- Unchanged: `WEAPON_HEIGHT` 20 as the technique cast point and the gun fallback (headless), `HIT_POINT_DY` / `BODY_DY` 0, `AIM_HEIGHT` as the enemy fallback, `PLAYER_AIM_HEIGHT` 10 (the enemy shots' aim).
+
+**ASSUMED:**
+- `BLOODSTAIN_OFFSET` 0 (player +0xe3c, no writer found; the initial value not read).
+- The technique cast point's height: `WEAPON_HEIGHT` 20 above the feet (the weapon model node of `unknown_get_tech_cast_location` 0x0068c2f4 is not traced).
+
+**Tests:** `tests/techfire.test.ts` (new block in the target selection: a target 45 up at 40 out is outside the 40 degree cone from the feet and inside it from 20 up; `weaponPositionY(0) == 0`, `weaponPositionY(3, 40) == 23`). `node tests/techfire.test.ts`: ok. `node tests/combat.test.ts`: 5852 checks, 0 failures. `node tests/weaponorigin.test.ts` and `tests/playerfx.test.ts`: all passed. `node tests/combatdepth.test.ts`: 836 checks, 0 failures. `cd client && tsc --noEmit -p .`: clean. The worktree's `client/node_modules` and `vendor` were symlinks to the main checkout for these runs, removed before the commit. No Playwright, not run in Chrome.
+
+**Left (ROADMAP line stays open):**
+- The technique cast point: `unknown_get_tech_cast_location` 0x0068c2f4 (GetWeaponModelData +0x10 through the vtable +0x10c): the node the Foie / Barta / Gibarta objects start at. Needs the node index and the port's weapon skeleton (as `combat/weaponorigin.ts` does for guns), then `WEAPON_HEIGHT` goes.
+- The enemy Ultimate Megid's origin and aim (dump 295370..295461): weapon_position + (0, 3, 17) rotated, aim at the target's weapon position; the port's enemy Megid is a `TechBolt` from the boss's bolt origin.
+- `PLAYER_AIM_HEIGHT` 10: the enemy shots' aim (missile homing, gunner laser, bullets, Rafoie / Gifoie), `techlightning.ts` `PLAYER_POINT`, and `volopt2.ts`.
+- The bloodstain offset's initial value (the object at player +0xe3c); the status pulse's emitter; the lock-on's per-box pick for multi-box enemies; the other exe Foie casters (Hildebear 295460, Boota 390505, Dorphon 394153, 501426).

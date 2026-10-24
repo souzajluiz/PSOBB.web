@@ -7,6 +7,7 @@ import {
   effectTier,
   enemyAimHeight,
   AIM_HEIGHT,
+  WEAPON_HEIGHT,
   enemyFire,
   FIRE_SE,
   FireShot,
@@ -29,6 +30,7 @@ import {
   type Candidate,
   type TechTarget,
 } from '../client/src/combat/techfire.ts';
+import { weaponPositionY } from '../client/src/combat/weaponorigin.ts';
 import { TECH, techData, techPower } from '../client/src/combat/techniques.ts';
 import { STATUS } from '../client/src/combat/status.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
@@ -277,6 +279,16 @@ check(!circleHits(0, 0, 400, T(1, 120, 0, 8), 100) && circleHits(0, 0, 400, T(1,
   const tech = techData(TECH.rabarta, 0);
   n = pickTechTargets(0, 0, 0, 0, { rangeH: tech.rangeH, rangeV: tech.unknown1 ? 0 : 0, angleH: tech.angleH, angleV: tech.angleV, targets: tech.targets }, [c(1, -20, -20)], null, out);
   eq(n, 1, 'a full-circle technique ignores the facing');
+  // The origin is the player's weapon_position: the feet (weaponPositionY, bloodstain ASSUMED 0),
+  // not the old WEAPON_HEIGHT 20 above them. A target 45 up at 40 out is past the 40 degree
+  // vertical cone from the feet and inside it from 20 up (the vertical cone's apex is wy).
+  const high = c(7, 0, 40, 45);
+  n = pickTechTargets(0, weaponPositionY(0), 0, 0, p, [high], null, out);
+  eq(n, 0, 'from the feet the 45-high target is outside the 40 degree cone');
+  n = pickTechTargets(0, WEAPON_HEIGHT, 0, 0, p, [high], null, out);
+  eq(n, 1, 'the old origin 20 up would have taken it (the change is the origin)');
+  eq(weaponPositionY(0), 0, 'the weapon position height is the feet with the bloodstain offset zero');
+  eq(weaponPositionY(3, 40), 23, 'weapon position = feet + 0.5 * bloodstain offset (player +0xe3c)');
 }
 
 // --- the effect tables ------------------------------------------------------------

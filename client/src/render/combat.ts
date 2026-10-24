@@ -133,7 +133,7 @@ import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICL
 import { boxTargetable, childBoxTable, enemyBoxTable, slotSetType, slotVariant, VOLOPT_SET_TYPE } from '../formats/enemyboxes.ts';
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
 import { enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
-import { gunBulletStart, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
+import { gunBulletStart, weaponPositionY, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
 import { attackHeading, inUnsafeMap, RAND_MAX_C, slowApplies } from './playermove.ts';
@@ -6835,8 +6835,9 @@ export class CombatView {
     const me = this.game.self;
     const own = me ? this.view?.playerPositions().get(me.clientId) : null;
     for (const p of specialHandlerParticles(special)) {
-      // ASSUMED: the attacker's weapon position (+0x300) is 20 above its feet.
-      const at = p.at === 'player' && own ? new THREE.Vector3(own.x, own.y + 20, own.z) : hit;
+      // The attacker's weapon position (player +0x300) is its feet plus half the bloodstain
+      // offset, zero (combat/weaponorigin.ts weaponPositionY, exe 0077a1f4).
+      const at = p.at === 'player' && own ? new THREE.Vector3(own.x, weaponPositionY(own.y), own.z) : hit;
       this.particle(p, at);
     }
     // Burning, Shock / Thunder and Storm / Tempest: the objects of combat/techlightning.ts.
@@ -7224,8 +7225,9 @@ export class CombatView {
   // The targeting system's pick for a technique of the Foie / Barta families
   // (combat/techfire.ts pickTechTargets: check_enemy_is_targetable). ASSUMED: the
   // lock-on cursor is not a manually chosen primary target, the weapon position
-  // is WEAPON_HEIGHT above the feet and an enemy's hit box is a round box of its
-  // collision radius centred on its hit box (aimHeightOf).
+  // is the player's weapon_position (the feet, weaponPositionY: check_enemy_is_targetable
+  // measures from weapon_position, DEVLOG 2026-10-23) and an enemy's hit box is a round box of
+  // its collision radius centred on its hit box (aimHeightOf).
   private pickFireTargets(data: TechniqueData, from: THREE.Vector3, heading: number): EnemyRuntime[] {
     const cands: Candidate[] = [];
     const byId = new Map<number, EnemyRuntime>();
@@ -7236,7 +7238,7 @@ export class CombatView {
       byId.set(e.index, e);
     }
     const out: Candidate[] = [];
-    pickTechTargets(from.x, from.y + WEAPON_HEIGHT, from.z, heading, data, cands, null, out);
+    pickTechTargets(from.x, weaponPositionY(from.y), from.z, heading, data, cands, null, out);
     return out.map((c) => byId.get(c.id)!);
   }
 

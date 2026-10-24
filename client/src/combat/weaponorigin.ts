@@ -58,3 +58,15 @@ export function gunBulletStart(attach: number, feet: Point, origin: WeaponOrigin
   out.z = feet.z;
   return out;
 }
+
+// The player's weapon_position (player +0x300) height. UpdatePlayerWeaponPosition_0077a1f4
+// (dump 751644; objdump 0x0077a1f4..0x0077a23c): y = player.y + 0.5 * the bloodstain offset
+// (battleparams_stats +0x10 = player +0xe3c, the constant 0.5 at 0x009780a8); with no
+// battleparams_stats pointer the y is player.y. So the weapon position is the feet plus half the
+// bloodstain offset. The load preserves +0xe3c and never sets it (DEVLOG 2026-10-23 "player
+// weapon position"), so the offset is ASSUMED zero and the weapon position is the feet.
+export const BLOODSTAIN_OFFSET = 0; // ASSUMED: player +0xe3c, no writer found in the exe
+
+export function weaponPositionY(feet: number, bloodstain: number = BLOODSTAIN_OFFSET): number {
+  return feet + 0.5 * bloodstain;
+}
