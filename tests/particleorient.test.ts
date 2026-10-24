@@ -10,10 +10,14 @@
 // The undirected Foie (TechniqueEntity ctor) and the heading Megid take
 // Vector3f_GetAnglesZ(sin, 0, cos) of the heading; the directed Foie and the aimed Megid
 // (EffectEntityBase) take 0.
+// Also (update_particle_effect_single_particle, dump line 291383): particle flag 2 runs
+// the helpers X, Y, Z (v' = Rx Ry Rz v); flag 0x20 multiplies the particle's own matrix
+// in first (out = M^T ... v); the table's 0x1000 is particle flag 0x2000, which spawn
+// destroys (dump line 288330) and the single particle update never submits (dump 291923).
 // Run: node tests/particleorient.test.ts
 
 import { ParticleSystem, NO_ORIENT, orientOfDirection, parseParticleEntry, turnStep, type Orient } from '../client/src/classic/particles.ts';
-import { foieEmitterOrient, startEmitters, type FireObject } from '../client/src/combat/techfire.ts';
+import { emitterFx, objectEmitterOrient, startEmitters, type FireKind, type FireObject } from '../client/src/combat/techfire.ts';
 import { MEGID_EMITTERS, MegidOrb } from '../client/src/combat/techlightning.ts';
 
 let failures = 0;
@@ -94,16 +98,92 @@ for (const o of angles) {
 // The Foie emitter angles: an undirected Foie at heading h is turned by GetAnglesZ(sin h, 0, cos h);
 // a directed one is not turned (EffectEntityBase); flag 1 (0xac) is a half turn more.
 const foie = (heading: number, directed: boolean) => ({ heading, directed }) as unknown as FireObject;
-vecNear(foieEmitterOrient(foie(0, false), 'object'), [HALF, 0, 0], 'Foie heading 0 (undirected), flag 2: X a quarter turn');
-vecNear(foieEmitterOrient(foie(Math.PI / 2, false), 'object'), [0, 0, -HALF], 'Foie heading a quarter turn: Z minus a quarter turn');
-vecNear(foieEmitterOrient(foie(0, true), 'object'), [0, 0, 0], 'Foie directed: no angles (EffectEntityBase sets +0x54/+0x5c to 0)');
-vecNear(foieEmitterOrient(foie(0, false), 'half'), [HALF + Math.PI, 0, 0], 'Foie flag 1 (0xac), heading 0: X a half turn more');
-vecNear(foieEmitterOrient(foie(0, true), 'half'), [Math.PI, 0, 0], 'Foie flag 1 (0xac), directed: X a half turn');
+vecNear(objectEmitterOrient(foie(0, false), 'object'), [HALF, 0, 0], 'Foie heading 0 (undirected), flag 2: X a quarter turn');
+vecNear(objectEmitterOrient(foie(Math.PI / 2, false), 'object'), [0, 0, -HALF], 'Foie heading a quarter turn: Z minus a quarter turn');
+vecNear(objectEmitterOrient(foie(0, true), 'object'), [0, 0, 0], 'Foie directed: no angles (EffectEntityBase sets +0x54/+0x5c to 0)');
+vecNear(objectEmitterOrient(foie(0, false), 'half'), [HALF + Math.PI, 0, 0], 'Foie flag 1 (0xac), heading 0: X a half turn more');
+vecNear(objectEmitterOrient(foie(0, true), 'half'), [Math.PI, 0, 0], 'Foie flag 1 (0xac), directed: X a half turn');
 
-// The Foie table (tier 5): the muzzle burst, then 0x19e (flag 0x1000, no angles), 0x14 and 0x19c (flag 2), 0xac (flag 1).
+// The emitter tables by kind: the angles (object, or half for flag 1) and the hidden ones (flag 0x1000).
+const kindsOf = (k: FireKind, tier: number) =>
+  startEmitters(k, tier).map((e) => `${e.id.toString(16)}:${e.angles ?? '-'}${e.hidden ? '!' : ''}`).join(' ');
+
+// The Foie table (tier 5): the muzzle burst, then 0x19e (flag 0x1000: hidden, no angles), 0x14 and 0x19c (flag 2), 0xac (flag 1).
 {
-  const kinds = startEmitters('foie', 5).map((e) => `${e.id.toString(16)}:${e.angles ?? '-'}`).join(' ');
-  check(`Foie tier 5 emitters [${kinds}]`, kinds === '18:- 19e:- 14:object ac:half 19c:object');
+  const kinds = kindsOf('foie', 5);
+  check(`Foie tier 5 emitters [${kinds}]`, kinds === '18:- 19e:-! 14:object ac:half 19c:object');
+}
+
+// Barta (flag 2 and 1 entries take the angles, 0x192 is flag 0 and is not turned) and Gibarta (flag 2 0x181 is turned).
+{
+  const b0 = kindsOf('barta', 0), b3 = kindsOf('barta', 3), g0 = kindsOf('gibarta', 0), g5 = kindsOf('gibarta', 5);
+  check(`Barta tier 0 emitters [${b0}]`, b0 === '190:object 191:object 192:-');
+  check(`Barta tier 3 emitters [${b3}]`, b3 === '190:object 191:object 192:- 198:half');
+  check(`Gibarta tier 0 emitters [${g0}]`, g0 === '180:- 181:object');
+  check(`Gibarta tier 5 emitters [${g5}]`, g5 === '181:object 1e0:- 1e1:-');
+  const rabarta = [0, 1, 2, 3, 4, 5].map((t) => kindsOf('rabarta', t)).join(' | ');
+  check('Rabarta: no emitter has angles (create_particle_effect3 only)', !/object|half/.test(rabarta));
+  // Barta / Gibarta object angles: the heading's when undirected, none when aimed (EffectEntityBase).
+  vecNear(objectEmitterOrient({ heading: 0, directed: false } as unknown as FireObject, 'object'), [HALF, 0, 0], 'Barta / Gibarta heading 0: X a quarter turn');
+  vecNear(objectEmitterOrient({ heading: 0, directed: true } as unknown as FireObject, 'half'), [Math.PI, 0, 0], 'Barta / Gibarta aimed, flag 1: X a half turn only');
+}
+
+// The hidden emitters: Foie 0x19e and Megid 0x1cf carry particle flag 0x2000 (noDraw); the rest do not.
+check('emitterFx: a hidden emitter is noDraw', emitterFx(startEmitters('foie', 5)[1]).noDraw === true);
+check('emitterFx: a visible emitter has no flags', emitterFx(startEmitters('foie', 5)[2]).noDraw === undefined);
+{
+  const megid = MEGID_EMITTERS.map((tier) => tier.filter((e) => e.hidden).map((e) => e.id.toString(16)).join(','));
+  check(`Megid hidden emitters by tier [${megid.join('|')}]`, megid.join('|') === '|||||1cf');
+}
+
+// Particle flag 2: the helpers run X, Y, Z, so Rz is applied first and Rx last (v' = Rx Ry Rz v).
+{
+  for (const o of angles) {
+    const m = mul(mul(rx(o[0]), ry(o[1])), rz(o[2]));
+    for (const v of vs) {
+      vecNear(turnStep(o, v as [number, number, number], { flag2: true }), apply(m, v), `flag 2 product Rx Ry Rz at [${o.map((x) => x.toFixed(1))}] on [${v}]`);
+    }
+  }
+  vecNear(turnStep([HALF, 0, HALF], [0, 1, 0], { flag2: true }), [-1, 0, 0], 'flag 2, X and Z a quarter turn: Z first, so +y goes to -x');
+  vecNear(turnStep([HALF, 0, HALF], [0, 1, 0]), [0, 0, 1], 'flag 2 clear, same angles: X first, so +y goes to +z');
+}
+
+// Particle flag 0x20: the particle's own matrix M is multiplied in first, so out = M^T (default turn) v.
+// The exe's transform reads the stack transposed (out.x = _11 x + _21 y + _31 z).
+{
+  check('flag 0x20: M^T e1 is the first row of M', (() => {
+    const w = turnStep(null, [1, 0, 0], { matrix: [1, 2, 0, 0, 1, 0, 0, 0, 1] });
+    return Math.abs(w[0] - 1) < 1e-9 && Math.abs(w[1] - 2) < 1e-9 && Math.abs(w[2]) < 1e-9;
+  })());
+  const tr = (a: number[][]) => a[0]!.map((_, j) => a.map((r) => r[j]!));
+  const M = ry(0.9);
+  const flat = M.flat();
+  for (const o of angles) {
+    for (const v of vs) {
+      const dflt = apply(mul(mul(rz(o[2]), rx(o[0])), ry(o[1])), v);
+      vecNear(turnStep(o, v as [number, number, number], { matrix: flat }), apply(tr(M), dflt), `flag 0x20 with M = Ry(0.9), default turn at [${o.map((x) => x.toFixed(1))}] on [${v}]`);
+      const f2 = apply(mul(mul(rx(o[0]), ry(o[1])), rz(o[2])), v);
+      vecNear(turnStep(o, v as [number, number, number], { flag2: true, matrix: flat }), apply(tr(M), f2), `flag 0x20 with flag 2 at [${o.map((x) => x.toFixed(1))}] on [${v}]`);
+    }
+  }
+}
+
+// noDraw: the particle is made and stepped but never drawn (live is empty; a plain one is drawn).
+{
+  const dat = new Uint8Array(0x98);
+  const dv = new DataView(dat.buffer);
+  const f = (o: number, v: number) => dv.setFloat32(o, v, true);
+  f(0x34, 2); f(0x44, 1); dv.setInt32(0x48, 10, true); dv.setInt32(0x4c, 0, true); f(0x50, 1); f(0x24, 1); f(0x2c, 1);
+  const e = parseParticleEntry(dat, 0);
+  const hidden = new ParticleSystem();
+  hidden.add(e, [0, 0, 0], null, undefined, { noDraw: true });
+  hidden.step(true);
+  check('noDraw: the particle is made (count 1)', hidden.count === 1);
+  check('noDraw: the particle is not drawn (live empty)', hidden.live.length === 0);
+  const plain = new ParticleSystem();
+  plain.add(e, [0, 0, 0], null);
+  plain.step(true);
+  check('a plain emitter is drawn (live 1)', plain.live.length === 1);
 }
 
 // Megid: the tier 3-5 flag 2 entries (0x1c4, and 0x1cf in tier 5) take the object angles.

@@ -186,7 +186,7 @@ export class FieldParticles {
     const base = pos.clone();
     const origin = pos.clone();
     origin.y += p.dy ?? 0;
-    particles.add(e, [origin.x, origin.y, origin.z], p.orient ?? null, p.tint);
+    particles.add(e, [origin.x, origin.y, origin.z], p.orient ?? null, p.tint, p.fx ?? {});
     const burst: Burst = {
       particles,
       anchor: follow ? at : null,

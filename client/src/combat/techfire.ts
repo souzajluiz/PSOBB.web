@@ -32,7 +32,7 @@
 //   (level / 5, 1..5, else 0), +0x12c hit radius 4.0 (the directed Gibarta
 //   12.0), +0x128 the hit box (InitEnemyCollisionBoxes_007b9a88).
 
-import { NO_ORIENT, orientOfDirection, type Orient } from '../classic/particles.ts';
+import { NO_ORIENT, orientOfDirection, type EffectFx, type Orient } from '../classic/particles.ts';
 import { enemyBoxTable } from '../formats/enemyboxes.ts';
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
@@ -752,16 +752,19 @@ export interface FxEmitter {
   dy?: number;
   /** Added along the object's heading (Gibarta's un-flagged entries: 3 ahead). */
   ahead?: number;
-  /** create_particle_effect2 (the exe's flag 2 or 1 entries) with the object's angles: 'object', or 'half' (X turned half a circle, flag 1). See foieEmitterOrient. */
+  /** create_particle_effect2 / 5 (the exe's flag 2 or 1 entries) with the object's angles: 'object', or 'half' (X turned half a circle, flag 1). See objectEmitterOrient. */
   angles?: 'object' | 'half';
+  /** Particle flag 0x2000 (the table's 0x1000): the particles are destroyed at birth and never drawn (EffectFx.noDraw). */
+  hidden?: boolean;
 }
 
 const E = (id: number, scale: number, mode: FxEmitter['mode'], extra: Partial<FxEmitter> = {}): FxEmitter => ({ id, scale, mode, ...extra });
 
 // Foie (g_TechniqueEffectDataPointers, 0x0096d1c8): {id, flags, scale}; flag 2 /
 // 1 = create_particle_effect2 with the object's angles (1: turned half a circle),
-// 0x1000 = particle flag 0x2000. Every entry follows the ball. The one-shot
-// create_particle_effect12(…, 0x18) at the start is the muzzle burst.
+// 0x1000 = create_particle_effect4 with particle flag 0x2000 (hidden: the particles are
+// destroyed at birth, update_particle_effect spawn, dump line 288330). Every entry
+// follows the ball. The one-shot create_particle_effect12(…, 0x18) at the start is the muzzle burst.
 export const FOIE_MUZZLE = 0x18;
 const FOIE_FX: readonly (readonly FxEmitter[])[] = [
   [E(0x14, 1, 'follow', { angles: 'object' })],
@@ -769,48 +772,58 @@ const FOIE_FX: readonly (readonly FxEmitter[])[] = [
   [E(0x14, 1.4, 'follow', { angles: 'object' })],
   [E(0x14, 1.6, 'follow', { angles: 'object' }), E(0xac, 1, 'follow', { angles: 'half' })],
   [E(0x14, 1.8, 'follow', { angles: 'object' }), E(0xac, 1, 'follow', { angles: 'half' })],
-  [E(0x19e, 1, 'follow'), E(0x14, 2.2, 'follow', { angles: 'object' }), E(0xac, 1, 'follow', { angles: 'half' }), E(0x19c, 1, 'follow', { angles: 'object' })],
+  [E(0x19e, 1, 'follow', { hidden: true }), E(0x14, 2.2, 'follow', { angles: 'object' }), E(0xac, 1, 'follow', { angles: 'half' }), E(0x19c, 1, 'follow', { angles: 'object' })],
 ];
 
 /**
- * The object angles a Foie emitter is made with (create_particle_effect2's param_2:
- * local_3c, or local_30 for flag 1 = X + 0x8000). An undirected Foie
- * (create_foie_object1) is a TechniqueEntity, whose +0x54 / +0x5c are
+ * The object angles an emitter is made with (create_particle_effect2 / 5's param_2:
+ * local_3c, or local_30 for flag 1 = X + 0x8000). An undirected object (Foie, Barta,
+ * Gibarta, Megid's heading form) is a TechniqueEntity, whose +0x54 / +0x5c are
  * Vector3f_GetAnglesZ of its heading's direction (sin, 0, cos) (0x006efe50); a
- * directed one (TechniqueObject_Constructor_006e3480) is an EffectEntityBase, which
- * sets +0x54 and +0x5c to 0 (0x006f0138), so its emitters are not turned.
- * The exe's Y is always 0 here (local_3c.flY = 0).
+ * directed one (EffectEntityBase: TechniqueObject_Constructor_006e3480, the aimed
+ * Barta / Gibarta, Gibarta's point constructor 0x006e4058) sets +0x54 and +0x5c to 0
+ * (0x006f0138), so its emitters are not turned. The exe's Y is always 0 here.
  */
-export function foieEmitterOrient(o: FireObject, angles: NonNullable<FxEmitter['angles']>): Orient {
+export function objectEmitterOrient(o: FireObject, angles: NonNullable<FxEmitter['angles']>): Orient {
   const base: Orient = o.directed ? NO_ORIENT : orientOfDirection(Math.sin(o.heading), 0, Math.cos(o.heading));
   return angles === 'half' ? [base[0] + Math.PI, base[1], base[2]] : base;
 }
 
+/** The effect flags an emitter is made with: the table's 0x1000 is particle flag 0x2000 (noDraw). */
+export function emitterFx(e: FxEmitter): EffectFx {
+  return e.hidden ? { noDraw: true } : {};
+}
+
 // Gibarta (g_TechniqueVisualDefinitions, 0x0096d2f0), InitializeTechniqueVisuals_006e3ba0:
-// flag 2 = create_particle_effect5 at the object, else create_particle_effect3 3
+// flag 2 = create_particle_effect5 at the object with the object's angles (+0x54 / +0x5c,
+// the loop's local_4c; the table's 0x181 has flag 0x2), else create_particle_effect3 3
 // ahead; flag 0x40 sets the scale; flag 0x20 makes the particle a model of the
 // technique BML (not drawn here). update_gibarta never moves them: they stay at
 // the start. Tier 5 also makes particles 0x1e0 / 0x1e1 15 below the start.
 const GIB: FxEmitter[] = [E(0x180, 1, 'fixed', { ahead: 3 })];
+const GIB_ANGLED = { angles: 'object' } as const;
 const GIBARTA_FX: readonly (readonly FxEmitter[])[] = [
-  [...GIB, E(0x181, 1, 'fixed')],
-  [...GIB, E(0x181, 1.2, 'fixed')],
-  [...GIB, E(0x181, 1.4, 'fixed')],
-  [...GIB, E(0x181, 1.6, 'fixed')],
-  [...GIB, E(0x181, 1.8, 'fixed')],
-  [E(0x181, 2.2, 'fixed'), E(0x1e0, 1, 'burst', { dy: -15 }), E(0x1e1, 1, 'burst', { dy: -15 })],
+  [...GIB, E(0x181, 1, 'fixed', GIB_ANGLED)],
+  [...GIB, E(0x181, 1.2, 'fixed', GIB_ANGLED)],
+  [...GIB, E(0x181, 1.4, 'fixed', GIB_ANGLED)],
+  [...GIB, E(0x181, 1.6, 'fixed', GIB_ANGLED)],
+  [...GIB, E(0x181, 1.8, 'fixed', GIB_ANGLED)],
+  [E(0x181, 2.2, 'fixed', GIB_ANGLED), E(0x1e0, 1, 'burst', { dy: -15 }), E(0x1e1, 1, 'burst', { dy: -15 })],
 ];
 
-// Barta (g_AntiTechEffectDefinitions, 0x0096ca84): flag 2 / 1 = create_particle_effect5
-// (1: turned half a circle), else create_particle_effect3; all follow the ball
-// (update_barta), scale from the table unless flag 0x20 (a model).
+// Barta (g_AntiTechEffectDefinitions, 0x0096ca84): flag 2 = create_particle_effect5 with
+// the object's angles (AntiTechEntity_Constructor_006dd85c's local_3c = +0x54 / +0x5c),
+// flag 1 (0x198) = create_particle_effect5 with X + 0x8000 (a half turn), else
+// create_particle_effect3 (0x192, not turned). All follow the ball (update_barta), scale
+// from the table unless flag 0x20 (a model: 0x193 / 0x1d7 / 0x1d8, not drawn here).
+const BARTA_ANGLED = { angles: 'object' } as const;
 const BARTA_FX: readonly (readonly FxEmitter[])[] = [
-  [E(0x190, 1, 'follow'), E(0x191, 1, 'follow'), E(0x192, 1, 'follow')],
-  [E(0x190, 1.2, 'follow'), E(0x191, 1.2, 'follow'), E(0x192, 1, 'follow')],
-  [E(0x190, 1.4, 'follow'), E(0x191, 1.4, 'follow'), E(0x192, 1, 'follow')],
-  [E(0x190, 1, 'follow'), E(0x191, 1, 'follow'), E(0x192, 1, 'follow'), E(0x198, 1, 'follow')],
-  [E(0x190, 1.2, 'follow'), E(0x191, 1.2, 'follow'), E(0x192, 1, 'follow'), E(0x198, 1, 'follow')],
-  [E(0x190, 1.6, 'follow'), E(0x191, 1.6, 'follow'), E(0x192, 1, 'follow'), E(0x198, 1, 'follow')],
+  [E(0x190, 1, 'follow', BARTA_ANGLED), E(0x191, 1, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow')],
+  [E(0x190, 1.2, 'follow', BARTA_ANGLED), E(0x191, 1.2, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow')],
+  [E(0x190, 1.4, 'follow', BARTA_ANGLED), E(0x191, 1.4, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow')],
+  [E(0x190, 1, 'follow', BARTA_ANGLED), E(0x191, 1, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow'), E(0x198, 1, 'follow', { angles: 'half' })],
+  [E(0x190, 1.2, 'follow', BARTA_ANGLED), E(0x191, 1.2, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow'), E(0x198, 1, 'follow', { angles: 'half' })],
+  [E(0x190, 1.6, 'follow', BARTA_ANGLED), E(0x191, 1.6, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow'), E(0x198, 1, 'follow', { angles: 'half' })],
 ];
 
 // Rabarta (g_ParticleEffectDataPointers, 0x0096dc6c): create_particle_effect3 at the

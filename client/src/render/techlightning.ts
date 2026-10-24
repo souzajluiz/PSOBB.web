@@ -232,6 +232,7 @@ export class TechEffects {
       const spawn: ParticleSpawn = { id: em.id, delay: 0, duration: frames };
       if (em.scale !== undefined) spawn.scale = [em.scale, em.scale];
       if (em.angles) spawn.orient = base;
+      if (em.hidden) spawn.fx = { noDraw: true };
       const start = at();
       if (!start) continue;
       void this.particles.spawn(spawn, this.pointGetter(at), false, true);

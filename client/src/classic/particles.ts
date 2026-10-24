@@ -131,10 +131,33 @@ export function parseParticleEntry(dat: Uint8Array, id: number): ParticleEntry {
 export type Orient = readonly [number, number, number];
 export const NO_ORIENT: Orient = [0, 0, 0];
 
+/**
+ * The effect flags of a created particle effect, as the exe's particles carry them
+ * (create_particle_effect2 / 4's flags word, copied into the particle's +0x24 at spawn,
+ * update_particle_effect's single particle branch):
+ * - flag2: particle flag 2. The velocity is turned Rx Ry Rz (Rz applied first) instead of
+ *   Rz Rx Ry (update_particle_effect_single_particle, the `& 2` branch, 0x0050dbb8 area).
+ *   No emitter the port makes passes it (the table flag 2 selects create_particle_effect2,
+ *   it is not the effect's flag).
+ * - noDraw: particle flag 0x2000. update_particle_effect spawns the particle already
+ *   destroyed (ParticleEffectSingleParticle_Destroy_00508634 sets 0x2000 on it, dump line
+ *   288330), and its single particle update returns before the renderer submission
+ *   (dump line 291923). The particle still moves and fades; it is never drawn.
+ * - matrix: particle flag 0x20 (the effect's +0x2e, set by ParticleEffectSingleParticle_
+ *   SetTransform_00508dec). The effect's own matrix (+0x90, its 3x3 _11.._33 row-major here)
+ *   is copied into the particle's +0xc0 at spawn (flag 0x200000) and multiplied in first.
+ */
+export interface EffectFx {
+  flag2?: boolean;
+  noDraw?: boolean;
+  matrix?: readonly number[];
+}
+
 export interface Emitter {
   entry: ParticleEntry;
   pos: [number, number, number];
   orient: Orient | null; // the emitter's object angles (null = none: the velocity is not turned)
+  fx: EffectFx;
   acc: number;
   // ParticleEffectSingleParticle_SetId_00508ee4: a colour override (RGB,
   // flag 0x100 of the effect). ASSUMED to scale the entry's colour.
@@ -201,25 +224,49 @@ export function orientOfDirection(x: number, y: number, z: number): Orient {
 }
 
 /**
- * The step a local velocity becomes under the object angles (update_particle_effect_single_particle,
- * the branch without texture flag 0x20 and with particle flag 2 clear, 0x0050dbb8 area):
- * push identity, rotate_matrix_by_int_angle (Z), maybe_rotate_matrix_around_x (X),
- * matrix_rotation_y (Y), then rotate_vec3f_using_matrix_transformation_stack. Each
- * helper left-multiplies the stack, and that vector step reads it transposed, so
- * v' = Rz(Z) Rx(X) Ry(Y) v with the standard right-handed matrices: Y first, Z last.
- * (The particle-flag-2 branch, which no emitter here passes, applies Rx Ry Rz instead.)
+ * The step a local velocity becomes under the object angles and the effect's flags
+ * (update_particle_effect_single_particle, 0x0050dbb8 area). The exe pushes identity,
+ * multiplies in the particle's own matrix first when flag 0x20 is set
+ * (MultiplyMatricesInPlace_0083ba24, S := M S), then the three angle helpers, then
+ * rotate_vec3f_using_matrix_transformation_stack, which reads the stack transposed
+ * (out = S^T v, its 3x3 part). Each helper left-multiplies the stack, so for the
+ * default branch (flag 2 clear) S = Ry Rx Rz M and out = M^T Pz Px Py v: Y first, then X,
+ * then Z, the matrix last. The standard right-handed matrices P are the transposes of the
+ * helpers (rotate_matrix_by_int_angle writes its rows as [c s; -s c], the transpose of P(a)).
+ * With particle flag 2 the helpers run X, Y, Z, so out = M^T Px Py Pz v: Z first, X last.
+ * ASSUMED: the angle helpers' sin is the standard one (see orientOfDirection).
  */
-export function turnStep(o: Orient | null, v: readonly [number, number, number]): [number, number, number] {
-  if (!o || (o[0] === 0 && o[1] === 0 && o[2] === 0)) return [v[0], v[1], v[2]];
-  const [ax, ay, az] = o;
-  const cy = Math.cos(ay), sy = Math.sin(ay);
-  let x = cy * v[0] + sy * v[2];
-  let y = v[1];
-  let z = -sy * v[0] + cy * v[2];
-  const cx = Math.cos(ax), sx = Math.sin(ax);
-  [y, z] = [cx * y - sx * z, sx * y + cx * z];
-  const cz = Math.cos(az), sz = Math.sin(az);
-  [x, y] = [cz * x - sz * y, sz * x + cz * y];
+export function turnStep(o: Orient | null, v: readonly [number, number, number], fx: EffectFx = {}): [number, number, number] {
+  const turned = !!o && (o[0] !== 0 || o[1] !== 0 || o[2] !== 0);
+  if (!turned && !fx.matrix) return [v[0], v[1], v[2]];
+  const [ax, ay, az] = o ?? NO_ORIENT;
+  let x = v[0], y = v[1], z = v[2];
+  const rotY = () => {
+    const c = Math.cos(ay), s = Math.sin(ay);
+    [x, z] = [c * x + s * z, -s * x + c * z];
+  };
+  const rotX = () => {
+    const c = Math.cos(ax), s = Math.sin(ax);
+    [y, z] = [c * y - s * z, s * y + c * z];
+  };
+  const rotZ = () => {
+    const c = Math.cos(az), s = Math.sin(az);
+    [x, y] = [c * x - s * y, s * x + c * y];
+  };
+  if (fx.flag2) {
+    rotZ();
+    rotY();
+    rotX();
+  } else {
+    rotY();
+    rotX();
+    rotZ();
+  }
+  const m = fx.matrix;
+  if (m) {
+    // Mᵀ v on the 3x3 part: out_i = sum_j M[j][i] v_j (the exe's out.x = _11 x + _21 y + _31 z, ...).
+    [x, y, z] = [m[0]! * x + m[3]! * y + m[6]! * z, m[1]! * x + m[4]! * y + m[7]! * z, m[2]! * x + m[5]! * y + m[8]! * z];
+  }
   return [x, y, z];
 }
 
@@ -242,13 +289,14 @@ export class ParticleSystem {
     return ((this.seed >>> 16) & 0x7fff) / 32768;
   }
 
-  add(entry: ParticleEntry, pos: [number, number, number], orient: Orient | null, tint?: number): void {
-    this.emitters.push({ entry, pos, orient, acc: 0, tint });
+  add(entry: ParticleEntry, pos: [number, number, number], orient: Orient | null, tint?: number, fx: EffectFx = {}): void {
+    this.emitters.push({ entry, pos, orient, fx, acc: 0, tint });
   }
 
-  // The live particles (render/telepipe.ts draws them in the world).
+  // The drawn particles (render/telepipe.ts and render/hitfx.ts make a sprite each). A noDraw
+  // emitter's particles are stepped but not in this list (EffectFx.noDraw).
   get live(): readonly Particle[] {
-    return this.list;
+    return this.list.some((q) => q.e.fx.noDraw) ? this.list.filter((q) => !q.e.fx.noDraw) : this.list;
   }
 
   step(spawn = true): void {
@@ -329,7 +377,7 @@ export class ParticleSystem {
     q.v = [q.v[0] * d.damping, q.v[1] + d.gravity, q.v[2] * d.damping];
     q.size *= d.size[2];
     // The emitter's object angles turn the local velocity (turnStep).
-    q.step = turnStep(q.e.orient, q.v);
+    q.step = turnStep(q.e.orient, q.v, q.e.fx);
     q.p = [q.p[0] + q.step[0], q.p[1] + q.step[1], q.p[2] + q.step[2]];
     q.age += q.dt;
     if (this.models) this.modelStep(q);
@@ -355,6 +403,7 @@ export class ParticleSystem {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     for (const q of this.list) {
+      if (q.e.fx.noDraw) continue;
       const d = q.e.entry;
       const z = -q.p[2];
       if (z < 1) continue;
