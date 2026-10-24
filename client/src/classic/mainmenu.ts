@@ -64,7 +64,7 @@ export const MAIN_MENU = [e(2, ITEM_PACK), e(0), e(3), e(5, CHAT), e(0x23, TEAM)
 export const MAIN_MENU_ANDROID = [e(2, ITEM_PACK), e(0), e(5, CHAT), e(0x23, TEAM), e(6), e(7)]; // 0x009f3020
 
 // Label texel origin per id (0x00971980), in texture 2 of texturejapanese.xvm.
-const LABEL_UV: Array<[number, number]> = [
+export const LABEL_UV: Array<[number, number]> = [
   [0, 18], [0, 18], [0, 0], [0, 54], [0, 54], [0, 36], [0, 72], [0, 90], [0, 90], [0, 108],
   [0, 108], [0, 126], [0, 162], [0, 162], [0, 234], [0, 180], [0, 180], [0, 198], [0, 216], [98, 0],
   [98, 0], [98, 18], [98, 72], [0, 144], [0, 144], [98, 36], [98, 54], [98, 54], [98, 54], [98, 54],
