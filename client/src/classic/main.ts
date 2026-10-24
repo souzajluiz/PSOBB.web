@@ -26,6 +26,7 @@ import type { TeamHost, TeamItemRow } from './teammenu.ts';
 import { QuestLoadingScreen } from './questloading.ts';
 import { parseItemPMT } from '../formats/itempmt.ts';
 import { ItemNames } from '../formats/itemnames.ts';
+import { lobbyEntryArrival, type LobbyEntry } from '../formats/lobbyspawn.ts';
 import { ShipSelectScreen } from './shipselect.ts';
 import { connectBridge } from '../net/wstransport.ts';
 import { CharCreateScreen, NAME_MAX, type CharCreateAssets } from './charcreate.ts';
@@ -353,7 +354,7 @@ async function main(): Promise<void> {
       // The field Item Pack names its rows and draws the equipment panel from the item names
       // (render/fieldhud.ts names()); the lobby's Item List has them through the same loader.
       view.hud.setNames(() => itemNames);
-      view.onLobbyWarp = () => void leaveGame(game, shipName);
+      view.onLobbyWarp = () => void leaveGame(game, shipName, 'teleporter');
       townField = new FieldTown({ game, view, files, canvas: worldCanvas, character: () => session?.character ?? null, log: game.log });
       Object.assign(window, { classicTown: townField.town });
       await view.enter();
@@ -373,7 +374,7 @@ async function main(): Promise<void> {
         }),
       (message) => {
         console.error(`[classic] game "${game.name}": ${message}`);
-        void leaveGame(game, shipName);
+        void leaveGame(game, shipName, 'leave');
       },
       { status: false },
     );
@@ -385,7 +386,7 @@ async function main(): Promise<void> {
   // The lobby loads behind the same warp burst as the game entry (the exe's
   // unknown_init_lobby calls play_loading_screen_animation(floor) too).
   let leaving: Game | null = null;
-  const leaveGame = async (game: Game, shipName: string) => {
+  const leaveGame = async (game: Game, shipName: string, entry: LobbyEntry) => {
     if (leaving === game) return;
     leaving = game;
     if (gameView?.game === game) {
@@ -397,7 +398,7 @@ async function main(): Promise<void> {
     Object.assign(window, { classicGame: undefined, classicTown: undefined });
     const assets = await loadConnectingAssets();
     showWorld(false);
-    const back = game.leave().then(async (lobby) => ({ lobby, screen: await buildLobby(lobby, shipName) }));
+    const back = game.leave().then(async (lobby) => ({ lobby, screen: await buildLobby(lobby, shipName, entry) }));
     const loading = new ConnectingScreen(
       assets,
       back,
@@ -425,7 +426,7 @@ async function main(): Promise<void> {
     const s = session;
     if (!s) return;
     s.meetUser(reply).then(
-      (next) => enterLobby(next, shipName),
+      (next) => enterLobby(next, shipName, 'meet'),
       (err: unknown) => console.error(err),
     );
   };
@@ -496,18 +497,18 @@ async function main(): Promise<void> {
       const lobby = session.lobby;
       if (!lobby) return;
       if (menu) await showShipSelect(lobby, menu);
-      else await enterLobby(lobby, shipName);
+      else await enterLobby(lobby, shipName, 'ship');
     };
     return { changeShip: () => go((s) => s.changeShip()), changeBlock: () => go((s) => s.changeBlock()) };
   };
 
   // The lobby's screen, built but not shown: leaveGame builds it behind the
   // loading screen and shows it when the burst is done.
-  const buildLobby = async (lobby: Lobby, shipName: string): Promise<LobbyScreen> => {
+  const buildLobby = async (lobby: Lobby, shipName: string, entry: LobbyEntry): Promise<LobbyScreen> => {
     const v = world();
     lobbyView?.dispose();
     await v.load(source, lobbyMapFile(lobby.lobbyNumber));
-    const mapData = await loadLobbyMapData(source, lobby.lobbyNumber, (m) => console.log(`[classic] ${m}`));
+    const mapData = await loadLobbyMapData(source, lobby.lobbyNumber, (m) => console.log(`[classic] ${m}`), lobbyEntryArrival(entry));
     lobbyView = new LobbyView(v, lobby, mapData, { labels: false });
     console.info(`[lobby#${lobby.seq}] lobby view built: lobby ${lobby.lobbyNumber}, ${lobby.players.size} players, markers [${lobbyView.markerIds()}]`);
     const hud = await loadHud(mapData.infoCols ?? []);
@@ -545,9 +546,9 @@ async function main(): Promise<void> {
       };
     },
   });
-  const enterLobby = async (lobby: Lobby, shipName: string) => {
+  const enterLobby = async (lobby: Lobby, shipName: string, entry: LobbyEntry) => {
     showWorld(true);
-    showLobby(lobby, await buildLobby(lobby, shipName));
+    showLobby(lobby, await buildLobby(lobby, shipName, entry));
   };
 
   const showShipSelect = async (lobby: Lobby, menu: ServerMenuItem[]) => {
@@ -571,7 +572,7 @@ async function main(): Promise<void> {
           // A 19 answer moved the session to another connection (a new Lobby).
           const current = session.lobby ?? lobby;
           if (next) await showShipSelect(current, next);
-          else await enterLobby(current, shipName);
+          else await enterLobby(current, shipName, 'ship');
         } catch (err) {
           console.error(err);
           screen.busy = false;
@@ -600,7 +601,7 @@ async function main(): Promise<void> {
       () => {
         void task.then(async ({ lobby, menu }) => {
           if (menu) await showShipSelect(lobby, menu);
-          else await enterLobby(lobby, 'newserv');
+          else await enterLobby(lobby, 'newserv', 'ship');
         });
       },
       (message) => {

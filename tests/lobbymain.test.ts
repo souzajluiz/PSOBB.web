@@ -12,7 +12,7 @@ import { BmlArchive } from '../client/src/formats/bml.ts';
 import { lobbyMainChunk, objectModelFor, type ObjectModelContext } from '../client/src/formats/objectmodels.ts';
 import { parseObjectSets as parseSetObjects, type ObjectSet } from '../client/src/formats/setdata.ts';
 import { parseObjectSets, playerSpawns } from '../client/src/formats/objset.ts';
-import { lobbyArrivalSource, lobbySpawnAt, type LobbySpawn } from '../client/src/formats/lobbyspawn.ts';
+import { lobbyArrivalSource, lobbyEntryArrival, lobbySpawnAt, type LobbySpawn } from '../client/src/formats/lobbyspawn.ts';
 
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
 const gslPath = join(DATA, 'data.gsl');
@@ -126,6 +126,11 @@ const origin = lobbySpawnAt(new Map(), 3, true);
 if (!origin || origin.x !== 0 || origin.y !== 0 || origin.z !== 0) fail('lobby spawn: no set for the source is the origin');
 if (lobbySpawnAt(new Map(), 3, false) !== null) fail('lobby spawn: no sets at all is the caller fallback');
 if (lobbySpawnAt(sourceZero, 9, true)?.x !== 0) fail('lobby spawn: an id with no set is the origin');
+// The four lobby entries of the port: each exe path resets g_prev_floor_id to -1 and
+// the flags to 0 before the players are placed, so the warp type is 1 and the source 0.
+for (const entry of ['ship', 'leave', 'teleporter', 'meet'] as const) {
+  if (lobbyEntryArrival(entry) !== 0) fail(`lobby entry ${entry}: source ${lobbyEntryArrival(entry)} != 0`);
+}
 // The real lobbies: every player set is source 0, ids 0..11 each once, so the
 // default arrival source (0) finds the spawn of every client id.
 if (existsSync(gslPath)) {
