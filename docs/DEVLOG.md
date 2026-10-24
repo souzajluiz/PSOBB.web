@@ -17754,3 +17754,51 @@ Trap Vision (tool, item 8):
 - Draw the 0xC panel in the MAG window with the page byte (states 5 / 0xC) and the candidate rows; the Chrome check then goes with it.
 - Decode the initial page value, the info page (0x726780), the tool's panels, and the counter format.
 - Resist candidates from `PlayerRecalculateStats_0068e030` out[6..10].
+
+## 2026-10-23: field MAG model (model choice, hub gate, motion, transform)
+
+**Question:** the port drew no MAG model anywhere. The lobby entry above left the field MAG open. This entry ports the field MAG per the exe.
+
+**Exe evidence** (PsoBB.exe, Ephinea 1.25.13; dump `Psobb.exe-05112026.c`, addresses are the exe's):
+- A MAG is an item_instance with item_kind 2. Its update (`UpdateItemInstance_005c3ed8`, dump 412764) copies the owner's x, y, z, then calls the vtable's update and the equipment render. Its draw is `UpdateItemPhysics_005c4124` (dump 412908), which calls the vtable draw (`FUN_005d901c`, vtable +0x64) only when `is_current_map_safe()` != 0. That test is the hub list 0x0097f1c8 = {0, 15, 18, 45, -1}, the port's `HUB_AREAS`.
+- The MAG's vtable is 0x00b0d800, not the dump's `mag_instance_vtable_009c27b8` name (the name is wrong: `InitializeMagInstance_005d820c` writes 0x00b0d800, disassembled). Slots: +0x30 0x5d9f74, +0x34 0x5d9f6c, +0x38 0x5d9108 (the per-tick state machine), +0x64 0x5d901c (the draw), +0xc0 0x5d8314 (the model initializer, decompiled at 0x5d8314; the dump's `InitializeMagModel_005d8351` is the same routine under another name).
+- The model object (`mag_model_constructor`, dump 433604) has vtable 0x00b0d9a0: +0x8 0x5dcfa4 (render check), +0xc 0x5dd150 (the NJ draw), +0x4 0x5dc7c0 (the per-tick physics, `FUN_005dc7c0`, read from the asm of 0x005dc7c0..0x005dc98c), the transform is `FUN_005dd0d8` (0x005dd0d8, asm read).
+- Model choice: the item asset loader `LoadItemAsset_005d7868` (dump 429255) takes `model = base + PMT.type` and `skin = base + PMT.skin` with the group base tables 0x0092c53c / 0x0092c534 read at group 2 (mags, `item_group_1`): model 271, skin 295. These are ItemModel.afs / ItemTexture.afs entries (the held weapon's decoder, `render/heldweapon.ts`).
+- ItemMagEdit (`ItemMagEdit.prs`, the REL root at footer - 0x10): the root's first word points at a 12-byte-per-type part table (two 6-byte parts; byte 0 is the motion record, 0xff none); the root's +0x10 is the colour table (18 colours of (a, r, g, b) floats; the first colour is red, the second blue). `InitializeMagModel_005d8351` reads them.
+- Motion asset: `itemmagmotion.dat` (in data.gsl, 9000 bytes = 90 records of 0x64). The record fields, decoded from the physics: +0x00 node (the body node the MAG follows; -1 the owner's position), +0x08 the follow factor, +0x1c / +0x20 / +0x24 the tilts, +0x34 / +0x44 / +0x54 amplitudes with +0x3c / +0x4c / +0x5c phases and +0x40 / +0x50 / +0x60 speeds (the three orbit terms, `FUN_005dc600`), +0x10 / +0x14 / +0x18 amplitudes with +0x28 / +0x2c / +0x30 speeds and the +0x0d / +0x0e / +0x0f byte phases (the extra terms, `FUN_005dc590`, summed into +0xa8..+0xb0 and never reset), +0x05 / +0x06 / +0x07 the spin bytes. The byte-to-BAMS factor is 65536 / 360 (0x0092cc54 / 0x0092cc50). Record 0: node 63, factor 0.9, orbit B amplitude 10 at -1820 BAMS (-10 degrees).
+- Per tick (`FUN_005dc7c0`): the anchor (+0xb4) damps toward the node's point (`FUN_005dc62c`: p += (t - p) * factor; a state flag 0x10 uses 0.6 at 0x009c27cc); the offset (+0xc0..+0xc8) is the three orbit terms plus the sums of the extra terms (+0xa8..+0xb0); the spin: X (+0x34) is set from the flag branch and byte +5, Y (+0x38) and Z (+0x3c) accumulate bytes +6 / +7.
+- Transform (`FUN_005dd0d8`): push at the anchor (+0xb4), rotate by the owner's heading (owner +0x60), push at the offset (+0xc0), rotate by the record's tilt plus the spin (Z (d9 + +0x3c) first, then Y (d8 + +0x38), then X (d7 + +0x34)), scale by +0xdc.
+- The draw skips a child part whose flag +0x64 & 0x40 is set; the item's visibility is the hub gate (`UpdateItemVisibility_005c3f7c`).
+
+**Ported:**
+- `client/src/formats/itemmagmotion.ts`: the 90 records (`parseMagMotion`), with the offsets above.
+- `client/src/formats/itemmagedit.ts`: the part table and the colour table (`parseMagEdit`; the colour is the item's data2[3]).
+- `client/src/render/magmotion.ts`: pure model choice (`magArchiveEntries`, `magColourIndex`), the hub gate (`magDrawsOn`, = `inUnsafeMap`), the BAMS sine, and the part state and tick (`newMagPartState`, `magPartTick`, `magPartRotation`).
+- `client/src/render/magmodel.ts`: the rig (one part per record: a root at the anchor in the marker's frame, an orbit group, a spin group with ZYX order, the NJ model with the colour as the diffuse), ticked at 30 a second from the frame dt (capped at 4 ticks per frame), hidden outside the field.
+- `client/src/render/lobbyview.ts`: the rig is built once the body is loaded and rebuilt when the equipped MAG changes; the anchors read the body nodes (`skeletonNodePosition`), the owner's position at node -1; `heldState()` reports the rig's parts (`mags`, `magShown`) for the e2e check.
+- `client/src/render/gameview.ts`: the local player's equipped MAG (inventory flags & 8 with data1[0] == 2; the PMT entry's model and skin; the colour data2[3]); ItemMagEdit is parsed where the evolution table is.
+- Remote players' MAGs are not sent (the join data and 6x70 carry the weapon only): ASSUMED none.
+
+**Tests:**
+- `tests/magmodel.test.ts` (ALL PASS, Node 24): the archive entries (271 / 295 bases), the colour index, the hub gate (0, 15, 18, 45 hidden; 1, 2, 14, 16, 100 shown), the BAMS sine, the anchor damping (100 -> 10 -> 1), the orbit terms (a quarter turn per tick; the constant -10 degree orbit B), the extra terms, the spin (bytes into Y and X), the rotation, the rig's tick clock and placement, the node and the owner fallbacks; with data.gsl present, the file's 90 records (record 0: node 63, factor 0.9, orbit B 10 at -1820), the part table (type 0: records 28 and 0; type 1: none; type 7: 12 and 2) and the colours (colour 0 = (1, 1, 0.2, 0.1) as (a, r, g, b); 18 colours).
+- `tsc` (client) exit 0; `tests/players.test.ts`, `tests/magfeed.test.ts`, `tests/fieldhud.test.ts` pass.
+- `client/e2e/mag-field.spec.ts` (ONE Playwright run, as the brief allowed): a fresh character gets a MAG in the offline inventory (`patchOffline` in `client/e2e/fresh-field.ts`, the new `mag` option of `enterFreshField`), equips it in the mag slot, warps to Forest 1; the rig has 2 parts and one is shown; the screenshot is `scratchpad/mag-field.png` (the player is there; the MAG is not clearly identifiable in that frame, so the drawing is checked by the rig's state, not by eye).
+
+**ASSUMED:**
+- The MAG's type is data1[1] (the exe's `group_2` for mags).
+- Both parts draw the primary model (the secondary model slot is set only by the item loader, not traced); a type with no table row draws nothing.
+- The matrix order of the spin (Z, then Y, then X: `FUN_0082df5c`'s three blocks) and the sign of the rotations; the heading is the parent group's rotation (the exe multiplies the owner's +0x60 heading in the transform).
+- The spin flag (FUN_005db764) is "standing" (owner +0x328 bit 2 or 4); the port passes `!moving`.
+- The gate is the hub test only (the owner's invisibility, the stealth suit and `disable_equipment_rendering` are not read).
+- `+0xdc` scale is 1.0 (`mag_model_constructor` reads the owner's +0x97c, not ported).
+- `mag_set_color` past 0x11 is colour 0; the part table past 72 types is empty (the table ends at the file's end).
+- The exe's `ROUND` is `Math.round`; `int_sin` is `Math.sin` of BAMS (its table is not read).
+- The per-tick clock: dt x 30, at most 4 ticks per frame (ASSUMED cap).
+- FUN_005db444 (owner +0x33c & 0x200 skips the physics) is not applied.
+
+**Left:**
+- The secondary model (the item loader's second asset) and any visible check of the MAG's place behind the shoulder in a frame (a close camera shot or the rig's world position in the e2e).
+- Remote players' MAGs (the join data does not carry the MAG).
+- The MAG's state machine (`FUN_005d9108`: the feed, the trigger effects, `UpdateMagEquippedWeaponState`) and the MAG's photon / effects; the owner's state 7 path (`FUN_005dcec0`, `FUN_005dcf80`).
+- The texture scroll and the 2-byte / 8-byte per-part tables of ItemMagEdit (the `obj+4` / `obj+8` pairs that set the model's +0xe0..+0xec).
+- The weapon-projectile path (flag 8, `UpdateWeaponProjectilePhysics_005dcbd4`) is not used by the MAG.

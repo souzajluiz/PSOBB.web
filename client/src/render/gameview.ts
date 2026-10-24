@@ -24,6 +24,7 @@ import { playerRoomId } from '../formats/playerroom.ts';
 import { floorChangeSource, spawnsOfSource } from '../formats/fieldspawn.ts';
 import { GameItems } from '../net/items.ts';
 import { parseMagEvolution, SE_FEED } from '../net/magfeed.ts';
+import { parseMagEdit, type MagEdit } from '../formats/itemmagedit.ts';
 import { se } from '../audio/se.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { FloorItemLayer } from './flooritems.ts';
@@ -116,6 +117,8 @@ export class GameView {
   current: FloorInfo | null = null;
   // The local character file (its inventory has the equipped weapon).
   private characterFile: () => CharacterFile | null = () => null;
+  // ItemMagEdit's MAG model tables (loaded with the MAG feed's evolution table).
+  private magEdit: MagEdit | null = null;
   onFloor: (info: FloorInfo) => void = () => {};
   // The lobby teleporter (TObjCityAreaWarp) was used: the caller leaves the game.
   onLobbyWarp: () => void = () => {};
@@ -306,7 +309,10 @@ export class GameView {
     const combat = this.combat;
     void (async () => {
       const data = (await files.has('ItemMagEdit.prs')) ? await files.read('ItemMagEdit.prs') : (await combat.streamFiles()).get('ItemMagEdit.prs');
-      if (data) evolution = parseMagEvolution(data);
+      if (data) {
+        evolution = parseMagEvolution(data);
+        this.magEdit = parseMagEdit(data); // the MAG models' part table and colours (render/magmodel.ts)
+      }
     })().catch((err) => log(`MAG: no ItemMagEdit (${(err as Error).message}); mags will not evolve`));
     this.items.magFeed = () => {
       const pmt = this.hud.pmt;
@@ -328,6 +334,15 @@ export class GameView {
     // The combat view loads ItemPMT (its own file or the server's stream file).
     void this.combat.itemPmt();
     return {
+      // The local player's equipped MAG (the PMT entry's model and skin; the colour is data2[3]).
+      mag: (clientId) => {
+        if (clientId !== this.game.self?.clientId) return null;
+        const pmt = this.combat.loadedItemPmt;
+        const m = this.characterFile()?.inventory.find((i) => (i.flags & 8) !== 0 && i.data.data1[0] === 2);
+        const entry = pmt && m ? pmt.mags[m.data.data1[1]] : undefined;
+        return entry && m ? { type: entry.type, skin: entry.skin, colour: m.data.data2[3] } : null;
+      },
+      magEdit: () => this.magEdit,
       equipped: (clientId) => {
         const pmt = this.combat.loadedItemPmt;
         let data1: Uint8Array | null | undefined;

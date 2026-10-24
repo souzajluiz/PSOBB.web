@@ -33,6 +33,9 @@ import type { WeaponNodeRef } from '../combat/weaponorigin.ts';
 import { PlayerMover, RAND_MAX_C, fromBams, legSpeed, modifyDirection, rampAxis, remoteStep, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 import { HeldWeaponFiles, type HeldWeapon } from './heldweapon.ts';
+import { buildMagRig, disposeMagRig, magKey, setMagRigVisible, updateMagRig, type MagEquip, type MagRig } from './magmodel.ts';
+import { parseMagMotion, type MagMotionRecord } from '../formats/itemmagmotion.ts';
+import type { MagEdit } from '../formats/itemmagedit.ts';
 
 const CLASS_COLORS = [
   0xd64545, 0xe0607a, 0xa83232, // HUmar, HUnewearl, HUcast
@@ -161,6 +164,10 @@ export interface HeldWeaponSource {
   // The motion class of the player's weapon (0..18, 0 = none), which picks the field
   // motions (formats/plymotion.ts fieldLocomotion). Absent: 0.
   motionClass?(clientId: number): number;
+  // The player's equipped MAG (render/magmodel.ts), and ItemMagEdit's tables once loaded
+  // (null: not yet). Absent: no MAG.
+  mag?(clientId: number): MagEquip | null;
+  magEdit?(): MagEdit | null;
 }
 
 interface Marker {
@@ -179,6 +186,9 @@ interface Marker {
   body: THREE.Bone[] | null;
   // The held weapon's bones in the exe's walk order (playermodel.ts weaponBones), or null.
   weaponBones: THREE.Bone[] | null;
+  // The equipped MAG's rig (null: none) and the key it was built or is being built with.
+  mag: MagRig | null;
+  magKey: string;
   charClass: number;
   gait: Locomotion;
   follow: Follower; // the tick-rate state of a remote player's run toward `target`
@@ -257,6 +267,8 @@ export class LobbyView {
   // The players' gait uses the field motion set (weapon-dependent) instead of the town set.
   private fieldMotions: boolean;
   private heldFiles: HeldWeaponFiles | null = null;
+  private itemFiles: ClientFiles | null = null;
+  private magMotion: Promise<MagMotionRecord[]> | null = null;
   private disposed = false;
 
   // labels: false leaves the name tags to the caller (classic HUD).
@@ -311,6 +323,7 @@ export class LobbyView {
     this.spawns = mapData.spawns;
     this.hasSpawnSets = mapData.hasSpawnSets ?? mapData.spawns.size > 0;
     this.files = mapData.files;
+    this.itemFiles = mapData.files;
     if (mapData.files && mapData.mainObjects?.length) {
       // The seasonal decoration of TObjLobbyMain for this session's event (the
       // lobby's 64 join); a load error only leaves the decoration out.
@@ -455,6 +468,8 @@ export class LobbyView {
       animator: null,
       body: null,
       weaponBones: null,
+      mag: null,
+      magKey: '',
       charClass: p.charClass,
       gait: 'idle',
       follow: { x: 0, z: 0, heading: 0 },
@@ -532,18 +547,22 @@ export class LobbyView {
   }
 
   // Development hook (e2e): each marker's held weapon key, the key its model
-  // was built with, the vertex count of its mesh (0: none) and whether the mesh
-  // is drawn (visible up the parent chain).
-  heldState(): { clientId: number; key: string; weaponKey: string; vertices: number; shown: boolean }[] {
+  // was built with, the vertex count of its mesh (0: none), whether the mesh
+  // is drawn (visible up the parent chain), and the MAG rig's parts and whether one is drawn.
+  heldState(): { clientId: number; key: string; weaponKey: string; vertices: number; shown: boolean; mags: number; magShown: boolean }[] {
     return [...this.markers.values()].map((m) => {
       let shown = !!m.weapon;
       for (let o: THREE.Object3D | null = m.weapon; o && shown; o = o.parent) shown = o.visible;
+      const parts = m.mag?.parts ?? [];
       return {
         clientId: m.clientId,
         key: this.heldKey(m.clientId),
         weaponKey: m.weaponKey,
         vertices: m.weapon?.geometry.attributes.position?.count ?? 0,
         shown,
+        // The MAG rig: its parts, and whether one of them is drawn (visible up the parent chain).
+        mags: parts.length,
+        magShown: parts.some((p) => p.root.visible && (p.root.parent?.visible ?? false)),
       };
     });
   }
@@ -557,6 +576,79 @@ export class LobbyView {
       if (m.weapon) m.weapon.visible = visible;
       const p = this.lobby.players.get(m.clientId);
       if (p && this.heldKey(m.clientId) !== m.weaponKey) void this.loadModel(p, m);
+      this.syncMag(m);
+    }
+  }
+
+  // The MAG of a marker (render/magmodel.ts): built once the body is loaded, and rebuilt when
+  // the equipped MAG changes. The rig's parts are children of the marker's group.
+  private syncMag(m: Marker): void {
+    if (!this.held?.mag || !m.body) return;
+    const key = magKey(this.held.mag(m.clientId));
+    if (key === m.magKey) return;
+    m.magKey = key;
+    this.dropMag(m);
+    if (key) void this.buildMag(m, key);
+  }
+
+  private async buildMag(m: Marker, key: string): Promise<void> {
+    try {
+      const equip = this.held?.mag?.(m.clientId) ?? null;
+      const edit = this.held?.magEdit?.() ?? null;
+      if (!equip || !edit || !this.heldFiles || !this.itemFiles) return;
+      this.magMotion ??= this.itemFiles.read('itemmagmotion.dat').then((d) => parseMagMotion(d));
+      const motion = await this.magMotion;
+      const rig = await buildMagRig(this.heldFiles, equip, { edit, motion }, (node) => this.anchorPoint(m, node));
+      if (!rig) return;
+      if (this.disposed || this.markers.get(m.clientId) !== m || m.magKey !== key) {
+        disposeMagRig(rig);
+        return;
+      }
+      m.mag = rig;
+      for (const part of rig.parts) m.group.add(part.root);
+    } catch (err) {
+      console.warn(`MAG of client ${m.clientId}: ${(err as Error).message}`);
+    }
+  }
+
+  // Removes a marker's MAG rig (its parts leave the group before the group's children are disposed:
+  // the model's textures are shared).
+  private dropMag(m: Marker): void {
+    if (!m.mag) return;
+    for (const part of m.mag.parts) m.group.remove(part.root);
+    disposeMagRig(m.mag);
+    m.mag = null;
+  }
+
+  // A MAG part's anchor point: the body node's point, or the owner's position (node -1, or no such node).
+  private anchorPoint(m: Marker, node: number): { x: number; y: number; z: number } {
+    const out = { x: 0, y: 0, z: 0 };
+    if (node >= 0 && skeletonNodePosition(m.body, node, out)) return out;
+    return { x: m.group.position.x, y: m.group.position.y, z: m.group.position.z };
+  }
+
+  // Each frame: the MAGs follow their players (game ticks), and show outside the hubs.
+  private updateMags(dt: number): void {
+    if (!this.held) return;
+    const shown = this.held.visible();
+    for (const m of this.markers.values()) {
+      if (!m.mag) continue;
+      const p = this.lobby.players.get(m.clientId);
+      m.group.updateWorldMatrix(true, false);
+      const inv = m.group.matrixWorld.clone().invert();
+      const v = new THREE.Vector3();
+      updateMagRig(
+        m.mag,
+        dt,
+        { x: m.group.position.x, y: m.group.position.y, z: m.group.position.z },
+        (node, out) => skeletonNodePosition(m.body, node, out),
+        (w) => {
+          v.set(w.x, w.y, w.z).applyMatrix4(inv);
+          return { x: v.x, y: v.y, z: v.z };
+        },
+        !(p?.moving ?? false),
+      );
+      setMagRigVisible(m.mag, shown && !!m.model);
     }
   }
 
@@ -580,6 +672,7 @@ export class LobbyView {
     const m = this.markers.get(id);
     if (!m) return;
     this.viewer.scene.remove(m.group);
+    this.dropMag(m);
     for (const child of m.group.children) disposeObject(child, child !== m.model);
     this.markers.delete(id);
     console.info(`[lobby#${this.lobby.seq}] marker removed: client ${id} (markers ${this.markers.size})`);
@@ -722,6 +815,7 @@ export class LobbyView {
     const me = this.lobby.self;
     const mine = me ? this.markers.get(me.clientId) : undefined;
     this.syncHeld();
+    this.updateMags(dt);
     this.emoteTick(me ?? null, keys);
     this.viewer.fogProbe = mine ? mine.group.position : null; // fog regions follow our player
 
