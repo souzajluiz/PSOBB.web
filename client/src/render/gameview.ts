@@ -169,6 +169,7 @@ export class GameView {
       bossCamera: () => this.combat.bossCameraView(),
       trap: (ev, trap) => this.combat.trapEvent(ev, trap),
       captureTrap: (ev) => this.combat.captureTrapEvent(ev),
+      fieldHit: (damage, at) => this.combat.fieldObjectHit(damage, at),
       captureReticle: (pos) => this.combat.setCaptureReticle(pos),
     });
     this.items = new GameItems(game, { ...character, log });
