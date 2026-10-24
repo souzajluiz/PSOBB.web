@@ -45,6 +45,7 @@ import { applyMenuViewShift } from './viewshift.ts';
 import { characterOptionsEnv, readOptionFlags, restoreBrightness } from '../classic/options.ts';
 import { currentPalette, CONFIG_OFFSET, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
 import { CONFIG_SIZE } from '../classic/customize.ts';
+import { isAndroid } from '../combat/progression.ts';
 import { drawHotbar, HOTBAR_POS, hotbarY } from '../classic/hotbar.ts';
 import { bandsOf, overlayFrame, textureBitmap, textureBitmaps, type WindowSkin } from '../classic/stage.ts';
 import type { ItemData, ItemNames } from '../formats/itemnames.ts';
@@ -313,9 +314,11 @@ export class FieldHud {
         text: (g, i) => this.text(g, i),
         learned: (t) => (this.opts.character()?.techLevels[t] ?? null) !== null,
         hasItem: (i) => this.paletteItemId(i) !== null,
-        itemName: (i) => `Item ${i + 1}`, // ASSUMED placeholder: the tool's unitxt name is not traced
+        // ValidatePlayerAction's weapon test (ASSUMED: a weapon is item type 0, equipped).
+        weaponEquipped: () => (this.opts.character()?.inventory ?? []).some((x) => x.equipped && x.data.data1[0] === 0),
+        trapStock: (t) => this.trapCount?.(t) ?? 0,
+        android: () => isAndroid(this.opts.character()?.charClass ?? -1),
         config: () => this.paletteConfig(),
-        flipped: () => this.palette?.flipped ?? false,
         setConfig: (cfg) => this.setPaletteConfig(cfg),
         save: (cfg) => this.opts.saveCustomize?.(cfg),
       },

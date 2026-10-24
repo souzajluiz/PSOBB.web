@@ -1,12 +1,15 @@
 // The action palette editor (Main menu > Customize, client/src/classic/customize.ts): the slot
 // layout against parsePalette, the hotbar and palette-slot writes (PsoBB.exe dump 717407..717439,
-// 718380..718393, 718426), the 07ED body and the save upload (E7 then 05, dump 811320 / 811346),
-// and the window's keys and close rule (dump 717267).
+// 718358..718426), the action grid decoded from the exe (tables 0x009737e0 / 0x00973880, dump
+// 562653 / 562657; movement 718731; labels 717482; availability 597294), the 07ED body and the save
+// upload (E7 then 05, dump 811320 / 811346), and the window's keys and close rule (dump 717267).
 // Run: node tests/customize.test.ts
 import { applyKeyConfig, KEYS } from '../client/src/input/keyconfig.ts';
 import { parsePalette } from '../client/src/classic/palette.ts';
 import {
-  actionRows,
+  actionCells,
+  actionEnabled,
+  actionText,
   assignHotbar,
   assignPaletteSlot,
   CONFIG_SIZE,
@@ -42,6 +45,31 @@ function sample(): Uint8Array {
   c[slotOffset(0, HOTBAR_FIRST + 2) + 2] = 1; // disabled flag on hotbar 3
   return c;
 }
+
+// The fake environment: every technique in `learned` is learned; the state holds the config.
+function fakeEnv(
+  learned: Set<number>,
+  save: (c: Uint8Array) => void = () => {},
+  state: { config: Uint8Array } = { config: sample() },
+  extra: Partial<CustomizeEnv> = {},
+): CustomizeEnv {
+  return {
+    text: (g, i) => `g${g}:${i}`,
+    learned: (t) => learned.has(t),
+    hasItem: () => true,
+    weaponEquipped: () => false,
+    trapStock: () => 0,
+    android: () => false,
+    config: () => new Uint8Array(state.config),
+    setConfig: (c) => {
+      state.config = new Uint8Array(c);
+    },
+    save,
+    ...extra,
+  };
+}
+
+const press = (k: string) => ({ key: k, repeat: false }) as KeyboardEvent;
 
 applyKeyConfig(null);
 
@@ -93,13 +121,18 @@ applyKeyConfig(null);
   eq(readRow(c, 0, 0), { group1: 0, group2: 0 }, 'palette slot toggle clears the same action');
 }
 
-// 6. Palette slot reset (ResetDefaultPalette): the action leaves the other 3-slot entries of both palettes; hotbar keeps it.
+// 6. Palette slot reset (ResetDefaultPalette, 718426): the action leaves the other 3-slot entries of palette 0
+// (only palette 0 is read there); hotbar entries keep it.
 {
   const c = sample();
   assignPaletteSlot(c, 0, 2, { group1: 3, group2: 4 }); // technique 4 sits on the left slot
   eq(readRow(c, 0, 1), { group1: 0, group2: 0 }, 'the left slot loses the technique');
   eq(readRow(c, 0, 2), { group1: 3, group2: 4 }, 'the right slot takes it');
   eq(readRow(c, 0, HOTBAR_FIRST + 1), { group1: 3, group2: 0 }, 'hotbar entries are not touched by the palette reset');
+  const d = sample();
+  writeRow(d, 1, 1, { group1: 3, group2: 5 });
+  assignPaletteSlot(d, 0, 2, { group1: 3, group2: 5 });
+  eq(readRow(d, 1, 1), { group1: 3, group2: 5 }, 'palette 1 is not cleared by the palette 0 reset');
 }
 
 // 7. The 07ED body: the 0xE8 config, a copy; a wrong size is refused.
@@ -117,60 +150,125 @@ applyKeyConfig(null);
   check(threw, 'a short config is refused');
 }
 
-// 8. Action rows: attacks 0..2, techniques 0..18 (enabled when learned), palette items 0..12.
+// 8. The action grid (exe tables 0x009737e0 fleshie, 0x00973880 android): fleshie is 13 rows (attacks,
+// techniques, items), android 6 rows (attacks, items, traps; no techniques). Empty cells keep their place.
+// Labels: group 7 0x13 + action (attacks), group 5 (techniques), group 7 0x16 + action (items, traps).
 {
+  const fleshie = actionCells(false);
+  eq(fleshie.length, 39, 'fleshie: 13 rows of 3 cells');
+  eq(fleshie[0], [2, 0], 'fleshie row 0 starts with the Attack');
+  eq(fleshie[2], [2, 2], 'fleshie row 0 ends with the Extra Attack');
+  eq(fleshie[3], [3, 0], 'fleshie row 1 starts with technique 0 (Foie)');
+  eq(fleshie[14], [0, 0], 'a technique row ends with an empty cell');
+  eq(
+    fleshie.filter(([c]) => c === 3).map(([, a]) => a).sort((x, y) => x - y),
+    Array.from({ length: 19 }, (_, i) => i),
+    'all 19 techniques, once each',
+  );
+  eq(
+    fleshie.filter(([c]) => c === 4).map(([, a]) => a),
+    Array.from({ length: 13 }, (_, i) => i),
+    'items 0..12 in order',
+  );
+  check(!fleshie.some(([c, a]) => c === 4 && a >= 13), 'fleshie has no traps');
+  const android = actionCells(true);
+  eq(android.length, 18, 'android: 6 rows of 3 cells');
+  check(!android.some(([c]) => c === 3), 'android has no techniques');
+  eq(
+    android.filter(([c]) => c === 4).map(([, a]) => a),
+    [0, 1, 2, 9, 10, 11, 8, 13, 14, 15, 16],
+    'android items and traps',
+  );
   const env = fakeEnv(new Set([0, 4]));
-  const rows = actionRows(env);
-  eq(rows.length, 3 + 19 + 13, 'row count');
-  eq(rows[0].row, { group1: 2, group2: 0 }, 'first row is the first attack');
-  eq(rows.find((r) => r.row.group1 === 3 && r.row.group2 === 4)?.enabled, true, 'a learned technique is enabled');
-  eq(rows.find((r) => r.row.group1 === 3 && r.row.group2 === 5)?.enabled, false, 'an unlearned technique is disabled');
+  eq(actionText(2, 2, env.text), 'g7:21', 'attack label: group 7 0x13 + 2');
+  eq(actionText(3, 4, env.text), 'g5:4', 'technique label: group 5');
+  eq(actionText(4, 13, env.text), 'g7:35', 'trap label: group 7 0x16 + 13');
+  eq(actionText(0, 0, env.text), '', 'an empty cell has no label');
+  eq(actionEnabled(3, 4, env), true, 'a learned technique is enabled');
+  eq(actionEnabled(3, 5, env), false, 'an unlearned technique is disabled');
+  eq(actionEnabled(2, 2, env), false, 'Extra Attack needs an equipped weapon');
+  eq(actionEnabled(2, 1, env), true, 'Heavy Attack is always enabled');
+  eq(actionEnabled(4, 0, env), true, 'an item in the bag is enabled');
+  eq(actionEnabled(4, 13, env), false, 'a trap with no stock is disabled');
+  eq(actionEnabled(4, 13, fakeEnv(new Set(), () => {}, undefined, { trapStock: () => 2 })), true, 'a trap with stock is enabled');
+  eq(actionEnabled(0, 0, env), false, 'an empty cell is never enabled');
 }
 
-// 9. The window: Decide on a slot opens the actions, Decide on an action writes the slot, the number key writes the hotbar,
-// closing with a change sends the config once; a close with no change sends nothing.
+// 9. The window: the slot list is Left / Bottom / Right and starts on Bottom; Decide opens the grid at (0, 0);
+// Decide writes the slot and returns to the list; a number key writes the hotbar; a Cancel in the grid marks a
+// change; a Cancel with nothing done sends nothing; closing with a change sends the config once.
 {
   const saved: Uint8Array[] = [];
-  const state = { config: sample(), flipped: false };
-  const env: CustomizeEnv = {
-    text: (g, i) => `g${g}:${i}`,
-    learned: (t) => t === 0 || t === 4,
-    hasItem: () => true,
-    itemName: (i) => `item${i}`,
-    config: () => new Uint8Array(state.config),
-    flipped: () => state.flipped,
-    setConfig: (c) => {
-      state.config = new Uint8Array(c);
-    },
-    save: (c) => saved.push(new Uint8Array(c)),
-  };
-  const key = (k: string) => ({ key: k }) as KeyboardEvent;
-  const decide = key(KEYS.decide);
-  const cancel = key(KEYS.cancel);
-  const down = key(KEYS.selectDown);
-  const menu = new CustomizeMenu(env);
-  check(menu.key(cancel) === false, 'Cancel on the slot list closes the window');
+  const state = { config: sample() };
+  const env = fakeEnv(new Set([0, 4]), (c) => saved.push(new Uint8Array(c)), state);
+  const decide = press(KEYS.decide);
+  const cancel = press(KEYS.cancel);
+
+  const idle = new CustomizeMenu(env);
+  check(idle.key(cancel) === false, 'Cancel on the slot list closes the window');
   eq(saved.length, 0, 'no change: nothing sent');
 
-  const m2 = new CustomizeMenu(env);
-  m2.key(decide); // slot list -> actions
-  m2.key(down);
-  m2.key(down); // action 2: attack 2
-  m2.key(decide); // assign to slot cursor 0 (bottom)
-  eq(readRow(state.config, 0, 0), { group1: 2, group2: 2 }, 'Decide assigns the highlighted action to the bottom slot');
-  m2.key(cancel); // back to the slots
-  m2.key(down); // slot cursor 1 (left)
-  m2.key(decide); // actions, cursor still on attack 2
-  m2.key(key('1')); // number key 1: hotbar slot 1
-  eq(readRow(state.config, 0, HOTBAR_FIRST), { group1: 2, group2: 2 }, 'number key 1 writes hotbar 1');
+  const m = new CustomizeMenu(env);
+  m.key(decide); // slot list -> grid, cursor (0, 0) = Attack
+  m.key(press(KEYS.selectRight));
+  m.key(press(KEYS.selectRight)); // cell 2 = Extra Attack
+  m.key(decide); // Bottom (the cursor's start) takes it; back to the list
+  eq(readRow(state.config, 0, 0), { group1: 2, group2: 2 }, 'Decide writes the Extra Attack to Bottom');
   eq(saved.length, 0, 'nothing saved while the window is open');
-  m2.key(cancel); // actions -> slots
-  check(m2.key(cancel) === false, 'Cancel on the slot list closes');
-  eq(saved.length, 1, 'closing with a change sends the config once');
-  eq(saved[0].length, CONFIG_SIZE, 'the sent config is 0xE8 bytes');
+  m.key(press(KEYS.selectLeft)); // Bottom -> Left
+  m.key(decide); // grid again, cursor reset to (0, 0)
+  m.key(press('1')); // number key 1 writes the Attack to hotbar 1
+  eq(readRow(state.config, 0, HOTBAR_FIRST), { group1: 2, group2: 0 }, 'number key 1 writes hotbar 1 (palette 0)');
+  eq(readRow(state.config, 1, HOTBAR_FIRST), { group1: 2, group2: 0 }, 'number key 1 writes hotbar 1 (palette 1)');
+  m.key(cancel); // grid -> list (a change: the flag is set)
+  check(m.key(cancel) === false, 'Cancel on the slot list closes');
+  eq(saved.length, 1, 'closing after a grid action sends the config once');
+  eq(saved[0]!.length, CONFIG_SIZE, 'the sent config is 0xE8 bytes');
+
+  // A grid Cancel alone marks the change (dump 718731 path: the grid's bit 1 sets the window's flag).
+  const saved2: Uint8Array[] = [];
+  const m2 = new CustomizeMenu(fakeEnv(new Set([0, 4]), (c) => saved2.push(new Uint8Array(c)), { config: sample() }));
+  m2.key(decide);
+  m2.key(cancel);
+  m2.key(cancel);
+  eq(saved2.length, 1, 'a grid Cancel with nothing written still sends on close');
 }
 
-// 10. The save upload: E7 with the 0x3994 save, then the 05 packet with no body; the 07ED frame is 0xE8 with flag 7.
+// 10. The writes do not check availability (the number-key and Decide paths have no ValidatePlayerAction call):
+// a number key writes a cell whose item is not in the bag; an empty cell clears the hotbar slot it is sent to.
+{
+  const state = { config: sample() };
+  const env = fakeEnv(new Set(), () => {}, state, { hasItem: () => false });
+  const m = new CustomizeMenu(env);
+  m.key(press(KEYS.decide)); // grid, cursor (0, 0)
+  m.key(press('2')); // hotbar 2 gets cell 0 (Attack, always available)
+  eq(readRow(state.config, 0, HOTBAR_FIRST + 1), { group1: 2, group2: 0 }, 'a number key writes the cell under the cursor');
+  m.key(press(KEYS.selectDown)); // row 1
+  m.key(press(KEYS.selectDown)); // row 2
+  m.key(press(KEYS.selectDown)); // row 3
+  m.key(press(KEYS.selectDown)); // row 4: cells 12, 13, 14
+  m.key(press(KEYS.selectRight));
+  m.key(press(KEYS.selectRight)); // cell 14 = empty
+  m.key(press('1'));
+  eq(readRow(state.config, 0, HOTBAR_FIRST), { group1: 0, group2: 0 }, 'an empty cell clears hotbar 1 (palette 0)');
+  eq(readRow(state.config, 1, HOTBAR_FIRST), { group1: 0, group2: 0 }, 'an empty cell clears hotbar 1 (palette 1)');
+  eq(readRow(state.config, 0, HOTBAR_FIRST + 1), { group1: 2, group2: 0 }, 'hotbar 2 is untouched');
+}
+
+// 11. The window's own palette (Control on the slot list) writes palette 1; the config's HUD flip is not read.
+{
+  const state = { config: sample() };
+  const m = new CustomizeMenu(fakeEnv(new Set([0]), () => {}, state));
+  m.key(press('Control'));
+  m.key(press(KEYS.decide)); // grid (0, 0)
+  m.key(press(KEYS.selectDown)); // row 1, cell 3 = Foie
+  m.key(press(KEYS.selectDown)); // row 2, cell 6 = Gifoie
+  m.key(press(KEYS.decide)); // Bottom of palette 1
+  eq(readRow(state.config, 1, 0), { group1: 3, group2: 1 }, 'the flipped window writes palette 1');
+  eq(readRow(state.config, 0, 0), { group1: 2, group2: 1 }, 'palette 0 bottom is untouched');
+}
+
+// 12. The save upload: E7 with the 0x3994 save, then the 05 packet with no body; the 07ED frame is 0xE8 with flag 7.
 {
   const sent: Array<{ cmd: number; flag: number; len: number }> = [];
   const s = new BBSession({} as never);
@@ -188,19 +286,6 @@ applyKeyConfig(null);
   s.fullCharacter = new Uint8Array(10);
   s.sendSaveFile();
   eq(sent.length, 0, 'a short save is not sent');
-}
-
-function fakeEnv(learned: Set<number>): CustomizeEnv {
-  return {
-    text: (g, i) => `g${g}:${i}`,
-    learned: (t) => learned.has(t),
-    hasItem: () => true,
-    itemName: (i) => `item${i}`,
-    config: () => sample(),
-    flipped: () => false,
-    setConfig: () => {},
-    save: () => {},
-  };
 }
 
 applyKeyConfig(null);

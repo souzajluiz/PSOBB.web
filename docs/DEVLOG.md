@@ -15345,3 +15345,72 @@ The entry above says the 3D view is not shifted in Chrome. That was a misreading
 - The team chat in Chrome (the window's draw and the F10 lock in the field).
 - The exe's F9 / F10 focus bit (0x1) early return and the blocked-input test are not modelled.
 - F11 (keyboard control mode) and the team log's file write.
+
+## 2026-10-23: Customize: the action grid from the exe (table, labels, availability), lobby message, E7 triggers
+
+Follow-up to "Customize (action palette editor) and the save upload (E7) traced and ported" (above). The previous entry's ASSUMED action rows were wrong in four places (the grid, the labels, the slot list, the hotbar write); fixed here from the exe.
+
+### Action grid (exe)
+
+- Table address: `customize_menu_action_list_fleshie_config` = **0x009737E0** (40 entries), `customize_menu_action_list_android_config` = **0x00973880** (20 entries). Found from the code, not from the dump's header: `customize_menu_action_list_constructor` (dump 718599, the function at 0x0074A210) stores `0x009737E0` (fleshie, the "not Android" branch) or `0x00973880` (android: `testb $0x10` on `gender_race_job_flags`) into the list's +0x8C. Entries are `struct action_list_entry { short category; short action; }` (dump 83753), 4 bytes. The rows are three entries wide: the constructor's loop steps `paVar5 + 3` and `render_customize_menu_action_list` (dump 718800) uses `index % 3` / `index / 3` for column and row. Category 8 ends the list (fleshie at entry 39, row 13; android at entry 18, row 6).
+- Fleshie (`tools/exedata.py read 009737e0 u 40`): row 0 attacks 0, 1, 2; rows 1..4 techniques 0, 6, 3 / 1, 7, 4 / 2, 8, 5 / 9, 18 (+ empty); rows 5..7 techniques 15, 16, 17 / 13, 10, 11 / 12, 14 (+ empty); rows 8..11 items 0..10 (+ empty at the end of row 11); row 12 items 11, 12 (+ empty). So all 19 techniques, items 0..12, no traps. The technique columns follow the element order (Foie-type, Zonde-type, Barta-type).
+- Android (`read 00973880 u 20`): attacks 0..2; items 0, 1, 2, 9, 10, 11, 8; traps 13..16 (category 4, actions 13..16); no techniques; no items 3..7 or 12.
+- Empty cells (category 0) keep their place. The cursor can sit on them; Decide or a number key on one writes the empty action (the slot is cleared).
+- Cursor (dump 718731, `handle_customize_menu_action_list_movement_inputs`): up / down move the row and wrap (13 / 6 rows); left / right move the column and wrap 0..2. Opened at row 0, column 0 each time.
+
+### Labels (exe)
+
+- `probably_get_item_description` (dump 717482), the highlighted row's text: attack = unitxt collection 7 index 0x13 + action (Attack, Heavy Attack, Extra Attack); technique = collection 5 index (`unitxt_get_technique_name`); item or trap = collection 7 index 0x16 + action (Monomate .. Trap Vision for 0..12, Fire / Freeze / Slo-mo / Confusion trap for 13..16). Collection 7 is `unitxt_get_action_description` (`unitxt + 0x1c`). So the palette item labels come from the action-description collection, not the item name table (collection 1, used by the inventory). Checked with `parseUnitxt` on the local `unitxt_j.prs` (not committed).
+- The lobby message: unitxt group 11 index 1 = "Customizing / Action Palette is not / allowed in the / lobby." (the text; the call site is not traced).
+
+### Availability (exe)
+
+- `ValidatePlayerAction_006ab474` (dump 597294), with the menu open (the function returns 1 early for an open menu, so the challenge checks are skipped): category 0 never; 1 always; 2 (attack) action 2 needs an equipped weapon (`CheckItemStateForUpdate`); 3 (technique) needs the technique learned (`IsTechniqueLevelUnlimited`: effective level 0xff is unlearned, disabled); 4 items 0..12 need the tool in the bag (`FindItemInInventory`); 4 traps 13..16 need the Battle Mode trap count > 0 (`CheckPlayerFlagAtOffset` on player+0x89C+N returns 0 when the count is positive) and not a boss map.
+- The grey colour (0xff404040, drawn only) is the only use. **The writes do not check it**: the number-key path (dump 717401..717443) and the Decide path (`GuildCardListWindowApplyPaletteSelection_00749d98`, 718358) call no availability check. So an unlearned technique or an item not in the bag can be assigned. The port does the same.
+
+### Slot list and hotbar (exe)
+
+- The slot list is 3 entries (`GuildCardListWindow_HandleInput_00749234`, dump 717859): the palette slots Left, Bottom, Right. The cursor (+0x61) is the value `GuildCardListWindowGetPaletteSlotIndex_00749e84` maps: 0 -> palette_slots[1] (Left), 1 -> [0] (Bottom, the start: the constructor sets 1), 2 -> [2] (Right). Left / Right move it (wrap). Control (`unknown_handle_customize_menu_switch`, 717900) flips the window's own palette (+0x62, starts on palette 0); the HUD's palette flip is not touched. Decide opens the grid; Cancel closes.
+- The hotbar is **not** in the slot list. Hotbar slots 1..0 are written only by the number keys in the grid (dump 717401, `was_input_pressed` 0x23..0x2C; flat index 3..12). The port's earlier 13-entry slot list and its Decide-on-hotbar were wrong.
+- Decide in the grid writes the palette slot of the window's palette (+0x62). `GuildCardListWindowResetDefaultPalette_00749eac` (718426) clears the same action from **palette 0** only, slots 0, 2, 1 (the port's version also read palette 1; fixed). Then the window returns to the slot list (state 4 -> 1 -> 2).
+- Cancel in the grid returns to the slot list **and sets the window's changed flag** (state 4 with bit 1: `*(param_1+0x24) = 1`), so closing after it sends 07ED even with no write. The port does the same.
+
+### E7 triggers (exe, which the port has an equivalent for)
+
+- `unknown_send_disconnect` (dump 782693) sends `send_packet5` (E7 + 05) only when `g_pShipConnectionManager` exists, i.e. on the ship / game connection.
+- Quit Game > Disconnect (`ChallengeMenuProcessSelection_0074c018`): ported before (lobby `disconnect()` calls `hud.saveFile`).
+- Logout (`uninit_login_scene`, dump 805110): its upload goes to the ship connection, which the ship select (the port's logout point) does not have (it runs on the login connection). Nothing to port there; not sent.
+- `ExitGame_007a6358` (788401) sets the exit_game scene; `close_game` (805704) is the window's exit callback (`pfnGameExitCallback`, dump 404990). Both are application exits, not leaving a game. The port has no hook for them (the title's exit leaves the page before any ship connection; a closing tab cannot send reliably). Not ported.
+- Leaving a game to the lobby (the port's `leaveGame`, 98 / 84): no `send_packet5` on that path in the dump's caller list; not ported.
+- The periodic counter (`GameLoop_Update_007bcc4c`, dump 805214, and `update_game_in_quest`, 805532): `g_Packet5SendTimer` counts frames while `is_0_or_1(g_GameListData)` is 0 and calls `send_packet5()` once it passes 12. In the second site the reset is only in the other branch, so read literally it would upload every frame in that state; the flag's meaning is not traced. The port has no frame counter for it. Not ported; open.
+
+### Port
+
+- `client/src/classic/customize.ts`: the two tables (`ACTION_TABLE_FLESHIE`, `ACTION_TABLE_ANDROID`, the exe bytes), `actionCells`, `actionText` (labels), `actionEnabled` (availability), `SLOT_LIST_FLAT` (the slot list order), the grid cursor and its movement, number keys, Decide / Cancel as above, the window's own palette (Control). `assignPaletteSlot` reads and clears palette 0 only. Removed: the 13-row action list, the `Item N` placeholders, the hotbar Decide.
+- `client/src/render/fieldhud.ts`: the Customize env (`weaponEquipped`, `trapStock`, `android` = `isAndroid(charClass)`, `learned`, `hasItem`); `flipped` and `itemName` are gone.
+- `client/src/classic/mainmenu.ts`: `disabledNotice` (a greyed row chosen with Decide shows its text in the help window; the buzzer still sounds).
+- `client/src/classic/lobby.ts`: `menu.disabledNotice` for id 0 = unitxt group 11 index 1, the line breaks joined with spaces: "Customizing Action Palette is not allowed in the lobby."
+- `tests/customize.test.ts`: the grid (fleshie and android cells, the 19 techniques once each, items, traps, no techniques on android), labels, availability (learned tech, Extra Attack with no weapon, item in the bag, trap stock), the window's list and grid keys, a number key writing an unavailable row, empty cells clearing a hotbar slot, the window's own palette (Control), the grid Cancel flag, the E7 + 05 and 07ED frames.
+
+### ASSUMED
+
+- The grid is drawn as a text list of the non-empty cells in table order (the exe draws icons in a 3-column grid with a description window for the highlighted row; the icons, scroll and description window are not ported).
+- Weapon test for attack 2: an equipped item of type 0 (`CheckItemStateForUpdate_005e9534 == 1` is not traced).
+- Trap availability: stock > 0 only; `ChallengeUI_HandleActionForAllElements` and the boss-map rule are not modelled.
+- `is_menu_open` is set while the Home menu is open (the availability check's early return); its writer was not traced.
+- Learned technique = the port's `techLevels` entry (the Technique menu's rule), not `CalculateEffectiveTechniqueLevel`.
+- The lobby message's trigger: shown when the greyed Customize row is chosen with Decide (the exe's call site for group 11 index 1 is not traced; the text matches the message).
+- Control as the window's flip key (the default "Action Palette Change" binding, as the HUD reads it).
+- Number keys 1..0 use the port's `HOTBAR_KEYS`; the sound for a number-key write is `SE.ok` (no exe sound traced for that path).
+
+### Left
+
+- The grid drawing (icons, 3 columns, scroll, description window) and the highlighted row's description text.
+- The periodic E7 (the `g_Packet5SendTimer` path above) and the logout / app-exit triggers, not ported (reasons above).
+- The Customize window in Chrome (not run: the brief says no Playwright).
+
+### Checks
+
+- `node tests/customize.test.ts`: all checks passed.
+- `node tests/hotbar.test.ts`, `fieldhud.test.ts`, `lobbymenu.test.ts`, `simplemail.test.ts`, `options.test.ts`, `questboard.test.ts`, `mainmenulayout.test.ts`, `shortcuts.test.ts`, `teammenu.test.ts`, `telepipe.test.ts`, `minimap.test.ts`: pass.
+- `cd client && npx tsc --noEmit -p .`: exit 0 (client/node_modules linked from the main checkout for the run; removed before the commit).

@@ -202,6 +202,9 @@ export class LobbyScreen implements Screen {
     this.menu.cursorSaved = () => cursorSaved(readOptionFlags(hud.fullCharacter?.() ?? null));
     // ValidateMenuItemCondition_00732620 with the lobby's rules (see lobbyMenuRules).
     this.menu.validate = (id) => validateMenuEntry(id, lobbyMenuRules(!!hud.team && teamMember(hud)));
+    // Customize (0) chosen in the lobby: unitxt group 11 index 1, "Customizing Action Palette is not
+    // allowed in the lobby." (the text's own line breaks become spaces). The exe's call site is not traced (ASSUMED).
+    this.menu.disabledNotice = (id) => (id === 0 ? hud.text(11, 1).replace(/\s*\n\s*/g, ' ').trim() : null);
     this.home = new HomeLeaves(() => ({
       text: (g, i) => hud.text(g, i),
       lobby,
