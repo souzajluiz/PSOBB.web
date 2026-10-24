@@ -145,5 +145,37 @@ if (existsSync(gslPath)) {
   }
 }
 
+// 7. TObjWarpLobby (0x0181), the centre teleporter's beam (objectmodels.ts lobbyWarpSpec;
+// create 0x007bb0b4 through the type table 0x00a0ec94, ctor 0x0066dd9c, render 0x0066e0dc,
+// update 0x0066de54: +4.0 a tick, back to frame 0 past the last frame). Drawn in the
+// lobby only: the spec needs the lobby flag.
+const warpObj = { ...obj(0), type: 0x0181 } as ObjectSet;
+const warpSpec = objectModelFor(warpObj, { area: 0, episode: 1, lobby: true });
+if (!warpSpec || warpSpec.bml !== 'bm_obj_lobby_warp.bml' || warpSpec.parts.length !== 1) fail('TObjWarpLobby: no lobby warp spec');
+const wpart = warpSpec!.parts[0];
+if (wpart.model !== 0 || wpart.motion !== 0 || wpart.drive !== 'restart' || wpart.speed !== 4) fail(`TObjWarpLobby part: model ${wpart.model} motion ${wpart.motion} drive ${wpart.drive} speed ${wpart.speed}`);
+if (warpSpec?.collision) fail('TObjWarpLobby has a collision box (the exe gives it none)');
+if (objectModelFor(warpObj, { area: 0, episode: 1 }) !== null) fail('TObjWarpLobby is drawn outside the lobby');
+if (existsSync(gslPath)) {
+  const gsl = new GSLArchive(new Uint8Array(readFileSync(gslPath)));
+  const wbml = new BmlArchive(gsl.get('bm_obj_lobby_warp.bml'));
+  const wnames = wbml.entries.map((e) => e.name);
+  if (wnames[0] !== 'de_obj_citybeam.xj' || wnames[1] !== 'de_obj_citybeam.njm') fail(`bm_obj_lobby_warp.bml entries are ${wnames.join(', ')}`);
+  if (!gsl.has('bm_obj_city_common.xvm')) fail('bm_obj_city_common.xvm is not in data.gsl (the ASSUMED beam texture)');
+  let warps = 0;
+  for (let n = 1; n <= 10; n++) {
+    const name = `map_lobby_${String(n).padStart(2, '0')}o.dat`;
+    if (!gsl.has(name)) continue;
+    const ws = parseSetObjects(gsl.get(name)).filter((o) => o.type === 0x0181);
+    warps += ws.length;
+    if (ws.length !== 1) fail(`${name}: ${ws.length} TObjWarpLobby sets`);
+    for (const w of ws) {
+      if (w.position[0] !== 0 || w.position[1] !== 3 || w.position[2] !== 240) fail(`${name}: TObjWarpLobby at ${w.position.join(',')}`);
+      if (!objectModelFor(w, { area: 0, episode: 1, lobby: true })) fail(`${name}: TObjWarpLobby has no model`);
+    }
+  }
+  if (warps !== 10) fail(`${warps} TObjWarpLobby sets in lobbies 01..10, not 10`);
+}
+
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);

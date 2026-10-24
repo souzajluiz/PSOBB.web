@@ -30,6 +30,7 @@ export interface ObjectModelContext {
   episode: number; // 1, 2, 3 (= Episode 4)
   ultimate?: boolean; // Ultimate Episode 1 online loads the *_a archives
   event?: number; // the session's seasonal event (the 64 join's event byte; 0 = none)
+  lobby?: boolean; // the lobby's own sets (lobbyview.ts): TObjWarpLobby (0x0181) is drawn only there
 }
 
 // When a part is drawn.
@@ -252,6 +253,21 @@ function lobbyMainSpec(o: ObjectSet, event: number): ObjectModelSpec {
   return spec('TObjLobbyMain', 'bm_obj_lobby_main.bml', [part], { collision: LOBBY_MAIN_COLLISION });
 }
 
+// TObjWarpLobby (0x0181; create 0x007bb0b4 through the type table at 0x00a0ec94,
+// ctor 0x0066dd9c, vtable 0x00b35800). Its BML bm_obj_lobby_warp.bml holds model 0
+// (de_obj_citybeam.xj) and motion 0 (de_obj_citybeam.njm), the Ragol city's beam
+// (TObjCityAreaWarp, 0x0044). The render 0x0066e0dc draws the model at the object's
+// position and heading with fog off, at the frame +0xcc; the update 0x0066de54 adds
+// 4.0 (0x00939eb0) a tick and sets the frame back to 0 once the sum passes the
+// motion's last frame (`restart`). The round box is TObjLobbyMain's only: this object
+// has no collision. Its visible flag (+0xd0) is set by the ctor from +0x88 before the
+// set's params are applied, so it is shown (ASSUMED; the lobby screenshot shows it).
+// ASSUMED: the beam's texture sheet, bm_obj_city_common.xvm (the exe passes no texture
+// name to LoadBML_005b7a84 for this BML).
+function lobbyWarpSpec(): ObjectModelSpec {
+  return spec('TObjWarpLobby', 'bm_obj_lobby_warp.bml', [{ model: 0, textures: 'bm_obj_city_common.xvm', motion: 0, drive: 'restart', speed: 4 }]);
+}
+
 export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectModelSpec | null {
   const { area, episode } = ctx;
   const ult = !!ctx.ultimate && episode === 1;
@@ -261,6 +277,9 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     // ---- lobby ----
     case 0x0182:
       return lobbyMainSpec(o, ctx.event ?? 0);
+    case 0x0181:
+      // Only the lobby's own sets are modelled here (the type is not checked in the field).
+      return ctx.lobby ? lobbyWarpSpec() : null;
     // ---- warps ----
     // TObjAreaWarpForest (and the quest copy 0x001B): create 0x007bac58, ctor
     // FUN_006696a4: model 0 (+0xd0, warp base, all nodes FUN_00835120), model 1
