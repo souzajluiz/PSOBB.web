@@ -28,11 +28,15 @@
 // RefreshItemStatDisplay_00726294); 0xC/0xD the photon blast line when the
 // mag gained one; back to 3.
 //
-// ASSUMED: the content of the mag's window (the exe draws stat elements whose
-// layout is not recovered: here Level / Synchro / IQ [0xC0..0xC2] and the
-// four stats with a bar of their part of a level); the Photon Blast choice
-// (state 0xE, ListWindowObject_Initialize_0075330c at entry 0xA) is left
-// out: it does nothing here.
+// The status window (entry 9) is the GameList of the mag window; its page is the list's
+// navigation byte (itemdetail.ts, the pages section), written by states 5 and 0xC only:
+//   page 0 (open): the six stats with the current values (0x726ff0, labels 0x9c..0xa1);
+//   page 1 (Give Items): Level / Synchro / IQ [0xC0..0xC2] and the four stats with a bar of
+//     their part of a level (0x726864; the row layout is ASSUMED, not recovered);
+//   page 2 (a photon blast gained): the mag's three photon blast rows (0x7267dc).
+// No page counter or arrow is drawn (none found); the exe's page slide is not ported.
+// The Photon Blast choice (state 0xE, ListWindowObject_Initialize_0075330c at entry 0xA)
+// is left out: it does nothing here.
 
 import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
@@ -44,6 +48,7 @@ import { DISABLED, drawListWindow, drawWindowTitle, INSET, listKey, listWindowHe
 import { wipeElement, WindowAnim, withElementWipe, withWindowAnim } from './windowanim.ts';
 import { ICON_UV, isWrapped, itemRow, type ItemPackTextures, type ItemRow, type RowContext } from './itempack.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
+import { magPhotonRows, magStatRows, MAG_PAGE, type StatBlock } from './itemdetail.ts';
 
 export const MAG_LIST = { x: 13, y: 256, w: 206, h: 184 } as const; // entry 7, 0x00973dc0
 export const MAG_SELECT = { x: 221, y: 256, w: 172 } as const; // entry 8
@@ -99,6 +104,9 @@ export class MagMenu {
   private shown: number[] | null = null;
   private pbCount = 0;
   private pbLine = '';
+  // The status window's page (the GameList's navigation byte, itemdetail.ts MAG_PAGE): 0 at
+  // open, 1 once Give Items has opened the item list, 2 once a feed gained a photon blast.
+  private panelPage: number = MAG_PAGE.stats;
   mags: InventoryItem[] = [];
   foods: InventoryItem[] = [];
   // The later windows are objects of their own, each with its own counter
@@ -162,6 +170,10 @@ export class MagMenu {
     if (this.item.cursor >= this.item.top + ITEM_ROWS) this.item.top = this.item.cursor - ITEM_ROWS + 1;
   }
 
+  get page(): number {
+    return this.panelPage;
+  }
+
   get busy(): boolean {
     return this.state === 'rising' || this.state === 'pb';
   }
@@ -197,6 +209,7 @@ export class MagMenu {
       return;
     }
     this.pbLine = `${this.env.text(11, 0x77)} ${this.env.text(9, pbs[this.pbCount])}${this.env.text(11, 0x5f)}`;
+    this.panelPage = MAG_PAGE.photon; // state 0xC: HandleGameListNavigation(+2) before the PB window
     this.setState('pb');
     this.wait = 0;
   }
@@ -231,6 +244,7 @@ export class MagMenu {
       if (r === 'cancel') {
         this.setState('mags');
       } else if (r === 'decide' && this.select.items[this.select.cursor].value === 1) {
+        this.panelPage = MAG_PAGE.status; // ChallengePlayerListWindow_HandleInput state 5: HandleGameListNavigation(+1)
         this.setState('items');
         this.item = { cursor: 0, top: 0 };
         this.refresh();
@@ -366,7 +380,6 @@ export class MagMenu {
   // The status window's rows and stat bars (each text and bar is an element of the wipe).
   private drawStatusRows(ctx: CanvasRenderingContext2D, mag: InventoryItem): void {
     const S = MAG_STATUS;
-    const d = mag.data.data1;
     const x = S.x + INSET;
     let y = S.y + INSET;
     const t = (s: string, tx: number, ty: number) => wipeElement(ctx, tx, ty, ROW, () => drawGameText(ctx, s, tx, ty, '#ffffff'));
@@ -375,6 +388,23 @@ export class MagMenu {
       t(value, S.x + S.w - INSET - gameTextWidth(value), y);
       y += ROW;
     };
+    if (this.panelPage === MAG_PAGE.stats) {
+      // Page 0 (EquipmentStatDisplayObject_Initialize_00726ff0): the six stats, current values.
+      const s = this.env.rowContext().stats;
+      const current: StatBlock = { atp: s.atp, dfp: s.dfp ?? 0, mst: s.mst, ata: s.ata, evp: s.evp ?? 0, lck: s.lck ?? 0 };
+      for (const r of magStatRows(current)) line(`${this.env.text(11, r.label)}:`, String(r.value));
+      return;
+    }
+    if (this.panelPage === MAG_PAGE.photon) {
+      // Page 2 (ChallengePlayerListWindow family 0x7267dc): the mag's photon blasts, three rows.
+      for (const pb of magPhotonRows(photonBlasts(mag.data))) {
+        if (pb !== null) t(this.env.text(9, pb), x, y);
+        y += ROW;
+      }
+      return;
+    }
+    // Page 1 (0x726864): Level, Synchro, IQ and the four stats with their bars.
+    const d = mag.data.data1;
     line(this.env.text(11, 0xc0), String(d[2]));
     line(this.env.text(11, 0xc1), `${mag.data.data2[0]}%`);
     line(this.env.text(11, 0xc2), String(mag.data.data2[1]));

@@ -17754,3 +17754,47 @@ Trap Vision (tool, item 8):
 - Draw the 0xC panel in the MAG window with the page byte (states 5 / 0xC) and the candidate rows; the Chrome check then goes with it.
 - Decode the initial page value, the info page (0x726780), the tool's panels, and the counter format.
 - Resist candidates from `PlayerRecalculateStats_0068e030` out[6..10].
+
+## 2026-10-23: the mag window's pages drawn; 0xC is the item picture; the weapon pages have no writer
+
+**Question:** which windows own the 0xC panel and its pages, where the page byte is written, and where the pages are drawn. The brief's premise was that the BB screenshots show the paged detail in the Item Pack.
+
+**Owner of the constructor.** `ChallengePlayerListWindow_Constructor_007525bc` (dump 700308 area) has one caller, the menu switch of `handle_player_menu_select` (dump 700118): the `mag_menu1` / `mag_menu2` case (exe.s 0x732d06). The mag window builds its weapon list (`EquipListWindow_Constructor_0074aff8`, entry 7) and the status window (`CreateEquipListWindowObject_00725d18`, entry 9, the GameList `this+0x40`). The Item Pack (`inventory_menu`, `GuildCardSearchWindow_Constructor_0075086c`) builds a plain list window (`ChatShortcutMenuListWindow_Constructor_00736988`) and creates neither entry 0xC nor a GameList, so the premise is wrong for this exe. The BB screenshots may come from another build.
+
+**Callers of `GameList_RenderSelectionDisplay_00727450`.** Only the GameList setters call it (`GameList_SetSelectedIndex_0072606c`, `GameListMenu_SetSelection_00725f80`, `GameListSetCompactItemDisplay_00725fc8`, `GameListMenu_UpdateItemSelection_00725ff0`, `ChatShortcutMenu_Update_00725e4c`, `CreateEquipListWindowObject_00725d18`). Their callers (exe.s call sites) are the equip-list windows: the mag window, the Equipment menu (`EquipmentMenu_Constructor_0074aa48`), the shop dialogs (`ShopDialog_*`), the bank's take list (`BankItemTakeMenuDialog_*`, `BankDialog_*`), the Sinowberill / medical / drop dialogs, the information counter, the quick menu's sub-menu and the info board's equip list. So every GameList-based list shows the page-0 stats (`EquipmentStatDisplayObject_Update_00727220` for a weapon). Only the mag window ever sets the page byte (below), so the shop, bank, equipment and quick windows show page 0 only.
+
+**The 0xC group is the item picture.** `ChallengePlayerListWindow_UpdateItemDetail_0073175c` (dump 698949), which states 2 and 8 call on the group at `get_gui_position(0xc)` (`this+0x44`), only calls `unknown_get_itemkt_image(group, item)` and sets the group's state byte (1 = picture found, 2 = none). `unknown_get_itemkt_image` (dump 440786) reads the item's picture texture (mags from asset file 0xb8). The stat rows and the pages are not in that group: the dispatcher's `this` is the GameList (the entry 9 window at (395, 256), the port's `MAG_STATUS`), and the page functions write the GameList's own elements (`this+0x28`). The earlier notes (the 0xC stat panel, the pages in 0xC) were wrong on this point.
+
+**The page byte (`**(this+0x64)`).**
+- Starts at 0: `CreateEquipListWindowObject_00725d18` builds the navigation object with `ChatShortcutMenu_SubList_SetData_0073e5d4(obj, 0, 3, slot)` (dump 690013).
+- The writer is `UpdateListNavigationDirection_0073e954` (dump 709837). Its only caller is `HandleGameListNavigation_007260e8` (exe.s: one call at 0x7260f4), and that has two callers, both in the mag window's `ChallengePlayerListWindow_HandleInput_007526c8`: state 5 (exe.s 0x7528a8, direction 1) and state 0xC (exe.s 0x752b2b, direction 2). The byte is set absolutely: the same direction again changes nothing; a change also sets a slide (+10 / -10 at the object's +8, not ported).
+- Key path: the Select window (states 3 / 4, the list at entry 8) has two rows. Value 1, "Give Items", goes to state 5 (`ChallengePlayerListWindowSetActionState_00752fe0`, dump 725382) and sets page 1. Value 0, "Photon Blast", goes to state 0xE (no page). State 7 (the feed) checks `g_KeyboardSharedState[0xd]` (the Cancel key, per the DEVLOG's earlier reading and the menu key order ASSUMED from `unknown_handle_keyboard_menu_inputs`) and goes back to state 5: page 1 again, no change. State 0xC (after the rise, when the mag has more photon blasts than before the feed) sets page 2 before the photon window (state 0xD).
+- So no key, arrow or counter moves the page. The dispatcher and the page functions draw no page counter or arrow (the `wchar_rightwards_arrow` in `UIElement_DisplayItemAttribute_0072d330` is the candidate arrow). The shops' and bank's windows never set the byte.
+
+**The pages (the mag table `DAT_009f2544`).** Page 0 is `EquipmentStatDisplayObject_Initialize_00726ff0` (dump 690989): the six stat labels with the current values from `UpdateEquipmentStatDisplay_007258dc`. Page 1 is `0x726864` (Level, Synchro, IQ, the four stats; already the port's status rows). Page 2 is `0x7267dc` (asm read): the photon blasts through `GetPhotonBlastValue_005dbc08` and the text call `0x70ff48`, three slots.
+
+**Weapon, armour and shield pages.** The attribute (`0x726dc8`), resist (`0x726c7c`, `0x726cb0`) and slot pages are reached only when the byte is 1 or 2 in a window whose item is a weapon / armour / shield. In this build the byte is non-zero only in the mag window, whose list holds mags only (`EquipListWindow_PopulateWeaponList_0074b340(list, 2)`, the port's `magList`). So those pages have no writer and are dead in this exe build. The `itemdetail.ts` pages section says so.
+
+**Ported:**
+- `client/src/classic/magmenu.ts`: the page (`panelPage`, a getter `page`): 0 at open, 1 at Give Items (state 5), 2 at the photon gain (state 0xC). The status window draws page 0 (the six stats, `magStatRows`, current values, the candidate hidden), page 1 (unchanged rows) or page 2 (`magPhotonRows`, three slots; the names from group 9, as the photon line does).
+- `client/src/classic/itemdetail.ts`: `MAG_PAGE`, `magStatRows`, `magPhotonRows`; the header and the pages section corrected (0xC, the reachability).
+- `tests/fieldhud.test.ts`: the page 0 / 1 / 2 transitions in the MAG block (a photon-gaining feed through a fixture mag `MAG_PB_HEX` and a stub pmt), the row helpers.
+- `docs/ROADMAP.md`: the pages line.
+- Not changed: `classic/itempack.ts` (`SHOW_EQUIP_PANEL` stays off; the Item Pack has no 0xC), `classic/shop.ts` (the bank's take list keeps its own rect; the shops' detail is still open).
+
+**Not ported:** the page slide (+/-10 at the nav object's +8), the photon empty-row text (0x70ff48 arguments not decoded), the page-1 row layout (the exe's element offsets), the item picture of 0xC (needs the item picture asset), and the candidate column for a mag (ASSUMED hidden).
+
+**ASSUMED:**
+- The Cancel key is `g_KeyboardSharedState[0xd]` (from the order of the six menu masks, DEVLOG 2026-10-23 key notes); the state-7 path has no visible effect here (page 1 again).
+- A mag is not equippable (`ValidateItemForEquip_005c9e40` returns 0 for it), so page 0's candidate values are hidden.
+- The photon page's empty rows are blank.
+- The mag's page 0 uses the character's current values (`rowContext().stats`), not the battleparams.
+
+**Checks:** `node tests/fieldhud.test.ts` (all pass, the new MAG page and helper checks included); `client` tsc (`node client/node_modules/typescript/bin/tsc --noEmit -p client`, Node 24) clean. The worktree's `client/node_modules` is a symlink to the main checkout for the run and is removed before the commit.
+
+**Screenshot:** not taken. The window needs a mag on a fresh account (an offline patch through `bridge/admin-chars.mjs`, which accepts `mags` and `inventory`), then the newserv, bridge and vite stack. Not run, given the disk (5.5 GB free) and the brief's one-spec allowance; the spec would be `client/e2e/magpages.spec.ts` with `enterFreshField`.
+
+**Left:**
+- The Item Pack and the shops: no 0xC (the Item Pack) and no page writer (the shops), so no pages there. Their stat rows (page 0) are the shops' open item.
+- The page slide, and the item picture of 0xC (the asset of the item picture).
+- The page-1 row layout (the exe's element offsets), the photon empty-row text, and the Photon Blast window's text (state 0xE, entry 0xA).
