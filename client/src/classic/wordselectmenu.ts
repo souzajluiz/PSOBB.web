@@ -21,10 +21,13 @@
 // Also here (2026-10-23, the picker window): the state table at 0x9d05e0 (WORD_SELECT_ENTRIES), the
 // root rows (table2[type]) and the child lists (table1[value], the scene placeholder -0x1E), the
 // list levels that WordSelectPickerModel pushes and pops (ProcessNextEntry / NavigateBack). The
-// picker window is classic/wordselectwindow.ts. Not ported: the numeric count window (state 3 with
-// GetStringIdGroup != 7), the item-based pseudo lists (-0x28 / -0x2D), the name lists in the picker,
-// the multi-word path (Next, states 0x12 / 0x13), the galgryphon effects and sounds, and the
-// ES/FR/DE/US locales. See DEVLOG 2026-10-23 (word select picker, window).
+// picker window is classic/wordselectwindow.ts. Also here (2026-10-23, the confirm): the numeric
+// count window (NumericCountModel, state 3 with GetStringIdGroup != 7, CreateNumericDisplayListWindow
+// 0x728ac4), the NEXT / SELECT row (states 0x12 / 0x13: NEXT builds up to 8 tokens), the item pseudo
+// lists (-0x28 / -0x2D, with the selected item) and the player-name lists (-0x3C..-0x5A). Not ported:
+// the state 0x14 name step (a name row confirms as a token), the buffer clear of ProcessConfirmation's
+// locale 0 branch, the galgryphon effects and sounds, and the ES/FR/DE/US locales. See DEVLOG
+// 2026-10-23 (word select picker, the confirm and the multi-word path).
 
 import { wordSelectPhrase, type WordSelectTable } from '../net/wordselect.ts';
 import type { WordSelectMessage } from '../net/chatshortcut.ts';
@@ -232,6 +235,45 @@ export function popSelection(sel: WordSelectSelection): void {
   }
 }
 
+// ---- The numeric count window (CreateNumericDisplayListWindow_00728ac4, dump 692115) ----
+// WordSelectMenu_ConfirmSelection_00702688 opens it for a chosen id whose string group is not 7:
+// the group's maximum is DAT_0096E714[group] (exe data: 999999, 99, 30, 15, 200, 999 for groups
+// 0..5; group 6 is unused), its digit count is the number of digits of the maximum (the exe's
+// threshold chain), and the initial value is the buffer's numeric parameter (+0x14). Confirm copies
+// the value back to +0x14; cancel clears it (WordselectmenuClearCurrentItemID_0070812c).
+export const WORD_SELECT_NUMERIC_MAX: readonly number[] = [999999, 99, 30, 15, 200, 999];
+
+export function numericDigitCount(max: number): number {
+  let digits = 1;
+  for (let v = max; v >= 10; v = Math.floor(v / 10)) digits++;
+  return digits;
+}
+
+export class NumericCountModel {
+  readonly max: number;
+  readonly digits: number;
+  value: number;
+  // The digit under the cursor: 0 is the least significant digit (the exe's number_to_print of
+  // cell 0 is value % 10). ASSUMED: the cursor moves between the digit cells and the value is kept
+  // within 0..max (the exe's digit keys are not traced).
+  cell = 0;
+
+  constructor(initial: number, max: number) {
+    this.max = max;
+    this.digits = numericDigitCount(max);
+    this.value = Math.min(Math.max(0, Math.trunc(initial)), max);
+  }
+
+  adjust(delta: number): void {
+    const next = this.value + delta * 10 ** this.cell;
+    this.value = Math.min(Math.max(0, next), this.max);
+  }
+
+  moveCell(delta: number): void {
+    this.cell = Math.min(Math.max(0, this.cell + delta), this.digits - 1);
+  }
+}
+
 // WordSelectMenu_IsItemInCategory_00707095 (0x707095): 0x36 < id < 0x46.
 export function isItemInCategory(id: number): boolean {
   return id > 0x36 && id < 0x46;
@@ -375,7 +417,27 @@ export function wordSelectRootRows(table: WordSelectTable | null, type: number):
 // The child list a row opens: table1[value] (GetItemMetaPointer_00705544), the scene list for the
 // placeholder. Empty when the row has no list (the exe's NULL). ASSUMED: the item-based pseudo lists
 // (-0x28 list A, -0x2D list B) and the player-name lists are not opened here.
-export function wordSelectChildRows(table: WordSelectTable | null, value: number, scene: WordSelectScene = 'free'): number[] {
+// The context the pseudo lists need: the selected item (-0x28 list A, -0x2D list B,
+// WordSelectMenuPopulateItemList_00705454) and the player-name lists (-0x3C .. -0x5A).
+export interface WordSelectListContext {
+  selectedItem?: number; // the item id of the list's item (none when absent)
+  nameLists?: WordSelectNameLists | null;
+}
+
+export function wordSelectChildRows(
+  table: WordSelectTable | null,
+  value: number,
+  scene: WordSelectScene = 'free',
+  ctx: WordSelectListContext = {},
+): number[] {
+  if (value === WORD_SELECT_META.listA || value === WORD_SELECT_META.listB) {
+    const lists = populateWordSelectItemLists(table, ctx.selectedItem ?? -1);
+    return value === WORD_SELECT_META.listA ? lists.listA : lists.listB;
+  }
+  if (ctx.nameLists) {
+    const names = wordSelectNameListAt(ctx.nameLists, value);
+    if (names) return names;
+  }
   const index = value === WORD_SELECT_SCENE_PLACEHOLDER ? WORD_SELECT_SCENE_LIST[scene] : value;
   return wordSelectListAt(table, index) ?? [];
 }
@@ -409,6 +471,8 @@ export interface WordSelectPickerOptions {
   table?: WordSelectTable | null;
   scene?: WordSelectScene; // the placeholder row's list (default free field)
   jpLocale?: boolean; // word_select_locale == 0 (the only locale read)
+  selectedItem?: number; // the selected item (the -0x28 / -0x2D lists); none when absent
+  players?: { filled: (slot: number) => boolean; currentSlot: number }; // the name lists' players
 }
 
 export class WordSelectPickerModel {
@@ -422,8 +486,17 @@ export class WordSelectPickerModel {
   readonly scene: WordSelectScene;
   readonly jpLocale: boolean;
   readonly levels: WordSelectLevel[];
+  // The count window open on a chosen leaf (the sub-state at +0xB8 = 1 and the window at +0x84).
+  numeric: NumericCountModel | null = null;
+  // The NEXT / SELECT row under a confirmed leaf: 0 NEXT (state 0x12), 1 SELECT (state 0x13);
+  // null while the word list has the focus.
+  buttonCursor: number | null = null;
+  readonly selectedItem: number;
+  readonly nameLists: WordSelectNameLists | null;
 
   constructor(p: WordSelectPickerOptions) {
+    this.selectedItem = p.selectedItem ?? -1;
+    this.nameLists = p.players ? wordSelectNameLists(p.players.filled, p.players.currentSlot) : null;
     this.itemType = p.type;
     this.sel.numericParameter = p.numericParameter ?? 0;
     this.sel.targetType = 0;
@@ -454,10 +527,23 @@ export class WordSelectPickerModel {
   // root's state 0 has no UpdateSelectionEffect call).
   move(delta: number): void {
     if (this.status !== WORD_SELECT_STATUS_OPEN) return;
+    if (this.numeric) {
+      this.numeric.adjust(delta > 0 ? 1 : -1); // up / down change the digit under the cursor
+      return;
+    }
+    if (this.buttonCursor !== null) {
+      this.buttonCursor = (this.buttonCursor + (delta > 0 ? 1 : -1) + 2) % 2;
+      return;
+    }
     const n = this.top.rows.length;
     if (n === 0) return;
     this.top.index = (this.top.index + delta + n) % n;
     if (this.depth > 0) this.cursor(this.cursorValue);
+  }
+
+  // Left / right: the digit cell of the count window (no effect on the list or the buttons).
+  moveCell(delta: number): void {
+    if (this.status === WORD_SELECT_STATUS_OPEN && this.numeric) this.numeric.moveCell(delta > 0 ? 1 : -1);
   }
 
   // The cursor's value is reported (UpdateSelectionEffect is called on each change).
@@ -481,10 +567,23 @@ export class WordSelectPickerModel {
   // the state is not 1). Returns the copied-out message when the picker closed.
   press(): WordSelectMessage | null {
     if (this.status !== WORD_SELECT_STATUS_OPEN) return null;
+    if (this.numeric) {
+      // Select on the count: the value is the buffer's numeric parameter (+0x14), then the NEXT /
+      // SELECT row (ConfirmSelection_00702688 returns 1 and the state goes to 0x12).
+      this.sel.numericParameter = this.numeric.value;
+      this.numeric = null;
+      this.buttonCursor = 0;
+      return null;
+    }
+    if (this.buttonCursor !== null) {
+      if (this.buttonCursor === 0) this.keepBuilding();
+      else return this.close();
+      return null;
+    }
     const v = this.cursorValue;
     if (this.depth === 0) {
       if (v === WORD_SELECT_TOKEN_FREE || !this.acceptRoot(v, this.jpLocale)) return null;
-      const child = wordSelectChildRows(this.table, v, this.scene);
+      const child = wordSelectChildRows(this.table, v, this.scene, this.listContext());
       if (child.length === 0) return null;
       this.state = this.next;
       this.fx.last = -1;
@@ -492,14 +591,46 @@ export class WordSelectPickerModel {
       this.cursor(this.cursorValue);
       return null;
     }
-    return this.close();
+    // A leaf of a child list (ProcessConfirmation_0070305c, state 3): a chosen id whose string group
+    // is not 7 opens the count window first; then the NEXT / SELECT row (states 0x12 / 0x13).
+    const group = stringIdGroup(v);
+    if (group !== 7 && group < WORD_SELECT_NUMERIC_MAX.length) {
+      this.numeric = new NumericCountModel(this.sel.numericParameter, WORD_SELECT_NUMERIC_MAX[group]);
+      return null;
+    }
+    this.buttonCursor = 0;
+    return null;
   }
 
-  // Back (the Cancel key): a child level pops (NavigateBack_0070226c), and the leaf's token is
-  // taken off again when the toggle put it there (ASSUMED: the pop of the state's flags 2). On the
-  // root the picker is cancelled (ResetAllMenus).
+  private listContext(): WordSelectListContext {
+    return { selectedItem: this.selectedItem, nameLists: this.nameLists };
+  }
+
+  // NEXT: the confirmed token stays in the buffer (the toggle is committed, so the next leaf pushes
+  // its own token), the list stays on the same level, and the picker builds the sentence further.
+  // ASSUMED: NEXT is refused at the 8-token cap (the exe's cap is the buffer's 8 slots).
+  private keepBuilding(): void {
+    if (this.sel.count >= WORD_SELECT_MAX_TOKENS) return;
+    this.buttonCursor = null;
+    this.fx.toggle = 0;
+    this.fx.last = -1;
+  }
+
+  // Back (the Cancel key): the count window closes first (the value is cleared, as the exe's
+  // cancel does), then the NEXT / SELECT row, then a child list pops (NavigateBack_0070226c), and
+  // the leaf's token is taken off again when the toggle put it there (ASSUMED: the pop of the
+  // state's flags 2). On the root the picker is cancelled (ResetAllMenus).
   back(): void {
     if (this.status !== WORD_SELECT_STATUS_OPEN) return;
+    if (this.numeric) {
+      this.numeric = null;
+      this.sel.numericParameter = 0;
+      return;
+    }
+    if (this.buttonCursor !== null) {
+      this.buttonCursor = null;
+      return;
+    }
     if (this.depth === 0) {
       this.cancel();
       return;

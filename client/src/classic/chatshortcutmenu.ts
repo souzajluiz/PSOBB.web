@@ -37,7 +37,8 @@
 //     over classic/wordselectmenu.ts; its window placement and title are ASSUMED. Accept makes a word
 //     record (type 2) and asks the confirm; Cancel returns to the keyboard. The key does nothing
 //     inside a picker.
-//   - The word select row's label (the slot list) is the empty label; the picker shows the sentence.
+//   - The word select row's label (the slot list) is the rendered sentence (renderWordSelect over the
+//     JP table; player names come from the host's wordPlayers, empty in the Home menu).
 //   - The picker is not opened when the keyboard is activated (the exe's flags 0x240 / key 0xf path is
 //     not traced): it opens on the Symbol Chat key only.
 //   - The preview box (InformationCounterListWindow at 0x76, title unitxt(11, 0x48)) between the
@@ -51,8 +52,8 @@
 //   - The Yes / No strings are unitxt(11, 0x6e) / (11, 0x6f) (the same ones the teams use).
 import { se, SE } from '../audio/se.ts';
 import { KEYS, menuKeyOf } from '../input/keyconfig.ts';
-import { clearChatShortcut, CHAT_SHORTCUT_SYMBOL, CHAT_SHORTCUT_TEXT, CHAT_SHORTCUT_TEXT_MAX, CHAT_SHORTCUT_WORD_SELECT, parseChatShortcut, writeChatShortcut, type ChatShortcut } from '../net/chatshortcut.ts';
-import { currentWordSelectTable } from '../net/wordselect.ts';
+import { clearChatShortcut, CHAT_SHORTCUT_SYMBOL, CHAT_SHORTCUT_TEXT, CHAT_SHORTCUT_TEXT_MAX, CHAT_SHORTCUT_WORD_SELECT, parseChatShortcut, writeChatShortcut, type ChatShortcut, type WordSelectMessage } from '../net/chatshortcut.ts';
+import { currentWordSelectTable, renderWordSelect } from '../net/wordselect.ts';
 import { parseSymbolChats } from '../net/symbolchat.ts';
 import { drawListWindow, INSET, listKey, type ListItem } from './fieldwindows.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
@@ -97,6 +98,9 @@ export interface ChatShortcutHost {
   // The scene the word picker's root list is read for (get_word_select_type). ASSUMED 'lobby' when
   // the host does not say (the Shortcut leaf is reached from the lobby and the field).
   wordScene?: () => WordSelectScene;
+  // The room's players (the names of a word record and the picker's name lists) and the selected
+  // item of the word picker. ASSUMED absent in the Home menu: no names and no player lists.
+  wordPlayers?: () => WordPlayers;
   // unitxt lookup (group, index), the Home menu's text.
   text: (group: number, index: number) => string;
   // The save copy (the session's full character), read and written in place. Null without one.
@@ -105,8 +109,21 @@ export interface ChatShortcutHost {
   onClose: (picked: boolean) => void;
 }
 
+// The room's players as the word picker and the word labels read them: the names by slot, which
+// slots are filled, and the slot of the local player (the name lists skip it).
+export interface WordPlayers {
+  names: (slot: number) => string;
+  filled: (slot: number) => boolean;
+  currentSlot: number;
+}
+
 // The label of a slot row (the exe's kind of row per type: text, word select, symbol, empty).
-function slotLabel(full: Uint8Array | null, slot: number, text: (i: number) => string): string {
+function slotLabel(
+  full: Uint8Array | null,
+  slot: number,
+  text: (i: number) => string,
+  word: (m: WordSelectMessage) => string,
+): string {
   const s = parseChatShortcut(full, slot);
   if (!s || s.type === 0) return '';
   if (s.type === CHAT_SHORTCUT_TEXT) return s.text;
@@ -114,7 +131,9 @@ function slotLabel(full: Uint8Array | null, slot: number, text: (i: number) => s
     const rows = symbolChatRows(full ? parseSymbolChats(full) : [], (_g, i) => text(i));
     return rows[s.symbolIndex ?? -1]?.label ?? '';
   }
-  return ''; // word select: the word table is not in the port (ASSUMED empty label)
+  // A word record shows the sentence it was made of (the balloon's renderer, renderWordSelect).
+  if (s.type === CHAT_SHORTCUT_WORD_SELECT && s.word) return word(s.word);
+  return '';
 }
 
 function windowWidth(items: readonly ListItem[], title: string | null): number {
@@ -166,7 +185,7 @@ export class ChatShortcutMenu {
     const out: ListItem[] = [];
     for (let r = 0; r < SHORTCUT_PAGE_ROWS; r++) {
       const slot = this.page * SHORTCUT_PAGE_ROWS + r;
-      out.push({ label: slotLabel(full, slot, (i) => this.text(i)), value: slot, enabled: true });
+      out.push({ label: slotLabel(full, slot, (i) => this.text(i), (m) => renderWordSelect(m, currentWordSelectTable(), this.wordPlayers().names)), value: slot, enabled: true });
     }
     return out;
   }
@@ -322,17 +341,24 @@ export class ChatShortcutMenu {
     this.mode = this.mode === 'word' ? 'symbol' : 'word';
   }
 
+  // The players of the room (no names and no players when the host gives none).
+  private wordPlayers(): WordPlayers {
+    return this.host.wordPlayers?.() ?? { names: () => '', filled: () => false, currentSlot: -1 };
+  }
+
   // CreateWordSelectMenuEntity_00701d00 (the word picker over the keyboard): the root list is the
   // word type of the scene (wordSelectType, no item selected), the table is the JP one.
   private openWordPicker(): void {
     const scene = this.host.wordScene?.() ?? 'lobby';
+    const players = this.wordPlayers();
     const model = openWordSelectPicker({
       type: wordSelectType(scene, false),
       table: currentWordSelectTable(),
       scene,
       jpLocale: true,
+      players: { filled: players.filled, currentSlot: players.currentSlot },
     });
-    this.wordPicker = new WordSelectWindow(model);
+    this.wordPicker = new WordSelectWindow(model, players.names);
     this.phase = 'wordPicker';
   }
 

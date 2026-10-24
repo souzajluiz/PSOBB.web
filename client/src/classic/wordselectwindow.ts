@@ -65,6 +65,12 @@ export class WordSelectWindow {
       se(SE.cursor);
       return true;
     }
+    if (k === 'left' || k === 'right') {
+      if (!this.model.numeric) return false;
+      this.model.moveCell(k === 'left' ? -1 : 1);
+      se(SE.cursor);
+      return true;
+    }
     if (k === 'decide') {
       se(SE.ok);
       this.model.press();
@@ -79,6 +85,20 @@ export class WordSelectWindow {
       return true;
     }
     return false;
+  }
+
+  // The line under the sentence: the count window's value (the digit cell is ASSUMED to show as the
+  // cursor, not drawn) or the NEXT / SELECT row (its labels are the exe's u_NEXT / u_SELECT
+  // strings, the marker is ASSUMED).
+  private footer(): string[] {
+    const m = this.model;
+    if (m.numeric) return [`${m.numeric.value} / ${m.numeric.max}`];
+    if (m.buttonCursor !== null) {
+      const next = m.buttonCursor === 0 ? '> NEXT' : '  NEXT';
+      const select = m.buttonCursor === 1 ? '> SELECT' : '  SELECT';
+      return [`${next}   ${select}`];
+    }
+    return [];
   }
 
   // The sentence as the buffer holds it now (the model's result, not copied out).
@@ -101,7 +121,7 @@ export class WordSelectWindow {
       shown,
       this.model.top.index - this.top,
     );
-    const lines = this.preview().split('\n');
+    const lines = [...this.preview().split('\n'), ...this.footer()];
     const h = listWindowHeight(Math.max(1, lines.length), false);
     const rect = { x: list.x, y: list.y + list.h + 8, w: list.w, h };
     drawTextWindow(ctx, skin, rect, lines.join('\n'));

@@ -17111,3 +17111,45 @@ emote still plays). ASSUMED: the marker is in the buffer process_chat_message re
 - The model particle's colour / alpha inputs: which bytes the pool holds at a model particle's +0x94 (the arena's contents, or a particle with SetTransform), and the texture stage's colour arguments that the diffuse goes into.
 - The `cameraYaw` source: the HUD's yaw (the view's source / target) against `g_pDefaultNPCCameraState->y_rotation` is not checked on screen.
 - The Rafoie ring's cloak shader and the advanced effects setting (as before).
+
+## 2026-10-23: word select picker, the confirm (count window, NEXT / SELECT row, pseudo lists) and the Shortcut slot label
+
+**Goal:** the four left items of the picker: (1) the multi-word sentence (Next, states 0x12 / 0x13, up to 8 tokens before Select), (2) the numeric count window (state 3, group != 7) and the state 3 confirm, (3) the item pseudo lists -0x28 / -0x2D with the selected item and the player-name lists, (4) the Shortcut slot label of a word record.
+
+**Exe evidence** (`reverse/refsrc/.../Psobb.exe-05112026.c`, dump line numbers):
+- Dispatch `WordSelectMenu_ProcessState_007023c8` (658512): case 0x11 -> `ProcessAccept_00702b0c`, case 0xF -> `ProcessAccept_00702b88`, case 0x12 -> `State0x13_Update_0070260c` (658671), case 10 / 0xB / 0x10 / 0x13 -> `State0x13_Update_00702d90` (659102), case 3 -> `ProcessConfirmation_0070305c` (659316).
+- Accept in 0x11 / 0xF / 0x12 (`ProcessAccept_00702b0c` 658917, the 0x12 handler at 658671): `+0xB8 == 0` -> `CanCancel_007028a8` (658802): a chosen id whose `GetStringIdGroup` (663154) is not 7 sets `+0xB8 = 1` and returns 1 (the count window opens on the next step); group 7 returns 0 and the confirm is immediate. `+0xB8 == 1` -> `ConfirmSelection_00702688` (658712): creates the count window (`CreateNumericDisplayListWindow_00728ac4`, 692115) with max `DAT_0096E714[group]` and the initial value `+0x14`, stores it at `+0x84`, returns 0. Its close: flag 2 -> confirm (`+0x14` = the window value at `+0x70`), flag 4 -> cancel (`+0x14` cleared, `WordselectmenuClearCurrentItemID_0070812c`).
+- The count window's maximum: `DAT_0096E714` (`tools/exedata.py read 0x96e714 u 8`): group 0 = 999999, 1 = 99, 2 = 30, 3 = 15, 4 = 200, 5 = 999 (group 6 = 0x3F800000, unused by `GetStringIdGroup`). Digit count = digits of the maximum (the threshold chain at 692115).
+- After a confirmed leaf the state goes to 0x12 (from 0xF / 0x11) or 0x13 (from 0x12): `+0xB4 = 0x12` / `0x13` at 658948 / 658702. State 0x13 accept (`00702d90`): any accept closes (`ResetAndCloseMenus_00706c94`) unless the state is 10 and the value is 0x685 (-> 0x14). So 0x12 is the NEXT step and 0x13 the SELECT step, and the state table flags agree (0x13 has the selected style, flag 1).
+- The toggle (`UpdateSelectionEffect`, 663804) pushes a valid token when the cursor lands on it, so the leaf's token is on top of the buffer when the leaf is confirmed, and the next pick pushes on top of it: the sentence builds up to the 8 slots.
+- Pseudo lists: the picker's `GetItemMetaPointer` pseudo indices -0x28 (list A) / -0x2D (list B) and the name lists -0x3C / -0x46 / -0x50 / -0x5A are read by `populateWordSelectItemLists` (the selected item) and `wordSelectNameLists` (the players), both already ported in `classic/wordselectmenu.ts`.
+
+**Premise check.** The brief's "Next (states 0x12 / 0x13)" holds: 0x12 and 0x13 are the NEXT and SELECT steps reached by a confirmed leaf. Two details differ from a plain reading: a leaf confirm does not close the picker (the exe moves to 0x12 / 0x13), and `ProcessConfirmation`'s locale 0 branch (`SetSelectedValue_00702f88`, then `WordselectmenuInitializeSelectionBounds_00708134` on the buffer, then `+0xC6 = 3`) clears the buffer. The port does not do that clear (see Left): it would empty the sentence the picker is building, and the exe's copy-out of the sentence is not traced.
+
+**Ported:**
+- `classic/wordselectmenu.ts`: `WORD_SELECT_NUMERIC_MAX`, `numericDigitCount`, `NumericCountModel` (the value, the digit cell, adjust / moveCell). The picker: `numeric` (the count window), `buttonCursor` (0 NEXT, 1 SELECT; null while the list has the focus), `press` on a leaf (group != 7 opens the count, else the NEXT / SELECT row), NEXT (`keepBuilding`: the toggle is committed, the list stays on its level, the token stays in the buffer; refused at 8 tokens), SELECT (close), back (count cancel clears the parameter, then the buttons, then the level). `wordSelectChildRows` takes the context (`selectedItem`, `nameLists`): -0x28 / -0x2D are the item lists, -0x3C..-0x5A the name lists. The picker options take `selectedItem` and `players`.
+- `classic/wordselectwindow.ts`: left / right move the count cell; a footer line under the sentence shows the count (`value / max`) or the NEXT / SELECT row.
+- `classic/chatshortcutmenu.ts`: `slotLabel` renders a word record with `renderWordSelect` (the JP table, the names from the new optional host `wordPlayers`). The word picker gets the room's players (`wordPlayers`, default: no names, no players).
+- No host wires `wordPlayers` yet (the Home menu has no room; the lobby and the field can pass `lobby.players` and the current slot).
+
+**ASSUMED** (also marked in code):
+- The count's cell layout: cell 0 is the least significant digit, the cursor moves between cells, up / down add or subtract 10^cell and the value is clamped to 0..max. The exe's digit keys and their wrap are not traced.
+- The NEXT / SELECT row: its labels are the exe's u_NEXT / u_SELECT strings; the marker and the layout are ASSUMED. NEXT keeps the list on the same level (the exe's 0x12 handler has no root reset in its accept path), and the 8-token cap refuses NEXT (the exe's buffer has 8 slots; the refusal is not traced).
+- A confirmed leaf goes straight to the NEXT / SELECT row, with no count step when group 7.
+- The count value is the buffer's numeric parameter (+0x14) on the way in and out; a count cancel clears it.
+- Name rows (-0x3C head) confirm like a token: the exe's state 0x14 name step (`+0x8C == -0x3C` -> state 0x14) is not ported.
+
+**Not ported:**
+- The locale 0 confirm's buffer clear and `+0xC6 = 3` (ProcessConfirmation 659316, the `SetSelectedValue` / `InitializeSelectionBounds` branch): see Premise check.
+- The state 0x14 name step, the state 8 confirm (`ConfirmCancelState`), the state 0x11 `+0xFC` value (the leaf's id copy-out), the sounds for the count window, the galgryphon effects, `UpdateIDHistory`, the ES / FR / DE / US child maps.
+- The count window's real drawing (the exe's six digit cells, the `+0x62` digit count and the `flag 2` hidden cells) is a text footer here.
+- The Home menu host does not pass `wordPlayers`: a word record's name tokens show empty names there, and the name lists are empty.
+
+**Checks.** `node tests/wordselectmenu.test.ts` all passed (the count model, the pseudo lists, the NEXT / SELECT row, the 8-token refusal; the old "a child accept closes" assertions now follow the NEXT / SELECT row). `node tests/chatshortcutmenu.test.ts` all checks passed (the word record is two keys: Enter on the word, then ArrowDown and Enter on SELECT; slot 3's label is the sentence "Hello."). `node tests/wordselect.test.ts`, `chatshortcut`, `chatline`, `symbolchat` pass. `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` exit 0 (Node 24). No Playwright. `client/node_modules` was linked from the main checkout for the chatshortcutmenu test and removed before the commit.
+
+**Left (in order):**
+1. The locale 0 confirm's buffer clear and `+0xC6 = 3` (ProcessConfirmation 659316): trace what the copy-out sends after it, then port.
+2. The state 0x14 name step and the state 8 confirm.
+3. The room host wiring (`wordPlayers` from the lobby and the field), so the name lists and word-record names are live.
+4. The count window's real drawing and digit keys (`0x728ac4` digit cells, the hidden cells).
+5. The screenshot spec (lobby -> Home -> Chat > Shortcut -> slot -> Edit -> Symbol key) once newserv runs from a worktree build.
