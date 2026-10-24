@@ -32,8 +32,10 @@
   reproduced locally; waiting for a production console log).
 - Episode 2 bosses: Barba Ray ported (brain, 10 parts as hit targets, Pig Ray minions;
   body moves: swim, arc, followers, side entries, corner transitions 3..0x0e and
-  0x28..0x39 (2026-10-24). Still open: phases 0x0d, 0x0f/0x10, 0x11/0x12, 0x17..0x1a,
-  dispatch 0/1/2 (DEVLOG 2026-10-24); map in docs/bosses/barbaray-map.md). Gol Dragon has its brain
+  0x28..0x39, the drop 0x0d, the volopt 0x0f/0x10, the beam 0x17, the shot 0x19/0x1a and
+  dispatch 0 (2026-10-24). Still open: 0x11/0x12 (the jump, input), 0x18 (the player
+  attack), dispatch 1 (the intro) and 2 (the input) (DEVLOG 2026-10-24; map in
+  docs/bosses/barbaray-map.md, pass 8). Gol Dragon has its brain
   (combat/goldragon.ts). Gal Gryphon has its brain (combat/galgryphonai.ts and the states
   files; its death goes through the brain since 2026-10-24). Olga Flow has a partial brain,
   form 1 (combat/olgaflowai.ts, 2026-10-24; map in docs/bosses/olgaflow-map.md).
