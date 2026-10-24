@@ -14671,3 +14671,42 @@ Brief: the user's GameCube reference of the field main menu (Home): dimmed strip
 - Root cause of the 3D view not shifting in the field: run the probe in the spec once login works, and check which camera and onFrame draw the field.
 - The Status window (0x19): no BB route found. If one is found, port its three pages (Total EXP / To Next Lv / Money, the stats, battle / challenge) from the labels above.
 - The GC overlay and the GC info panel: not ported (not in the exe).
+
+## 2026-10-23: quick menu: the End key opens the quick menu, not a symbol row
+
+**What changed.** `classic/quickmenu.ts` ports the quick menu's tab model (no window yet): the tab mapping, the cursor's start and step, the traps / Android rules, the lobby tab, the motion menu's 8 rows and the list positions. `tests/quickmenu.test.ts` (27 checks). The End-key picker (`classic/symbolchatlist.ts` mode 'chat') stays a stand-in: the exe's End window has no symbol chat row to port (see the premise correction). The ROADMAP line (Classic HUD) is updated.
+
+**Premise correction (per the exe):** the brief put the End key's symbol chat row on the quick menu. The exe's End key opens the quick menu, and its rows are not symbol chats:
+- Key role 14 (`quickmenu`, dump 86172) is tested in `unknown_handle_quickmenu` (dump 682493) and calls `quick_menu_constructor` (682560, body at 711543).
+- Field tabs: cursor 0 = weapons (`PopulateEquippableWeapons`, gui 1), cursor 1 = two-handed (`PopulateTwoHandedWeapons`, gui 2 at (324, 256) in the table), cursor 2 = traps (`ResetAndRefresh`, when `should_have_traps`), cursor 3 = techniques (`CreateTechniqueListWindow`, gui 1). Cases 0..0x11 of `update_quickmenu` (dump 711625 on); case 0x11 is the character option pick (712424).
+- Lobby: cursor 0xff, tab 0x0c, the motion menu (case 0xc, 711997): 8 categories (unitxt group 0x42 0..7), each with a sub-list (case 0xe, gui 0xe2, table 0x00972ea0).
+- Symbol chat is not in any of these. Its row is in the challenge / player list windows: the chat panel (`ChallengePlayerInfoWindow_UpdateState_007138e0`, mode 3, dump 674657) on the `QuickmenuObject` (g_pUITextColorTable, constructor 677373, created at map setup 758825), and the challenge menu dispatcher (`player_status_menu` -> `ChatShortcutMenuWindow_Constructor`, `trade_invite_menu1..3` -> `QuickMenuWindow_Constructor_0075e958`, dump 700300..700366).
+
+**Exe evidence** (dump lines, `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`; data from `tools/exedata.py read`):
+- Tab mapping: `UpdateQuickMenuTabFromCharacterOption_00742070` (712540) reads `g_QuickMenuTabMappingTable_00972f76 + cursor + 2`. Bytes at 0x00972f78: `00 03 06 09`.
+- Cursor source: `GetCharacterOptionsCursorMode_007be270` (806201) = `(character_options_bitfield & 0x30000) >> 16`.
+- Start cursor: `quick_menu_constructor` (711577..711594): cursor 2 without traps moves to 3; an Android on 3 moves to 0. Lobby branch (711596..711597): cursor 0xff, tab 0x0c.
+- `should_have_traps_quick_menu` (712522): battle mode or Android.
+- Step: `InformationCounterListWindow_HandleInput_007419d4` (712096): +1 with wrap (3 -> 0), 2 skipped without traps, 3 skipped for an Android (to 0). Key held: 0x10 when character option 2 is set, else 0x11. Not stepped in the lobby or while the game list (+0x40) is open.
+- GUI table 0x00971f40, 8 bytes an entry (`get_gui_position` 710012): gui 1 = (13, 317), gui 2 = (324, 256), gui 0xe1 = (13, 276), gui 0xe2 = (13, 317), gui 0x60 / 0x61 = (341, 318), gui 0x7a = (13, 256).
+- Motion table 0x00972ea0 (12-byte rows: text base, value base, count): (10,2,5) (15,7,5) (20,12,4) (24,16,6) (30,22,7) (37,29,6) (43,35,13) (8,0,2). Unitxt group 0x42 is the motion names (0x0a = "Greeting1", 0x08..0x09 = "Photon Chair1/2").
+- Chat cooldown owner: `g_pUITextColorTable` is the QuickmenuObject, not the End window (see the 2026-10-23 cooldown entry). Its `+0x38` panel is created in its constructor, so the 'panel up' gate is not checked in the port.
+
+**Ported (`classic/quickmenu.ts`):**
+- `QUICK_MENU_TAB_TABLE`, `quickMenuTabFor(cursor)` (0xff -> 0x0c), `quickMenuStartCursor(mode, traps, android)`, `quickMenuStepCursor(cursor, traps, android)`, `quickMenuShouldHaveTraps(battle, android)`.
+- `QUICK_MENU_GUI` (gui 1, 2, 0xe1, 0xe2) and `QUICK_MENU_MOTION_ROWS` (the 8 rows).
+
+**Not ported (documented, not reachable from the port):** the quick menu's windows (the weapon / two-handed / traps / technique lists and their rendering), the lobby motion menu's drawing and sub-lists, the End-key opening gates (`unknown_handle_quickmenu` checks: the player, the slot's UI block, the `g_pUITextColorTable` 0x1c bits, a held key), the trade path states 0x13..0x20 of `QuickMenuWindow_ProcessState_0075f09c` (dump 732743), and the 0x61 player list.
+
+**ASSUMED** (also marked in the code):
+- The tab names for cursor 2 (traps) and cursor 3 (techniques) come from the populate calls (`ResetAndRefresh`, `CreateTechniqueListWindow`), not from a read of their strings.
+- The End picker stays a stand-in. Its position `SYMBOL_LIST_POS` (16, 40) is still ASSUMED. The table's gui 0x7a is (13, 256), but the picker's exe window is not traced, so the port keeps its own position.
+- The chat cooldown still ticks in the field (not in a quick menu object).
+
+**Tests:** `node tests/quickmenu.test.ts` (Node 24): ALL PASS (27 checks: tabs, traps, steps, start cursor, motion rows, gui positions). `node tests/symbolchat.test.ts`: ALL PASS (unchanged). `tsc --noEmit -p .` in `client/`: clean (node_modules linked from the main checkout for the run, removed before the commit). Not run in Chrome (no Playwright, per the brief).
+
+**Left (in order):**
+1. The quick menu's windows: the tab lists (weapon, two-handed, traps, techniques) and the End-key gates, so the End key opens the quick menu as the exe does. Once it exists, the End picker goes away (it is not in the exe).
+2. The lobby motion menu (case 0xc / 0xe) drawing and its sub-lists (unitxt group 0x42).
+3. The trade path (states 0x13..0x20 of `QuickMenuWindow_ProcessState_0075f09c`, the 900-frame cancel) and the 0x61 player list.
+4. The chat cooldown owner: the quick menu object's `+0x22` timer, ticked only while its panel is up.
