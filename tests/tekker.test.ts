@@ -18,7 +18,7 @@ import {
   type CounterEnv,
   type CounterItems,
 } from '../client/src/classic/shop.ts';
-import type { RowContext } from '../client/src/classic/itempack.ts';
+import { itemRow, type RowContext } from '../client/src/classic/itempack.ts';
 import { shopRow } from '../client/src/classic/shop.ts';
 import { ItemPMT } from '../client/src/formats/itempmt.ts';
 import { itemFromHex, ItemNames, type ItemData } from '../client/src/formats/itemnames.ts';
@@ -362,7 +362,20 @@ eq([SHOP_DETAIL.x, SHOP_DETAIL.y, SHOP_DETAIL.w, SHOP_DETAIL.h], [400, 50, 240, 
     [5, 7, 6, 8],
     'tools: mate / fluid / disk / other icon 2',
   );
-  // ASSUMED: the exe's undroppable (0x2a / 0x2b) and equipped (0x0c) icon 1 are not on a fresh Result item (not checked here).
+  // Icon 1 of the compact rows (shop stock, bank take list, Result): ListWindowObject_AddItem_007375a4 ->
+  // UIElement_InitializeItemDisplay_0072b870 (dump 694171) -> UIElement_UpdateItemValidationState_0072bab0
+  // (dump 694290), which writes only 0x19 / 0x13 over the 0x36 it set. The undroppable (0x2a / 0x2b) and
+  // equipped (0x0c) icons are written by ItemEntity_UpdateColoring_0072c045, reached only from the
+  // item_instance rows (InitializeItemObject_0072bdd4, dump 694456). So a compact row never shows them.
+  pmt.tools[1] = [];
+  pmt.tools[1][0] = { ...base(0x20), amount: 10, tech: 0, cost: 0, itemFlags: 0 } as never; // no bit 2: undroppable (GetItemAttackData 0x10)
+  const undrop = inv('030100000003000000000000 0a000100 00000000');
+  const undropEquipped = inv('030100000003000000000000 0a000100 00000000', true);
+  eq([itemRow(undrop, ctx).icon1, itemRow(undropEquipped, ctx).icon1], [0x2a, 0x2b], 'inventory rows: undroppable 0x2a, equipped 0x2b');
+  eq(shopRow(undrop.data, '', ctx).icon1, 0x36, 'compact row: undroppable tool stays 0x36 (UpdateItemValidationState never writes 0x2a)');
+  eq([itemRow(knownSaber, ctx).icon1, shopRow(knownSaber.data, '', ctx).icon1], [0x0c, 0x36], 'equipped saber: inventory 0x0c, compact row 0x36');
+  eq([shopRow(unknownSaber().data, '', ctx).icon1, shopRow(wrappedUnknown.data, '', ctx).icon1], [0x36, 0x36], 'untekked saber (class ok): 0x36; wrapped: 0x36 (returns before the icon)');
+  pmt.tools[1] = [];
   pmt.weaponKinds = [];
 }
 

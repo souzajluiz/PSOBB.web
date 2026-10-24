@@ -29,6 +29,29 @@ BAMS, seam, wrap, snap, range). `tests/questeditor.test.ts` still passes (1424 c
 **ASSUMED:** that the exe's generic hit reaction does not kill the Gryphon (its vtable hit handler is not decoded; the dump has no on-kill call in the Gryphon update); that followers' remote kill matches the leader's (followers run the leave only through the synced states); that the drop is at the origin (the on-killed runs with the body at the origin, as the exe does).
 
 **Not checked:** in Chrome. The leader's death script in a live room.
+## 2026-10-24: Shop row icon 1: the compact rows have no undroppable / equipped icon
+
+**What changed:** nothing in `shopRow` (`client/src/classic/shop.ts`); the test `tests/tekker.test.ts` gets a block that pins icon 1 of the compact rows and the inventory rows side by side; `docs/ROADMAP.md` (the tekker Items line) is updated. The earlier note (2026-10-23 late) that `shopRow` lacks the undroppable / equipped branches was based on the wrong exe path, so it is not ported.
+
+**Exe evidence (`PsoBB.exe`, dump `src/Psobb.exe-05112026.c`, Ghidra `tools/ghidra/decomp.sh 0x0072c045`):**
+- The two row builders are different functions:
+  - compact (`compact_item_data`): `ListWindowObject_AddItem_007375a4` (703814) -> `UIElement_InitializeItemDisplay_0072b870` (694171, sets icon 1 = 0x36 at +0x1c) -> `UIElement_UpdateItemValidationState_0072bab0` (694290). The bank list `append_item_to_bank_list` (703830) goes to `UIElement_UpdateItemState_0072bc4c` (694375), which calls the same validation. The shop dialogs add their stock with `ListWindowObject_AddItem_007375a4` (`ShopDialog_Initialize` 632522, `ShopDialog_InitializeType1List` 633719).
+  - item_instance: `ListWindowObject_AddItem_00737620` (703849) -> `InitializeItemObject_0072bdd4` (694456) -> `ItemEntity_UpdateColoring_0072c045` (694505). `UIElement_SetItemDisplayProperties_0072c0d0` (694624) and `..WithSuffix_0072c224` (694701) also call it. These are the inventory rows (`itemRow`).
+- `UIElement_UpdateItemValidationState_0072bab0`, the compact path:
+  - wrapped (`is_item_wrapped`) -> colour -1, return (icon 1 stays 0x36);
+  - `GetPlayer_0068d5a8(this+6)` null -> return (icon 0x36, colours unset). ASSUMED unreachable in the shop: the element's player is the local one, present while a shop is open; the +6 write is not traced;
+  - icon 1 changes only from 0x36: untekked and `is_rare_weapon` -> 0x19, else `ValidateItemForEquip` flag bit 1 -> 0x13. No 0x0c, no 0x2a / 0x2b, no 0x400 test.
+- `ItemEntity_UpdateColoring_0072c045` (Ghidra and dump agree): 0x400 -> colour -1, return; null player -> return; `GetItemAttackData(0x10)` 0 and flag 8 clear -> 0x19 / 0x13 / 0x36 (0x28 = -1), flag 8 set -> 0x0c; attack bit set -> 0x2a (not equipped) / 0x2b (equipped). Only the item_instance rows reach it.
+- `GetItemAttackData_005c50b4` (414125): bit 0x10 is `CheckItemEquipConditions` (`005d5f40`) with `this+0xdc` 0x200 / 0x80 folded in. `itemRow`'s `undroppable()` (ItemPMT tool flags bit 2 clear) models only the PMT part; the `this+0xdc` flags are ASSUMED absent on the rows (no compact field carries them).
+- The Result (`6xB9`) is compact data, so its list is ASSUMED to be the compact path (`ListWindowObject_AddItem_007375a4`); the exe's caller of that list is not traced.
+
+**Port state:**
+- `shopRow` already matches the compact path for icon 1 (0x36 / 0x19 / 0x13) and the wrapped early return. A compact row never gets 0x0c / 0x2a / 0x2b, so adding those branches would have changed the shop, bank and Result icons the exe shows as 0x36.
+- The tekker's candidate list is inventory (`itemRow`), so it already has the undroppable / equipped icons (`tests/tekker.test.ts`).
+
+**Checks:** `node tests/tekker.test.ts` (all checks passed, new block: undroppable tool 0x2a / compact 0x36, equipped saber 0x0c / compact 0x36, untekked and wrapped 0x36). `node tests/shop.test.ts`, `tests/fieldhud.test.ts`, `tests/items.test.ts`, `tests/itemmodels.test.ts` pass (the last two need `vendor/newserv`, linked from the main checkout). `./node_modules/.bin/tsc --noEmit -p .` in `client/` clean. Not run: Chrome (per the brief).
+
+**ASSUMED / open:** the compact row's null-player return (above); the Result's list path (above); the `this+0xdc` flags of `CheckItemEquipConditions` in the undroppable test (above); the `unaff_ESI` / `unaff_retaddr` reads in the Ghidra output of the compact and item_instance validation (the flags come out of an out-parameter that Ghidra does not resolve; the port uses the documented bit 1 = class of `ValidateItemForEquip_005c9e40`).
 
 ## 2026-10-24: Optimal PRS parser for quest files
 
