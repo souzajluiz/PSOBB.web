@@ -5,7 +5,25 @@
 // (0x00972ea0) and the gui positions (0x00971f40).
 // Run: node tests/quickmenu.test.ts
 import {
+  ATTACK_BIT_EQUIPPABLE,
+  QM_SOUND_CANCEL,
   QUICK_MENU_GUI,
+  canCreateChallengeTrapManager,
+  compareToggle,
+  isTwoHandedTabItem,
+  itemAttackDataBits,
+  techniqueRows,
+  techniqueSwapKey,
+  toolPendingAction,
+  toolTabStep,
+  toolTechSlotId,
+  trapDecide,
+  trapRows,
+  trapStatusCount,
+  trapStockCount,
+  twoHandedTabRows,
+  type QuickMenuItemFacts,
+  type TrapDecideInput,
   QUICK_MENU_LOBBY_CURSOR,
   QUICK_MENU_LOBBY_TAB,
   QUICK_MENU_MOTION_ROWS,
@@ -68,10 +86,113 @@ check('motions: row 0 is Greeting (unitxt 0x42 0x0a, 5 entries, value base 2)', 
 check('motions: row 7 is Photon Chair (0x08, 2 entries)', QUICK_MENU_MOTION_ROWS[7].textBase === 8 && QUICK_MENU_MOTION_ROWS[7].count === 2);
 
 // GUI positions: get_gui_position(n) = 0x00971f40 + 8n.
-check('gui: gui 1 (weapon / technique list) is (13, 317)', QUICK_MENU_GUI.list.x === 13 && QUICK_MENU_GUI.list.y === 317);
-check('gui: gui 2 (two-handed list) is (324, 256)', QUICK_MENU_GUI.twoHandedList.x === 324 && QUICK_MENU_GUI.twoHandedList.y === 256);
+check('gui: gui 1 (every tab list) is (13, 317)', QUICK_MENU_GUI.list.x === 13 && QUICK_MENU_GUI.list.y === 317);
+check('gui: gui 2 (weapon compare list) is (324, 256)', QUICK_MENU_GUI.compareList.x === 324 && QUICK_MENU_GUI.compareList.y === 256 && QUICK_MENU_GUI.compareList.gui === 2);
 check('gui: gui 0xe1 (motion list) is (13, 276)', QUICK_MENU_GUI.motionList.x === 13 && QUICK_MENU_GUI.motionList.y === 276);
 check('gui: gui 0xe2 (motion sub-list) is (13, 317)', QUICK_MENU_GUI.motionSubList.x === 13 && QUICK_MENU_GUI.motionSubList.y === 317);
+
+// ---- Tab rows and actions (2026-10-23) ----
+const tool = (over: Partial<QuickMenuItemFacts> = {}): QuickMenuItemFacts => ({
+  group1: 3, group2: 0, groupIdx: 0, dwItemFlags: 0, equipCheckBits: 0, rare: false, ...over,
+});
+
+// Attack data bits (GetItemAttackData_005c50b4, asm 5c50b4..5c510f).
+check('attack: mask passes only the masked bits', itemAttackDataBits(tool({ equipCheckBits: 0x0d }), ATTACK_BIT_EQUIPPABLE) === 0);
+check('attack: checker bit 2 shows for mask 2', itemAttackDataBits(tool({ equipCheckBits: 0x02 }), 2) === 2);
+check('attack: dwItemFlags 0x200 adds bit 2 on a zero result', itemAttackDataBits(tool({ dwItemFlags: 0x200 }), 2) === 2);
+check('attack: dwItemFlags 0x80 gives 0x10 when the result is 0', itemAttackDataBits(tool({ dwItemFlags: 0x80 }), 0x10) === 0x10);
+check('attack: 0x80 does not replace a nonzero masked result', itemAttackDataBits(tool({ equipCheckBits: 0x02, dwItemFlags: 0x80 }), 0x12) === 2);
+check('attack: the 0x80 fix-up is taken after the mask (mask 2 stays 0)', itemAttackDataBits(tool({ equipCheckBits: 0x01, dwItemFlags: 0x80 }), 2) === 0);
+
+// Two-handed tab (PopulateTwoHandedWeapons 0x74b620): bit 2, not bit 1, not rare.
+check('two-handed: a tool with bit 2 and no bit 1 is in the tab', isTwoHandedTabItem(tool({ equipCheckBits: 0x02 })));
+check('two-handed: bit 1 (blocked here) keeps it out', !isTwoHandedTabItem(tool({ equipCheckBits: 0x03 })));
+check('two-handed: a rare item is out', !isTwoHandedTabItem(tool({ equipCheckBits: 0x02, rare: true })));
+check('two-handed: no bit 2 is out', !isTwoHandedTabItem(tool({ equipCheckBits: 0x00 })));
+check('two-handed: a non-tool with dwItemFlags 0x200 is in (no group check in the populate)', isTwoHandedTabItem(tool({ group1: 0, dwItemFlags: 0x200 })));
+const invRows = [
+  { instanceId: 10, facts: tool({ equipCheckBits: 0x02 }) },
+  { instanceId: 11, facts: tool({ equipCheckBits: 0x00 }) },
+  { instanceId: 12, facts: tool({ equipCheckBits: 0x02, rare: true }) },
+  { instanceId: 13, facts: tool({ equipCheckBits: 0x02 }) },
+];
+check('two-handed rows: inventory order, filtered', twoHandedTabRows(invRows).map((r) => r.instanceId).join(',') === '10,13');
+check('two-handed rows: an empty inventory gives no rows', twoHandedTabRows([]).length === 0);
+
+// Tool slot (GetToolTechSlotId 0x5de4d8: group_2 at +0xf3, group_idx at +0xf4).
+check('slot: class 0 variants 0..2 are slots 0..2', toolTechSlotId(0, 0) === 0 && toolTechSlotId(0, 1) === 1 && toolTechSlotId(0, 2) === 2);
+check('slot: class 1 variants 0..2 are slots 3..5', toolTechSlotId(1, 0) === 3 && toolTechSlotId(1, 2) === 5);
+check('slot: class 3 is slot 8, class 4 is 9, class 5 is 10', toolTechSlotId(3, 7) === 8 && toolTechSlotId(4, 0) === 9 && toolTechSlotId(5, 9) === 10);
+check('slot: class 6 variants 0/1 are 6/7, class 7 is 0xb, class 8 is 0xc', toolTechSlotId(6, 0) === 6 && toolTechSlotId(6, 1) === 7 && toolTechSlotId(7, 0) === 0x0b && toolTechSlotId(8, 0) === 0x0c);
+check('slot: class 2 (technique scrolls) and unlisted variants have no slot', toolTechSlotId(2, 0) === -1 && toolTechSlotId(0, 3) === -1 && toolTechSlotId(6, 2) === -1);
+
+// The player's pending action (ProcessToolTechUse 0x741c00, CanPerformAction 0x7a3790: slot 9 or 10, ready bit).
+check('action: slot 9 with the ready bit sets action 4', JSON.stringify(toolPendingAction(9, true)) === '{"actionType":4,"slot":9}');
+check('action: slot 10 with the ready bit sets action 4', toolPendingAction(10, true)?.slot === 10);
+check('action: slot 8 is refused (8 < slot is strict)', toolPendingAction(8, true) === null);
+check('action: slot 11 is refused', toolPendingAction(11, true) === null);
+check('action: no ready bit, no action', toolPendingAction(9, false) === null);
+check('action: no slot, no action', toolPendingAction(-1, true) === null);
+
+// Tools tab state machine (update_quickmenu cases 3..5).
+check('tools: state 3 goes to 4 on the same frame', toolTabStep(3, 0, false, true, true).state === 4);
+check('tools: state 4 with list flag 4 closes', toolTabStep(4, 4, false, true, true).close === true);
+check('tools: state 4 with list flag 2 goes to 5', toolTabStep(4, 2, false, true, true).state === 5 && !toolTabStep(4, 2, false, true, true).close);
+check('tools: state 4 with no flags waits', toolTabStep(4, 0, false, true, true).state === 4 && !toolTabStep(4, 0, false, true, true).close);
+check('tools: state 5 with key 0xd held cancels with SE 0x585', toolTabStep(5, 0, true, true, true).close && toolTabStep(5, 0, true, true, true).sound === QM_SOUND_CANCEL);
+check('tools: state 5 with the action and an item uses it and closes', toolTabStep(5, 0, false, true, true).use === true && toolTabStep(5, 0, false, true, true).close === true);
+check('tools: state 5 without the action waits', !toolTabStep(5, 0, false, false, true).use && !toolTabStep(5, 0, false, false, true).close);
+check('tools: state 5 with no item waits', !toolTabStep(5, 0, false, true, false).use);
+
+// Traps tab rows (ResetAndRefresh 0x74b9b4 -> the challenge status items 0x737ec4).
+check('status: a signed byte 0..20 is the count', trapStatusCount(3) === 3 && trapStatusCount(20) === 20);
+check('status: 21, negatives and the high bytes read as 0', trapStatusCount(21) === 0 && trapStatusCount(-1) === 0 && trapStatusCount(0xff) === 0);
+check('stock: 0..99 is the count, outside is 0', trapStockCount(5) === 5 && trapStockCount(99) === 99 && trapStockCount(100) === 0 && trapStockCount(-3) === 0);
+const safeRows = trapRows([3, 0, 20, 21], 5, true);
+check('traps: rows with a count above 0 only, in index order', safeRows.map((r) => r.row).join(',') === '0,2,4');
+check('traps: row 4 is the stock, label unitxt 0x11 0x17', safeRows[2].count === 5 && safeRows[2].labelId === 0x17 && safeRows[0].labelId === 0x13);
+check('traps: a safe, non-boss map is not greyed', safeRows.every((r) => !r.disabled));
+check('traps: an unsafe or boss map greys every row', trapRows([1], 1, false).every((r) => r.disabled));
+check('traps: a stock of 100 hides row 4', trapRows([0, 0, 0, 0], 100, true).length === 0);
+check('traps: a negative status hides its row', trapRows([-1, 0, 0, 0], 0, true).length === 0);
+
+// Battle Mode trap manager (CreateSinowberillChallengeEntityManager 0x6b08b8).
+check('trap manager: battle_spaceship (16) and battle_ruins (17) only', canCreateChallengeTrapManager(16, false) && canCreateChallengeTrapManager(17, false) && !canCreateChallengeTrapManager(15, false));
+check('trap manager: not while one exists', !canCreateChallengeTrapManager(16, true));
+
+// Traps decide (update_quickmenu case 8).
+const td = (over: Partial<TrapDecideInput> = {}): TrapDecideInput => ({
+  row: 2, keyHeld13: false, actionAllowed: true, uiGate: true, paletteBlocked: false, canPerform: true,
+  stock: 4, status: 3, playerId: 7, map: 16, managerExists: false, ...over,
+});
+check('decide: key 0xd held cancels with SE 0x585', trapDecide(td({ keyHeld13: true })).sound === QM_SOUND_CANCEL && trapDecide(td({ keyHeld13: true })).close);
+check('decide: no action allowed does nothing', trapDecide(td({ actionAllowed: false })).kind === 'none');
+const pal = trapDecide(td({ row: 2, status: 3 }));
+check('decide: row 0..3 sends the palette packet (sub 0x83, size 2, id, row, count) and closes', pal.kind === 'palette' && pal.close && JSON.stringify(pal.packet) === '{"sub":131,"size":2,"playerId":7,"row":2,"count":3}');
+check('decide: a zero status sends nothing', trapDecide(td({ status: 0 })).kind === 'none' && !trapDecide(td({ status: 0 })).close);
+check('decide: the element gate off sends nothing', trapDecide(td({ uiGate: false })).kind === 'none');
+check('decide: palette blocked (0x32c == 2) sends nothing', trapDecide(td({ paletteBlocked: true })).kind === 'none');
+check('decide: cannot perform sends nothing', trapDecide(td({ canPerform: false })).kind === 'none');
+const trap = trapDecide(td({ row: 4, stock: 4, map: 16 }));
+check('decide: row 4 on battle_spaceship makes a trap and takes one from the stock', trap.kind === 'trap' && trap.close && trap.stockAfter === 3);
+check('decide: row 4 with an empty stock clamps to 0', trapDecide(td({ row: 4, stock: 0, map: 17 })).stockAfter === 0);
+check('decide: row 4 off the battle maps does nothing', trapDecide(td({ row: 4, map: 1 })).kind === 'none');
+check('decide: row 4 with a manager already up does nothing', trapDecide(td({ row: 4, managerExists: true })).kind === 'none');
+
+// Weapon compare list (key 0xe held in state 1).
+check('compare: opening sets the list open and clears bit 8', compareToggle(false).open && !compareToggle(false).uiBit8Set);
+check('compare: closing sets bit 8', !compareToggle(true).open && compareToggle(true).uiBit8Set);
+
+// Technique swap (update_quickmenu case 0xa, SwapTechniqueSlots 0x741d28).
+const order = Array.from({ length: 19 }, (_, i) => i);
+const first = techniqueSwapKey(-1, 4, order);
+check('swap: the first press marks the selected row', first.pending === 4 && !first.changed && first.order.join() === order.join());
+const second = techniqueSwapKey(4, 9, first.order);
+check('swap: the second press swaps the two rows and clears the mark', second.pending === -1 && second.changed && second.order[4] === 9 && second.order[9] === 4);
+check('swap: the same row twice keeps the order and sets changed', techniqueSwapKey(3, 3, order).order.join() === order.join() && techniqueSwapKey(3, 3, order).changed);
+check('swap: the input order is not mutated', order[4] === 4);
+const rows = techniqueRows(second.order);
+check('swap: 19 rows, slot to tech id', rows.length === 19 && rows[4].techId === 9 && rows[18].slot === 18);
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);
