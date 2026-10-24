@@ -26,8 +26,8 @@ import {
   type StatusValues,
 } from '../classic/hud.ts';
 import { bandsOf, overlayFrame, textureBitmap, VW } from '../classic/stage.ts';
-import { TARGET_CARD_ANCHOR } from '../combat/targetcard.ts';
-import type { TargetCardText } from '../combat/targetcard.ts';
+import { PLAYER_CARD_HEIGHT, TARGET_CARD_ANCHOR } from '../combat/targetcard.ts';
+import type { PlayerTargetCardText, TargetCardText } from '../combat/targetcard.ts';
 import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
 import type { MapViewer } from './mapviewer.ts';
 
@@ -57,6 +57,8 @@ export class PlayerHud {
   hudFlags: () => number = () => 0;
   // The target card of the lock-on target (combat/targetcard.ts); null = none.
   targetCard: TargetCardText | null = null;
+  // The player (ally) card of a support target, drawn when no enemy card is up.
+  allyCard: PlayerTargetCardText | null = null;
 
   constructor(viewer: MapViewer, files: ClientFiles) {
     this.viewer = viewer;
@@ -195,7 +197,8 @@ export class PlayerHud {
     this.status.draw(ctx, tex);
     this.party.draw(ctx, tex);
     this.floats.draw(ctx, tex.font);
-    this.drawTargetCard(ctx, tex.font);
+    if (this.targetCard) this.drawTargetCard(ctx, tex.font);
+    else if (this.allyCard) this.drawAllyCard(ctx, tex.font);
     ctx.save();
     ctx.translate(0, bandsOf(f.vh, f.fill).mid);
     this.messages.draw(ctx, anchorX(MESSAGE_WINDOW.x, MESSAGE_WINDOW.w, this.extra));
@@ -223,6 +226,41 @@ export class PlayerHud {
     const row = y + pad + GLYPH_HEIGHT + 10;
     drawGlyphText(ctx, font, t.label, x + pad, row, 0xffffffff);
     drawGlyphText(ctx, font, t.value, x + pad + valueX, row, t.argb);
+  }
+
+  // The player (ally) card (ChallengeMenuObject_UpdatePlayerTarget, combat/targetcard.ts):
+  // the section ID icon and the name in a box 49 high whose bottom edge is gui slot 0x1f's
+  // y (437). The icon is a hexagon in the section's colour (ASSUMED shape and size); the box
+  // width is ASSUMED from the name (the exe's width is the text's width plus a constant).
+  private drawAllyCard(ctx: CanvasRenderingContext2D, font: CanvasImageSource): void {
+    const c = this.allyCard;
+    if (!c) return;
+    const pad = 10;
+    const icon = 9; // ASSUMED hexagon radius
+    const x = TARGET_CARD_ANCHOR.x;
+    const bottom = TARGET_CARD_ANCHOR.y;
+    const y = bottom - PLAYER_CARD_HEIGHT;
+    const textX = x + pad + icon * 2 + 6;
+    const width = Math.max(120, textX - x + glyphTextWidth(c.name) + pad);
+    ctx.fillStyle = 'rgba(6, 18, 30, 0.78)';
+    ctx.fillRect(x, y, width, PLAYER_CARD_HEIGHT);
+    ctx.strokeStyle = 'rgba(90, 220, 240, 0.9)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, width - 1, PLAYER_CARD_HEIGHT - 1);
+    const cx = x + pad + icon;
+    const cy = y + PLAYER_CARD_HEIGHT / 2;
+    ctx.fillStyle = `#${(c.argb & 0xffffff).toString(16).padStart(6, '0')}`;
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (Math.PI / 3) * i + Math.PI / 6;
+      const px = cx + icon * Math.cos(a);
+      const py = cy + icon * Math.sin(a);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    drawGlyphText(ctx, font, c.name, textX, cy - GLYPH_HEIGHT / 2, 0xffffffff);
   }
 
   dispose(): void {

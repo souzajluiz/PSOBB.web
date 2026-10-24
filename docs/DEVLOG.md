@@ -14726,3 +14726,71 @@ Brief: the magenta "EXP+5" over a killed enemy and the green "HP+602" over heale
 - The quick menu key on a hub: `unknown_handle_quickmenu` returns on the hidden palette outside the lobby. The port's quick-menu behaviour on Pioneer 2 was not compared.
 - The exe's 38-frame delay before the windows show (ASSUMED above).
 - The render walker's flag check (ASSUMED above).
+## 2026-10-23: ally target card and support cursor (Resta / Anti / Reverser)
+
+**What changed:** The lock-on was enemies only, so a support tech's ally had no cursor and no card.
+Now a palette Resta, Anti or Reverser marks the nearest eligible party member with the light-blue
+cursor (row 4) and the player card (section ID icon and name, 49 high, above gui slot 0x1f):
+- `client/src/combat/reticle.ts`: `nearestSupportTarget` (nearest first, the caster left out by the
+  caller, Reverser takes a dead member, range_h), `PLAYER_RETICLE_HEIGHT` (12, ASSUMED).
+- `client/src/combat/targetcard.ts`: `PLAYER_CARD_HEIGHT` (49), `SECTION_ARGB` (ASSUMED colours),
+  `playerTargetCardText` (the name and the icon colour).
+- `client/src/render/combatoverlay.ts`: a second cursor group (`allyReticle`), `setTarget(..., {ally: true})`.
+- `client/src/render/combat.ts`: `updateAllyLock` (palette slots 0..9 with group 1 = 3 and group 2 in
+  `SUPPORT_TARGET_TECHS`), the ally cursor follows the drawn position, `allyCardOf` (`game.players`).
+- `client/src/render/playerhud.ts`: `allyCard`, drawn by `drawAllyCard` when no enemy card is up.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13; dump `Psobb.exe-05112026.c` at
+`~/Downloads/psobb-master/reverse/refsrc/original-psobb-client-source/src/`).**
+- `ChallengeMenuObject_UpdateTarget_00731df8` (dump 699409): the item's flag 0x10000000 goes to
+  `ChallengeMenuObject_UpdatePlayerTarget_0073220c` (699599), 0x80000000 to the item target, 0x20000000 to
+  `ui_target_window_attribute` (the enemy card).
+- `UpdatePlayerTarget` (699599): `ListWindow` text objects from `DAT_009f2ce0`, then
+  `QuickMenuUpdatePlayerInfo_00742454` (712821) on the target's player (`GetPlayer_0068d5a8`), text width
+  0xa0 (`TextRenderer_SetText_0072db60`), height `0x42440000` = 49.0 at `this + 0x3c`, y =
+  `get_gui_position_y(0x1f)` - 49.0 * `this + 0x6c`.
+- `QuickMenuUpdatePlayerInfo_00742454`: the player's name (`get_player_name`); if the player is dead
+  (`is_dead` vtable call) it stores 0xffff0000 at +0x24, else the player's `field_0x948`. The section
+  ID is in the player struct (`section_id`, dump enum `section_id`: viridia 0 .. whitill 9); the icon's
+  texture is not traced.
+- Targeting: `enable_reticle` (575550) and `CheckEnemyTargetability_006945fc` (575520) run
+  `check_enemy_is_targetable` (785551) for every player's record; it skips `player->player_idx ==
+  target->entity_index` (the caster), tests `record.field6_0x10 & target.unknown_entity_type_flags` and
+  the range (`wpn_to_trgt_dist_sq`, `horizontal_distance`).
+- `unknown_update_equipment_properties_from_pmt` (784800s): reticle type 4 with param 10 is
+  `GetTechniqueData(resta, 0xe)` (its range_h / angle / targets from the tech record), param 9 is
+  `GetTechniqueData(reverser, 0xe)`; reticle type 3 is a technique with `(field6_0x10, field4_0x8)` per
+  the switch on `param_7` (cases 0xb / 0xc, 0xe, 10 / 0xd / 0xf / 0x10).
+- `find_targets_for_weapons_and_techs` (785117) sorts each record's targets by distance (insertion and
+  `QuickSortWeaponTargetInfo_007a2a1c`), then `create_target_reticles_for_weapon_or_tech` (785268) makes
+  one reticle per target (`init_reticle`, the `g_BossWeaponReticle` vtable).
+- The colour: `GetReticleColorIndex_006aba4c` (597907) looks up the (type, subtype) pair in the
+  record's 14-entry table (`this + 4` or `this + 0x3c`), -1 when none. The table `g_ReticleColorTable`
+  (0x009ff540) read again with `tools/exedata.py read 009ff540 f 56`: row 4 = (1, 0.42, 0.81, 0.96),
+  the light blue; row 0 and 1 = green, row 2 = blue, row 3 = red. The port's `RETICLE_COLORS` matches.
+
+**ASSUMED.**
+- Which ally is the cursor: the port's rule (nearest party member within the palette tech's range_h,
+  living for Resta and Anti, dead for Reverser). The exe keeps one reticle per record and target, with
+  the primary chosen by the record; the port shows one ally cursor.
+- Anti's targeting record: not traced in the dump (the port's `playerTargets` range), so Anti is
+  included.
+- The row: row 4 for every support target (the exe's row comes from the record's table, not traced).
+- The ally's cursor height: +12 above the feet (`PLAYER_RETICLE_HEIGHT`); the enemy uses +22.
+- The card's window scale (`this + 0x6c`) is 1, so the card's bottom edge is y 437; its width is the
+  name plus the icon and padding (exe's width not traced); the icon is a hexagon, and its colours
+  (`SECTION_ARGB`) are ASSUMED (only three of the reference screenshot's colours are checked by eye).
+- The enemy card keeps priority over the ally card when both exist (the exe's `UpdateTarget` shows one
+  card per target; which one wins with two targets is not traced).
+- The player entity's flags for the `field6_0x10` test were not read; the port's rule ignores them.
+
+**Left.**
+- The exe's per-record reticles (one per palette record and target, `render_secondary_reticle_maybe`
+  786247 for the others): not ported.
+- The section icon's real texture and the card's padding: not traced.
+- Anti's and Resta's record flags (`field6_0x10` for players): not traced.
+- `client/e2e/lockon.spec.ts`: not run in this session (the brief forbids Playwright).
+
+**Checks.** `node tests/reticle.test.ts` (all pass, 10 new cases for the support target and the
+player card), `node tests/enemystatus.test.ts` and `node tests/fieldhud.test.ts` (pass under Node 24;
+the shell's default Node 16 fails to load them), `cd client && npx tsc --noEmit -p .` (exit 0).

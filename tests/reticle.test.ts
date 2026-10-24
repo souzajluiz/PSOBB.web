@@ -19,17 +19,22 @@ import {
   RETICLE_NOTCH,
   RETICLE_OUTLINE_THRESHOLD,
   RETICLE_Z_OFFSET,
+  PLAYER_RETICLE_HEIGHT,
   bamsToRadians,
+  nearestSupportTarget,
   reticleColor,
   reticleOutlineVisible,
   reticleRow,
 } from '../client/src/combat/reticle.ts';
 import {
+  PLAYER_CARD_HEIGHT,
+  SECTION_ARGB,
   TARGET_ATTR_ARGB,
   TARGET_CARD_ANCHOR,
   TARGET_CARD_HEIGHT,
   TARGET_TEXT,
   monsterNameCollection,
+  playerTargetCardText,
   targetAttributeIndex,
   targetCardText,
 } from '../client/src/combat/targetcard.ts';
@@ -134,6 +139,33 @@ if (existsSync(gslPath)) {
 } else {
   console.log('skip cursor model: data.gsl not found');
 }
+
+// 9. Support target (find_targets_for_weapons_and_techs: nearest first; check_enemy_is_targetable:
+// not the caster; Reverser takes a dead party member; the range is the technique's range_h).
+const origin = { x: 0, z: 0 };
+// The caller leaves the caster out of the candidates.
+const party = [
+  { id: 1, x: 6, z: 8, dead: false },   // distance 10
+  { id: 2, x: 3, z: 0, dead: false },   // distance 3
+  { id: 3, x: 0, z: 2, dead: true },    // distance 2, dead
+];
+const live = nearestSupportTarget(origin, party, 20, false);
+check('support: nearest living ally wins (the dead one at 2 is skipped)', live?.id === 2, JSON.stringify(live));
+check('support: distance is the horizontal one', live !== null && near(live.distance, 3, 1e-9), JSON.stringify(live));
+const far = nearestSupportTarget(origin, party.slice(1, 3), 2.5, false);
+check('support: out of range_h gives none', far === null, JSON.stringify(far));
+const dead = nearestSupportTarget(origin, party, 20, true);
+check('support: Reverser takes the dead one', dead?.id === 3, JSON.stringify(dead));
+check('support: no candidate gives null', nearestSupportTarget(origin, [], 20, false) === null);
+check('support: cursor sits above the feet by 12 (ASSUMED)', PLAYER_RETICLE_HEIGHT === 12);
+
+// 10. Player card (ChallengeMenuObject_UpdatePlayerTarget: height 49.0 = 0x42440000).
+check('player card height is 49.0 (0x42440000)', PLAYER_CARD_HEIGHT === 49 && Buffer.from(new Float32Array([49]).buffer).readUInt32LE(0) === 0x42440000);
+const card = playerTargetCardText({ name: 'Yukina', sectionId: 6 });
+check('player card: the name', card.name === 'Yukina', card.name);
+check('player card: redria (6) icon colour', card.argb === SECTION_ARGB[6] && card.argb === 0xffff3030, card.argb.toString(16));
+check('player card: unknown section falls back to whitill', playerTargetCardText({ name: 'X', sectionId: 42 }).argb === SECTION_ARGB[9]);
+check('section table has ten sections', SECTION_ARGB.length === 10);
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);
