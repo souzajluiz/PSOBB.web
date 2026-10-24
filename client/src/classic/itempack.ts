@@ -990,29 +990,7 @@ export class ItemPackMenu {
       for (const s of m.stats) line(`${s.name}:`, s.text);
       return;
     }
-    const c = this.env.character();
-    const current: StatBlock = {
-      atp: rc.stats.atp,
-      dfp: rc.stats.dfp ?? 0,
-      mst: rc.stats.mst,
-      ata: rc.stats.ata,
-      evp: rc.stats.evp ?? 0,
-      lck: rc.stats.lck ?? 0,
-    };
-    const equipped = it.equipped;
-    // The item in the same slot: a weapon for a weapon, the armour for an armour, the shield for a shield.
-    const d = it.data.data1;
-    const old = c?.inventory.find((o) => o.equipped && o.data.data1[0] === d[0] && (d[0] !== 1 || o.data.data1[1] === d[1])) ?? null;
-    const problems = equipProblems(it.data, rc);
-    const rows = equipStatRows(current, it.data, old && old !== it ? old.data : null, names.pmt, equipped, problems === 0);
-    for (const row of rows) {
-      t(`${text(11, row.label)}:`, x0, y, white);
-      const cur = String(row.current);
-      const item = `→ ${row.item}`;
-      t(item, xr - gameTextWidth(item), y, row.color);
-      t(cur, xr - gameTextWidth(item) - 6 - gameTextWidth(cur), y, white);
-      y += ROW;
-    }
+    drawEquipStatRows(ctx, this.env, it.data, it.equipped, rc, x0, xr, y);
   }
 
   // Console aid (window.gameView.hud.debug().itemPack): the cursor, the rows, the selected
@@ -1043,6 +1021,75 @@ export class ItemPackMenu {
       drawAmountWindow(ctx, skin, tex, a, R, this.env.text(11, 0x3b)),
     );
   }
+}
+
+// The equipment stat rows of a weapon / armour / shield: label, then the
+// character's current value and the candidate's (the "→" value, its colour).
+// The exe's rows are EquipmentStatDisplayObject_Update_00727220 (weapons) and
+// _00727078 (armour, shield) through the list's kind table (DAT_009f2520 /
+// DAT_009f2538), see itemdetail.ts. `equipped` is the item's own state; the
+// item in the same slot is compared by its data.
+export interface EquipPanelEnv {
+  text: (group: number, index: number) => string;
+  character: () => CharacterFile | null;
+}
+
+export function drawEquipStatRows(
+  ctx: CanvasRenderingContext2D,
+  env: EquipPanelEnv,
+  item: ItemData,
+  equipped: boolean,
+  rc: RowContext,
+  x0: number,
+  xr: number,
+  y0: number,
+): void {
+  const names = rc.names;
+  if (!names) return;
+  const white = '#ffffff';
+  const t = (s: string, x: number, y: number, color: string) => wipeElement(ctx, x, y, ROW, () => drawGameText(ctx, s, x, y, color));
+  const c = env.character();
+  const current: StatBlock = {
+    atp: rc.stats.atp,
+    dfp: rc.stats.dfp ?? 0,
+    mst: rc.stats.mst,
+    ata: rc.stats.ata,
+    evp: rc.stats.evp ?? 0,
+    lck: rc.stats.lck ?? 0,
+  };
+  // The item in the same slot: a weapon for a weapon, the armour for an armour, the shield for a shield.
+  const d = item.data1;
+  const old = c?.inventory.find((o) => o.equipped && o.data.data1[0] === d[0] && (d[0] !== 1 || o.data.data1[1] === d[1])) ?? null;
+  const problems = equipProblems(item, rc);
+  const rows = equipStatRows(current, item, old && old.data !== item ? old.data : null, names.pmt, equipped, problems === 0);
+  let y = y0;
+  for (const row of rows) {
+    t(`${env.text(11, row.label)}:`, x0, y, white);
+    const cur = String(row.current);
+    const next = `→ ${row.item}`;
+    t(next, xr - gameTextWidth(next), y, row.color);
+    t(cur, xr - gameTextWidth(next) - 6 - gameTextWidth(cur), y, white);
+    y += ROW;
+  }
+}
+
+// A stat panel on its own (the bank's detail, shop.ts): the frame at `rect`, the
+// equipment rows from its top inset. ASSUMED: the rows' place inside the window
+// (the exe's element offsets for the list's detail window are not decoded).
+export function drawEquipPanel(
+  ctx: CanvasRenderingContext2D,
+  skin: WindowSkin,
+  env: EquipPanelEnv,
+  item: ItemData,
+  equipped: boolean,
+  rc: RowContext,
+  rect: { x: number; y: number; w: number; h: number },
+  wipe?: WindowAnim,
+): void {
+  drawWindowFrame(ctx, skin.frame, rect.x, rect.y, rect.w, rect.h);
+  const x0 = rect.x + INSET;
+  const y0 = rect.y + INSET;
+  withElementWipe(wipe, x0, y0, rect.w - 2 * INSET, () => drawEquipStatRows(ctx, env, item, equipped, rc, x0, rect.x + rect.w - INSET, y0));
 }
 
 // The digit spinner window (CreateNumericDisplayListWindow_00728ac4), with a

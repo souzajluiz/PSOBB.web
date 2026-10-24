@@ -50,6 +50,7 @@
 import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
 import type { ItemPMT } from '../formats/itempmt.ts';
+import { hasEquipPanel } from './itemdetail.ts';
 import { maxStackSize, type ItemData } from '../formats/itemnames.ts';
 import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
 import { MEDICAL_COST, stackSize } from '../net/items.ts';
@@ -68,6 +69,7 @@ import {
   itemDescription,
   itemRow,
   itemRowName,
+  drawEquipPanel,
   type ItemPackTextures,
   type ItemRow,
   type RowContext,
@@ -423,6 +425,9 @@ interface ItemList {
   // The "n/max" line (ListWindowObject_RenderItemText_007367d0, drawn when the
   // list's max is above 0): the bank's take list only. null: no line.
   capacity: number | null;
+  // The stat panel instead of the description for a weapon / armour / shield (the
+  // bank's take list: its detail window draws the equipment rows, see drawEquipPanel).
+  panel: boolean;
 }
 
 class Closed extends Error {}
@@ -552,7 +557,7 @@ abstract class CounterBase {
     rows: ItemRow[],
     items: ItemData[],
     quantity: ItemList['quantity'] = null,
-    opts: { detail?: boolean; bar?: boolean; capacity?: number } = {},
+    opts: { detail?: boolean; bar?: boolean; capacity?: number; panel?: boolean } = {},
   ): void {
     const cursor = this.list ? Math.min(this.list.cursor, Math.max(0, rows.length - 1)) : 0;
     this.list = {
@@ -566,6 +571,7 @@ abstract class CounterBase {
       detail: opts.detail ?? true,
       bar: opts.bar ?? true,
       capacity: opts.capacity ?? null,
+      panel: opts.panel ?? false,
     };
     this.clampTop();
   }
@@ -680,7 +686,12 @@ abstract class CounterBase {
       this.drawList(ctx, skin, tex, l);
       const item = l.items[l.cursor];
       const R = SHOP_DETAIL;
-      if (item && l.detail) drawTextWindow(ctx, skin, { x: anchorX(R.x, R.w, extra), y: R.y, w: R.w, h: R.h }, itemDescription(item, this.env.rowContext().names));
+      if (item && l.detail) {
+        const rect = { x: anchorX(R.x, R.w, extra), y: R.y, w: R.w, h: R.h };
+        const rc = this.env.rowContext();
+        if (l.panel && rc.names && hasEquipPanel(item)) drawEquipPanel(ctx, skin, this.env, item, false, rc, rect);
+        else drawTextWindow(ctx, skin, rect, itemDescription(item, rc.names));
+      }
       if (l.quantity && item) this.drawCount(ctx, skin, QUANTITY_WINDOW, this.env.text(12, 1), l.quantity(l.cursor));
     }
     if (this.picture) this.drawPicture(ctx, skin, extra, this.picture);
@@ -1148,7 +1159,7 @@ export class BankCounter extends CounterBase {
         list.map((b) => shopRow(b.data, maxStackSize(b.data) > 1 ? `×${b.amount}` : '', ctx)),
         list.map((b) => b.data),
         (i) => list[i].amount,
-        { capacity: BANK_ITEMS_MAX },
+        { capacity: BANK_ITEMS_MAX, panel: true },
       );
       const i = await this.pick();
       if (i === null) break;
