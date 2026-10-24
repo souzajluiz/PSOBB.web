@@ -17016,3 +17016,55 @@ the port applied it to the bare text, which would drop every two-character line 
 "- 2" is the 2-unit language marker (`\tE`) the line carries in the exe's buffer, so `Lobby.sendChat`
 now gates on the marked line: a short plain line is sent, a line with only an emote key is not (the
 emote still plays). ASSUMED: the marker is in the buffer process_chat_message reads.
+
+## 2026-10-23: stalactite fall, shatter and hit; destructible rock break; Trap Vision counter (no duration in the exe)
+
+**Report:** the falling stalactite 0x038b is ported (trigger, gravity, the landing, the hit under 10 within 100, the shatter with its box off, the particles and SE). Its five debris parts are not. The destructible rock 0x0303 breaks by its switch flag (box off, model hidden); its break effects are not ported. Trap Vision: the brief's premise (a timed vision bit while the effect runs) is not in the exe. The tool's value at +0x104 is a stack count, and no code path sets the vision bit for the tool. Nothing is ported for Trap Vision; the vision stays the android class's (`UpdatePlayerEntityStateAndFlags_00695b48`).
+
+**Verified (PsoBB.exe: objdump of the exe's text, `tools/exedata.py`; the named dump `Psobb.exe-05112026.c` where its names match the bytes):**
+
+Stalactite 0x038b (the dump calls it `DerolleEnemyHead`):
+- Init 0x00679fd4: state +0x32e = 0, +0x340 = y minus the ground probe at the spawn point (`Enemygetgroundinfo_007b4c58`).
+- Update 0x00679948: state 0 scans the four player slots; XZ distance squared (`0x007a9180`) under 2500 (0x0093b6fc, 50 units) sets state 1. State 1 runs 0x006799c8.
+- The step 0x006799c8 calls `EnemyAI_UpdateVerticalPosition_00772b44`, the enemy's own vertical integration: gravity g = -0.1088888869 (0x009782d0) is added to the velocity (+0x310); the step lands when `y + v <= ground` (y = ground, v = 0, flag 0x800000 in +0x30). The fall value is `y (+0x3c, the same field as y2) - ground`, stored at +0x340.
+- The hit: with the fall value under 10 (0x0093b6f0), each player on the floor with `character_flags & 0x4000e00 == 0`, its bit `1 << slot` of +0x33c clear, and XZ within 100 (0x0093b6f4; `unknown_object_player_collision` = 0x007b8338, which uses the XZ helper) takes `entity_hit_by_tech(player, this, fixed_damage, power, NULL, ~foie, -1)`, where power = 0x0093b708 (100.0) x {1, 2, 3, 6}[the index the dump calls `g_CurrentFloor`], and `player +0x30 |= 0x400`. The mask bit is read there; nothing in this function sets it.
+- The shatter 0x00679ac4 runs when +0x30 has 0x800000 (after the hit loop, same tick). With no record at +0x80: state 2, the entity flags cleared, the entity marked dead, `+0x08 |= 1`, box 0 off (0x007b52ec), and the debris 0x00679b70: five DerollePart objects (0x234 bytes each, from the template `g_DerolleHeadPartInitData`, njcm chunks of the BML `DerolleHeadSakana`), `create_particle_effect(xyz, 100)`, `create_particle_effect(xyz, 0xf0)` and SE 0xaf at the object. With a record at +0x80: box status and `NotifyDoorStateChange_007b5038`, no state change.
+- Box row 0x009c9fb8 (sphere r15, flags 0x10003 plus 0x1f00 from 0x007b52c4 on box 0) and the solid's place (the DEVLOG Wilds solids entry) are unchanged.
+
+Destructible rock 0x0303 (vtable 0x00b36980: slot 1 0x00633734 the DerollePart update, slot 2 0x00675b8c the draw, slot +0x38 0x006759d4 and slot +0x3c 0x006336f8 the break's effects):
+- Ctor 0x00675c74: switch flag +0xb8 = param4 when it is 0..0x100, else -1 (`0x00675cf3`..`0x00675d33`).
+- Update 0x00633734: with state +0xb4 = 0 and the flag 0..0xff set on the floor (`IsSwitchUnlockedOnCurrentFloor_00816eec`), state = 1 and vtable +0x3c, then +0x38. With state 1 the next tick marks the object dead and sets `+0x08 |= 1`.
+- Slot +0x3c (0x006336f8) calls the vtable +0x40 and then two calls with the SE / particle ids 0x45 and 0x46 at the object (the callee 0x0050b510 is not traced). Slot +0x38 (0x006759d4) is a large effect function (reads the 0x93aa40 table), not traced.
+
+Trap Vision (item 8: `init_item_tool_8` 0x005df848, constructor 0x005df8dc, vtable 0x00b0eca0 over the base 0x00b0dc40):
+- Per-frame slot +0x30 = 0x005de1ec (checked in the data at 0x00b0dc70). It compares the getter 0x005ddaf4 (`(this+0x104) ^ stored`, the XOR with the field's own address) with the cap 0x005c5064, and calls the expiry 0x005c3550 when the value is above the cap.
+- The cap 0x005c5064 -> 0x005d6430: 1 when the item fails the predicate 0x005d24b0 (item type 3 with subtype 0, 1, 3..8 or 0x10, or type 4); 99 for code 03 10 xx; 10 otherwise (Trap Vision 03 08 00 gets 10).
+- The value's writer 0x005de3b0 (xor with the field's address, then store). Its vtable users: +0x8c = 0x005de46c (consume: when n <= value, store value - n and return 1), +0x90 = 0x005de4a0 (add n when value + n <= cap, store, return 1). The constructor 0x005de2d8 stores the start value from 0x005d29b0: the item's byte 5 (the stack count) when the predicate holds and the byte is not 0, else 1. So +0x104 is the tool's stack count, not a time.
+- The use slot +0x74 = 0x005de3fc: with flag 0x400 (0x005c443c) it clears the flag (0x005c4860) and stops. Otherwise, with an owner (+0xf8), it clears +0x109, calls vtable +0xa8 (for this vtable 0x005df834: `unknown_cast_tech(ryuker, 0, owner)` in the dump, technique 14 on the owner), then plays SE 0x1af and message 0x580 if +0x109 is still 0, and removes the item (0x005c46f8) if the owner's +0xdc has 0x10.
+- The base update 0x005c3ed8 (the floor item's states 1 and 2) calls +0x30 each tick. The list at 0x00a8d81c and its add / remove (0x005c4364, the base's +0x12c) are not on the tool's use path.
+- The vision bit 0x10000 of +0x33c: the only store is `UpdatePlayerEntityStateAndFlags_00695b48`, from the class flag +0x964 & 0x10. The disassembly has 48 displacement uses of +0x964: all are loads, pushes or tests. No path found sets the tool's vision bit, so the port does not add one.
+
+**Ported:**
+- `client/src/render/fieldobjects.ts`: `FallingStalactite` (state, +0x310 velocity, +0x340 fall, `watch` for the trigger, `step` for the gravity and the landing), `stalactiteDamage` (100 x {1, 2, 3, 6}), `stalactiteInRange`, `dist2xz`; `FieldObjects.tickStalactites` (per game tick; the local player takes the hit; the model's y follows the fall), `shatterStalactite` (state 2, box off through `shattered`, model hidden, particles 100 and 0xf0, SE 0xaf); `rockSwitchFlag` and `FieldObjects.tickRocks` (the switch-flag break: state 1, then dead on the next tick). The stalactite and the rock are excluded from the static batch (`dynamicIndices`).
+- `client/src/render/gamefield.ts`: `tickStalactites` and `tickRocks` on the game ticks; `difficulty` and `onStalactiteHit` set on each floor; the `fieldHit` option.
+- `client/src/render/gameview.ts`: `fieldHit` -> `combat.fieldObjectHit`.
+- `client/src/render/combat.ts` `fieldObjectHit`: the player's damage path (`PlayerDamage.hit`, the PB gain), the same as a fixed hit. Skipped while the local player is not alive.
+- `tests/objectcollision.test.ts`: section 6 (the trigger range and its strict edge, one gravity step, the landing and the hit ticks, the no-ground case, the 100 range, the XZ distance, the damage table) and the rock flag mapping.
+- `docs/ROADMAP.md`: the solids line and the trap vision line.
+
+**ASSUMED:**
+- A stalactite's +0x80 record is null (the shatter path without a record). The record path (box status notify) is not ported.
+- The object's y (+0x3c) is the physics y, as the exe's offsets show; the model follows it each tick (the smooth draw between ticks is not applied to it).
+- No ground under the stalactite: no fall and no hit (the exe's probe result in that case is not traced).
+- Only the local player takes the hit; the other clients apply theirs. The exe's per-player gate (`character_flags & 0x4000e00`) is mirrored only as "the local player is not busy" (`PlayerDamage.busy`); the killer is 0 and there is no knockback.
+- The damage index is the difficulty (0..3); the dump's name `g_CurrentFloor` is not trusted.
+- The XZ range test (`unknown_object_player_collision`) is `dist2 < 100^2`.
+- The rock's flag range is 0..0xff (the update's check); its break is one tick after the flag, and its break effects are not played.
+- The shatter's model is hidden (the exe's `mark_monster_initdata_as_dead`; the draw of a dead entity is not traced).
+
+**Checks:** `node tests/objectcollision.test.ts` (ALL PASS, section 6 added); `node tests/traps.test.ts`, `collision`, `townfield`, `drops`, `fieldhud` pass; `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24) is clean. Not run: Playwright (per the brief), Chrome.
+
+**Left:**
+- The stalactite's five debris parts (0x00679b70: the DerollePart bodies with the BML chunks and their physics); the record path of the shatter (+0x80: box status and 0x007b5038).
+- The destructible rock's break effects (0x006759d4, and the 0x006336f8 calls to 0x0050b510 with the SE / particle ids 0x45 and 0x46).
+- Trap Vision: no duration exists in the exe client (the value is a stack count). Open: the callers of 0x005de46c and 0x005de4a0 (the consume / add of the item's stack), and whether the use path's technique 14 cast (0x006e0780, case 14) has any Trap Vision effect (not traced; the dump names this function `use_telepipe`, so the vtable may belong to the Telepipe).

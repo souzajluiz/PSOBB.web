@@ -4427,6 +4427,18 @@ export class CombatView {
     this.overlay?.setTarget(pos, { row: reticleRow('enemy'), camera: this.viewer.camera, trap: true });
   }
 
+  // A falling stalactite's hit on the local player (render/fieldobjects.ts FallingStalactite): the exe's
+  // DerolleEnemyHead_UpdatePlayerDamage (0x006799c8) calls entity_hit_by_tech with the fixed amount, so it
+  // is the same path as a fixed hit (the damage, the PB gain). ASSUMED: a player that is not alive takes
+  // none, and the killer is 0 (the pillar traps' convention) with no knockback.
+  fieldObjectHit(damage: number, at: { x: number; z: number }): void {
+    if (this.damage.busy || damage < 1) return;
+    const me = this.view?.playerPositions().get(this.game.selfId);
+    this.damage.hit(damage, me ? Math.atan2(me.x - at.x, me.z - at.z) : 0, 0, 0);
+    this.gainPb(damage, true);
+    this.opts.log(`stalactite: ${damage} damage`);
+  }
+
   captureTrapEvent(ev: TrapEvent): void {
     if (ev.kind === 'hold') this.imposeHold({ frames: ev.frames, particle: 0, x: ev.x, z: ev.z, radius2: ev.radius2 }, 'capture trap');
     else if (ev.kind === 'release') {

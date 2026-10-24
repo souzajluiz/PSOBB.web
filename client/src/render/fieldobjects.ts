@@ -327,6 +327,96 @@ export function solidObstacle(s: FieldSolid): Obstacle {
   };
 }
 
+// The falling stalactite (0x038b; PsoBB.exe: init 0x00679fd4, update 0x00679948, the state-1 step
+// 0x006799c8 (DerolleEnemyHead_UpdatePlayerDamage), the shatter 0x00679ac4, the debris 0x00679b70; the
+// dump calls the object DerolleEnemyHead). Its box is row 0x009c9fb8 (sphere r15, flags 0x10003, with
+// 0x1f00 ORed into box 0 by 0x007b52c4); the box blocks until the shatter turns box 0 off (0x007b52ec).
+export const STALACTITE_TYPE = 0x038b;
+export const ROCK_BREAKABLE_TYPE = 0x0303; // the destructible rock (DerollePart, vtable 0x00b36980, ctor 0x00675c74)
+const STALACTITE_TRIGGER_RANGE_SQ = 2500; // 0x0093b6fc: XZ distance squared (7a9180), 50 units
+const STALACTITE_HIT_HEIGHT = 10; // 0x0093b6f0: the hit runs while the fall value is under it
+const STALACTITE_HIT_RANGE = 100; // 0x0093b6f4: the player's XZ range (unknown_object_player_collision)
+const STALACTITE_GRAVITY = Math.fround(-0.1088888868689537); // g_EnemyGravity (0x009782d0), per game tick
+const STALACTITE_DAMAGE_BASE = 100; // 0x0093b708: GetDifficultyMultiplier = 100 x {1, 2, 3, 6}[difficulty]
+const STALACTITE_DAMAGE_STEPS = [1, 2, 3, 6];
+const STALACTITE_SE_SHATTER = 0xaf; // play_directional_sound_effect(0xaf) at the object (0x00679b70)
+const STALACTITE_PARTICLES = [100, 0xf0]; // create_particle_effect(xyz, 100) and (xyz, 0xf0) (0x00679b70)
+
+// The destructible rock's switch flag from param4 (ctor 0x00675c74: 0..0x100 kept, else -1 = never breaks).
+export function rockSwitchFlag(param4: number): number {
+  const f = Math.trunc(param4);
+  return f >= 0 && f <= 0x100 ? f : -1;
+}
+
+// The stalactite's damage on a player (DerolleEnemyHead_UpdatePlayerDamage): the difficulty's fixed amount.
+export function stalactiteDamage(difficulty: number): number {
+  return STALACTITE_DAMAGE_BASE * STALACTITE_DAMAGE_STEPS[Math.max(0, Math.min(3, difficulty))];
+}
+
+export interface StalactiteStep {
+  landed: boolean; // the 0x800000 flag of the entity: the vertical step met the ground this tick
+  hit: boolean; // the fall value is under 10: the hit loop runs
+}
+
+// One stalactite. state: +0x32e (0 hanging, 1 falling, 2 shattered); y: +0x3c, which is the physics
+// height too (the vertical step writes y2 = +0x3c); vy: +0x310; fall: +0x340, the height above the ground.
+export class FallingStalactite {
+  state: 0 | 1 | 2 = 0;
+  readonly x: number;
+  readonly z: number;
+  y: number;
+  vy = 0;
+  fall: number;
+  constructor(x: number, z: number, y: number, ground: number | null) {
+    this.x = x;
+    this.z = z;
+    this.y = y;
+    // init (0x00679fd4): the fall value is the height above the ground at the spawn point.
+    this.fall = ground === null ? 0 : y - ground;
+  }
+
+  // State 0 (the update's scan): a player within 50 in XZ starts the fall.
+  watch(players: ReadonlyArray<{ x: number; z: number }>): void {
+    if (this.state !== 0) return;
+    for (const p of players) {
+      if (dist2xz(p, this) < STALACTITE_TRIGGER_RANGE_SQ) {
+        this.state = 1;
+        return;
+      }
+    }
+  }
+
+  // State 1, the vertical step (EnemyAI_UpdateVerticalPosition 0x00772b44): `ground` is the probe under the
+  // stalactite before the step. Gravity adds to the velocity; a step that reaches the ground lands the
+  // stalactite on it (vy 0, the landed flag). The fall value is then the height above the ground.
+  // ASSUMED: with no ground under it, nothing falls and nothing hits (the exe's probe result there is not traced).
+  step(ground: number | null): StalactiteStep {
+    if (ground === null) return { landed: false, hit: false };
+    const vel = STALACTITE_GRAVITY + this.vy;
+    const next = this.y + vel;
+    let landed = false;
+    if (next <= ground) {
+      this.y = ground;
+      this.vy = 0;
+      landed = true;
+    } else {
+      this.y = next;
+      this.vy = vel;
+    }
+    this.fall = this.y - ground;
+    return { landed, hit: this.fall < STALACTITE_HIT_HEIGHT };
+  }
+}
+
+// XZ distance squared (the exe's vec3 XZ helper 0x007a9180).
+export function dist2xz(a: { x: number; z: number }, b: { x: number; z: number }): number {
+  return (a.x - b.x) ** 2 + (a.z - b.z) ** 2;
+}
+
+export function stalactiteInRange(p: { x: number; z: number }, s: { x: number; z: number }): boolean {
+  return dist2xz(p, s) < STALACTITE_HIT_RANGE * STALACTITE_HIT_RANGE;
+}
+
 const SWITCH_RADIUS: Record<number, number> = {
   0x0081: 20, // FUN_0062998c: +0xcc = 20.0
   0x0101: 10, // newserv: "The activation radius is always 10 units"
@@ -710,6 +800,13 @@ export class FieldObjects {
   onParticles: (id: number, at: { x: number; y: number; z: number }) => void = () => {};
   // The beam door's unlock event (NotifyDoorStateChange_007b5038: the object's box-status packet).
   onBeamUnlock: (d: FieldDoor) => void = () => {};
+  // The falling stalactites (0x038b). `difficulty` (0..3) picks the hit's amount; onStalactiteHit
+  // is the local player's hit (the caller applies it through the player's damage path).
+  difficulty = 0;
+  onStalactiteHit: (damage: number, at: { x: number; z: number }) => void = () => {};
+  private stalactites = new Map<number, FallingStalactite>(); // object index -> stalactite
+  private shattered = new Set<number>(); // object indices whose box is off and model hidden (the shatter, the break)
+  private rocks = new Map<number, { flag: number; state: number }>(); // destructible rocks: switch flag, state (+0xb4)
 
   constructor(
     viewer: MapViewer,
@@ -731,6 +828,14 @@ export class FieldObjects {
       if (p.entity.kind !== 'object') continue;
       this.sets.set(p.entity.index, p.entity);
       if (isDelayedObject(p.entity, constructed)) this.delayed.add(p.entity.index);
+      if (p.entity.type === STALACTITE_TYPE) {
+        const [x, y, z] = p.world;
+        this.stalactites.set(p.entity.index, new FallingStalactite(x, z, y, collision?.groundHeight(x, z, y) ?? null));
+      }
+      if (p.entity.type === ROCK_BREAKABLE_TYPE) {
+        // The rock's switch flag is param4 (ctor 0x00675c74: 0..0x100 kept, else -1 = never breaks).
+        this.rocks.set(p.entity.index, { flag: rockSwitchFlag(p.entity.params[3] ?? -1), state: 0 });
+      }
     }
     for (const d of this.all.doors) {
       if (models?.models.has(d.index)) {
@@ -757,6 +862,8 @@ export class FieldObjects {
   dynamicIndices(extra: Iterable<number> = []): Set<number> {
     const out = new Set<number>(extra);
     for (const list of [this.all.warps, this.all.doors, this.all.switches, this.all.triggers]) for (const x of list) out.add(x.index);
+    for (const i of this.stalactites.keys()) out.add(i); // they fall: their model moves on the ticks
+    for (const i of this.rocks.keys()) out.add(i); // they break: their model hides on the ticks
     return out;
   }
 
@@ -845,7 +952,7 @@ export class FieldObjects {
     }
     const broken = new Set(this.all.boxes.filter((b) => b.broken).map((b) => b.index));
     for (const s of this.solids) {
-      if (this.delayed.has(s.index) || broken.has(s.index)) continue;
+      if (this.delayed.has(s.index) || broken.has(s.index) || this.shattered.has(s.index)) continue;
       out.push(solidObstacle(s));
     }
     return out;
@@ -970,6 +1077,69 @@ export class FieldObjects {
     }
     this.showBossWarps();
     if (this.collision) this.collision.obstacles = this.obstacles();
+  }
+
+  // The falling stalactites, once per game tick (DerolleEnemyHead_Update 0x00679948): a hanging one
+  // starts when a player is within 50 (XZ); a falling one steps its gravity, takes the hit while its
+  // fall value is under 10 (the local player within 100, once per shatter) and shatters on landing.
+  // `self` / `others` are the floor's players; only the local player takes the hit (ASSUMED: the other
+  // clients apply theirs).
+  tickStalactites(ticks: number, self: { x: number; y: number; z: number } | null, others: ReadonlyArray<{ x: number; y: number; z: number }>): void {
+    if (!this.stalactites.size) return;
+    let changed = false;
+    for (let i = 0; i < ticks; i++) {
+      const players: Array<{ x: number; y: number; z: number }> = [];
+      if (self) players.push(self);
+      for (const o of others) players.push(o);
+      for (const [index, s] of this.stalactites) {
+        if (s.state === 2 || this.delayed.has(index)) continue;
+        if (s.state === 0) {
+          s.watch(players);
+          continue;
+        }
+        const r = s.step(this.collision?.groundHeight(s.x, s.z, s.y) ?? null);
+        const model = this.models?.models.get(index);
+        if (model) model.root.position.y = s.y;
+        if (r.hit && self && stalactiteInRange(self, s)) this.onStalactiteHit(stalactiteDamage(this.difficulty), s);
+        if (r.landed) {
+          this.shatterStalactite(index, s);
+          changed = true;
+        }
+      }
+    }
+    if (changed && this.collision) this.collision.obstacles = this.obstacles();
+  }
+
+  // The destructible rock 0x0303 (its update is the DerollePart update 0x00633734): when its switch flag is
+  // set on the floor it enters state 1 (the break's effects, vtable +0x3c / +0x38, not ported), and on the
+  // next tick state 1 kills it: the box goes off and the model hides. Flags 0..0xff only (0x100 never breaks).
+  tickRocks(ticks: number): void {
+    if (!this.rocks.size) return;
+    let changed = false;
+    for (let i = 0; i < ticks; i++) {
+      for (const [index, r] of this.rocks) {
+        if (this.delayed.has(index) || this.shattered.has(index)) continue;
+        if (r.state === 1) {
+          this.shattered.add(index);
+          this.models?.setVisible(index, false);
+          changed = true;
+          continue;
+        }
+        if (r.flag >= 0 && r.flag < 0x100 && this.flags.has(r.flag)) r.state = 1;
+      }
+    }
+    if (changed && this.collision) this.collision.obstacles = this.obstacles();
+  }
+
+  // The shatter (DerolleEnemyHead_Destructor 0x00679ac4, the path without a box record): state 2, the
+  // box off, the model hidden, the debris (the particles and the SE here; its five parts are not ported).
+  private shatterStalactite(index: number, s: FallingStalactite): void {
+    s.state = 2;
+    this.shattered.add(index);
+    this.models?.setVisible(index, false);
+    const at = { x: s.x, y: s.y, z: s.z };
+    for (const id of STALACTITE_PARTICLES) this.onParticles(id, at);
+    this.onSe(STALACTITE_SE_SHATTER, at);
   }
 
   // The beam-family object update runs once per game tick (30/s), as the exe's object update does:

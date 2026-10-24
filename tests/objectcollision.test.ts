@@ -7,13 +7,14 @@
 //     it, not a step away from it;
 //  4. the placed solids of a floor (collectFieldSolids): containers and rocks are
 //     solids, doors are not; a solid's box is turned by its yaw;
-//  5. the drop spot's body test (spotHitsBody) for a sphere body.
+//  5. the drop spot's body test (spotHitsBody) for a sphere body;
+//  6. the falling stalactite (0x038b): the trigger, the fall, the landing and the hit; the rock's switch flag.
 //
 // Run: node tests/objectcollision.test.ts
 import type { PlacedEntity, ObjectSet } from '../client/src/formats/setdata.ts';
 import type { MapCollision } from '../client/src/formats/crel.ts';
 import { boxPairActive, CollisionWorld, OBJECT_BOX_FLAGS, PLAYER_BOX_FLAGS, PLAYER_RADIUS, type Obstacle } from '../client/src/render/collision.ts';
-import { collectFieldSolids, solidObstacle, type FieldSolid } from '../client/src/render/fieldobjects.ts';
+import { collectFieldSolids, dist2xz, FallingStalactite, rockSwitchFlag, solidObstacle, stalactiteDamage, stalactiteInRange, type FieldSolid } from '../client/src/render/fieldobjects.ts';
 import { spotHitsBody } from '../client/src/net/dropspot.ts';
 import { CHILD_COLLISION_LINKS, COLLISION_SITES, COLLISION_TABLES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, isTargetable, slotSetType, slotVariant } from '../client/src/formats/enemyboxes.ts';
@@ -225,6 +226,50 @@ check(isTargetable(0x44) === true, 'an enemy with no known table is targetable (
 check(isTargetable(0x42) === true, 'Monest has a box with flag 0x8000');
 check(boxTargetable({ flags: 0x8003 }) && !boxTargetable({ flags: 0x30003 }), 'flag 0x8000 makes a box targetable');
 check(slotSetType({ set: { type: 0x42 } as never, child: 0 }) === 0x42 && slotSetType({ set: { type: 0x42 } as never, child: 1 }) === null, 'a child slot has no set type of its own');
+
+// 6. the falling stalactite (0x038b, render/fieldobjects.ts FallingStalactite): the trigger (50 in XZ),
+//    the gravity step and the landing, the fall value under 10 (the hit), the range 100 and the damage by difficulty.
+const stalactiteOk =
+  [0, 1, 2, 3].map((d) => stalactiteDamage(d)).join(',') === '100,200,300,600' && stalactiteDamage(-1) === 100 && stalactiteDamage(9) === 600;
+check(stalactiteOk, 'the stalactite hit is 100 x {1, 2, 3, 6} by difficulty (0x0093b708 and the table), clamped');
+{
+  const hang = new FallingStalactite(0, 0, 100, 0);
+  hang.watch([{ x: 49, z: 0 }]);
+  const near = hang.state === 1;
+  const far = new FallingStalactite(0, 0, 100, 0);
+  far.watch([{ x: 51, z: 0 }]);
+  check(near && far.state === 0, 'a player within 50 in XZ starts the fall (49 yes, 51 no; the 2500 squared gate)');
+  const diag = new FallingStalactite(0, 0, 100, 0);
+  diag.watch([{ x: 30, z: 40 }]); // 30^2 + 40^2 = 2500, not under the gate
+  check(diag.state === 0, 'the trigger distance is strict: exactly 50 does not start the fall');
+}
+{
+  const s = new FallingStalactite(0, 0, 100, 0);
+  s.state = 1;
+  const first = s.step(0);
+  check(!first.landed && !first.hit && Math.abs(s.y - (100 + Math.fround(-0.1088888868689537))) < 1e-4 && s.fall === s.y, 'one gravity step drops the stalactite by g and its fall value is the height above the ground');
+  let landedAt = -1;
+  let hitAt = -1;
+  for (let t = 0; t < 2000 && landedAt < 0; t++) {
+    const r = s.step(0);
+    if (r.hit && hitAt < 0) hitAt = t;
+    if (r.landed) landedAt = t;
+  }
+  check(landedAt > 0 && s.y === 0 && s.vy === 0 && s.fall === 0, 'the fall lands on the ground at height 0 with no velocity');
+  check(hitAt >= 0 && hitAt < landedAt && hitAt > 0, 'the hit (fall under 10) comes on the ticks just before the landing');
+  const flat = new FallingStalactite(0, 0, 5, 0);
+  flat.state = 1;
+  const r0 = flat.step(0);
+  check(r0.landed === false && r0.hit === true, 'a stalactite 5 above the floor is under the hit height at once');
+  const none = new FallingStalactite(0, 0, 100, null);
+  none.state = 1;
+  const rn = none.step(null);
+  check(!rn.landed && !rn.hit && none.y === 100, 'no ground under it: it does not fall and does not hit (ASSUMED)');
+}
+check(stalactiteInRange({ x: 0, z: 99 }, { x: 0, z: 0 }) && !stalactiteInRange({ x: 0, z: 101 }, { x: 0, z: 0 }), 'the stalactite hits the players within 100 in XZ');
+check(dist2xz({ x: 3, z: 4 }, { x: 0, z: 0 }) === 25, 'the XZ distance squared ignores the height (7a9180)');
+
+check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag(0x100) === 0x100 && rockSwitchFlag(-1) === -1 && rockSwitchFlag(0x101) === -1, 'the destructible rock keeps param4 in 0..0x100 as its switch flag, else none (0x00675c74)');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

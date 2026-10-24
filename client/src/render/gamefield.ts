@@ -72,6 +72,8 @@ export interface GameFieldOptions {
   captureTrap?: (e: TrapEvent) => void;
   // The Seabed capture trap's state-1 cursor (render/traps.ts captureReticleShown); null hides it.
   captureReticle?: (pos: { x: number; y: number; z: number } | null) => void;
+  // A falling stalactite's hit on the local player (render/fieldobjects.ts FallingStalactite): the damage and the place it fell from.
+  fieldHit?: (damage: number, at: { x: number; z: number }) => void;
   // Whether a quest is running (g_QuestStarted): the trade zone bits clear while it runs.
   questStarted?: () => boolean;
   log: (msg: string) => void;
@@ -312,6 +314,8 @@ export class GameField {
     this.objects = new FieldObjects(this.viewer, e.placed, { episode, floor, area }, this.flagsOf(floor), e.objects, e.collision, this.constructedOf(floor));
     this.objects.onSwitch = (s) => this.pressSwitch(s);
     this.objects.questFlag = (f) => this.game.getQuestFlag(f);
+    this.objects.difficulty = this.game.info?.difficulty ?? 0;
+    this.objects.onStalactiteHit = (damage, at) => this.opts.fieldHit?.(damage, at);
     const difficulty = this.game.info?.difficulty ?? 0;
     this.traps = [];
     for (const p of e.placed) {
@@ -507,6 +511,8 @@ export class GameField {
     if (ticks && this.tradeObjects.length) this.tradeZoneFrame();
     if (ticks && this.captures.length) this.captureTicks(ticks, pos);
     if (ticks && this.objects) this.objects.tickBeamDoors(ticks, pos, others);
+    if (ticks && this.objects) this.objects.tickStalactites(ticks, pos, others);
+    if (ticks && this.objects) this.objects.tickRocks(ticks);
     if (w && pos && ticks) this.updateBattleMusic(w, pos, ticks);
     if (pos && !this.busy) this.watchWarps(pos);
     for (let i = 0; i < ticks && !this.busy; i++) this.bossWarpFrame(pos);
