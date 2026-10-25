@@ -561,6 +561,25 @@ Open: the other phases still use one clock tick a frame.
 - Merillia and Sinow Spigell spawn states: same rule, not read per family.
 
 **Checks:** no code changed. `cd client && npx tsc --noEmit -p .` exit 0. `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5852 checks, 0 failures (Node 24). Not run in Chrome, no Playwright.
+## 2026-10-25: Sinow Berill / Spigell and Merillia: the spawn exit in the exe matches the port (verdict, no code change)
+
+**Question:** the Ep2 chain watch (the 10-25 table) saw built Sinow Berill / Spigell and Merillia still in `spawn` after 30 s. What is the exe's spawn exit, and does the port differ?
+
+**Verdict:** the spawn exit rules match. Neither the exe nor the port leaves spawn on a player distance, the wave flag or a cloak rule: both count frames. A 30 s stay therefore cannot come from these rules; a built, visible enemy is ticked at 30 Hz (`render/combat.ts` `tickEnemies`) and leaves a 6-frame spawn in 7 ticks. No code change; the stall is in the tick gate or the watch's reading (not traced in a run).
+
+**Berill / Spigell (TObjEneMe3StelthReal, set type 0xd4; Spigell is `p6 > 0`, same class and rules):**
+- Vtable 0x00b0a120 (the port's ctor 0x0059e0a4). Slot +0x1cc (0x00b0a2ec, `tools/exedata.py read 00b0a2ec p 1`) is the state 0 handler 0x005a1aa4 (the dispatch `SinowberillProcessState_0059eb08` case 0, dump .c:386450).
+- 0x005a1aa4 (`tools/ghidra/decomp.sh`): enter (arg 4): `+0xf3 == 1` (ground) sets the next state 2 and calls 0x0051f664(1), else state 0 and 0x0051f664(3) (ceiling); the invulnerable call (vtable +0x184); `+0x3d4` clears bit 1 and sets bit 2; the position is the set point. Frame (arg 0): the counter `+0x42c` increments; on 1 it sets the lift. Transition (arg 3): `counter > 5` leaves for the ground or the ceiling. No other term.
+- The per-update order is 0x0051f5bc (vtable +0x15c): transition (arg 3) only when `vtable +0x160` (0x0051f614, `state != +0x37c`) is 0, then frame (arg 0), then 0x0051f604 stores the state. The port's `tick` runs transition then `run`, and `BERILL.spawnFrames` 5 with `frames > 5` leaves on the 7th tick. `tests/enemyfsmep2c.test.ts` pins "frame 7: state 1" (ground) already.
+
+**Merillia (TObjEneMerillLia, set type 0xd5):**
+- `merillia_constructor` (dump .c:360620) sets `unknown_ai_state = 0xd` (state 13, spawn), animation 1, and calls the vtable +0x150 enter. The port cites state 13 (0x005756e8): the emergence effect of 40 frames, then state 12 (under). The port's `MerilliaAi` spawn runs `emergeFrames` (40) then `under`; its wake-up test (search radius, then `wakeRadius`) is only in `under`, not spawn. Matches.
+- The exe's counting of the 40 frames is not traced (ASSUMED the same one-tick count as the port).
+
+**Gee:** the 10-24 entry (4th tick) already matches its counter rule.
+
+**Not changed:** no code, so no new test. Checks: `cd client && npx tsc --noEmit -p .` exit 0; `NEWSERV=.../vendor/newserv node tests/enemyfsmep2c.test.ts`, `tests/enemyfsmep2.test.ts` pass; `tests/combat.test.ts` 5859 checks, 0 failures (Node 24).
+
 ## 2026-10-25: e2e run: guns, Dark Falz casket, boss smoke, Gol Dragon
 
 **Runs** (headless Chrome, the running stack: newserv, bridge, Vite on 5173; `npx playwright test`, Node 24):
