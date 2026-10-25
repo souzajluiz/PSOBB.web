@@ -192,9 +192,9 @@ export const AI_PROFILES: Record<string, EnemyAiProfile> = {
   // loop), 2 walk (11, 1, loop), 3 and 4 the attacks (1, 2 at 1.0), 7 the war cry
   // (10 wakeup, 0.8). Slot 11 has no animation (mode 0), and the family never writes
   // +0x398 = 1, so there is no spawn (the ctor leaves the brain idle). Its states 1, 2,
-  // 4, 5, 7, 8 are the Booma handlers; its own state 3 (0x005acdb8) delegates to the
-  // Booma's state 3 (0x0052afe4) on some paths, and its state 10 (0x005acb78) is not
-  // ported (ASSUMED: the chase and the war cry share the Booma brain's notice / chase).
+  // 4, 5, 7, 8 are the Booma handlers. Its own state 3 (0x005acdb8) is the Booma chase
+  // behind a warp roll, and its state 10 (0x005acb78) is the leap: both run in
+  // combat/goranai.ts (GoranAi wraps this profile).
   GoranFamily: {
     idle: loop(9, 0.6),
     walk: loop(11, 1),
@@ -348,7 +348,8 @@ export class SpawnStateTimer {
 // 'spawn' is exe state 0 (unknown_booma_enemy_spawn_handler, 0x00535a6c): the
 // spawn animation, invulnerable, then idle. The Shark and Dimenian use the same
 // state with their timer instead of the animation (EnemySpawnTimer).
-export type AiState = 'spawn' | 'idle' | 'notice' | 'chase' | 'attack' | 'recover' | 'dead';
+// 'warp' is exe state 10 (the Goran's leap, combat/goranai.ts); the Booma brain never enters it.
+export type AiState = 'spawn' | 'idle' | 'notice' | 'chase' | 'attack' | 'recover' | 'dead' | 'warp';
 
 export interface AiTarget {
   clientId: number;
@@ -460,7 +461,7 @@ export class EnemyAi {
   private speeds: EnemySpeeds;
   private wander: number; // e.dat wander radius of the spawn entry
   private timer = 0;
-  private chaseTicks = 0;
+  protected chaseTicks = 0;
   private attackIndex = 0;
   private attackFrames = 0;
   private dealt = false;
@@ -680,6 +681,9 @@ export class EnemyAi {
             out.motion = this.play(this.profile.idle);
           }
         }
+        break;
+      case 'warp':
+        // Only GoranAi (combat/goranai.ts) runs this state; its tick returns before this switch.
         break;
       default:
         exhaustive(this.state);

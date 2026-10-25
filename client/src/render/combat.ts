@@ -34,6 +34,7 @@ import {
   type EnemyAiMotion,
   type EnemyBrain,
 } from '../combat/enemyai.ts';
+import { GoranAi, goranWarpRow } from '../combat/goranai.ts';
 import {
   LilyAi,
   LilySpit,
@@ -1582,7 +1583,8 @@ export class CombatView {
               return gy === null ? null : { y: gy };
             },
           });
-        } else if (profile) ai = new EnemyAi({
+        } else if (profile) {
+          const aiOpts: ConstructorParameters<typeof EnemyAi>[0] = {
           x: instance.placed.world[0],
           z: instance.placed.world[2],
           angle: instance.placed.yaw,
@@ -1605,7 +1607,23 @@ export class CombatView {
           // EnableDerolleEntity 0x005517a0, reached only through unknown_booma_enemy_ai state 9),
           // so a fresh Dimenian takes the no-effect branch (spawn: false).
           spawn: className !== 'TObjEneDimedian',
-        });
+          };
+          // The Goran family: the warp roll (state 3) and the leap (state 10), combat/goranai.ts.
+          // Its rows: MovementData 17 + subtype, AttackData 17 + subtype and 20 + subtype.
+          ai = className === 'GoranFamily'
+            ? new GoranAi({
+                ...aiOpts,
+                warp: goranWarpRow(
+                  params && mi !== null ? params.movement(difficulty, 17 + subtype) : null,
+                  params?.attack(difficulty, 17 + subtype).distanceX,
+                  params?.attack(difficulty, 20 + subtype).distanceX,
+                ),
+                initdata3: setParams[2],
+                rng: () => this.rng(),
+                attack,
+              })
+            : new EnemyAi(aiOpts);
+        }
         // The Monest's own states are its spawner (combat/enemyfsm.ts).
         if (monest) ai = null;
         else withAi++;

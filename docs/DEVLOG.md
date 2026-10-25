@@ -1,5 +1,33 @@
 # Devlog
 
+## 2026-10-25: Goran warp (state 3's roll, state 10's leap) on the Booma brain; state 11 is a trail, not a state
+
+**Question.** What do Goran's own states add over the Booma notice / chase: Pyro's fire, Detonator's bomb? What are states 10 and 11 and Boota's 11?
+
+**Answer.** Goran's state 3 is the Booma chase behind a warp roll; state 10 is the leap the roll starts (a flight to a point beside the target, then a landing contact). There is no fire and no bomb in either: Pyro and Detonator share the same code and differ only by their BattleParam rows. Goran state 11 and Boota state 11 are weapon-trail updaters (visual, animations 3 and 4), not brain states. Boota's own state 9 stays untraced; Boota's state 10 is the empty placeholder 0x0061cdb0.
+
+**Dispatch (VERIFIED).** `unknown_booma_enemy_ai` (0x0052b78c) switches on +0x32e for 0..9 and sends everything else to the default slot +0x17c. Goran's vtable 0x00b0af40, slots at +0x154 + 4 * state: 0 0x005ad51c, 3 0x005acdb8, 9 0x005517a0, 10 0x005acb78, 11 0x005ae3cc. State 10 is therefore reached through the default slot; its wrapper runs the body only when +0x32e == 10. State 11 is never dispatched (slot +0x180 is not a dispatcher slot).
+
+**State 3, the warp roll (0x005acdb8..0x005ad026; the dump's `goran_wandering_warp_chance`; VERIFIED by objdump).** Per tick, in order: the enemy is not frozen and not in state 0, 8 or 10 (0x005acae8); it has a target (GetTargetableNPC); roll < (50 + initdata_param3) * 0.01 (0x0092a7d8 = 50.0, 0x0092a7c8 = 0.01; the fcompp leaves the roll under the chance); the squared XZ distance d2 is in [AttackData[17+sub].distanceX ^ 2, 32400] (0x0092a7c4 = 180^2); and the target's heading and its bearing from the enemy differ by at most round(iparam1 * 65536 / 360) BAMS (0x0092a7c0 = 65536, 0x0092a7bc = 360). If all pass, the flank point is built and the leap starts instead of the chase tick; otherwise the Booma chase handler 0x0052afe4 runs (the war cry and the chase, the port's notice and chase). The search gate before the roll (vtable +0x44 = 0x007713a4) is not traced: ASSUMED it passes.
+
+**Flank (`hit_goran_enemy_with_projectile` 0x005acb10 gets it; asm of the rotation and scale checked).** v = target - enemy, turned by +90 deg (0x4000) when the heading difference is not negative and by -90 deg (0xc000) when it is; scaled by flankDist^2 / d2 when d2 < flankDist^2 (AttackData[20+sub].distanceX). Point = target + v. The sign convention of the vector and of matrix_rotation_y are ASSUMED.
+
+**The leap (state 10, 0x005acb8c; control flow VERIFIED from the dump, the arithmetic from the dump).** The launch (0x005acb10) sets flag 0x200000, aims the lock at the flank point, launches the projectile at speed fparam6 (MovementData[17+sub].fparam6), sets state 10 and sub 0. Sub 0 loads the counter (iparam2) and the 0x3b0 timer (the Dimenian's timer object, vtable 0x00aff758; its step is not traced: ASSUMED one tick). Sub 1 faces the target and flies; it lands when the squared distance to the target is under fparam6 or the counter runs out. Sub 2 is the landing (EnemyUpdateCollisionWrapper: the body box against the players): ASSUMED one contact hit in reach, then the chase. The exe never writes +0x32e in sub 2, so the exit to the chase is ASSUMED. The flight's motion is ASSUMED to follow the launch direction at fparam6 per tick (vtable +0x4c, the projectile step, not traced).
+
+**The rows (BattleParamEntry_ep4_on.dat, Normal; the enum 17 / 18 / 19 Goran / Pyro / Detonator from the dump's init_goran_subtypes_global_config).** MovementData fparam6 3 / 6.5 / 7.5, iparam1 10 / 45 / 45 (tolerance degrees), iparam2 6 / 6 / 8 (counter). AttackData distanceX 13 / 15 / 32 (minimum warp distance), 48 / 48 / 140 (flank distance). The same rows in BattleParamEntry_ep4.dat. The dump's field names (field4..field7 of battleparams_animation_speeds) are the MovementData fparams 5, 6 and the iparams 1, 2.
+
+**Dead code.** The dump's `goran_random_warp_check` (0x005ad036) has no direct call and no vtable slot: ASSUMED unused; not ported.
+
+**State 11 (0x005ae3cc, Goran) and Boota 11 (0x005a6448).** Both are the weapon-trail updaters of animations 3 and 4 (`unknown_get_attack_trail_effect_data`, the trail parameters 7 / 15 / 1.0 and 9 / 22 / 1.0 for Goran, Boota's own, drawn at the hand's transform with the trail draw call). Visual only; the port draws no enemy trails for the Booma family either, so nothing is ported.
+
+**Radar.** A leap shows its icon (exe state 10: the icon call 0x005acd6e is unconditional, VERIFIED). `boomaBrainIconShown('warp')` is true. The state-3 icon (notice and chase) stays ASSUMED as before.
+
+**Port.** `client/src/combat/goranai.ts` (new): `GoranAi extends EnemyAi` with the warp roll in notice and chase, the leap state 'warp', the landing hit; the pure helpers `warpChance`, `warpToleranceBams`, `bamsDifference`, `flankPoint`, `goranWarpRow`. `client/src/combat/enemyai.ts`: `AiState` gains 'warp' (never run by EnemyAi), `chaseTicks` is protected. `client/src/render/combat.ts`: the GoranFamily brain is a `GoranAi` built from the BattleParam rows of its subtype; the other profiles are unchanged. `client/src/classic/minimap.ts`: 'warp' shows its icon. Boota's brain is unchanged (no state to add).
+
+**Open.** The search gate (vtable +0x44); the leap's velocity and step (+0x4c); the timer's step (sub 0 and 2); the exit from state 10; the flight's flag 0x200000 (hittable or not); the Detonator's blast (no damage path is traced in the state-10 body: the landing contact is the only one); Goran's state-3 icon.
+
+**Tests.** `tests/bootagoran.test.ts`: the warp constants, the tolerance, the flank, the gate's six outcomes, the leap's tick sequence (charge, fly at 3 units, landing), the landing hit, the flinch-through and the icon. `node tests/bootagoran.test.ts` passed; `tests/enemyfsm.test.ts`, `tests/minimap.test.ts`, `tests/combatdepth.test.ts` (836 checks) passed; `NEWSERV=... node tests/combat.test.ts` 5860 checks, 0 failures; `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome (no Playwright).
+
 ## 2026-10-25: weapon hit pipeline (box overlap to EntityHitEntity); Vol Opt monitors are struck on any wall
 
 **Question.** Which gates decide a weapon hit in the exe, and does a Vol Opt monitor need an exposed wall to be struck (the port's `targetable = exposed`)?

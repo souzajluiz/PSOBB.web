@@ -3,6 +3,8 @@
 // The vtable rows are the dumps of tools/exedata.py read <vtable+0x154> p 12 (VERIFIED); the motion
 // rows are the dumps of tools/exedata.py motions (VERIFIED). Run: node tests/bootagoran.test.ts
 import { AI_PROFILES, EnemyAi, type AiTarget, type EnemyAiProfile } from '../client/src/combat/enemyai.ts';
+import { GoranAi, bamsDifference, flankPoint, goranWarpRow, warpChance, warpToleranceBams } from '../client/src/combat/goranai.ts';
+import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 import { BOOMA_BRAIN_TYPES, boomaBrainIconShown } from '../client/src/classic/minimap.ts';
 
 let failures = 0;
@@ -108,6 +110,87 @@ for (const t of ['BOOTA', 'ZE_BOOTA', 'BA_BOOTA', 'GORAN', 'PYRO_GORAN', 'GORAN_
 // (ASSUMED icon shown, the Booma state-3 delegate).
 eq(['spawn', 'idle', 'notice', 'chase', 'attack', 'recover', 'dead'].map((s) => boomaBrainIconShown(s)),
   [false, true, true, true, true, true, false], 'the radar icon of the Booma-substrate states');
+
+// --- Goran warp (state 3's roll, state 10's leap): client/src/combat/goranai.ts ---
+// The rows of subtype 0 (Goran): MovementData 17 (fparam6 3, iparam1 10, iparam2 6), AttackData 17 (distanceX 13) and
+// 20 (distanceX 48), read from BattleParamEntry_ep4_on.dat (Normal).
+const warpRow = goranWarpRow({ fparam1: 0, fparam2: 0, fparam3: 0, fparam4: 0, fparam5: 20, fparam6: 3, iparam: [10, 6, 0, 0, 0, 0] } as EnemyMovementData, 13, 48);
+eq(warpRow, { speed: 3, toleranceDeg: 10, counter: 6, minDist: 13, flankDist: 48 }, 'the Goran warp row (MovementData 17, AttackData 17 and 20)');
+eq(goranWarpRow(null, 13, 48), null, 'no BattleParams row: no warp');
+eq([warpChance(0), warpChance(2)], [0.5, 0.52], 'the roll chance (50 + initdata_param3) * 0.01');
+eq(warpToleranceBams(10), 1820, 'the heading tolerance: round(10 * 65536 / 360) BAMS');
+eq(warpToleranceBams(45), 8192, 'the heading tolerance: round(45 * 65536 / 360) BAMS');
+eq([bamsDifference(0x0100, 0xff00), bamsDifference(0x8000, 0)], [0x200, 0x8000], 'integer_angle_abs_difference wraps');
+// The flank: target at (100, 0) facing the enemy at the origin (bearing pi/2 from the enemy); enemy-to-target
+// vector (100, 0) turned by -90 deg (the target heading is 0 < bearing: diff = target - bearing < 0) and not scaled.
+const tgt: AiTarget = { clientId: 0, x: 100, z: 0, charClass: 0, dead: false, angle: Math.PI / 2 };
+const flank = flankPoint(tgt, { x: 0, z: 0 }, 48);
+eq([Math.round(flank.x * 1e6) / 1e6, Math.round(flank.z * 1e6) / 1e6], [100, -100], 'the flank point: the target plus the offset turned by +90 deg');
+const near2 = flankPoint({ ...tgt, x: 10, z: 0 }, { x: 0, z: 0 }, 48);
+check(Math.hypot(near2.x - 10, near2.z) > 40, `a close target pushes the flank out to flankDist^2 / d: ${JSON.stringify(near2)}`);
+
+const gbrain = (rng: () => number, warp = warpRow): GoranAi =>
+  new GoranAi({
+    x: 0,
+    z: 0,
+    angle: 0,
+    profile: goran,
+    detect: 300,
+    turnRate: 1024,
+    attack: { minAtp: 0, maxAtp: 0, minAta: 0, maxAta: 0, distanceX: 12, angle: 0x1c71, distanceY: 0 },
+    speeds,
+    radius: 10,
+    wander: 0,
+    warp,
+    initdata3: 0,
+    rng,
+    spawn: false,
+  });
+const aim = (x: number, z: number, angle: number): AiTarget => ({ clientId: 0, x, z, charClass: 0, dead: false, angle });
+// A Goran that noticed a player at (100, 0) facing it (the roll always passes): the next tick launches the leap.
+const gw = gbrain(() => 0);
+gw.tick([aim(100, 0, Math.PI / 2)]);
+eq(gw.state, 'notice', 'Goran: the war cry first (the roll is state 3, after the notice)');
+const launch = gw.tick([aim(100, 0, Math.PI / 2)]);
+eq([gw.state, gw.inLeap, launch.motion], ['warp', true, null], 'Goran: the warp roll fires and the leap starts (state 10)');
+const charge = gw.tick([aim(100, 0, Math.PI / 2)]);
+eq([gw.state, gw.inLeap, charge.hit], ['warp', true, null], 'Goran: the leap charge tick (sub 0), no hit');
+// Each fly tick moves 3 units (fparam6) toward the flank point; the counter (6) ends the leap.
+const x0 = gw.x;
+gw.tick([aim(100, 0, Math.PI / 2)]);
+check(Math.abs(Math.hypot(gw.x - x0, gw.z) - 3) < 1e-9, `the leap moves fparam6 = 3 units per tick (moved ${Math.hypot(gw.x - x0, gw.z)})`);
+let landed = false;
+for (let i = 0; i < 10 && !landed; i++) landed = gw.tick([aim(100, 0, Math.PI / 2)]).hit === null && gw.state !== 'warp';
+check(gw.state === 'warp' || gw.state === 'chase', `the leap ends in the landing (state ${gw.state})`);
+// Landing contact: a target inside reach + radius (12 + 10) hits once.
+const gl = gbrain(() => 0, { ...warpRow!, counter: 0 });
+gl.tick([aim(100, 0, Math.PI / 2)]);
+gl.tick([aim(100, 0, Math.PI / 2)]);
+const flyEnd = gl.tick([aim(100, 0, Math.PI / 2)]);
+const hitTarget = { clientId: 0, x: gl.x + 5, z: gl.z, charClass: 0, dead: false, angle: 0 };
+gl.tick([hitTarget]); // the fly tick: the counter runs out, the leap lands
+const landing = gl.tick([hitTarget]); // the landing contact
+eq([gl.state, landing.hit?.clientId ?? null], ['chase', 0], 'Goran: the landing contact hits the target in reach, then the chase');
+check(flyEnd.hit === null, 'Goran: no hit while the leap flies');
+// A roll that fails, a target too far, too near, or facing away: no leap.
+const deny = (label: string, rng: () => number, t: AiTarget) => {
+  const q = gbrain(rng);
+  q.tick([aim(100, 0, Math.PI / 2)]);
+  q.tick([t]);
+  check(!q.inLeap, `no leap: ${label}`);
+};
+deny('the roll misses', () => 0.99, aim(100, 0, Math.PI / 2));
+deny('beyond 180 units', () => 0, aim(200, 0, Math.PI / 2));
+deny('inside minDist 13', () => 0, aim(10, 0, Math.PI / 2));
+deny('facing away (heading difference pi)', () => 0, aim(100, 0, -Math.PI / 2));
+// A frozen-state enemy (dead) and the flinch: the leap continues through a hit.
+const fl = gbrain(() => 0);
+fl.tick([aim(100, 0, Math.PI / 2)]);
+fl.tick([aim(100, 0, Math.PI / 2)]);
+fl.onDamage(9);
+check(fl.inLeap && fl.state === 'warp', 'the leap goes on through a hit');
+// The icon of the leap: exe state 10, the radar rule (classic/minimap.ts).
+check(boomaBrainIconShown('warp'), 'the leap (exe state 10) shows its radar icon (unconditional at 0x005acd6e)');
 
 if (failures) {
   console.log(`${failures} failure(s)`);
