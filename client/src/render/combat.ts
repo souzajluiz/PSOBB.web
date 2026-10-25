@@ -1838,7 +1838,8 @@ export class CombatView {
       // Dark Falz forms 1 and 3 have their own forced icons (minimapIcons).
       if (e.ai instanceof DarkFalzPartAi && (e.ai.entity === DF_ID.form3 || e.ai.entity === DF_ID.form1)) continue;
       const p = e.instance.root.position;
-      out.push({ x: p.x, z: p.z, type: e.slot.type });
+      // A De Rol Le segment keeps the body's slot type, but its icon is its own (classic/minimap.ts FORCED_ICON_RULES).
+      out.push({ x: p.x, z: p.z, type: e.ai instanceof DrlSegmentAi ? 'DE_ROL_LE_BODY' : e.slot.type });
     }
     return out;
   }
