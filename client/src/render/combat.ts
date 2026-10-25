@@ -111,6 +111,7 @@ import {
   hitChanceWith,
   rollDamage,
   rollHit,
+  tookDamage,
   weaponForCombat,
   type AttackerStats,
   type AttackType,
@@ -7320,7 +7321,9 @@ export class CombatView {
     if (byPlayer && damage >= 1 && !e.ai?.invulnerable) haptic('hit'); // browser vibration (input/haptics.ts)
     this.hitMissed = fx.miss === true;
     const landed = fx.landed ?? fx.miss !== true;
-    this.hitLanded = landed;
+    // 0x200 (took_damage) needs the total at 1.0 or more (EntityHitEntity 0x007738c4): a landed
+    // roll that rounds to a sub-1 total is 0x100 here, and the flinch below follows it.
+    this.hitLanded = tookDamage(damage, landed);
     if (e.ai?.invulnerable) {
       // EntityHitEntity / entity_hit_by_tech: the number 0 and nothing else.
       const ip = e.instance.root.position;

@@ -102,8 +102,10 @@ check(enemyDefence({ short5: 500 }) === 1, 'defence is clamped to 1.0');
   const d = { hp: 100, maxHp: 100, evp: 0, dfp: 0 };
   check(applyDamage(d, 0.9) === FLAG_MISSED && d.hp === 100, 'damage below 1 is a miss');
   check(applyDamage(d, 10) === FLAG_HIT && d.hp === 90, 'a normal hit');
-  // EntityHitEntity: a landed roll sets 0x200 (took_damage) at 0 damage; a miss is 0x100 only.
-  check(applyDamage(d, 0, true) === FLAG_HIT && d.hp === 90, 'a landed 0-damage hit sends 0x200');
+  // EntityHitEntity (0x007738c4): 0x200 needs the total at 1.0 or more; a landed roll below it is 0x100 and
+  // deals nothing (tests/flinch.test.ts has the full rule).
+  check(applyDamage(d, 0, true) === FLAG_MISSED && d.hp === 90, 'a landed 0-damage hit sends 0x100 (no took_damage)');
+  check(applyDamage(d, 0.7, true) === FLAG_MISSED && d.hp === 90, 'a landed 0.7 total deals nothing');
   check(applyDamage(d, 0, false) === FLAG_MISSED && d.hp === 90, 'a missed roll sends 0x100');
   check(applyDamage(d, 30) === (FLAG_HIT | FLAG_BIG_HIT) && d.hp === 60, 'more than 25% of max HP sets the big-hit flag');
   check((applyDamage(d, 60) & FLAG_DEAD) !== 0 && d.hp === 0, 'HP below 1 sets the dead flag');

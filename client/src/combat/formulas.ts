@@ -147,12 +147,24 @@ export const FLAG_HIT = 0x200;
 export const FLAG_BIG_HIT = 0x400;
 export const FLAG_DEAD = 0x800;
 
-// `landed`: the hit roll passed. The exe sets 0x200 (took_damage, 512) on every
-// landed hit, a 0-damage one included, and 0x100 only on a miss (EntityHitEntity
-// 0x00773350 at dump 747690 and the tail at 747720; entity_hit_by_tech 747960..
-// 749367). The default is the damage test for the callers with no roll.
-export function applyDamage(defender: DefenderStats, total: number, landed = total >= 1): number {
-  if (!landed) return FLAG_MISSED;
+// EntityHitEntity_00773350 (entry 0x007732ba) for a melee or weapon hit: the summed
+// hitbox damage (a float, before ROUND) must reach g_Float1 = 1.0 (0x009782b0; the
+// dump's `g_Float0` at 747689 is 0.0 at 0x009782b8) for 0x200 (took_damage) to be
+// set (0x007738c4). Below it the exe sets the total to 0 and only 0x100 (no damage,
+// no hit reaction: the enemy's +0x88 check, 0x00777ba4, stays clear).
+export const TOOK_DAMAGE_MIN = 1;
+
+// Whether a hit counts as a hit for the flags and the flinch: the roll passed and
+// the total reaches TOOK_DAMAGE_MIN. Enemy-to-enemy hits use the same test (ASSUMED).
+export function tookDamage(total: number, landed = true): boolean {
+  return landed && total >= TOOK_DAMAGE_MIN;
+}
+
+// `landed`: the hit roll passed. A miss is 0x100 only; a landed hit whose total is
+// below TOOK_DAMAGE_MIN is 0x100 too, and deals nothing (see tookDamage). The
+// default is the damage test for the callers with no roll.
+export function applyDamage(defender: DefenderStats, total: number, landed = total >= TOOK_DAMAGE_MIN): number {
+  if (!tookDamage(total, landed)) return FLAG_MISSED;
   let flags = FLAG_HIT;
   if (total > defender.maxHp * 0.25) flags |= FLAG_BIG_HIT;
   defender.hp = Math.max(0, defender.hp - Math.round(total));
