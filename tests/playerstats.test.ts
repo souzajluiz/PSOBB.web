@@ -175,6 +175,7 @@ const S_58 = it('010258');     // k = 5 (ATP range)
 const S_5B = it('01025b');     // k = 0 (nothing)
 const S_85 = it('010285');     // handle_barrier: weapon sub switch
 const S_87 = it('010287');
+const S_95 = it('010295');    // shield 0x95: team count ATP (2026-10-25)
 const A_56 = it('010156');     // frame: weapon sub 0x10 idx < 7
 const WPN_10_2 = it('001002'); // weapon sub 0x10 idx 2
 const WPN_65 = it('006500');
@@ -260,7 +261,20 @@ const sets = (item: ReturnType<typeof it>, worn: WornEquipment, over: Partial<Re
 eq(sets(WPN_B4, wornOf({ units: [UNIT_H] })).ataMin, 300, 'item set: weapon sub 0xb4 with a unit H worn: ATA range +300');
 eq(sets(WPN_B4, wornOf({})).ataMin, 0, 'item set: weapon sub 0xb4 without the unit: nothing');
 eq(sets(WPN_6_8, wornOf({ mag: MAG_H })).lck, 100, 'item set: weapon sub 6 idx 8 with the mag H: LCK +100');
-eq(sets(S_87, wornOf({ weapon: WPN_BF })).resEvp, 50, 'item set: shield 0x87 with a weapon sub 0xbf: EVP +50');
+eq(sets(S_87, wornOf({ weapon: WPN_BF })).atp, 50, 'item set: shield 0x87 with a weapon sub 0xbf: ATP +50 (stat [0], objdump 0x005d5128)');
+eq(sets(S_87, wornOf({ weapon: WPN_BF })).resEvp, 0, 'item set: shield 0x87 writes no EVP resist');
+// The team count term (GetChallengeDataById 0x00797790 -> the record's byte +0x11, capped at 100, doubled):
+// armour 0x55 adds it to the DFP resist, shield 0x95 to the ATP stat (objdump 0x005d5492, 0x005d4f47).
+const TEAM_7 = { masterGuildCard: 0x1234, teamId: 0, unknownA5: 0, unknownA6: 0, memberCount: 7 };
+const TEAM_NONE = { masterGuildCard: 0, teamId: 0, unknownA5: 0, unknownA6: 0, memberCount: 9 };
+eq(sets(it('010155'), wornOf({}), { team: TEAM_7 }).resDfp, 14, 'team: armour 0x55 with a team of 7 members adds DFP 14 (2 x 7)');
+eq(sets(it('010155'), wornOf({}), { team: null }).resDfp, 0, 'team: armour 0x55 with no record adds nothing');
+eq(sets(it('010155'), wornOf({}), { team: TEAM_NONE }).resDfp, 0, 'team: armour 0x55 with the four membership dwords zero adds nothing (count 9 ignored)');
+eq(sets(it('010155'), wornOf({}), { team: { ...TEAM_7, memberCount: 200 } }).resDfp, 200, 'team: the member count is capped at 100 before doubling');
+eq(sets(it('010155'), wornOf({}), { team: { ...TEAM_7, teamId: 5 } }).resDfp, 14, 'team: a team id alone counts as a record');
+eq(sets(S_95, wornOf({}), { team: TEAM_7 }).atp, 14, 'team: shield 0x95 with a team of 7 members adds ATP 14 (stat [0])');
+eq(sets(S_95, wornOf({}), { team: null }).atp, 0, 'team: shield 0x95 with no record adds nothing');
+eq(sets(S_95, wornOf({}), { team: TEAM_7 }).resDfp, 0, 'team: shield 0x95 writes no DFP resist');
 eq(sets(S_85, wornOf({ weapon: WPN_65 })).ataMin, 300, 'item set: shield 0x85 with a weapon sub 0x65: ATA range +300');
 eq([sets(S_85, wornOf({ weapon: WPN_7_8 })).ataMin, sets(S_85, wornOf({ weapon: WPN_7_8 })).resDfp], [-200, -10], 'item set: shield 0x85 with weapon 7/8: ATA -200 and DFP -10');
 eq(sets(S_2A, wornOf({ weapon: WPN_14_1 })).ataMin, 300, 'item set: shield 0x2a with weapon 0x14/1: ATA range +300');

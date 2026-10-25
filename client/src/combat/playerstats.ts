@@ -385,6 +385,25 @@ const SET_F = {
 };
 
 // The worn state and the inputs the exe reads from the game (none of them is in the save).
+// The player's lobby team record (the 0x85c entry of the lobby's team table that
+// GetChallengeDataById_00797790 returns for the player's guild card, objdump 0x00797790): the first
+// 16 bytes are the membership (masterGuildCard, teamId, unknownA5, unknownA6, the same four dwords
+// that net/team.ts parseMembership reads), byte +0x11 the member count.
+export interface TeamRecord {
+  masterGuildCard: number;
+  teamId: number;
+  unknownA5: number;
+  unknownA6: number;
+  memberCount: number;
+}
+
+// The live team record: the client sets its source (classic/main.ts, the connection's TeamClient
+// membership, ASSUMED to be the lobby table's entry for the player); none is null.
+let liveTeamSource: () => TeamRecord | null = () => null;
+export function setLiveTeamSource(source: () => TeamRecord | null): void {
+  liveTeamSource = source;
+}
+
 export interface SetContext {
   worn: WornEquipment;
   beatTime: number; // get_beat_time (FUN_0077bab4): the clock behind galatine and morning glory
@@ -392,6 +411,7 @@ export interface SetContext {
   barrier: number; // barrier_player_proximity_check (FUN_005e26dc): the colored ring count
   party: readonly number[]; // the armour index of each party member (the DFP 0x18..0x1a loop)
   movement: number; // player +0x328, the movement bits (standing = 0x2, moving = 0x1e & ~0x2)
+  team: TeamRecord | null; // the player's lobby team record (teamFrameBonus); null = no record
 }
 
 // The beat time is passed in: the live client reads the clock (liveBeatTime, combat/beattime.ts), a
@@ -406,7 +426,19 @@ export function defaultSetContext(worn: WornEquipment, beatTime: number = 0): Se
     barrier: 0,
     party: worn.armour ? [worn.armour.data1[2]] : [],
     movement: 0x2,
+    team: liveTeamSource(),
   };
+}
+
+// The team count term of the armour 0x55 (DFP) and the shield 0x95 (ATP) set bonuses
+// (handle_frame_weapon_set_bonus 0x005d53ac case 0x55, handle_barrier_and_weapon_set_bonus
+// 0x005d4e14 case 0x95; objdump 0x005d53fd..0x005d54d4 and 0x005d4e75..0x005d4f4a). The record is
+// found when its first four dwords are not all zero (the exe's test on the copied record; no
+// record zeroes the copy); then the byte +0x11 is taken, capped at 100, and doubled. Not found: 0.
+export function teamFrameBonus(ctx: SetContext): number {
+  const r = ctx.team;
+  if (!r || (r.masterGuildCard | r.teamId | r.unknownA5 | r.unknownA6) === 0) return 0;
+  return 2 * Math.min(100, r.memberCount);
 }
 
 // The movement bits at player +0x328: standing 0x2; the 0x1e mask is running | unknown | walking | standing.
@@ -576,8 +608,8 @@ export function applyColoredRing(item: ItemLike, barrier: number, t: CandidateBl
 // are ported. Not ported (ASSUMED no effect in the compare): the branches that write the
 // elemental resists [1..5] (weapon 0xc5 / 0xac, armour 0x9b, shield 0x9b / 0x93 / 0x2a's armour
 // part, mag 'D'); the branches gated on param_6 (the float writes and the stat of a 0xe / 0xc
-// slot, null in PlayerRecalculateStats); the armour 0x55 and the shield 0x95 (table FUN_00797790,
-// the player's +0xeb4 and the DAT_00aaacc4.. set table); the weapon-misc tail (party table).
+// slot, null in PlayerRecalculateStats); the weapon-misc tail (party table). The armour 0x55 and
+// the shield 0x95 read the player's team record (teamFrameBonus, 2026-10-25).
 const PROOF_OF_SWORD_SAINT: readonly (readonly [number, number, number])[] = [
   [0x00, 0x03, 0x09], [0x00, 0x89, 0x00], [0x00, 0x89, 0x01], [0x00, 0x89, 0x02], [0x00, 0x89, 0x03],
   [0x00, 0xb8, 0x00], [0x00, 0x10, 0x00], [0x00, 0x10, 0x07], [0x00, 0x8a, 0x00], [0x00, 0x8a, 0x01],
@@ -608,7 +640,7 @@ function weaponMiscSetBonus(d: Uint8Array | number[], ctx: SetContext, t: Candid
 }
 
 // handle_frame_weapon_set_bonus (FUN_005d53ac): keyed by the candidate armour's index (d[2]); the
-// weapon in slot 6 is the condition. Case 0x55 is not ported (see the header note above).
+// weapon in slot 6 is the condition.
 function frameWeaponSetBonus(idx: number, ctx: SetContext, t: CandidateBlocks): void {
   const sub = slotByte(ctx.worn.weapon, 1);
   const wi = slotByte(ctx.worn.weapon, 2);
@@ -634,6 +666,10 @@ function frameWeaponSetBonus(idx: number, ctx: SetContext, t: CandidateBlocks): 
     case 0x56:
       if (sub === 0x10 && wi < 7) t.ataMin += 200;
       break;
+    case 0x55:
+      // The team count term: DFP (the resist dword +0x1c, objdump 0x005d5492..0x005d54d0).
+      t.resDfp += teamFrameBonus(ctx);
+      break;
     default:
       break;
   }
@@ -655,7 +691,11 @@ function barrierWeaponSetBonus(idx: number, ctx: SetContext, t: CandidateBlocks)
       else if (wi === 0xd) t.ataMin -= 300;
     }
   } else if (idx === 0x87) {
-    if (sub === 0xbf) t.resEvp += 50;
+    // The stat [0] word (ATP), not the EVP resist: objdump 0x005d5128 `add word [eax], 0x32`.
+    if (sub === 0xbf) t.atp += 50;
+  } else if (idx === 0x95) {
+    // The team count term on the stat [0] word (ATP), objdump 0x005d4f47 `add word [ecx], ax`.
+    t.atp += teamFrameBonus(ctx);
   }
 }
 
