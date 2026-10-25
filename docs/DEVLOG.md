@@ -102,6 +102,55 @@
 **Files.** `client/src/combat/enemyfsmep4.ts` (new), `tests/enemyfsmep4.test.ts` (new), `docs/ROADMAP.md` (the Episode 4 gates line).
 
 **Checks.** `node tests/enemyfsmep4.test.ts` ALL PASS; `node tests/enemyfsm.test.ts` and `node tests/minimap.test.ts` ALL PASS; `NEWSERV=vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures; `cd client && npx tsc --noEmit -p .` clean (Node 24).
+## 2026-10-25: Boota and Goran brains on the Booma substrate; Boota's appear never plays; Goran's state 3 reaches the Booma's state 3
+
+**Outcome.** Boota (`BootaFamily`, vtable 0x00b0a680) and Goran (`GoranFamily`, vtable 0x00b0af40) now have `AI_PROFILES` rows, so they run the generic `EnemyAi` brain of the Booma substrate instead of standing still. Their radar icon follows the Booma rule (`BOOMA_BRAIN_TYPES`, `boomaBrainIconShown`). Goran's own states 3 and 10 are not ported.
+
+**The slots (`tools/exedata.py read <vtable+0x154> p 12`, VERIFIED).** State n is the pointer at +0x154 + 4n. "=" means the same pointer as the Booma's table (0x00b01fc0).
+
+| state | Booma | Boota | Goran |
+|---|---|---|---|
+| 0 | 0x00535a6c spawn | 0x005a57f4 own | 0x005ad51c own (timed spawn) |
+| 1 | 0x0052a6e4 | = | = |
+| 2 | 0x0052ad80 | = | = |
+| 3 | 0x0052afe4 | = | 0x005acdb8 own |
+| 4 | 0x0052b1b8 | = | = |
+| 5 | 0x0052b290 | = | = |
+| 6 | 0x0061cdb0 empty | = | = |
+| 7 | 0x0052b33c | = | = |
+| 8 | 0x0052b518 dead | = | = |
+| 9 | 0x0073d160 | = | 0x005517a0 own |
+| 10 | 0x0061cdb0 empty | = | 0x005acb78 own |
+| 11 | 0x005366b0 | 0x005a6448 own | 0x005ae3cc own |
+
+Boota shares 1 to 10 (6 and 10 are the placeholder). Goran shares 1, 2, 4, 5, 6, 7, 8. Both families' state 0 and 11 are their own; the test `tests/bootagoran.test.ts` checks this table.
+
+**Motions (`tools/exedata.py motions`, VERIFIED).** Boota's table 0x009c05a0 and Goran's 0x009c10c0 have the Booma's layout. The motion indices are the family's `.njm` order (`formats/enemymodels.ts`):
+- Boota: slot 0 stund (10, 0.6, loop), slot 2 walk (12, 0.5, loop), slot 3 atackl (1, 0.65), slot 4 atackr (2, 0.85), slot 7 wakeup (11, 0.8, the war cry), slot 11 appear (0, 0.5).
+- Goran: slot 0 stund (9, 0.6, loop), slot 2 walk (11, 1.0, loop), slot 3 atackl (1, 1.0), slot 4 atackr (2, 1.0), slot 7 wakeup (10, 0.8), slot 11 mode 0 (no animation).
+
+**Boota state 0 (0x005a57f4, VERIFIED by objdump).** Sub 0 (+0x330): if +0x398 is 1, the appear (animation 0xb) starts, invulnerable (flag 0x04000000), sub 1; otherwise sub 2 with no motion. Sub 1 waits for the end test (+0xb4 leaves 0x20), then clears the invulnerable flag and sets animation 0, sub 2. Sub 2 goes to state 1. The port's Booma spawn (`tickSpawn`) has the same sub-states.
+- Nothing writes +0x398 = 1 for Boota. The Boota ctor 0x005a5cd4, the factory 0x005a5c08 and the init 0x005a602c have no such write. The base ctor 0x0052b6ec writes 0 (its `xor %edx,%edx` at 0x0052b700 is the value stored at 0x0052b744). The Booma ctor writes 1 at 0x0053621b, and only the Booma family has that writer.
+- So a fresh Boota takes the no-animation branch: the first tick is the spawn state with no motion, the next tick idle. The new `EnemyAiProfile.spawnGate: false` says this.
+
+**Goran state 0 (0x005ad51c, VERIFIED by objdump).** The timed spawn: the 0x3b0 timer, gated by +0x398 == 1 like the Boota's. The same function is the Dimenian's spawn (0x005ad51c, `EnemySpawnTimer`). The Goran ctor (0x005adb90, vtable store at 0x005adbd2) writes no +0x398 = 1, so the timer never runs and the Goran starts idle. ASSUMED: the exe spends one tick in the no-animation branch with no motion; the port starts idle (one tick, no motion change). No 0x805608 icon call in 0x005ad51c..0x005ad6fc.
+- **Open question for the Dimenian.** Its spawn is this same function, and `minimap.ts` / `render/combat.ts` keep the Dimenian's icon through the timed spawn ("timedSpawn"). The scan of this body finds no icon call, so that icon is drawn from somewhere else or the exception is wrong. Not changed here.
+
+**Goran state 3 (0x005acdb8..0x005ad51c), corrected.** The 2026-10-25 entry said "no 0x805608 call in 0x5acdb8..0x5ad51c". That is true of the body, but the body calls the Booma's state-3 handler 0x0052afe4 (its icon 0x0052b148) from 0x005ad019, and seven branches reach that call (0x005ace04, 0x005ace13, 0x005ace24, 0x005ace48, 0x005ace77, 0x005ace85, 0x005acf0c). Its other paths call its own helpers 0x005acae8 / 0x005acb10 and the timers. The gate of the own paths is not traced. ASSUMED: the icon shows for notice and chase (the brain's default).
+
+**Goran state 10 (0x005acb78, VERIFIED).** A wrapper: if +0x32e == 10 it calls the body 0x005acb8c. The body always reaches the icon call at 0x005acd6e (every exit jumps to 0x005acd5d), so the icon is unconditional in state 10. The writer of state 10 is not traced, and the body has its own sub-states (+0x330 1 and 2, the 0x3b0 object, the counter +0x344). Not ported: the brain has no state for it.
+
+**Radar.** The Booma rule (`boomaBrainIconShown`) for the port's brain states: spawn none, idle (state 1) icon, notice and chase (state 3) icon, attack and recover (state 5) icon, dead (state 8) none. Boota's handlers for those states are shared, so the rule is VERIFIED for Boota. Goran's states 1, 5, 8 are shared; its notice and chase are its own state 3, so the icon there is ASSUMED.
+
+**Ranges (ASSUMED).** No `AI_CONFIG` row for either family, so the brain uses `DEFAULT_AI_CONFIG` (search 100, turn 1024) and collision radius 10. The Booma's rows (225 / 250 / 300) are from g_BoomaHitboxParams, which these families do not use. Their own parameter tables are not traced. Speeds come from the BattleParam MovementData, as for the other families.
+
+**Corrected in place.** The 2026-10-25 "Episode 4 radar gates" entry said the port had no brain for Boota and Goran; that is now done. The `ENEMY_RADAR_SOURCE` comment for Goran is updated.
+
+**Files.** `client/src/combat/enemyai.ts` (`AI_PROFILES.BootaFamily` and `GoranFamily`; `EnemyAiProfile.spawnGate`, read by the constructor); `client/src/classic/minimap.ts` (`BOOMA_BRAIN_TYPES` +6 and the state notes); `tests/bootagoran.test.ts` (new: the slot table, the motion rows, the brain, the radar rule); `tests/minimap.test.ts` (the brain-gated set). `render/combat.ts` is unchanged (its `spawn` option is overridden by the profile).
+
+**Open.** Goran's state 3 own paths (their icon gate, and when they hand over to the Booma's 0x0052afe4); Goran's state 10 (its writer and its sub-machine); Boota's state 9 (0x0073d160, untraced) and state 11 (0x005a6448, untraced); the Dimenian's spawn icon (above); the ranges of both families.
+
+**Tests.** `node tests/bootagoran.test.ts`, `node tests/enemyfsm.test.ts`, `node tests/minimap.test.ts`, `node tests/combatdepth.test.ts`, `NEWSERV=... node tests/combat.test.ts` (5860 checks), `cd client && npx tsc --noEmit -p .`.
 
 ## 2026-10-25: Vol Opt lock-on read from the reticle filter; the monitors have no lock-on caller; no port change
 
