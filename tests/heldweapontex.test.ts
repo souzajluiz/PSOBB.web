@@ -4,7 +4,9 @@
 // For each of them: every texture id a poly uses resolves to the XVM texture
 // of that index, or, past the XVM's count, to the exe's no-texture result
 // (null, listed in `unbound`). No id is out of range.
-// Run: npx tsx tests/heldweapontex.test.ts
+// Also: no texture op carries -1; a renderargs list without a texture setter
+// keeps the previous texture (the exe's device state), so it emits no op.
+// Run: node tests/heldweapontex.test.ts (Node 24)
 // Env: PSOBB_DATA (client data/ folder), ITEMPMT (optional ItemPMT.prs)
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -89,6 +91,49 @@ if (!pmtPath || !existsSync(modelPath) || !existsSync(texturePath)) {
     }
   }
   console.log(`held weapon textures: ${gaps.length} slots, ${usesUnbound} poly texture uses past the XVM count (no texture in the exe)`);
+
+  // A renderargs list with no texture setter (the -1 ids of the decoder): the
+  // exe calls no setter for it, so the device keeps the texture of the draw
+  // before (PsoBB.exe RenderXjVariableBufferOpaqueUP_0083255d). The parser emits
+  // no texture op for such a list, so the strips follow the last texture op of
+  // their part; only a part's first strips can have none (ASSUMED: untextured,
+  // the exe's previous draw is not traced).
+  let strips = 0, texOps = 0, negativeTexOps = 0, leading = 0, weaponsWithLeading = 0;
+  let weaponsChecked = 0;
+  table.weapons.forEach((list) =>
+    list.forEach((w) => {
+      if (!w || w.type >= models.entries.length || w.skin >= textures.entries.length) return;
+      weaponsChecked++;
+      const h = decodeHeldWeapon(models.get(w.type), textures.get(w.skin));
+      let weaponLeading = 0;
+      // The port's mesh builder keeps one texture state per part, across its
+      // nodes in order (render/njcmmesh.ts runPolys), so the walk does too.
+      let seenTexture = false;
+      const walk = (o: NjcmObject) => {
+        for (const p of o.model?.polys ?? []) {
+          if (p.op === 'texture') {
+            texOps++;
+            if (p.id < 0) negativeTexOps++;
+            seenTexture = true;
+          } else if (p.op === 'strips') {
+            strips++;
+            if (!seenTexture) {
+              leading++;
+              weaponLeading++;
+            }
+          }
+        }
+        o.children.forEach(walk);
+      };
+      walk(h.object);
+      if (weaponLeading > 0) weaponsWithLeading++;
+    }),
+  );
+  check(weaponsChecked > 800, `${weaponsChecked} held weapons walked`);
+  check(negativeTexOps === 0, `no texture op carries id -1 (${negativeTexOps} found)`);
+  check(texOps > 0 && strips >= texOps, `${texOps} texture ops over ${strips} strip groups`);
+  check(leading > 0 && leading < strips, `${leading} strip groups before any texture setter of their part (ASSUMED untextured)`);
+  console.log(`held weapon texture state: ${texOps} texture ops, ${strips} strip groups, ${leading} with no earlier setter in ${weaponsWithLeading} weapons (ASSUMED untextured)`);
 }
 
 console.log(failures === 0 ? `ALL PASS (${checks} checks)` : `${failures} of ${checks} checks FAILED`);
