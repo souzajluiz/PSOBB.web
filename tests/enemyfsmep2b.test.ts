@@ -166,7 +166,8 @@ class Rig {
     check(n >= 0, 'the bolt state ends with its motion');
     check(!!shots && shots.length >= 1, 'the technique object leaves at motion frame 10');
     if (shots) {
-      eq(shots[0]!.effect, { kind: 'tech', power: 30 }, 'Mericarol: group 0 with fparam3');
+      const fx = shots[0]!.effect as { kind: string; power: number; group?: number };
+      eq([fx.kind, fx.power, fx.group], ['tech', 30, 0], 'Mericarol: group 0 with fparam3');
       // The cast row 0 runs at 0.6: frame 10 is the 17th tick of the state.
       const b = shots[0] as MericarolBolt;
       let hits = 0;
@@ -190,10 +191,11 @@ class Rig {
       void ai;
       return (shots ?? []).map((s) => s.effect);
     };
-    eq(kinds(0, false, () => 0.9), [{ kind: 'tech', power: 30 }], 'Mericarol, no confusion roll won');
-    eq(kinds(0, false, () => 0.5), [{ kind: 'tech', power: 30 }, { kind: 'status', status: STATUS.confusion }], 'Mericarol: iparam6 % for the confusion hit (group 0x12)');
-    eq(kinds(1, false, () => 0.5), [{ kind: 'tech', power: 30 }, { kind: 'status', status: STATUS.freeze }], 'Merikle: Gibarta group 2 (freeze)');
-    eq(kinds(2, false, () => 0.5), [{ kind: 'tech', power: 30 }, { kind: 'status', status: STATUS.shock }], 'Mericus: Zonde group 3 (shock)');
+    eq(kinds(0, false, () => 0.9), [{ kind: 'tech', power: 30, group: 0 }], 'Mericarol, no confusion roll won');
+    eq(kinds(0, false, () => 0.5), [{ kind: 'tech', power: 30, group: 0, status: { type: STATUS.confusion, chance: 1 } }], 'Mericarol: iparam6 % for the confusion hit (group 0x12, on the landed hit)');
+    // The freeze / shock are the tech's own group rolls (enemytechplayer.ts), not companion shots.
+    eq(kinds(1, false, () => 0.5), [{ kind: 'tech', power: 30, group: 2 }], 'Merikle: Gibarta group 2 (freeze roll in the group)');
+    eq(kinds(2, false, () => 0.5), [{ kind: 'tech', power: 30, group: 3 }], 'Mericus: Zonde group 3 (shock roll in the group)');
     eq(kinds(2, true, () => 0.9), [{ kind: 'megid', power: 30 }], 'Ultimate: Megid (group 5) for all');
   }
 

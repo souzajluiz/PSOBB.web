@@ -1,5 +1,29 @@
 # Devlog
 
+## 2026-10-25: Enemy tech groups: the Mericarol family, the Gi Gue spit, the Olga lancer
+
+**Question.** Which technique_group does each Episode 2 enemy cast pass to entity_hit_by_tech, and does the Merikle / Mericus freeze and shock land the way the port had it (a companion status shot, unconditional)?
+
+**Answer.** `enemyfsmep2b.ts` `MericarolAi.fireBolt` now tags the bolt with the exe's group and drops the companion freeze / shock shots. `enemyfsmep2a.ts` `GiGueSpit` hits with group 1. `tests/enemyfsmep2b.test.ts`, `tests/enemyfsmep2a.test.ts` pin the new shapes.
+
+**PROVEN (dump `src/Psobb.exe-05112026.c` for names, Ghidra `tools/ghidra/decomp.sh`, objdump on `PsoBB.exe` for every constant).**
+- Mericarol bolt, the group (`InitializeTechParameters_00573990`, decompile 0x00573990): `GetPlayerDifficulty_005735c0` is `enemy +0x464`, the caster's subtype. Subtype 0 (Mericarol) -> group 0; 1 (Merikle) -> 2 (Gibarta); 2 (Mericus) -> 3 (Zonde); ultimate mode -> 5 (Megid). The power is `fparam3` (the caller's `g_MericarolAnimationSpeeds + 8`, stored at tech index 0x3d = the group pointer's `[1]`), the speed `fparam4`.
+- The confusion flag (param_6, the caller's `get_random_float <= iparam6 / 100`) is drawn at every cast, before the subtype split. The update (`MericarolTechEntity_Update_00573ce4`) re-hits with group 0x12 when the group is still 0 and the flag is set, after the first hit landed.
+- The hit path: the tech's vtable +0x38 (0x00521e8c) -> +0x34 (0x00521cdc) -> +0x30 (0x00573bf4, the player loop) -> +0x4c (0x005221c0), which calls the player's vtable +0x60 = entity_hit_by_tech(attacker = tech +0xac, group = tech +0x3c, power = tech +0x3d, pos, -1, -1). The freeze / shock are therefore the group's own rolls (group 2 at 0x00774b22, group 3 at 0x00774872), so the port's status-shot freeze was unconditional and wrong.
+- The state gate, re-checked (objdump): freeze and shock need the defender's +0x32c == 1, or `CheckPlayerInvincibility_0077524c` (0 for an enemy attacker id >= 0x1000). A normal player is 0, so an enemy freeze / shock lands only in state 1. `enemytechplayer.ts` already has this gate.
+- Gi Gue spit (`GiGuesProjectileUpdate_0056c96c`, decompile 0x0056c96c): the hit is `entity_hit_by_tech(player, attacker, g_Tech_GiGuesProjectileHit, _DAT_00a73d84, NULL, ~foie, -1)`, the group is the constant at `0x00926500` = 1 (foie_gifoie_rafoie). Its power is `g_GiGue_AnimSpeeds + 0x1c` (iparam2, the port's `spitPower`). The confusion hit is group 0x12 after it.
+- Gibbles' ground blast (`unknown_gibbles_tech_damage`, dump 347413): `entity_hit_by_tech(player, boss, fixed_damage_maybe = 0, attack stats short, NULL, ~foie, -1)`: group 0, as the port has it.
+- Olga Flow fire lancer (`CheckOlga1SwordWaveHit_0049592c`, the only vtable +0x60 call in 0x0049592c..0x00495fdb, at 0x00495ca8): the pushes are `0x0` for the group, so group 0 is PROVEN (the port had it ASSUMED). The sword wave uses the same call.
+- Olga Flow mines (dump 208123 and 215479): `entity_hit_by_tech(player, mine, foie_gifoie_rafoie = 1, randomly_adjust(power, 0.1), NULL, ~foie, -1)`. The 215479 test measures the distance from the world origin (`this->x`, `this->z`, not the mine's position); the port has no mine objects, so this is not ported.
+
+**ASSUMED.**
+- The Gi Gue bomb and spike: the hit group is not found (the bomb's collision list is walked in GiGuesAIUpdate_007acee8, the hit call is not located). They keep group 0.
+- The Mericarol confusion hit: it is merged into the bolt's effect (`status` at chance 1), so it lands with the bolt's first hit. The exe's second entity_hit with group 0x12 is not traced further (its resist and its damage are not known; the port applies only the status).
+- The Mericarol bolt hits every player in the tech's hit box in the exe (the 0x00573bf4 loop), and the port's bolt still hits its target only.
+- `enemyTechHitsPlayer` passes defender state 0 (no challenge mode in the port), so an enemy freeze / shock never lands in normal play. That is the exe's gate for a normal player.
+
+**Left.** The Olga mine hits (no mine objects in the port). The Gi Gue bomb and spike groups.
+
 ## 2026-10-25: Quick menu tools tab: the mag cell rule (can_use_030C_mag_cell)
 
 **Question.** The quick menu's tools tab (the two-handed list, `ListWindowObject_PopulateTwoHandedWeapons_0074b620`) lists a tool when its checker bit 2 is set and bit 1 is clear. The mag cell (class 0x0c) bit 1 was left off: which rule blocks a mag cell, and what does the port's mag need to answer it?

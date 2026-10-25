@@ -332,6 +332,7 @@ const gigue = (params: number[], rng: () => number = () => 0.3) => new GiGueAi({
       if (r.shots) {
         spits += r.shots.length;
         statusSpits += r.shots.filter((s) => s.effect.kind === 'status').length;
+        for (const s of r.shots) if (s.effect.kind === 'tech') check(s.effect.group === 1, `Gi Gue (${len}): the spit's hit is group 1 (EFR)`);
       }
     });
     check(log.slice(0, 4).join(',') === 'emerge,idle,approach,volley', `Gi Gue (${len}): emerge, idle, approach, volley (${log.join(',')})`);
@@ -350,7 +351,7 @@ const gigue = (params: number[], rng: () => number = () => 0.3) => new GiGueAi({
     });
     check(!!spit, 'Gi Gue: a spit is shot');
     if (spit) {
-      eq(spit.effect, { kind: 'tech', power: 250 }, 'Gi Gue: the spit hits with power iparam2');
+      eq(spit.effect, { kind: 'tech', power: 250, group: 1 }, 'Gi Gue: the spit hits with power iparam2, group 1 (EFR)');
       let n = 0;
       let hit = false;
       while (!spit.done && n < 300) {
