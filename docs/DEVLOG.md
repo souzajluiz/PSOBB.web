@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-10-25: Player damage left: the technique cast point's node and the Megid casters (exe trace, no code change)
+
+**Question:** the ROADMAP "Player damage left" open sub-items the exe can settle: the enemy Ultimate Megid's origin and aim, and the technique cast point's node.
+
+**What changed:** nothing in the code. No port was made because the exe facts found do not yet give a complete port (see Left). ROADMAP "Player damage left" is updated with these facts.
+
+**Exe evidence (PsoBB.exe Ghidra dump `src/Psobb.exe-05112026.c`, `tools/exedata.py read`):**
+- The cast point. `unknown_get_tech_cast_location` (dump 557221) calls the player vtable slot +0x10c (dump field67_0x10c, the same body-point getter the gun's -1 / -2 attach uses) with `GetWeaponModelData(player)+0x10`. `GetWeaponModelData` (dump 598776) is `WeaponModel record = table[PlayerGetClampedWeaponGroupId] + GetPlayerWeaponGroup * 0x14`, the table being the 5 pointers at 0x009cc4a4 + 4k (`WeaponStat_ARRAY_009cc468[5].flDamage` as a pointer array). Reading the first records (0x00967960 + 0x14 n, `exedata read u`): the field at +0x10 is an int, 35 (0x23, body node 35) or 48 (0x30, the hand). So the technique cast point is the body node named by the weapon record, not a height above the feet. The port's `WEAPON_HEIGHT` 20 (`combat/techfire.ts` `castOriginY`) is therefore a stand-in for a node (the same node set as `combat/weaponorigin.ts` `weaponAttachRef`, parts 'body' 0x23 / 0x30).
+- ASSUMED / open: which weapon group id each player holds (`player unk_anim_data_object + 4`, set by the weapon animation code, not traced) and therefore which record (35 or 48) applies. The port has no weapon-group id, so the node cannot be chosen per weapon yet.
+- The enemy Ultimate Megid cited in the ROADMAP (dump 295370..295461) is in `HildeBearProcessStateAttack_00513c70` (dump 295311): the Hildebear's attack, not a port caster (the port's Hildebear has no Foie / Megid cast). Its branch: `g_CurrentFloor == ultimate` and `field370 == 1` gives `create_megid(origin, &target->weapon_position, level)` when `angle < max_y_angle / 2` and a target exists, else `create_megid1(origin, heading)`. The origin is `weapon_position + RotY(heading) * (0, 3, 17)` (`local_7c`, dump 295355..295366). Facts proven; no port.
+- The port's Ultimate Megid enemy is the Gibbon leader (`GibbonAi.fireSpell`, `combat/enemyfsmep2b.ts`). Its exe is `unknown_gibbon_behavior2` (dump 349600..349700): origin `weapon_position + RotY(heading) * (0, 15, 12)`, which matches the port's `GIBBON.castHeight` 15 and `castAhead` 12 (already pinned by `tests/enemyfsmep2b.test.ts`, the heading Foie block). The Gibbon's Megid aim point is the enemy's own `field_0x39c` (dump 349690..), not the target's weapon position as in the Hildebear. That field is a union written by other enemies' states (Sinowbeat states at dump 161447, 162303, 164594) and its meaning for the Gibbon is ASSUMED, so the port keeps the heading Megid (no aim).
+
+**ASSUMED / not traced:**
+- The per-weapon record (35 or 48) and the player's weapon group id (`unk_anim_data_object + 4`).
+- The Gibbon's Megid aim point (`field_0x39c`) and whether the exe's gate `field_0x398 != 0` is the lock target the port uses.
+- The Hildebear's attack state is not ported (no Foie / Megid cast for the Hildebear), so its Megid origin and aim have no port counterpart.
+
+**Left:** the weapon group id of each player and the group -> record table (then port the cast point as the body node 35 or 48 through `weaponAttachRef` / the skeleton provider, replacing `WEAPON_HEIGHT` for the techniques); the Gibbon's Megid aim point; the Hildebear's attack cast (a separate port).
+
+**Checks:** none run (no code changed).
+
 ## 2026-10-25: Non-BB download `.qst` writer (DC / PC / GC command structs)
 
 **Question:** the open-file and write-file commands of a DC / PC / GC `.qst`, online (44 / 13) and download (A6 / A7), byte for byte as newserv writes them, and the download writer hooked up where the online `.qst` writer lives (`packQst`).
