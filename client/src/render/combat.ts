@@ -6840,14 +6840,16 @@ export class CombatView {
     // `cap` of both kinds go in the 6x46 (player entity ids are client ids); the victim
     // rolls a player's hit on its own copy (onRemoteStrikeTargets), so only the enemies are hit here.
     const picked = this.pickStrikeTargets(enemies, from, attackType, cap);
+    // The 6x46 goes out on every strike, zero targets included: the exe's
+    // send_0x60_0x46_attack_end (0x00699248) gates on the weapon's targeting entry (reticle type 2),
+    // not on the target count. A strike that hits nothing sends the 8-byte {count 0} body, which
+    // is how a remote player's Mechgun spin is driven.
+    this.game.sendAttackTargets(picked.map(strikeEntityId));
     if (firesGunBullet(kind, variant)) {
-      if (picked.length) this.game.sendAttackTargets(picked.map(strikeEntityId));
       this.gunShot(attackType, step, from, picked, range, kind, variant);
       return;
     }
     const hit = picked.flatMap((t) => (t.enemy ? [t.enemy] : []));
-    if (!hit.length && !picked.length) return;
-    this.game.sendAttackTargets(picked.map(strikeEntityId));
     if (!hit.length) return;
     const attacker = this.attackerStats();
     this.strike = { attackType, step };

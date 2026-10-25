@@ -1,5 +1,27 @@
 # Devlog
 
+## 2026-10-25: 6x46 is sent on every strike, zero targets included
+
+**Outcome.** A strike that hits nothing now sends `6x46` with count 0 (8 bytes: `46 02 <client id> 00000000`). The port used to send nothing, so a remote player's Mechgun spin (driven from the sender's `6x46` on the receive side) stopped on a miss. Port change: `client/src/render/combat.ts` `resolveHit` sends `sendAttackTargets` before the gun / melee split, unconditionally.
+
+**Proven (PsoBB.exe; `Psobb.exe-05112026.c` dump, `headers/network.h` 6x46 notes).**
+- Send: `send_0x60_0x46_attack_end` (0x00699248, dump 579610), called from `handle_player_attack_animation_damaging_part` (0x006990b0) at each damaging-frame crossing (dump 579550 / 579574 / 579589).
+- Gate, in order: state `unknown_flags_invincibility` == 2 returns unless in an unsafe map, and the defensive recheck returns on 2 again, so state 2 never sends. Then `(state != 3 && update_player_targeting_info() == 0)` returns, so state 3 skips the targeting check. Then `unknown_is_player_invisible` returns when set.
+- `update_player_targeting_info` (0x006a3004, dump 588704) returns `&this->target_count` (non-null) iff the player has `unk1` and the palette-slot targeting entry has `reticle_type1 == 2`. It returns 0 otherwise. The target count is not in the gate.
+- Reticle type 2 is the equipped-weapon branch of `unknown_update_equipment_properties_from_pmt` (dump 784800 area: `reticle_color_type == 2` reads `get_weapon_pmt_data`).
+- Body: `{46, size_dwords = count + 2, client id, u32 count, TargetEntry[count]}`, count clamped to 0..10 for the size only. Zero targets: size 2, 8 bytes.
+
+**Newserv.** `ReceiveSubcommands.cc` 6x46 (`forward_subcommand_with_entity_targets_transcode_and_track_hits_t`) accepts count 0 (0 <= min(size - 2, 10)); `ProxyCommands.cc` blocks only a count above the bound. Zero entries: no hits to record, so the forward is the whole effect.
+
+**6x47 / 6x48.** No target gate shared with 6x46. `SendCastTechPacket_0069a2f0` (dump 580532) sends `cast_tech` (6x47) after the cast eligibility check, with the target count as data. The release (6x48, `launch_tech`, enum 72) is sent on the release frame; the port sends it unconditionally (`sendCastTechniqueComplete`). The exe's 6x48 sender is not located by name in the dump (not traced further); the port's technique send is already ungated, so no change.
+
+**Tests.** `tests/attack46.test.ts`: zero-target body bytes and parse back; one and two targets; a 12-target list cut to 10 with size 12. The real `Lobby.prototype.sendSubcommand` frames the body.
+
+**ASSUMED / open.**
+- State 3 (`unknown_flags_invincibility == 3`) sends `6x46` without refreshing the targeting block, so the exe would ship the previous strike's targets. The port has no state-3 flag, so this is not modelled.
+- Special strikes (`attackType 2`) are sent like weapon strikes. The exe's special path is not traced to a separate palette slot.
+- `tests/magfeed.test.ts` fails in a worktree without `vendor/newserv` tables (it reads `ROOT/vendor`); unrelated to this change.
+
 ## 2026-10-25: Episode 1 bosses: the Dragon's lock and hit are the entrance's box bit 0; De Rol Le's shell segments are on the radar with their box off
 
 **Outcome.** Dragon lock and hit: `concealed()` (`untargetable` = the entrance, sid 0x1d) is now PROVEN, not ASSUMED. Nothing changed in the code path, only the comments and a test. The earlier note that the update clears box bit 0 when the cursor is below 0x32 was wrong: that clear is bit 26 (see below). De Rol Le: the shell segments' forced radar icon has no box gate, so the port now shows a segment on the radar with its box off (`radarConcealed`). The body was already right (its icon is unconditional). Port change: `client/src/render/combat.ts` `radarConcealed` drops `DrlSegmentAi`.
