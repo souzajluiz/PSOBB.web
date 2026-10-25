@@ -137,11 +137,15 @@ export class Darvant extends DfEntity {
     super(entity, hp);
   }
   // A ring's hit box is on only in its window (the lock-on and the hit read bit 0). The spat
-  // and beam ones keep the state rule (ASSUMED: their boxes are not traced).
+  // and beam boxes are proven on from their first update and never cleared by the Dark Falz code:
+  // the spat factory (0x00460778) sets bit 0 of [+0x38C]+0x18 at 0x004608D5 when it sets the
+  // spit state (4); the beam's state 0 function (0x00460D34, the update's table entry) sets it at
+  // 0x0046100C every tick it runs. Nothing in 0x0044C000..0x00461000 clears it. Dead ones are not
+  // targetable (the port's rule; the exe's dead test is not traced here, ASSUMED).
   get targetable(): boolean {
     if (this.gone || this.st === DARVANT.dead) return false;
     if (this.kind === 'ring') return this.boxOn;
-    return this.kind === 'spit' || this.st !== DARVANT.rise;
+    return true;
   }
 }
 
@@ -184,7 +188,9 @@ export interface DarkFalzOptions {
   // The party at the time the control is built (+0x398, 1..4).
   partySize: () => number;
   rng: () => number;
-  // The control's entity index word (0x1000 + its slot, render/combat.ts entityId); its Darvants are +1 .. +0x1FD.
+  // The control's entity index word (render/combat.ts entityId, 0x1000 | slot ASSUMED). Proven
+  // (0x0044CFC0): a Darvant's small id is the control's +0x1C + counter, the entity id is +0x2C +
+  // counter, counter = control +0x38C in 1 .. 0x1FD. So the Darvants' words are that base + 1 .. 0x1FD.
   entityId?: number;
 }
 
