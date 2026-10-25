@@ -21,6 +21,34 @@
 - The time text (elapsed since login, `local_48 - _DAT_00aab214`, `hh:mm`, `99:59` fallback) is not ported.
 
 **Tests:** `node tests/beatclock.test.ts` (38/38), `node tests/beattime.test.ts` (42/42), `node tests/fieldhud.test.ts` (all passed), `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome.
+## 2026-10-25: Team invite, the invitee's side: 6xC1 receive, the prompt window, and the inviter's +4 is its own slot
+
+**Question:** the invitee's 6xC1 receive (action 0 invite, action 1 withdrawal), the prompt window (TeamFlagMenu_Update 0x00722428, its ctor 0x00722310) and the 6xC2 answer were not ported. What do the window's texts, positions and states give?
+
+**Exe evidence (`objdump -D -M intel`, the Ghidra dump `src/Psobb.exe-05112026.c`, `tools/exedata.py read`):**
+- 6xC1 receiver 0x0078bc44 (dump row C1): action 1 sets 0x00a9c8c4 = 1 (withdrawn, no answer). Action 0 calls the gate 0x007917b8 (byte 0x009ff3d4; its meaning is not named, ASSUMED: free to take an invite). A closed gate refuses at once: the body with +4 = 0 and +8 = 4 (0x0078bd31 / 0x0078bd39), relayed to the invite's +4. A set pending bit (0x00a98474 & 0x10) or a busy menu (0x00689410, the vtable +0x8c, the player's +0x2b8..+0x2c4; ASSUMED what these are) refuse the same way. Otherwise the body goes to the global 0x00a9c8c0 and 0x10 is set (0x0078bddf).
+- The quick menu per frame (0x00717754): a pending invite with the menu free opens the prompt (GuildCardListWindow, ctor 0x00722310, the window at +0x4c). A pending invite with the menu locked is answered busy (6xC2 with the body kept, +8 = 4, LAB_007177bd) and dropped (QuickMenuObject_CloseTeamFlagMenu_007162e4 clears 0x10).
+- **Inviter's +4 (corrected):** 0x0074d128 stores the invite window's +0x20 at body +4 (`mov edx, [ebp+0x20]` / `mov [esp+0x208], edx`, body starts at 0x204). The same +0x20 is passed to GetPlayer (0x0074ce17), so it is the menu owner's player slot (its own client id). The invitee's answer is relayed to the global's first word, which is this +4, so +4 must be the inviter's slot. The port had put the picked card there (ASSUMED in the earlier entry); that would send the answer to the wrong client id. Fixed: `inviteSubcommand` writes the own slot at +4 (the card argument is gone). The window's +0x20 is set from the quick menu's +0x54 (0x0074c860's caller, not traced: ASSUMED the own slot).
+- Prompt states (TeamFlagMenu_Update): state 0 waits for the decide key (intro text unitxt 11 0x14a, "%s has invited you to join / Team [%s]. / Accept the invitation?", formatted with the inviter name (body +0xC) and team (+0x3C)); the ctor's message box is at get_gui_position(0xed) = (10, 277), 264 x 104 (0xee). State 2 opens the first Yes/No at DAT_009f24dc = (152, 370), cursor on No. Cancel bit or No -> 3 (0x0072307e, 0x00722a59 style writes; the decline message is 0x185 "%s has declined to join / [%s]." or 0x14f, branch by CreateItemObject_006dc358, not read: the port uses 0x185 with the own name, ASSUMED). Yes -> the notice unitxt 11 0x14b (get_gui_position 0xe9 / 0xea = (31, 118), 572 x 124), a decide key -> state 5 with the second Yes/No DAT_009f24e4 = (488, 240). Yes -> 2 (accept, 0x00722c98), the 6xC2 sent with the own card at +4 and the own name (16 units) at +0xC; then state 7 waits for the add-member result (04EA, add_member_result_handler) and shows 0x183 (own name, team), or 0x152 + 0x154 (full), or 0x184 (other). The 900-frame count (both Yes/No lists) -> 4 with the 0x155 message ("Invitation cancelled."), the withdrawal too. Messages are unitxt group 11 (read from `data/unitxt_j.prs`, decoded with `classic/charcreate_text.ts` parseUnitxt; the table the port uses is unitxt_e.prs first).
+- 0x0074c7b8 / 0x0074c964 are the inviter's side (its 0x155 / 0x14f texts are not read here).
+
+**Changed:**
+- `client/src/net/team.ts`: `inviteSubcommand` (+4 = own slot; no card argument), `parseInviteRequest`, `inviteRefusal` (+4 = 0, +8 = 4), `inviteBusyAnswer` (+8 = 4, +4 kept), `TeamInviteReceiver` (receive / busyTick / close; withdrawn flag), `TeamClient.joinResult` (04EA wait, 10 s port time-out, ASSUMED).
+- `client/src/net/lobby.ts`: 6xC1 hook in `onSubcommands` (lobby and game; a refused invite goes out as 0x62 to the invite's +4 at once). `teamInvites`, `teamInviteFree`.
+- `client/src/classic/teammenu.ts`: `TeamInviteAnswerWindow` (intro, ask, notice, confirm, joining, message; keys: decide, up / down, cancel = No), the positions and unitxt ids above; `TeamHost.joinResult`.
+- `client/src/classic/homeleaves.ts`: the prompt lives in the Home leaves (shared by lobby and field): opened by the receiver's pending invite when the menus are free, busy answer otherwise; it takes the keys first and is drawn with the team windows. `inviteFreeOwner` set by `classic/lobby.ts` (no other menu) and `classic/fieldmenu.ts` (no menu, no trade).
+- `client/src/classic/main.ts`: the 6xC1 call without the card; `joinResult` in the team host.
+- `tests/team.test.ts`: the +4 slot layout; receiver tests (pending, refusal, busy, withdrawal); window tests with a fake host (decline, Yes path to accept, full team, time-out, withdrawal, no join result, cancel). `tests/homeleaves.test.ts`: the fake lobby has a receiver.
+
+**Not proven / ASSUMED:**
+- The gate byte 0x009ff3d4 and the busy checks (0x00689410, vtable +0x8c, player +0x2b8..+0x2c4): the port's `free` = no menu open (Home leaves, chat, menu, counter, party, team, trade, quit, info board, quick). Dead players (the exe's is_dead branch sends 4) are not checked.
+- Decline message: 0x185 with the own name (the exe's branch on CreateItemObject_006dc358 not read).
+- The 04EA reaches the invitee (state 7 waits for it in the exe, no time-out there); the port waits 10 s and closes quietly without it.
+- The window's +0x20 origin (quick menu +0x54): ASSUMED the own slot.
+- The intro and the notice accept the decide key only (the exe reads the key-held slot 0xc); cancel closes the message only with decide too.
+- Not drawn in Chrome (no Playwright); the draw code follows `Question` / `drawMenuWindow` and the exe positions.
+
+**Checks:** `client/node_modules` symlink to the main checkout (removed before commit). `node client/node_modules/typescript/bin/tsc --noEmit -p client` exit 0 (Node 24). `tests/team.test.ts` ALL PASS (81 checks, the window and receiver blocks new); `teammenu`, `homeleaves` (its fake lobby now has a receiver), `lobbymenu`, `lobbymain`, `fieldhud` pass under Node 24.
 
 ## 2026-10-25: Revive HP / TP by source: the item's TP restore ported, Reverser and Moon Atomizer already on the exe rule
 

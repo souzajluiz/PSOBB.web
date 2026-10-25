@@ -37,7 +37,14 @@ import {
   setFlagPacket,
   TEAM_CMD,
   teamChatPacket,
+  TEAM_INVITE_REFUSED,
+  TeamInviteReceiver,
+  inviteRefusal,
+  inviteBusyAnswer,
+  parseInviteRequest,
 } from '../client/src/net/team.ts';
+import { KEYS } from '../client/src/input/keyconfig.ts';
+import { TeamInviteAnswerWindow, type InviteAnswerHost } from '../client/src/classic/teammenu.ts';
 
 let failures = 0;
 const check = (name: string, ok: boolean) => {
@@ -214,12 +221,12 @@ function membershipBytes(): Uint8Array {
 // Team Invite (6xC1 body, the 6xC2 answer) and Point Regist (6xCC payload): the layouts the
 // dump's writers and the newserv structs give (net/team.ts).
 {
-  const body = inviteSubcommand({ selfId: 2, guildCard: 0x1234, name: 'Ann', teamName: 'Reds' });
+  const body = inviteSubcommand({ selfId: 2, name: 'Ann', teamName: 'Reds' });
   const dv = new DataView(body.buffer);
   check('6xC1 body is 0x5C bytes with the size word 0x17 and the 0xC1 sub', body.length === 0x5c && body[0] === 0xc1 && body[1] === 0x17);
-  check('6xC1 sender id at +2, card at +4, action 0 at +8', dv.getUint16(2, true) === 2 && dv.getUint32(4, true) === 0x1234 && dv.getUint32(8, true) === 0);
+  check('6xC1 sender id at +2, the inviter slot at +4 (not the card), action 0 at +8', dv.getUint16(2, true) === 2 && dv.getUint32(4, true) === 2 && dv.getUint32(8, true) === 0);
   check('6xC1 name at +0xC (24 units), team name at +0x3C (16 units)', dv.getUint16(0x0c, true) === 0x41 && dv.getUint16(0x3c, true) === 0x52 && dv.getUint16(0x3c + 2 * 3, true) === 0x73);
-  check('6xC2 answer: card at +4, action at +8', JSON.stringify(parseInviteAnswer(body)) === JSON.stringify({ guildCard: 0x1234, action: 0 }));
+  check('6xC2 answer: card at +4, action at +8', JSON.stringify(parseInviteAnswer(body)) === JSON.stringify({ guildCard: 2, action: 0 }));
   const pts = exchangeTeamPointsPayload(0x100, 3);
   const pv = new DataView(pts.buffer);
   check('6xCC payload: item id then amount (u32 each, 8 bytes)', pts.length === 8 && pv.getUint32(0, true) === 0x100 && pv.getUint32(4, true) === 3);
@@ -229,13 +236,13 @@ function membershipBytes(): Uint8Array {
 // timeout 4 (and the refuse paths 4); only 2 is an accept at the receiver 0x0078be84.
 {
   check('answer values: accept 2, decline 3, timeout 4', TEAM_INVITE_ACCEPT === 2 && TEAM_INVITE_DECLINE === 3 && TEAM_INVITE_TIMEOUT === 4);
-  const invite = inviteSubcommand({ selfId: 2, guildCard: 0x1234, name: 'Ann', teamName: 'Reds' });
+  const invite = inviteSubcommand({ selfId: 2, name: 'Ann', teamName: 'Reds' });
   const yes = inviteAnswerSubcommand({ invite, ownCard: 0x9999, ownName: 'Bo', action: TEAM_INVITE_ACCEPT });
   const dv = new DataView(yes.buffer);
   check('6xC2 answer: 0x5C bytes, 0xC2 sub, size word 0x17', yes.length === 0x5c && yes[0] === 0xc2 && yes[1] === 0x17);
   check('6xC2 answer: own card at +4, action 2 at +8', dv.getUint32(4, true) === 0x9999 && dv.getUint32(8, true) === 2);
   check('6xC2 answer: own name at +0xC (16 units), team name kept at +0x3C', dv.getUint16(0x0c, true) === 0x42 && dv.getUint16(0x3c, true) === 0x52);
-  check('6xC2 answer: the relay target is the invite +4 word', inviteTarget(invite) === 0x1234);
+  check('6xC2 answer: the relay target is the invite +4 word (the inviter slot)', inviteTarget(invite) === 2);
   check('6xC2 answer round trip: parseInviteAnswer reads the own card and 2', JSON.stringify(parseInviteAnswer(yes)) === JSON.stringify({ guildCard: 0x9999, action: 2 }));
   const no = inviteAnswerSubcommand({ invite, ownCard: 0x9999, ownName: 'Bo', action: TEAM_INVITE_DECLINE });
   check('6xC2 decline: action 3, not an accept', parseInviteAnswer(no).action === 3);
@@ -269,5 +276,133 @@ function membershipBytes(): Uint8Array {
   }
 }
 
-console.log(failures ? `${failures} FAILED` : 'ALL PASS');
-process.exit(failures ? 1 : 0);
+// The receiver (6xC1 at 0x0078bc44 and the quick menu's pending check 0x00717754): the refusal
+// layouts, the withdrawal flag and the busy answer.
+{
+  const invite = inviteSubcommand({ selfId: 3, name: 'Ann', teamName: 'Reds' });
+  const r = new TeamInviteReceiver();
+  check('receiver: a free gate keeps the invite pending, with no answer', r.receive(invite, true) === null && r.pending !== null);
+  check('receiver: the pending invite keeps the inviter name, team and relay target', r.pending?.inviterName === 'Ann' && r.pending?.teamName === 'Reds' && r.pending?.target === 3);
+  const second = r.receive(inviteSubcommand({ selfId: 4, name: 'Bo', teamName: 'Blue' }), true);
+  check('receiver: a second invite while one is pending is refused (+4 = 0, +8 = 4, relayed to slot 4 of the second invite)', second !== null && second.target === 4 && parseInviteAnswer(second.answer).action === TEAM_INVITE_REFUSED && parseInviteAnswer(second.answer).guildCard === 0 && second.answer[0] === 0xc2 && second.answer[1] === 0x17);
+  r.close();
+  const refused = r.receive(invite, false);
+  check('receiver: a closed gate refuses at once (+4 = 0, +8 = 4) and the relay target is the invite +4', refused !== null && refused.target === 3 && parseInviteAnswer(refused.answer).action === 4 && parseInviteAnswer(refused.answer).guildCard === 0 && r.pending === null);
+  check('receiver: inviteRefusal and inviteBusyAnswer keep the body from +4', inviteRefusal(invite).slice(0x0c).join() === invite.slice(0x0c).join() && inviteBusyAnswer(invite).slice(4, 8).join() === invite.slice(4, 8).join());
+  check('receiver: the busy answer keeps +4 (the inviter slot) and sets +8 = 4', parseInviteAnswer(inviteBusyAnswer(invite)).guildCard === 3 && parseInviteAnswer(inviteBusyAnswer(invite)).action === 4);
+  r.receive(invite, true);
+  check('receiver: a busy menu answers the pending invite (busyTick) and drops it', r.busyTick(false) !== null && r.pending === null && r.busyTick(false) === null);
+  r.receive(invite, true);
+  check('receiver: a free menu keeps the pending invite (busyTick returns nothing)', r.busyTick(true) === null && r.pending !== null);
+  r.receive(inviteSubcommand({ selfId: 3, name: 'Ann', teamName: 'Reds', action: 1 }), true);
+  check('receiver: action 1 withdraws (flag set), no answer and no pending change', r.withdrawn && r.pending !== null);
+  const parsed = parseInviteRequest(invite);
+  check('receiver: parseInviteRequest keeps the 0x5C-byte body', parsed.body.length === 0x5c && parsed.target === 3);
+}
+
+// The invitee's prompt window (TeamInviteAnswerWindow): the exe's states with a fake host. The unitxt
+// strings are the group 11 entries read from unitxt_j.prs (2026-10-25).
+async function runWindowTests(): Promise<void> {
+  const strings: Record<number, string> = {
+    0x14a: '%s has invited you to join\nTeam [%s].\nAccept the invitation?',
+    0x14b: 'A team is a group of hunters.\nIs this okay?',
+    0x155: 'Invitation cancelled.',
+    0x185: '%s has declined to join\n [%s].',
+    0x183: '%s belongs to\n [%s].',
+    0x152: 'Team [%s] is already full.',
+    0x154: 'Could not join.',
+    0x184: 'Could not join\n [%s].',
+    0x6e: 'Yes',
+    0x6f: 'No',
+  };
+  const make = (opts: { withdrawn?: boolean; join?: number | null } = {}) => {
+    const sent: Array<{ target: number; body: Uint8Array }> = [];
+    const host: InviteAnswerHost = {
+      text: (_g: number, i: number) => strings[i] ?? '',
+      ownCard: () => 0x9999,
+      ownName: () => 'Bo',
+      send: (target: number, body: Uint8Array) => sent.push({ target, body }),
+      joinResult: () => Promise.resolve(opts.join === undefined ? 0 : opts.join),
+      withdrawn: () => opts.withdrawn === true,
+    };
+    const invite = parseInviteRequest(inviteSubcommand({ selfId: 3, name: 'Ann', teamName: 'Reds' }));
+    return { win: new TeamInviteAnswerWindow(invite, host), sent };
+  };
+  const decide = { key: KEYS.decide };
+  const up = { key: KEYS.selectUp };
+  const cancel = { key: 'escape' };
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  {
+    const { win, sent } = make();
+    win.key(decide);
+    check('window: the intro key opens the first Yes/No (ask)', win.state === 'ask' && sent.length === 0);
+    win.key(decide);
+    check('window: the cursor starts on No, so Enter declines (3) and sends the 6xC2 to the inviter slot', win.state === 'message' && sent.length === 1 && sent[0].target === 3 && parseInviteAnswer(sent[0].body).action === 3);
+    check('window: the 6xC2 keeps the own card and name', parseInviteAnswer(sent[0].body).guildCard === 0x9999);
+    check('window: the decline message is open until a key', win.open);
+    win.key(decide);
+    check('window: the message key closes the window', !win.open);
+  }
+  {
+    const { win, sent } = make({ join: 0 });
+    win.key(decide);
+    win.key(up);
+    win.key(decide);
+    check('window: Yes on the first list shows the notice (no answer yet)', win.state === 'notice' && sent.length === 0);
+    win.key(decide);
+    check('window: the notice key opens the second Yes/No', win.state === 'confirm');
+    win.key(up);
+    win.key(decide);
+    check('window: Yes on the second list accepts (6xC2 action 2) and waits for the join result', win.state === 'joining' && sent.length === 1 && parseInviteAnswer(sent[0].body).action === 2);
+    await flush();
+    check('window: the join result 0 shows the joined text and waits for a key', win.state === 'message' && win.open);
+    win.key(decide);
+    check('window: after the join text the window closes', !win.open);
+  }
+  {
+    const { win, sent } = make({ join: 5 });
+    win.key(decide);
+    win.key(up);
+    win.key(decide);
+    win.key(decide);
+    win.key(up);
+    win.key(decide);
+    await flush();
+    check('window: a full team (04EA 5) shows the full text', win.state === 'message' && sent.length === 1 && parseInviteAnswer(sent[0].body).action === 2);
+  }
+  {
+    const { win, sent } = make();
+    win.key(decide);
+    for (let i = 0; i < INVITE_ANSWER_FRAMES; i++) win.tick();
+    check('window: the 900-frame count sends 4 (time-out) and shows the cancelled text', sent.length === 1 && parseInviteAnswer(sent[0].body).action === TEAM_INVITE_TIMEOUT && win.state === 'message');
+  }
+  {
+    const { win, sent } = make({ withdrawn: true });
+    win.key(decide);
+    win.tick();
+    check('window: a withdrawal shows the cancelled text and sends nothing', win.state === 'message' && sent.length === 0);
+  }
+  {
+    const { win, sent } = make({ join: null });
+    win.key(decide);
+    win.key(up);
+    win.key(decide);
+    win.key(decide);
+    win.key(up);
+    win.key(decide);
+    await flush();
+    check('window: no join result closes the window quietly', !win.open && sent.length === 1);
+  }
+  {
+    const { win, sent } = make();
+    win.key(decide);
+    win.key(cancel);
+    check('window: cancel on the first list counts as No (3)', sent.length === 1 && parseInviteAnswer(sent[0].body).action === 3);
+  }
+}
+
+runWindowTests().then(() => {
+  console.log(failures ? `${failures} FAILED` : 'ALL PASS');
+  process.exit(failures ? 1 : 0);
+});

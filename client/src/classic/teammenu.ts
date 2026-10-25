@@ -76,14 +76,29 @@
 
 import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
-import { memberRowLabel, PRIVILEGE, inTeam, type IntraRanking, type TeamMember, type TeamMembership, type TeamRank, type TeamReward } from '../net/team.ts';
+import {
+  InviteAnswerPrompt,
+  inviteAnswerSubcommand,
+  memberRowLabel,
+  PRIVILEGE,
+  inTeam,
+  TEAM_INVITE_ACCEPT,
+  TEAM_INVITE_TIMEOUT,
+  TEAM_RESULT,
+  type InviteRequest,
+  type IntraRanking,
+  type TeamMember,
+  type TeamMembership,
+  type TeamRank,
+  type TeamReward,
+} from '../net/team.ts';
 import { wrapGameText } from './chat.ts';
 import { DISABLED, drawListWindow, drawWindowTitle, INSET, listKey, ROW, SELECTED, TITLE_GAP, type ListItem } from './fieldwindows.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { CREATE_EDITORS, CREATE_WINDOW, GAME_LIST_WINDOW, type MenuKey, type Text } from './gamelist.ts';
 import { InfoWindow } from './ingame.ts';
 import { drawMenuWindow, drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
-import { CARET, caretColor, TextEditor, yesNoRect } from './titleflow.ts';
+import { CARET, caretColor, TextEditor, YES_NO, yesNoRect } from './titleflow.ts';
 
 // unitxt group 15 indices (strings of the team menus) and group 11.
 export const T15_TEAM = {
@@ -167,6 +182,8 @@ export interface TeamHost {
   // (6xC1, the answer 6xC2, then 03EA / 04EA; see net/team.ts). Optional: a host without them has no Invite.
   nearby?(): Promise<TeamInviteRow[]>;
   invite?(guildCard: number): Promise<TeamInviteOutcome>;
+  // The invitee's add-member result (04EA) after an accept (TeamInviteAnswerWindow); null when none came.
+  joinResult?(): Promise<number | null>;
   // Point Regist (0x2d, TeamPointWindow): the 6xCC exchange (the local inventory loses the amount).
   exchangeItem?(itemId: number, amount: number): void;
 }
@@ -1393,6 +1410,205 @@ export class TeamInviteWindow {
     ctx.save();
     ctx.translate(extra / 2, 0); // menus follow the counter's centring
     this.list.draw(ctx, skin, TEAM_INVITE_POS.x, TEAM_INVITE_POS.y, this.text(T11_TEAM_INVITE.title));
+    ctx.restore();
+  }
+}
+
+// --- The invitee's prompt (6xC1 received; TeamFlagMenu_Update, dump 0x00722428; the window's ctor
+// GuildCardListWindow_Constructor_00722310, dump 0x00722310) ---------------------------------
+//
+// Entered when the receiver (net/team.ts TeamInviteReceiver) holds a pending invite and the menus are
+// free (classic/homeleaves.ts). The exe's states, with the positions (get_gui_position pairs, the
+// table at 0x00971f40 + 8 * index; the Yes/No DAT_009f24dc / DAT_009f24e4 are vec2f positions,
+// yes_no_list_constructor):
+//   intro    unitxt 11 0x14a (inviter name, team name), the ctor's message at 0xed (10, 277), 264 x 104
+//            (0xee); a decide key moves on (state 0, CheckKeyHeld on the decide key).
+//   ask      the first Yes/No at (152, 370), cursor on No (state 2 / 3). Yes -> notice; No or cancel ->
+//            3 (decline); the 900-frame count -> 4 (time-out).
+//   notice   unitxt 11 0x14b at 0xe9 / 0xea (31, 118), 572 x 124 (state 4); a key -> confirm.
+//   confirm  the second Yes/No at (488, 240), cursor on No (state 5 / 6). Yes -> 2 (accept); No or
+//            cancel -> 3; the 900-frame count -> 4.
+//   joining  after 2: 6xC2 sent, the menu waits for the add-member result (04EA, state 7) with no
+//            time-out in the exe (the port: 10 s, ASSUMED); 0 -> 0x183 (own name, team), 5 -> 0x152 +
+//            0x154, other -> 0x184 (team). Its texts use the own name (ASSUMED).
+//   message  the result / cancelled / declined text at 0xeb / 0xec (190, 180), 260 x 120 (state 8); a
+//            decide key closes it.
+// A decline (3) shows 0x185 with the own name and the team (ASSUMED: the exe's three-way choice on
+// CreateItemObject_006dc358 is not read; its other branch 0x14f is not used). A time-out (4) and the
+// inviter's withdrawal (action 1, the receiver's withdrawn flag) show 0x155 "Invitation cancelled."
+// The withdrawal sends nothing. Keys follow the exe's decide key; cancel counts as No on a Yes/No.
+export const T11_INVITE_ANSWER = { intro: 0x14a, notice: 0x14b, cancelled: 0x155, declined: 0x185, joined: 0x183, full: 0x152, fullEnd: 0x154, failed: 0x184 } as const;
+export const INVITE_ANSWER_POS = {
+  intro: { x: 10, y: 277, w: 264, h: 104 },
+  ask: { x: 152, y: 370 },
+  notice: { x: 31, y: 118, w: 572, h: 124 },
+  confirm: { x: 488, y: 240 },
+  result: { x: 190, y: 180, w: 260, h: 120 },
+} as const;
+
+export interface InviteAnswerHost {
+  text: (group: number, index: number) => string;
+  ownCard(): number;
+  ownName(): string;
+  // The 6xC2 to the inviter (relayed by the server to the client id `target`, the invite's +4 word).
+  send(target: number, body: Uint8Array): void;
+  // The add-member result after an accept (04EA), null when none came.
+  joinResult(): Promise<number | null>;
+  // The receiver's withdrawn flag (0x00a9c8c4).
+  withdrawn(): boolean;
+}
+
+type InviteAnswerPhase = 'intro' | 'ask' | 'notice' | 'confirm' | 'joining' | 'message';
+
+export class TeamInviteAnswerWindow {
+  private phase: InviteAnswerPhase = 'intro';
+  private readonly prompt = new InviteAnswerPrompt();
+  private cursor = 1;
+  private text = '';
+  private visible = true;
+  private readonly invite: InviteRequest;
+  private readonly host: InviteAnswerHost;
+
+  constructor(invite: InviteRequest, host: InviteAnswerHost) {
+    this.invite = invite;
+    this.host = host;
+  }
+
+  get open(): boolean {
+    return this.visible;
+  }
+
+  get state(): InviteAnswerPhase {
+    return this.phase;
+  }
+
+  get answer(): number | null {
+    return this.prompt.action;
+  }
+
+  private t11(index: number): string {
+    return this.host.text(0x0b, index);
+  }
+
+  private message(text: string): void {
+    this.text = text;
+    this.phase = 'message';
+  }
+
+  private answerBody(action: number): Uint8Array {
+    return inviteAnswerSubcommand({ invite: this.invite.body, ownCard: this.host.ownCard(), ownName: this.host.ownName(), action });
+  }
+
+  private settle(): void {
+    const action = this.prompt.action;
+    if (action === null) return;
+    this.host.send(this.invite.target, this.answerBody(action));
+    if (action === TEAM_INVITE_ACCEPT) {
+      this.phase = 'joining';
+      this.host.joinResult().then((flag) => this.joined(flag));
+    } else if (action === TEAM_INVITE_TIMEOUT) {
+      this.message(this.t11(T11_INVITE_ANSWER.cancelled));
+    } else {
+      this.message(format(this.t11(T11_INVITE_ANSWER.declined), this.host.ownName(), this.invite.teamName));
+    }
+  }
+
+  private joined(flag: number | null): void {
+    if (!this.visible || this.phase !== 'joining') return;
+    const team = this.invite.teamName;
+    if (flag === null) {
+      this.visible = false;
+    } else if (flag === TEAM_RESULT.ok) {
+      this.message(format(this.t11(T11_INVITE_ANSWER.joined), this.host.ownName(), team));
+    } else if (flag === TEAM_RESULT.alreadyThere) {
+      this.message(`${format(this.t11(T11_INVITE_ANSWER.full), team)}\n${this.t11(T11_INVITE_ANSWER.fullEnd)}`);
+    } else {
+      this.message(format(this.t11(T11_INVITE_ANSWER.failed), team));
+    }
+  }
+
+  // The owner's per-frame clock: the withdrawal (checked in every state but the message) and the
+  // Yes/No count (900 frames).
+  tick(): void {
+    if (!this.visible) return;
+    if (this.phase !== 'message' && this.host.withdrawn()) {
+      this.message(this.t11(T11_INVITE_ANSWER.cancelled));
+      return;
+    }
+    if (this.phase === 'ask' || this.phase === 'confirm') {
+      this.prompt.tick();
+      this.settle();
+    }
+  }
+
+  // Returns whether the window is still open.
+  key(e: MenuKey): boolean {
+    if (!this.visible) return false;
+    const k = menuKeyOf(e);
+    if (this.phase === 'intro') {
+      if (k === 'decide') {
+        se(SE.ok);
+        this.phase = 'ask';
+      }
+    } else if (this.phase === 'ask' || this.phase === 'confirm') {
+      if (k === 'up' || k === 'down') {
+        this.cursor = 1 - this.cursor;
+        se(SE.cursor);
+      } else if (k === 'decide') {
+        se(SE.ok);
+        this.choose(this.cursor === 0);
+      } else if (k === 'cancel') {
+        se(SE.cancel);
+        this.choose(false);
+      }
+    } else if (this.phase === 'notice') {
+      if (k === 'decide') {
+        se(SE.ok);
+        this.prompt.dismissNotice();
+        this.phase = 'confirm';
+        this.cursor = 1;
+      }
+    } else if (this.phase === 'message') {
+      if (k === 'decide') {
+        se(SE.ok);
+        this.visible = false;
+      }
+    }
+    return this.visible;
+  }
+
+  private choose(yes: boolean): void {
+    if (this.phase === 'ask' && yes) {
+      this.prompt.choose(true);
+      this.phase = 'notice';
+      this.cursor = 1;
+      return;
+    }
+    this.prompt.choose(yes);
+    this.settle();
+  }
+
+  private box(ctx: CanvasRenderingContext2D, skin: WindowSkin, text: string, at: { x: number; y: number; w: number; h: number }): void {
+    drawWindowFrame(ctx, skin.frame, at.x, at.y, at.w, at.h);
+    wrapGameText(text, at.w - 2 * INSET).forEach((line, i) => drawGameText(ctx, line, at.x + INSET, at.y + INSET + i * 20));
+  }
+
+  private yesNo(ctx: CanvasRenderingContext2D, skin: WindowSkin, at: { x: number; y: number }): void {
+    drawMenuWindow(ctx, skin, { x: at.x, y: at.y, w: YES_NO.w, h: YES_NO.h }, [{ label: this.t11(T11_TEAM.yes) }, { label: this.t11(T11_TEAM.no) }], this.cursor);
+  }
+
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
+    if (!this.visible) return;
+    ctx.save();
+    ctx.translate(extra / 2, 0); // menus follow the counter's centring
+    const p = INVITE_ANSWER_POS;
+    if (this.phase === 'intro' || this.phase === 'ask') {
+      this.box(ctx, skin, format(this.t11(T11_INVITE_ANSWER.intro), this.invite.inviterName, this.invite.teamName), p.intro);
+    }
+    if (this.phase === 'ask') this.yesNo(ctx, skin, p.ask);
+    if (this.phase === 'notice') this.box(ctx, skin, this.t11(T11_INVITE_ANSWER.notice), p.notice);
+    if (this.phase === 'confirm') this.yesNo(ctx, skin, p.confirm);
+    if (this.phase === 'message') this.box(ctx, skin, this.text, p.result);
     ctx.restore();
   }
 }

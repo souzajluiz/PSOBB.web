@@ -24,7 +24,7 @@ import { ChatShortcutMenu } from './chatshortcutmenu.ts';
 import { MailCompose, SimpleMailMenu, type SimpleMailHost } from './simplemail.ts';
 import { SymbolChatList } from './symbolchatlist.ts';
 import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
-import { MEET_FRAMES, TeamInfoWindow, TeamInviteWindow, TeamLogWindow, TeamMemberListWindow, TeamPointWindow, type TeamHost } from './teammenu.ts';
+import { MEET_FRAMES, TeamInfoWindow, TeamInviteAnswerWindow, TeamInviteWindow, TeamLogWindow, TeamMemberListWindow, TeamPointWindow, type InviteAnswerHost, type TeamHost } from './teammenu.ts';
 import type { TeamChat } from './teamchat.ts';
 import type { WindowSkin } from './stage.ts';
 
@@ -63,6 +63,10 @@ export class HomeLeaves {
   private teamLog: TeamLogWindow | null = null;
   private teamInvite: TeamInviteWindow | null = null;
   private teamPoint: TeamPointWindow | null = null;
+  // The invitee's prompt (6xC1 received, classic/teammenu.ts TeamInviteAnswerWindow). It takes the keys first.
+  private inviteAnswer: TeamInviteAnswerWindow | null = null;
+  // The owner's menus other than the Home leaves (the exe's quick-menu gate, 0x00717754). Set by the view.
+  inviteFreeOwner: () => boolean = () => true;
   // Team Member List > Send Mail (exe states 0xb..0xe): the keyboard over the list.
   private teamMail: MailCompose | null = null;
   // Guild Card > Search > Send Mail (state 0x21): the keyboard for the result's card.
@@ -79,7 +83,17 @@ export class HomeLeaves {
   }
 
   get open(): boolean {
+    return this.windowsOpen || !!this.inviteAnswer;
+  }
+
+  // Any Home window but the invitee's prompt.
+  private get windowsOpen(): boolean {
     return !!(this.guildCard || this.shortcuts || this.mail || this.symbolList || this.teamList || this.teamInfo || this.teamLog || this.teamInvite || this.teamPoint || this.teamMail || this.searchMail);
+  }
+
+  // The receiver's gate for a 6xC1 (net/team.ts TeamInviteReceiver): no menu open.
+  inviteFree(): boolean {
+    return this.inviteFreeOwner() && !this.windowsOpen && !this.inviteAnswer;
   }
 
   // Opens the leaf for a Home menu id; false when this leaf cannot open here (no session, no team).
@@ -219,6 +233,7 @@ export class HomeLeaves {
 
   // The windows' own clocks (the Team Member List's search and meet timers).
   tick(): void {
+    this.tickInvite();
     // The Invite window closes itself when the invitee's answer comes (its promise), so the owner's menu gets the keys back here.
     if (this.teamInvite && !this.teamInvite.open) {
       this.teamInvite = null;
@@ -249,7 +264,10 @@ export class HomeLeaves {
     const h = this.host();
     e.preventDefault();
     if (this.meetFrames !== null) return; // the phase label takes no keys (state 0x26)
-    if (this.searchMail) {
+    if (this.inviteAnswer) {
+      this.inviteAnswer.key(e);
+      if (!this.inviteAnswer.open) this.endInvite(h);
+    } else if (this.searchMail) {
       const m = this.searchMail;
       m.key(e); // its callbacks may clear the field, so the check uses the local
       if (!m.open) this.searchMail = null;
@@ -385,6 +403,7 @@ export class HomeLeaves {
 
   // Draws the team windows (the lobby's and the field's middle band, with the view's extra width).
   drawTeam(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
+    this.inviteAnswer?.draw(ctx, skin, extra);
     this.teamList?.draw(ctx, skin, extra);
     this.teamInfo?.draw(ctx, skin, extra);
     this.teamLog?.draw(ctx, skin, extra);
@@ -422,6 +441,7 @@ export class HomeLeaves {
     this.teamLog = null;
     this.teamInvite?.close();
     this.teamInvite = null;
+    this.inviteAnswer = null;
     this.teamPoint?.close();
     this.teamPoint = null;
     this.teamMail = null;
@@ -432,6 +452,45 @@ export class HomeLeaves {
 
   private settle(): void {
     if (!this.open) this.onAllClosed();
+  }
+
+  // The invitee's prompt (classic/teammenu.ts TeamInviteAnswerWindow): the receiver's pending invite
+  // opens it when the menus are free; a pending invite the menus cannot show is answered busy
+  // (0x00717754, net/team.ts TeamInviteReceiver.busyTick). Runs every frame.
+  private tickInvite(): void {
+    const h = this.host();
+    if (!h) return;
+    const recv = h.lobby.teamInvites;
+    h.lobby.teamInviteFree = () => this.inviteFree();
+    const canOpen = this.inviteFreeOwner() && !this.windowsOpen;
+    const busy = recv.busyTick(canOpen);
+    if (busy) {
+      this.inviteAnswer = null;
+      h.lobby.conn.send(0x62, busy.target, busy.answer);
+      return;
+    }
+    if (!this.inviteAnswer && recv.pending && canOpen) this.inviteAnswer = new TeamInviteAnswerWindow(recv.pending, this.answerHost(h));
+    if (this.inviteAnswer) {
+      this.inviteAnswer.tick();
+      if (!this.inviteAnswer.open) this.endInvite(h);
+    }
+  }
+
+  private endInvite(h: HomeLeafHost | null): void {
+    this.inviteAnswer = null;
+    h?.lobby.teamInvites.close();
+  }
+
+  private answerHost(h: HomeLeafHost): InviteAnswerHost {
+    const lobby = h.lobby;
+    return {
+      text: (group, index) => h.text(group, index),
+      ownCard: () => h.team()?.selfGuildCard() ?? 0,
+      ownName: () => lobby.self?.name ?? '',
+      send: (target, body) => lobby.conn.send(0x62, target, body),
+      joinResult: () => h.team()?.joinResult?.() ?? Promise.resolve(null),
+      withdrawn: () => lobby.teamInvites.withdrawn,
+    };
   }
 }
 

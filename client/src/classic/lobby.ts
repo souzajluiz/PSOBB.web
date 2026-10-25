@@ -228,6 +228,8 @@ export class LobbyScreen implements Screen {
     this.home.onAllClosed = () => {
       this.menu.leafOpen = false;
     };
+    // The invitee's prompt is free when no other menu is open (the Home leaves are checked by HomeLeaves).
+    this.home.inviteFreeOwner = () => !this.busyWithoutHome;
     restoreBrightness();
     const t15 = (i: number) => hud.text(0x0f, i);
     const counterText: CounterText = {
@@ -326,7 +328,12 @@ export class LobbyScreen implements Screen {
   }
 
   private get busy(): boolean {
-    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit || !!this.infoBoard || !!this.trade || this.home.open || !!this.quick;
+    return this.busyWithoutHome || this.home.open;
+  }
+
+  // Any menu but the Home leaves (the invitee's prompt is refused or waits while one is open).
+  private get busyWithoutHome(): boolean {
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit || !!this.infoBoard || !!this.trade || !!this.quick;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every

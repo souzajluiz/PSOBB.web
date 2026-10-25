@@ -500,13 +500,15 @@ async function main(): Promise<void> {
         const target = [...owner.players.values()].find((p) => p.guildCardNumber === card);
         if (!target) return 'absent';
         const answer = owner.waitInviteAnswer();
-        conn.send(0x62, target.clientId, inviteSubcommand({ selfId: owner.selfId, guildCard: card, name: owner.self?.name ?? '', teamName: c.membership.name }));
+        conn.send(0x62, target.clientId, inviteSubcommand({ selfId: owner.selfId, name: owner.self?.name ?? '', teamName: c.membership.name }));
         const a = await answer;
         if (a.action !== TEAM_INVITE_ACCEPT) return 'declined';
         const flag = await c.addMember(a.guildCard);
         if (flag === 0) return 'joined';
         return flag === 5 ? 'full' : 'failed'; // 04EA: 0 ok, 5 full, other error (net/team.ts)
       },
+      // The invitee's add-member result after an accept (04EA; classic/teammenu.ts TeamInviteAnswerWindow).
+      joinResult: () => c.joinResult(),
       // Point Regist (0x2d): 6xCC in a game only (send_packet0x60_subcommand0xcc returns in the lobby);
       // the local inventory loses the amount, as the exe's local run of the subcommand does.
       exchangeItem: (itemId, amount) => {
