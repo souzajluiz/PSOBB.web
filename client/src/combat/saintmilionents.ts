@@ -397,8 +397,11 @@ export class SmWave extends EnemyShot {
 // aim = origin + length * (sin h, 0, cos h), the origin being the block's translation (+0x30..+0x38). The port
 // reads that block's translation and z axis from the last draw (SaintMilionAi.nodes / axes, slot SM_LASER.headingSlot).
 // The length +0x50 is a ramp: +100.0 an update (0x00976100) while child slot 1 is flagged (ASSUMED always), then the
-// wall cut (0x0077fffc) sets it to sqrt of the squared distance to the first wall point (0x007a8c28 / 0x0082dc9c).
-// No wall geometry in the port: the cut is not reproduced, the ramp is capped at SM_LASER.reach (ASSUMED).
+// wall cut sets it to the distance from the origin to the first wall hit of the ray origin -> aim (0x0077fffc with
+// mask -1, t in [0, 1], front faces only; 0x007a8c28 squared distance, 0x0082dc9c sqrt; proven by objdump of
+// 0x00765d7c). The cut writes +0x50 only: the aim (+0x44) is never clipped, and the hit (0x00768a84) reads the aim,
+// not +0x50. With no wall hit the ramp stands. The hit's line of sight is 0x0077fffc from the boss's origin to the
+// player's feet (mask -1, 0x00768c87). With no wall geometry the ramp is capped at SM_LASER.reach (ASSUMED).
 // ASSUMED: the origin is the boss's position read every frame; the box radius is PLAYER_RADIUS; child slots 1 and 2
 // are flagged on every frame of the laser's life; the line of sight is clear when no `clear` is given.
 export const SM_LASER = {
@@ -408,8 +411,8 @@ export const SM_LASER = {
   se: 0x6f8,
   // The length ramp (0x00976100 = 100.0, added to +0x50 each update). Proven.
   lengthStep: 100,
-  // ASSUMED cap: the exe's length stops at the first wall (no geometry here), so the ramp is capped at the centre
-  // arenas' range (SM_ARENAS 3 / 4) as a stand-in. Not an exe constant.
+  // ASSUMED cap, used only without wall geometry (no `wall` callback): the exe's length stops at the first wall, so
+  // the ramp is capped at the centre arenas' range (SM_ARENAS 3 / 4) as a stand-in. Not an exe constant.
   reach: 620,
   // The matrix slot of the laser's block (boss+0xe94, gated by 0x768964 with slot 0x2a): the origin and the heading
   // of the aim come from this node's transform, read by the render each draw. Proven (see above).
@@ -419,22 +422,35 @@ export const SM_LASER = {
   sweep: 0x8000,
 } as const;
 
-// The laser's length after update k (0-based): the exe's ramp, capped (see SM_LASER). The aim of that update is
-// origin + this length along the sweep heading. ASSUMED: the exe's hit reads the previous draw's aim (one update
-// behind); the port uses this update's length.
+// The ramp after update k (0-based), uncapped: 100 * (k + 1) (0x00976100). The aim of an update with wall geometry.
+export function laserRamp(k: number): number {
+  return SM_LASER.lengthStep * (k + 1);
+}
+
+// The laser's length after update k (0-based) without wall geometry: the ramp, capped (see SM_LASER). The aim of that
+// update is origin + this length along the sweep heading. ASSUMED: the exe's hit reads the previous draw's aim (one
+// update behind); the port uses this update's length.
 export function laserLength(k: number): number {
-  return Math.min(SM_LASER.lengthStep * (k + 1), SM_LASER.reach);
+  return Math.min(laserRamp(k), SM_LASER.reach);
+}
+
+export interface SmPoint3 {
+  x: number;
+  y: number;
+  z: number;
 }
 
 export interface SmLaserOptions {
-  // The boss's position (the dispatcher's origin, the boss's +0x38).
-  origin: () => { x: number; z: number };
-  // The aim point of sweep frame k (0 .. frames - 4), the laser's +0x44.
+  // The boss's position (the dispatcher's origin, the boss's +0x38). y is the origin's height (absent: 0, ASSUMED).
+  origin: () => { x: number; y?: number; z: number };
+  // The aim point of sweep frame k (0 .. frames - 4), the laser's +0x44 (XZ, at the origin's height).
   aim: (k: number) => { x: number; z: number };
   // MovementData iparam2 of the row being fought (read every frame, as the dispatcher does).
   damage: () => number;
-  // The line of sight (0x0077fffc, the origin to the player); absent: clear (ASSUMED).
-  clear?: (x0: number, z0: number, x1: number, z1: number) => boolean;
+  // The line of sight (0x0077fffc, the origin to the player's feet, mask -1); absent: clear (ASSUMED).
+  clear?: (from: SmPoint3, to: SmPoint3) => boolean;
+  // The wall cut (0x0077fffc, origin -> aim, mask -1): the distance to the first wall hit, or null. Absent: no cut.
+  cut?: (from: SmPoint3, to: SmPoint3) => number | null;
 }
 
 const BAMS_UNIT = (Math.PI * 2) / 0x10000;
@@ -452,6 +468,8 @@ export class SmLaser extends EnemyShot {
   private clock = 0;
   // The previous frame's aim heading (+0x58, BAMS).
   private prev = 0;
+  // The drawn length (+0x50) after the last update: the wall cut when the ray hits a wall, else the aim's reach.
+  length = 0;
   private readonly opts: SmLaserOptions;
   // Reused every tick (no allocation per frame).
   private readonly hits: AiTarget[] = [];
@@ -467,6 +485,7 @@ export class SmLaser extends EnemyShot {
     this.hits.length = 0;
     if (this.done) return this.hits;
     const o = this.opts.origin();
+    const oy = o.y ?? 0;
     this.x = o.x;
     this.z = o.z;
     this.frames++;
@@ -481,6 +500,10 @@ export class SmLaser extends EnemyShot {
     const ax = aim.x - o.x;
     const az = aim.z - o.z;
     const reach = Math.hypot(ax, az);
+    // The wall cut (0x00765e20 .. 0x00765e51): the length becomes the distance to the first wall on origin -> aim.
+    // The hit below reads the aim, not this length (0x00765e61 passes +0x44 to 0x00768a84).
+    const cut = this.opts.cut ? this.opts.cut({ x: o.x, y: oy, z: o.z }, { x: aim.x, y: oy, z: aim.z }) : null;
+    this.length = cut ?? reach;
     const cur = toBams(Math.atan2(ax, az));
     const span = absAngleDiff(cur, this.prev);
     // angle_sum (0x007a8cb8): cur + ((prev - cur) as int16 >> 1).
@@ -492,7 +515,7 @@ export class SmLaser extends EnemyShot {
       const tz = t.z - o.z;
       if (Math.hypot(tx, tz) >= reach + PLAYER_RADIUS) continue;
       if (absAngleDiff(toBams(Math.atan2(tx, tz)), mid) >= span) continue;
-      if (this.opts.clear && !this.opts.clear(o.x, o.z, t.x, t.z)) continue;
+      if (this.opts.clear && !this.opts.clear({ x: o.x, y: oy, z: o.z }, { x: t.x, y: t.y ?? oy, z: t.z })) continue;
       this.hits.push(t);
     }
     return this.hits;

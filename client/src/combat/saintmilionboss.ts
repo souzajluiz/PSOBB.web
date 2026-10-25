@@ -53,8 +53,10 @@
 //     (0x1b waits 60 more frames);
 //   - the aim of the lasers (states 0x13 / 0x14, see SmLaser and laserAim) is
 //     drawn by the exe (the draw writes the origin and aim; see SM_LASER): the
-//     length is the exe's ramp (capped ASSUMED), the origin and heading are the
-//     node 0x2a's (proven), the stand-in sweep only without a render record;
+//     length is the exe's ramp, cut at the first wall when the map is there
+//     (the `wall` option; capped at SM_LASER.reach ASSUMED without it), the
+//     origin and heading are the node 0x2a's (proven), the stand-in sweep only
+//     without a render record;
 //     the laser's hit, its life and its sound are; the missiles, the wave, the storm and the sand sonic are
 //     objects of their own (see SmMissile, SmWave, SmStorm and SmSandSonic);
 //   - the order of the players the followers go round and the stream of the
@@ -64,7 +66,7 @@ import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_RADIUS } from './enemyshots.ts';
-import { SM_LASER, SM_MISSILE, SM_SAND, SmClock, SmField, SmLaser, laserLength, SmMissile, SmRng, SmSandSonic, SmStorm, SmTouch, SmWave, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
+import { SM_LASER, SM_MISSILE, SM_SAND, SmClock, SmField, SmLaser, laserLength, laserRamp, SmMissile, type SmPoint3, SmRng, SmSandSonic, SmStorm, SmTouch, SmWave, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
 
 const BAMS = BAMS_TO_RAD;
 const f32 = Math.fround;
@@ -276,6 +278,9 @@ export interface SmBossOptions {
   frames: (motion: number) => number;
   tentacleFrames: (motion: number) => number;
   ground?: (x: number, z: number) => boolean;
+  // The map's first wall on a segment (cast_ray_at_map_collision_geometry, mask -1): the distance from `from` to it,
+  // or null. Absent: no wall geometry (the laser's ramp is capped at SM_LASER.reach, ASSUMED).
+  wall?: (from: SmPoint3, to: SmPoint3) => number | null;
   // The boss was already killed in this game (saved enemy status 0x12008).
   dead?: boolean;
   // The boss's base ATP (the stats row's atp, [boss+0x2c4]): the sand sonic's damage.
@@ -815,20 +820,31 @@ export class SaintMilionAi extends BrainBase {
   // when the laser is done (0x00765d7c starts it on the first update with child 2 flagged, ASSUMED: here at once).
   private laserEnter(): void {
     this.events.push({ kind: 'se', id: SM_LASER.se, x: this.x, z: this.z, loop: true });
+    const wall = this.opts.wall;
     this.laser = new SmLaser({
-      origin: () => ({ x: this.x, z: this.z }),
+      origin: () => this.laserOrigin(),
       aim: (k) => this.laserAim(k),
       damage: () => this.row.iparam[1],
+      // The wall cut and the line of sight are the same ray (0x0077fffc, mask -1); without geometry the laser is clear.
+      ...(wall ? { cut: wall, clear: (from: SmPoint3, to: SmPoint3) => wall(from, to) === null } : {}),
     });
     this.pendingShots.push(this.laser);
   }
 
-  // The aim point of update k (+0x44 = origin + length * forward): the exe's ramp length (laserLength, +100 an update,
-  // capped at SM_LASER.reach ASSUMED for the wall) along the laser node's z axis (the render's heading, proven: the
-  // node's translation is the origin, the XZ direction of its z axis the heading). Without the render's record the
+  // The laser's origin (+0x38, the node's translation): the boss's x / z, the height of the laser node when the render
+  // has recorded it (ASSUMED: the port's origin is the boss's position, the exe's is the node's).
+  private laserOrigin(): { x: number; y: number; z: number } {
+    const n = this.node(SM_LASER.headingSlot);
+    return { x: this.x, y: n ? n[1] : 0, z: this.z };
+  }
+
+  // The aim point of update k (+0x44 = origin + length * forward): the exe's ramp length (+100 an update) along the
+  // laser node's z axis (the render's heading, proven: the node's translation is the origin, the XZ direction of its
+  // z axis the heading). With wall geometry the ramp is uncapped (the wall cut shortens the drawn length, see SmLaser);
+  // without it the ramp is capped at SM_LASER.reach (laserLength, ASSUMED). Without the render's record the
   // stand-in sweep of SM_LASER (ASSUMED, centred on the boss's heading) is used.
   laserAim(k: number): { x: number; z: number } {
-    const r = laserLength(k);
+    const r = this.opts.wall ? laserRamp(k) : laserLength(k);
     const o = this.node(SM_LASER.headingSlot);
     const d = this.nodeAxis(SM_LASER.headingSlot);
     if (o && d) {

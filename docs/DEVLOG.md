@@ -1,5 +1,44 @@
 # Devlog
 
+## 2026-10-25: Saint-Milion laser is cut at the first wall (0x0077fffc)
+
+**Outcome.** The laser's length is the distance to the first map wall on the ray origin -> aim, when the map is there (`SaintMilionAi` option `wall`, wired in `render/combat.ts` from the view's `wallHit`, mask -1). The 620 cap stays only as the no-map fallback (ASSUMED). The hit does not use the cut: the exe's hit reads the unclipped aim, and walls reach it only through its per-player line of sight. Tests: `tests/saintmilionboss.test.ts` (fake wall at 250 clips the length to 250; the hit still reads the aim; the LoS runs origin to feet). Checks: saintmilionboss, saintmilion, bossrooms, combat (NEWSERV), `tsc --noEmit`. Not run in Chrome.
+
+**The ray 0x0077fffc (PROVEN, `objdump -d -M intel` 0x0077fffc .. 0x00780300, with the community decompile as the name).** It is `cast_ray_at_map_collision_geometry(from, to, mask)`:
+- The segment is `from` -> `to`, `t` in [0, 1]: `0x979910 = 0.0` (min) and `0x979914 = 1.0` (max). The triangle hit is taken only for `t` in that range, and the nearest hit wins (the result's running best starts at `0x40000000` = 2.0, 0xa9bc94).
+- Mesh prefilter: a collision node (list 0xaab3f0) passes when `node +0x14 & mask` is nonzero and its XZ circle is near the segment.
+- Face filter: `face +0x6 (word) & mask` must be nonzero (mask -1 accepts every face with any flag bit set).
+- One-sided test: the segment must cross the plane toward its back (`n . (to - from) < 0x97991c = -1e-5`, objdump 0x7802b5) and the start must be in front (`n . (from - v0) > 0x979918 = 1e-5`, community decompile, not re-read in the disassembly). Walls are hit from the normal's side only.
+- The result is the struct at 0xa9bc84 (+0x4 = the hit point pointer), or NULL.
+- Vector helper 0x7a8c4c(a, b, out): `out = b - a` (disassembly: `out[i] = arg2[i] - arg1[i]`). So the segment vector is `to - from`.
+
+**The laser update 0x00765d7c (PROVEN, objdump 0x00765d7c .. 0x00765ee0):**
+- Clock: `+0x30 += [0x976108] (1.0)`; end test `clock >= [+0x34]` at 0x00765d9e (`jae 0x765eba`).
+- Aim heading: `fpatan` of the aim - origin vector (0x765dd0..0x765dd7, components via 0x82f9c4), scaled by 0x9760f0 / 0x9760e8 (65536 / 2pi), truncated (`fistp`, control word 0xc00) into `ebp`. Not changed by this entry.
+- Ramp and cut, when child slot 1 is flagged (0x00765a90 with 1):
+  - `+0x50 += [0x976100] = 100.0` (0x765e14..0x765e1d). The stored value is cumulative: an uncut update adds 100 to the previous length.
+  - The ray: `call 0x77fffc(origin = &+0x38, aim = &+0x44, -1)` (0x765e20..0x765e27).
+  - On a hit (`eax != 0`): `d2 = 0x7a8c28(origin, eax+4)` is the squared 3D distance (`(dx)^2 + (dy)^2 + (dz)^2`, the disassembly at 0x7a8c28); `+0x50 = sqrt(d2)` through `0x82dc9c` (a sqrt; the negative branch is `-sqrt(|x|)`, not reached here). So the cut sets **L = |hit - origin|**, 3D.
+  - Impact: `0x661448(laser, 0x10, 6, &+0x44, 0)` at 0x765e5c, the impact at the unclipped aim pointer (not the hit point).
+- Hit: `0x768a84(boss, 4, cur, prev, &+0x44, 0)` at 0x765e78. The hit receives the aim pointer, never `+0x50`.
+- Without a hit the ramp is not capped in the exe: `+0x50` is `100 (k + 1)` (12500 at update 124). The 620 is therefore a port stand-in only.
+
+**The hit uses the aim, not the cut (PROVEN).** `0x768a84` reads the aim (`+0x44`) for its reach (`L = |aim - origin|`) and its wedge. The cut writes only `+0x50` (the drawn length); the aim is never written by the cut (the 2026-10-21 correction stands: `+0x44` still has no writer). So the hit reach is the unclipped aim, and the walls act on the hit through its line-of-sight test: `0x768c87` calls `0x77fffc(from = boss +0x38, to = player +0x300 (feet), -1)` for each living player (list 0xaad720, `word +0x96 == 1`), and a hit is dropped when the ray meets a wall.
+
+**Port changes.**
+- `client/src/combat/saintmilionents.ts`: `laserRamp(k)` (uncapped `100 (k + 1)`); `laserLength` stays the capped fallback. `SmLaserOptions` gains `cut(from, to)` (the wall distance or null) and `clear` takes 3D points; `origin` may carry a height `y`. `SmLaser.length` = the cut when the ray hits, else the aim reach. The hit keeps the aim reach, and its LoS is `clear` on the origin -> feet segment (3D).
+- `client/src/combat/saintmilionboss.ts`: `SmBossOptions.wall`. With it: `laserAim` uses the uncapped ramp, `laserEnter` passes `cut = wall` and `clear = (wall === null)`. The origin's height is the node 0x2a translation's y (ASSUMED: the exe's origin is that node's translation, the port's x / z stay the boss's position).
+- `client/src/render/combat.ts`: the Saint-Milion boss gets `wall` = the view's `wallHit(from, to, -1)` distance (the same segmentHit as the drops and the gun bullets, `render/collision.ts`, one-sided faces, t in [0, 1]).
+
+**ASSUMED, kept, with the reason:**
+- The aim (+0x44) has no writer in the exe (2026-10-21 / 10-22 entries). The port keeps the ramp point as the aim, so the ray is origin -> origin + ramp along the heading.
+- The origin's height: the node 0x2a's y (ASSUMED: the exe's origin is the block translation; the port's height is not otherwise known). Without the node the height is 0.
+- The feet's height for the LoS: the player's `y` (the feet, `AiTarget.y`), 0 when absent.
+- The 620 cap: no exe constant. It is used only without a `wall` callback (headless tests, no map).
+- The impact particle (0x661448) sits at the unclipped aim in the exe; the port has no particle here, so it is not reproduced.
+
+**Checks made.** `objdump` re-derivation above. The cut is the same ray as the drops' and the bullets' (`0x0077fffc`, mask -1, versus `0x8100` for bullets and `0x0100` for the Megid orb); the port's `segmentHit` already implements it (front faces, `t` in [0, 1]).
+
 ## 2026-10-25: Dubchic's radar row is 'own' (vtable 0x00b04760); the Dark Gunner's flinch shows its icon
 
 **Outcome.** The DUBCHIC row of `ENEMY_RADAR_SOURCE` moves from 'slot' to 'own'. The Dark Gunner's flinch (exe state 4, 0x00544704) now shows the radar icon in any brain state, so an idle gunner that is hit is drawn while it flinches (`render/combat.ts` `minimapEnemies` passes the 'flinch' brain while the owner's damage state runs). The port's flinch was already a hit reaction (owner damage motion, resumed to hover when the animation ends); this pass adds no new GunnerAi state.

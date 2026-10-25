@@ -731,6 +731,30 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     const near = at(0x4800, 100);
     eq(ids(l.tick([player(1, near.x, near.z)])), '', 'no clear line: no hit');
   }
+  // The wall cut (0x0077fffc, origin -> aim, mask -1, 0x00765e20 .. 0x00765e51): the length becomes the distance to the
+  // first wall, and the hit still reads the aim (0x00765e61 passes +0x44 to 0x00768a84, not +0x50).
+  {
+    const l = mk({ cut: () => 250 });
+    for (let i = 0; i < 5; i++) l.tick([]);
+    const mid = at(0x4800, 150);
+    eq(ids(l.tick([player(1, mid.x, mid.z)])), '1', 'wall cut: the hit reads the aim, a player past the wall at 250 is hit');
+    eq(l.length, 250, 'wall cut: the length is the distance to the first wall (250)');
+  }
+  {
+    const l = mk({ cut: () => null });
+    l.tick([]);
+    eq(l.length, 620, 'no wall on the ray: the length is the aim reach');
+  }
+  // The line of sight is the same ray from the origin's height to the player's feet (mask -1).
+  {
+    const seen: number[][] = [];
+    const l = mk({ origin: () => ({ x: 0, y: 30, z: 0 }), clear: (a, b) => { seen.push([a.x, a.y, a.z, b.x, b.y, b.z]); return true; } });
+    for (let i = 0; i < 5; i++) l.tick([]);
+    const near = at(0x4800, 100);
+    l.tick([{ ...player(1, near.x, near.z), y: 12 }]);
+    eq(seen.length, 1, 'the line of sight is tested for the candidate in the wedge');
+    eq(seen[0] ? seen[0].join(',') : '', [0, 30, 0, near.x, 12, near.z].join(','), 'the line runs from the origin (30) to the feet (12)');
+  }
   // Life: 125 updates; the 125th ends it and does not sweep. 126 frames of the motion.
   {
     const l = mk();
@@ -814,6 +838,22 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     b.axes[SLOT * 2] = 0;
     b.axes[SLOT * 2 + 1] = -2;
     near(aimOf(b, 0), 10, -80, 'node 0x2a: a z axis of (0, -2) aims straight back along -z');
+  }
+  // The map (the `wall` option): the ramp is uncapped and the laser's length is the wall cut; without it the cap stays.
+  {
+    const drive = (ai: SaintMilionAi) => ai as unknown as { setState(s: number, first?: boolean): void; pendingShots: EnemyShot[] };
+    const aimOf = (b: SaintMilionAi, k: number) => (b as unknown as { laserAim(k: number): { x: number; z: number } }).laserAim(k);
+    const walled = make(true, { x: 0, z: 0, wall: () => 250 });
+    walled.tick([player(1, 5000, 5000)]);
+    const d = drive(walled);
+    d.setState(19);
+    const laser = d.pendingShots.find((x): x is SmLaser => x instanceof SmLaser);
+    check(!!laser, 'wall: state 19 makes a laser');
+    for (let i = 0; i < 6; i++) laser?.tick([]);
+    eq(laser?.length ?? -1, 250, 'wall: the boss laser is cut at the wall (250)');
+    const far = aimOf(walled, 6);
+    eq(Math.round(Math.hypot(far.x, far.z)), 700, 'wall: the aim keeps the uncapped ramp (update 6 is 700)');
+    eq(Math.round(Math.hypot(aimOf(make(true), 6).x, aimOf(make(true), 6).z)), 620, 'no wall: the aim is capped at 620');
   }
   // The frame count of bm_obj_ep4_boss09_laser.bml (motion 0) against the client's archive, when it is there.
   {
