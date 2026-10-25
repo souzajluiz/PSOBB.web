@@ -1,5 +1,37 @@
 # Devlog
 
+## 2026-10-25: Vol Opt radar per entity (exe icon sites); the control and the prison never, the rod and the body always
+
+**Outcome.** `render/combat.ts` `voloptRadar(ai)` gives each Vol Opt entity its radar rule from the exe: the control (`VoloptAi`) and the prison (`VoloptPartAi`, kind `prison`) are never on the radar; the rod (kind `rod`) and the body (`VoloptForm2Ai`) are on it every live frame, the rod's icon needing its model root only through the control. The monitors, pillars and core keep `concealed()` (their state gates are read, the port's state mapping is not). Lock and hit are unchanged (ASSUMED per class, see below). `tests/volopt.test.ts` checks the rule.
+
+**Method.** Vtables are read from the image: each class's constructor stores its vtable (`mov dword [reg], imm`), the vtable's slot +0x00 is the scalar destructor, +0x04 the per-frame update, +0x08 the draw (the rows match the dump's `FUN_004409d8` / `FUN_00440d58` / `FUN_00440b98` shape). The minimap icon is `unknown_add_minimap_icon` at 0x00805608 (`pos, color, short type, flags`; flag bit 0 skips the distance test, and the Vol Opt sites pass 0, so they keep it) and the forced variant 0x0080575c. Call sites: objdump scan for `call 0x805608` / `0x80575c`, owner by Ghidra (`tools/ghidra/decomp.sh`).
+
+**Proven (PsoBB.exe).**
+
+| class | vtable | ctor / update | icon call sites | gate |
+|---|---|---|---|---|
+| control `VoloptAi` | 0x00af5540 | 0x0043c508 / 0x0043c5d4 (AI table 0x0043c680) | none in 0x43c000..0x43f000 | never |
+| core `VoloptCore` | 0x00af57a0 | 0x0043eeb4 dtor / 0x0043f010 | 0x43f9d8 (state 2, 0x43f6c8), 0x43fce1 (state 1, 0x43fb90), 0x440336 (state 9, 0x440298), 0x43f2c2 (state 10, 0x43f1c8) | dispatch 0x43f17c on +0x32e: state 2 ungated; 1, 9, 10 need `DAT_00a447ac >= 0`; states 0 (0x43fcfc), 4, 5, 7 have no site |
+| rod | 0x00af5a60 | 0x004409d8 dtor / 0x00440d58 | 0x440e55 (the update's tail, pos +0x38) | ungated: every path of the update reaches it (the state 5 jump at 0x440e29 rejoins at 0x440e37), only the paused / cut-scene test (`FUN_004f7c84 == 1`) skips the update |
+| monitor | 0x00af5c60 | 0x004414d8 dtor / 0x004419d4 | 0x441aaa (in the update) | flag 0x800 of +0x30 clear (`and eax,0x800; jne` skips it) |
+| pillar | 0x00af5ee0 | 0x00442254 dtor / 0x004425d8 (dispatch 0x00442730) | 0x443563 (state 2, 0x442ec0), 0x442d5b (state 4, 0x442c98), 0x442986 (state 9, 0x4428b0) | ungated in those states; states 0 (0x443b0c) and 5 (0x442770) have no site |
+| body `VoloptForm2Ai` | 0x00af6220 | ctor 0x004483fc (writes it, `FUN_004491cc` stat init) / 0x004442e0 (dispatch 0x004446fc) | 0x444692 (the update's tail) | after the dying test (flag 0x4000 of +0x30 returns before the dispatch) |
+| prison | 0x00af6560 | ctor 0x00449cb4 / 0x00449e3c (dispatch 0x00449f20) | none | never |
+| cage 0x00af6710 / bar 0x00af6870 / lid 0x00af68c8 | | 0x0044a694 / 0x0044b1b8 / 0x0044b8c4 | none | never (not entities) |
+
+- The monitor, pillar and core states that move a part to state 5 do so through the base vtable hooks: slot +0x8c (`FUN_00777bb0`) is `flags(+0x30) & 0x800`; when set, the update calls +0x104 (`FUN_0052c9c4`, next state 5). Slot +0x88 (`FUN_00777ba4`) is `flags & 0x200` (a hit this frame); it calls +0x100 (`FUN_0053175c`, next state 4). Both are base-class functions shared by all these vtables.
+- Lock search: `FUN_007714cc` (`EnemyGetNearestTargetInRange`, range 400) takes an entity only when its id is below 0x1000, `flags(+0x30) & 0x2000800 == 0` (so the 0x800 flag and the boxes-off flag 0x2000000 remove it) and its room id matches. It does not read 0x40000.
+- Hit boxes: the Vol Opt code calls none of `FUN_0052045c` (box bit 0 on), `FUN_005204b0` (bit 0 off) or `FUN_0052039c` (boxes 0x2000000 and flag 0x4000000 on): no call site in 0x43c000..0x452000 or 0x449000..0x44d000 (the call-site scan, objdump). So no Vol Opt entity's box bit 0 is toggled by its own code.
+
+**ASSUMED / open.**
+- Monitor, pillar and core radar: the gates above are read but the port's `targetable` is not mapped to them (the monitor's `+0x30 & 0x800` is set by its hit flag `FUN_004416fc`, and by a dead neighbour's death at 0x441bf0 state 5; the pillar's state 2/4/9 and the core's states). They stay `concealed()`.
+- Body before it is stood up: the exe's body update has no awake gate, so the icon may show from the body's creation; the port's body root shows only once awake, so the radar follows the root (ASSUMED creation time).
+- Rod after its death: the exe's rod update has no death test (no 0x4000 check); the port hides a dead rod (ASSUMED).
+- Lock and hit per class: not traced. The monitor's `+0x30` 0x40000 / 0x4000000 pair (the update at 0x4419d4 sets 0x4040000 when the core's slot `DAT_00a447ac` does not cover it and clears it when it does) and the rod's 0x40000 (state 7 at 0x440ef8) look like lock / invulnerable bits, but the reticle's reader was not found; the port keeps `untargetable` / `invulnerable` as they were.
+- Ultimate: the rod is not built (as before). The dump's "VoloptForm7*" names (the 0x0045xxxx icon sites) are Dark Falz's, not Vol Opt's.
+
+**Port.** `client/src/render/combat.ts`: `voloptRadar(ai)` (`always` | `never` | `concealed`); `radarConcealed` uses it before the Dragon rule; `minimapEnemies` accepts a rod whose model root is hidden while its control is visible (`onField`). `tests/volopt.test.ts`: the rule for the control, the rod (untargetable but on the radar, still not lockable), the prison, a monitor, pillar and core (unchanged), and the body (not ready, on the radar).
+
 ## 2026-10-25: Xbox (XB) .qst: parse and pack, newserv byte cross-check
 
 `formats/qst.ts` takes `version: 'XB'` (`QstVersion`). newserv's `S_OpenFile_XB_44_A6` (`src/CommandFormats.hh`, 0x50 bytes) is the PC / GC open body plus `xb_filename` (pstring 0x10, ASCII, at 0x38) and `content_meta` (u32 at 0x48, `0x30000000 | quest number`, `Quest.cc` `add_open_file_command_t` XB overload). The header is the 4-byte DC-style one; the write commands are the GC ones (`add_write_file_commands_t` with `bb_alignment` false). `qstVersion` returns `XB` for the first command's size 0x54 (it used to refuse). `packQstFiles(..., xb)` takes `{ xbFilename, contentMeta }` and throws without them; `parseQstFiles` returns them as `xb`. `packQst(..., { version: 'XB', language })` names the Xbox file `quest<N>_<c>.dat` with `c` the lowercase language letter (`JEGFSBTK`, default English), as newserv `VersionedQuest::xb_filename`. XB download files are the PSO V2 payload, as on DC / PC / GC (newserv's decode_qst_data_t applies its DLQ decoder to every A6 file).
