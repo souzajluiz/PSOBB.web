@@ -513,7 +513,7 @@ export class FieldHud {
     const area = this.opts.area();
     const equipped = c.inventory
       .filter((it) => it.equipped)
-      .map((it) => ({ data1: it.data.data1, magLevel: it.data.data1[0] === 2 ? magStats(it.data).level : 0 }));
+      .map((it) => ({ data1: it.data.data1, data2: it.data.data2, magLevel: it.data.data1[0] === 2 ? magStats(it.data).level : 0 }));
     const hasMag = c.inventory.some((it) => it.equipped && it.data.data1[0] === 2);
     return {
       pmt,
