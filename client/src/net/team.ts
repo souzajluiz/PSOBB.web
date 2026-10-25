@@ -481,15 +481,21 @@ export class TeamClient {
 // When the gate refuses, the exe answers itself with a 6xC2 built as: +4 0, +8 4, name and team
 // copied from the packet (ASSUMED reading, the copy is not fully traced).
 //
-// The 6xC2 ANSWER as sent by the invitee (the 0x74c970 function writes 0xC2 at its frame +8, not
-// 0xC1; the global-copy senders 0x0074ca78 and 0x00717754 are answers): +4 = the global's first dword
-// (the invite's +4, the invitee's card), +8 = literal 4, +0xC..+0x5B = the global's +8..+0x57.
-// Other C2 senders (0x00722230 family, ~10 sites) copy the global unchanged, so +8 is the stored
-// action. The answer receiver 0x0078be84 (the 0x60 row C2): action == 2 copies the body (+4..+0x5B)
-// into the global 0x00a9c8c0 and sets 0x00a98474 |= 0x20 (accepted); any other action stores
-// 0x00a9c8c4 = action and the name at 0x00a9c8c8 (declined). CONFLICT: the invitee-side literal is 4,
-// the receiver accepts only 2. ASSUMED that the accept answer is sent by a path not yet traced;
-// the code keeps 2 = accept (TEAM_INVITE_ACCEPT), the receiver's proven check.
+// The 6xC2 ANSWER (the invitee's prompt, DEVLOG 2026-10-25 "Team invite answer: Yes is 2"). Its
+// receiver 0x0078be84 (the 0x60 row C2) accepts only action == 2: it copies the body (+4..+0x5B) into
+// the global 0x00a9c8c0 and sets 0x00a98474 |= 0x20. Any other action stores 0x00a9c8c4 = action and
+// the name at 0x00a9c8c8 (declined). The invitee's senders, found by the C2 byte writes in the exe:
+//   Yes (second confirm)   action 2   TeamFlagMenu_Update (dump 0x00722428) list value 0 at state 6:
+//                                     body = the global copy, +4 = the player's own card (player +0xeb4),
+//                                     +8 = 2 (0x00722c98), +0xC = own name, relayed to the global's +4 word.
+//   No / cancel            action 3   the same function: list value 1 (0x007235a3, +8 = 3) and the cancel
+//                                     bit (state 6 flag 4, and the first prompt's No, 0x00722a59).
+//   timeout (900 frames)   action 4   the countdown reaches 0 (0x00722d26 builds +8 = 4 at 0x00722e30).
+//   busy / gate refused    action 4   0x0078bc44 refuse path (+4 = 0, +8 = 4) and 0x00717754 when the
+//                                     menu is busy (+8 = 4 at 0x007177cc). The inviter's window state 8
+//                                     (0x0074ca78, global copy, +8 = 4) is a withdrawal: 4 means "not 2".
+// So 4 is never an accept: the earlier "CONFLICT" (the invitee-side literal 4) was the refusal, not Yes.
+// Other C2 senders (0x00722230 family) copy the global unchanged, so +8 is the stored action.
 //
 // On accept the inviter sends 03EA with that card (FUN_007f323c) and waits for 04EA (the flag).
 //
@@ -523,6 +529,79 @@ export function inviteSubcommand(o: { selfId: number; guildCard: number; name: s
 export function parseInviteAnswer(body: Uint8Array): { guildCard: number; action: number } {
   const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
   return { guildCard: dv.getUint32(4, true), action: dv.getUint32(8, true) };
+}
+
+export const TEAM_INVITE_DECLINE = 3;
+export const TEAM_INVITE_TIMEOUT = 4;
+// The exe's countdown of each prompt (the window's +0x28 is set to 900 on entry and drops by one per frame).
+export const INVITE_ANSWER_FRAMES = 900;
+
+// The invitee's 6xC2 answer. `invite` is the received 6xC1 body (0x5C bytes, the header included): the
+// exe copies its +4..+0x5B into the global and the answer keeps that copy, then writes the player's own
+// card at +4, the action at +8 and the own name (16 units, wcsncpy) at +0xC. The team name at +0x3C stays
+// from the invite. The relay target is the invite's +4 word (the exe pushes the global's first dword).
+export function inviteAnswerSubcommand(o: { invite: Uint8Array; ownCard: number; ownName: string; action: number }): Uint8Array {
+  const b = new Uint8Array(TEAM_INVITE_SIZE);
+  b[0] = TEAM_INVITE_ANSWER_SUB;
+  b[1] = TEAM_INVITE_SIZE / 4;
+  b.set(o.invite.subarray(4, TEAM_INVITE_SIZE), 4);
+  const dv = new DataView(b.buffer);
+  dv.setUint32(4, o.ownCard >>> 0, true);
+  dv.setUint32(8, o.action >>> 0, true);
+  b.set(utf16(o.ownName, 0x10), 0x0c);
+  return b;
+}
+
+// The relay target of an invite (the 6xC1 body's +4 word, see inviteAnswerSubcommand).
+export function inviteTarget(invite: Uint8Array): number {
+  return new DataView(invite.buffer, invite.byteOffset, invite.byteLength).getUint32(4, true);
+}
+
+// The invitee's prompt as a pure model of the exe's two Yes/No lists (TeamFlagMenu_Update, dump
+// 0x00722428; the first list's No is the default cursor, SetSelection(1), as in the other prompts):
+//   ask      Yes -> notice; No or cancel -> decline (3)
+//   notice   the one-line message (unitxt 11, 0x14b, ASSUMED) closes on a key -> confirm
+//   confirm  Yes -> accept (2); No or cancel -> decline (3)
+// Either Yes/No prompt times out after INVITE_ANSWER_FRAMES frames -> 4. The strings and the window
+// drawing are not ported; the model keeps the answer the exe sends.
+export class InviteAnswerPrompt {
+  phase: 'ask' | 'notice' | 'confirm' | 'done' = 'ask';
+  action: number | null = null;
+  private frames = INVITE_ANSWER_FRAMES;
+
+  private finish(action: number): void {
+    this.phase = 'done';
+    this.action = action;
+  }
+
+  // Yes = true (the first list's and the second list's "Yes" row), cancel = Escape / the cancel key.
+  choose(yes: boolean): void {
+    if (this.phase === 'ask') {
+      if (yes) {
+        this.phase = 'notice';
+        this.frames = INVITE_ANSWER_FRAMES;
+      } else this.finish(TEAM_INVITE_DECLINE);
+    } else if (this.phase === 'confirm') {
+      this.finish(yes ? TEAM_INVITE_ACCEPT : TEAM_INVITE_DECLINE);
+    }
+  }
+
+  cancel(): void {
+    if (this.phase === 'ask' || this.phase === 'confirm') this.finish(TEAM_INVITE_DECLINE);
+  }
+
+  // The notice's key (any key held, as the exe's CheckKeyHeld).
+  dismissNotice(): void {
+    if (this.phase !== 'notice') return;
+    this.phase = 'confirm';
+    this.frames = INVITE_ANSWER_FRAMES;
+  }
+
+  // One frame of the countdown; the time-out answers 4.
+  tick(): void {
+    if (this.phase !== 'ask' && this.phase !== 'confirm') return;
+    if (--this.frames <= 0) this.finish(TEAM_INVITE_TIMEOUT);
+  }
 }
 
 // The 6xCC body (the 4-byte header included; the caller's sendSubcommand writes the sender id).

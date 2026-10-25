@@ -24,6 +24,33 @@
 - The 0x1d object's hit group (see above).
 
 **Checks:** `node tests/revive.test.ts` (10/10), `node tests/scapedoll.test.ts` (31), `node tests/returnprompt.test.ts` (62/62), `node tests/combatdepth.test.ts` (836, 0 failures), `NEWSERV=<main>/vendor/newserv node tests/combat.test.ts` (5859, 0 failures), `tsc --noEmit -p client` clean (Node 24). Not run in Chrome.
+## 2026-10-25: Team invite answer: Yes is 2, No and cancel are 3, the timeout and the refusals are 4
+
+**Question:** the invitee's 6xC2 senders write action 4 (0x0074ca78, 0x00717754, the 0x0078bc44 refuse path), but the receiver 0x0078be84 accepts only 2. Which code sends 2 on Yes, and what is 4?
+
+**Exe evidence (`objdump -D -M intel`, `tools/exedata.py xref`, C2 byte writers by scan):**
+- The C2 writers in the exe (`c6 04 24 c2` / `c6 44 24 xx c2`): 0x007177cc (in 0x00717754), 0x007224e2 and 0x00723433 (the TeamFlagMenu family), 0x0074c970 (the Invite window), 0x0078bc4e (the 6xC1 receiver's refuse), 0x007d7844 (not a team packet, not read).
+- The invitee's prompt is `TeamFlagMenu_Update` (dump 0x00722428, `Psobb.exe-05112026.c` 687508). It is the state machine of the list the 6xC1 receipt opens: `GuildCardListWindow_Constructor_00722310` (dump 687457) adds the one-row list (unitxt 11, 0x14a, formatted with the inviter's data) at +0x1c, disables the input, and its state 0 waits for that list, then state 2 shows the first Yes/No (`DAT_009f24dc`, cursor on No).
+- Yes (value 0) on the first list goes to a notice (unitxt 11, 0x14b) and state 5: the second Yes/No (`DAT_009f24e4`, cursor on No). Its state 6 Yes (list value 0 at 0x00722b6e..0x00722b8e) builds the answer: the global copy, +4 = the player's own card (player +0xeb4), `mov dword [esp+0x478], 2` at **0x00722c98** (+8 = 2), the own name via 0x006936b4 at +0xC, and the relay (0x00800464) to the global's first dword (0x00722cc4 calls 0x0078bf78).
+- No (value 1) at 0x007235a3 writes +8 = 3 (`mov [esp+0x31c], 3` at 0x007236ad). The cancel bit (flag 4) on the second list and the first list's No write 3 too (0x00722a59, 0x0072307e).
+- The 900-frame countdown (`[+0x28] = 900` on each list's entry, dropped per frame) ends at 0 with +8 = 4 (0x00722d26 builds it, `mov [esp+0x4d4], 4` at 0x00722e30).
+- 4 is the refusal: the 6xC1 receiver 0x0078bc44 answers a busy or pending invite with +4 = 0, +8 = 4 (0x0078bd39 `mov [esp+0x8], 4`), and 0x00717754 answers with +8 = 4 (0x007177cc) when the menu is busy with the pending bit set. The inviter's window state 8 (0x0074ca78) relays a global copy with +8 = 4 too; it is the inviter's withdrawal (ASSUMED, the state is not traced to its entry).
+- The receiver 0x0078be84 (`cmp eax, 2` at 0x0078be8b) accepts only 2 and treats 3 and 4 alike (declined). So there is no conflict: the invitee's accept literal is 2, and 4 was the refusal.
+
+**newserv:** `ReceiveSubcommands.cc` 5796-5797 route 6xC1 and 6xC2 to `forward_subcommand` unchanged. The server does not rewrite the action and creates no membership on 2. The membership comes from the inviter's 03EA after the accept (`on_EA_BB` add member), as the port does.
+
+**Changed:**
+- `client/src/net/team.ts`: the CONFLICT comment is replaced by the table above. New: `TEAM_INVITE_DECLINE` (3), `TEAM_INVITE_TIMEOUT` (4), `INVITE_ANSWER_FRAMES` (900), `inviteAnswerSubcommand` (the 6xC2 body from the received 6xC1: own card at +4, action at +8, own name at +0xC, the team name kept), `inviteTarget` (the invite's +4 word, the relay target), and `InviteAnswerPrompt` (the model of the two lists: ask, notice, confirm, done; Yes/No/cancel; the 900-frame timeout).
+- `tests/team.test.ts`: the answer layout, the round trip through `parseInviteAnswer`, the decline value, and the prompt paths (No, Yes-notice-Yes = 2, Yes-notice-No = 3, cancel = 3, timeouts at 900 frames).
+- The inviter's accept check (`TEAM_INVITE_ACCEPT` = 2 in `classic/main.ts`) is unchanged: it was right.
+
+**Not done (ASSUMED or open):**
+- The prompt is a model only. The window (the one-row list with the unitxt 11, 0x14a text, the two Yes/No lists, the 0x14b notice) is not drawn or wired to the 6xC1 receive: the receive hook, the list geometry and the strings are not identified.
+- Unitxt 11, 0x14a / 0x14b and the result messages (0x14d..0x155, 0x182/0x183) are not read; the notice's key and the notice's own countdown are ASSUMED (no countdown in the notice).
+- The 6xC1 +4 field: the exe's answer target is the invite's +4 word (the window's +0x20 on the inviter side), so the port's `inviteSubcommand` (+4 = the picked card) is ASSUMED to match the exe's target; the answer's name is 16 units (wcsncpy), the port writes a zero-terminated name (ASSUMED equal on the wire).
+- Flow entry: the list's state 0 waits for the one-row list to be valid; what makes it valid is not traced (ASSUMED: the 6xC1 receipt).
+
+**Checks:** `node tests/team.test.ts` (ALL PASS, new block for the answer and the prompt), `teammenu`, `homeleaves`, `lobbymenu`, `lobbymain` pass under Node 24. `cd client && npx tsc --noEmit -p .` exit 0. Not run in Chrome (no Playwright).
 
 ## 2026-10-25: Team invite layout: the 6xC1 invite is built inline, the global-copy sender is the 6xC2 answer
 
