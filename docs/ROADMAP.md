@@ -34,7 +34,12 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    (state gates, `exposed`) are per state from the exe (2026-10-25 DEVLOG,
    sub-state paths ASSUMED). Vol Opt's lock and hit gates are NOT ported:
    the writers of `+0x30` / `+0x390` are mapped in the DEVLOG, the idle
-   monitor's `0x2000000` and the pillars' `0x2000800` tests are open. The Dragon, Sinow Beat's mirage and Dark Falz are done
+   monitor's `0x2000000` and the pillars' `0x2000800` tests are open. 2026-10-25
+   DEVLOG: the reticle filter is `check_enemy_is_targetable` (0x007a2b28, with
+   per-record masks and the entity flags), the monitors, the control and the
+   prison have no `enable_reticle_` caller, and the core (states 1, 2, 4, 5, 7,
+   9, 10), pillars (0, 2, 4, 5, 9) and rod (every live frame) do; the port's
+   monitor and rod lock are not changed yet (the struck test shares `concealed()`). The Dragon, Sinow Beat's mirage and Dark Falz are done
    (2026-10-19; `combat/dragon.ts`, `combat/enemyfsmmines.ts` SinowAi,
    `combat/darkfalz*.ts`; the dump's and the JP tree's "Sinowbeat*" / "Dragon*"
    names around 0x00419214..0x004258ac are all the Dragon, see the DEVLOG).
