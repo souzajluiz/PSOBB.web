@@ -18,6 +18,18 @@
 **Verification:** `node tests/qstnonbb.test.ts` OK. Layout checks read newserv's offsets (headers, open bodies, write sizes, chunk flags, the payload's u32 size and seed, PSO V2 of the stream). With `vendor/newserv/build/newserv`: `encode-qst` output for DC v2, PC and GC, online and download, parses, and our re-pack from newserv's streams and seeds gives its bytes exactly; `decode-qst` reads our download `.qst` and returns our files. `tests/questwrite.test.ts` and `tests/quests.test.ts` still OK (BB unchanged).
 
 **Left open:** XB; the `create_download_quest` language override of the `.bin`; the BB A6 payload (newserv decodes A6 as DLQ on every version); the download-quest menu.
+## 2026-10-25: Barba Ray's drop constants (0x0d) from the static init
+
+**Question:** pass 9 left the drop's `.bss` words ASSUMED (a47a9c 1.0, a47a98 30.0, a47aa0 0.0). Are they written at run time or by the static init, and what values?
+
+**Evidence:** `objdump -d -M intel PsoBB.exe` of the static init. The entry is 0x004b99a0 (not 0x004b99d3): `fld [0x906c30]` (17.0) and `fld [0x906c1c]` (6.0), then the movs. `a47aa0 = 0x3e47ae15` (0.195, 0x004b9b68), `a47a98 = 6.0 / a47aa0` (fdiv 0x004b9b72, fstp 0x004b9b78) = 30.769, `a47a9c = 0x4192aaaa` (18.333, 0x004b9b7e). The same init puts 17.0 / 0.3 = 56.67 in a47a70. `tools/exedata.py xref` on the three words lists only the init's stores and reads in 0x004b7040 (the drop) and 0x004b6ac0 (`fsub a47aa0` gives `timer - (0.3 - 0.195)`). The Ghidra body (`HandleSinowberillMovementState_004b7040`, refsrc) confirms the roles: A = a9c, B = a98.
+
+**Port:** `BARBA_DROP.attackA` 18.333332, `attackB` 6 / 0.195, `liftZero` 0.195, all PROVEN (the ASSUMED tags are gone). Effects: the sub 2 clock step is 0.895 a tick (was 0.7); the rise speed at the sub 0 -> 1 transition is 1.096 (was 23.8 with the assumed values). The test's "speed clamped at -7 over 61 ticks" check was replaced: after the sub 3 the port resets the speed to z (Ghidra: `0x754 = 0x40`), so that check was not about the clamp. New checks in `tests/barbaray.test.ts`: the constants, the fall speed, the rise speed, the sub 2 step.
+
+**Not ported:** 0x18 (the player attack, 0x004b6300). Its object spawns are decoded (types 6 / 0xf, 0x208 / 0x209), but the damage template needs the attack record at `*(root+0x628)` and the area-hit dispatch (`DAT_00a72eb4` vt+0x30 / +0x34), both still open in pass 4, so a port would be a stub.
+
+**Observed, not changed:** after the drop's sub 3 the body keeps moving down (z -302 to -575 in 60 ticks in the trace). The Ghidra body has the same `z = speed - ez.pos` shape, so the suspect is the easing's sign (`Player__ApplyVelocityEasing` / `InitializeMovementTargetStruct_00434ac4`), a follow-up.
+
 ## 2026-10-25: Barba Ray's jump (phases 0x11 / 0x12)
 
 **Question:** port the two jump states of Barba Ray (`ProcessPlayerAction4_004b30fc`, dispatched from 0x11 with side 0 and 0x12 with side 2) and check the enter order that pass 8 left ASSUMED.

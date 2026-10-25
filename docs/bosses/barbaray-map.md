@@ -704,9 +704,9 @@ reached through the beam_c chain (`BARBA_SLOTS[14]`, next 1). The volopt, beam a
 to `BARBA_DWELL` when they never finish (ASSUMED: flat rows, no model, no motion end), so the brain
 never hangs.
 
-**The .bss constants.** 0x0d reads `DAT_00a47a9c`, `DAT_00a47a98` and `DAT_00a47aa0`, which are
-dynamic (written at run time, no value in the image). The port uses 1.0, 30.0 and 0.0 (ASSUMED: a98 is
-a divisor, so it cannot be 0). The 0x11 / 0x12 jump reads `DAT_00a47a80` .. `DAT_00a47a8c` (the same
+**The .bss constants.** 0x0d reads `DAT_00a47a9c`, `DAT_00a47a98` and `DAT_00a47aa0`. They are written
+once by the static init (pass 10: a9c 18.33, a98 30.77, aa0 0.195, PROVEN), not dynamic. The pass 9 values
+1.0 / 30.0 / 0.0 were ASSUMED and are replaced (see Pass 10). The 0x11 / 0x12 jump reads `DAT_00a47a80` .. `DAT_00a47a8c` (the same
 kind, not ported).
 
 **ASSUMED (all marked in the code):** +0xc0 is the animation clock (one a tick); the animation hold
@@ -773,9 +773,48 @@ ASSUMED (all marked in the code):
   the particles (0x161, 0x448 / 0x454) and the attack objects (0x201, UpdateSinowberillAttackPos3, not spawned,
   so no random draw).
 
-Correction found in pass 9 (not changed here, a follow-up for the 0x0d drop):
+Pass 9's correction (the static init writes a9c / a98 / aa0) is resolved in Pass 10 below.
+
+## Pass 10: the 0x0d drop constants from the static init, 2026-10-25
+
+Proven (objdump -d -M intel PsoBB.exe; `tools/exedata.py xref 00a47aa0 / 00a47a98 / 00a47a9c`):
+- The static init is the function at 0x004b99a0 (not 0x004b99d3: the entry is the two `fld` at 0x004b99a0
+  and 0x004b99a6, then the movs from 0x004b99ac). It loads `fld dword [0x906c30]` (17.0, ST(1)) then
+  `fld dword [0x906c1c]` (6.0, ST(0)). Then:
+  - 0x004b9b28: `a47a7c = 0.3`; `fxch`; `fdiv a47a7c`; `fstp a47a70` = 17.0 / 0.3 = 56.67 (the 0x906fe4 multiplier;
+    `(-370 / 56.67)` in the port's arc).
+  - 0x004b9b68: `a47aa0 = 0x3e47ae15` = 0.195 (liftZero).
+  - 0x004b9b72: `fdiv a47aa0`; 0x004b9b78: `fstp a47a98` = 6.0 / 0.195 = 30.769 (attackB, B).
+  - 0x004b9b7e: `a47a9c = 0x4192aaaa` = 18.333 (attackA, A).
+  - 0x004b9b88 / 0x004b9b92..0x004b9bba: a47ac0, a47a8c..a47a90 (the pass 9 jump constants, unchanged).
+- Only writers: the init (xref hits 0x004b9b68 / 0x004b9b6a..74 for aa0, 0x004b9b7a for a98, 0x004b9b80 for a9c).
+  The other refs are reads: 0x004b718b / 0x004b7199 / 0x004b75d7 (the rise and the sub 1 values, divisor B),
+  0x004b75df / 0x004b75e5 (A), 0x004b73f2 (`fsub a47aa0`, then `timer - (0.3 - aa0)`). The static-init writes
+  are literal absolute stores, so this is the full set of direct writers; a write through a computed base
+  pointer into the same words was not searched for (none is expected: the words sit in the init's block).
+- Ghidra body (refsrc `HandleSinowberillMovementState_004b7040`, `Psobb.exe-05112026.c` line 238247): the rise
+  speed `((A + B) * -vy + (300 - z)) / ((0.5 A + B) * A)` with A = `_DAT_00a47a9c`, B = `_DAT_00a47a98`,
+  fVar3 = 0.5 (906d28); the sub 1 `((40 - y) * 4.0) / B` and `(f * 2.0) / B`; the sub 2 `timer -= 0.3 - aa0`.
+  The port's formulas match this; only the three values were ASSUMED.
+- Port: `BARBA_DROP.attackA` 18.333332, `attackB` 6 / 0.195, `liftZero` 0.195 (PROVEN). The sub 2 clock step is
+  1 - 0.105 = 0.895 a tick (was 0.7 with the assumed 0.0 aa0). The rise speed at the sub 0 -> 1 transition is
+  802.43 / 732.2 = 1.096 (the old 1.0 / 30.0 gave 726.4 / 30.5 = 23.8), so the drop's rise differs from pass 9.
+- Test changes (`tests/barbaray.test.ts`, the 0x0d block): the constants are asserted; the fall speed min
+  (-4.2, never the -7 clamp in the fall); the rise speed 1.096 after the sub 0 -> 1 transition; the sub 2 clock step
+  0.895 (once: the clock is already past 22 when sub 2 starts, so sub 2 lasts one tick). The old "speed clamped
+  at -7 over 61 ticks" check was dropped: after sub 2 the port's sub 3 sets the speed to z (Ghidra: `0x754 = 0x40`
+  when the speed reaches 0), so the speed is not -7-bounded past the fall (faithful to the Ghidra body).
+
+Observed, NOT changed (a follow-up): after the drop's sub 3 the port's body keeps moving down (z falls from -302
+to -575 over 60 ticks in the trace), because the rise easing `ez` adds `pos` and `z = 0x754 - pos`. The Ghidra
+body says the same (`0x40 = 0x754 - 0x690`), so the sign of the easing output (`Player__ApplyVelocityEasing`,
+`InitializeMovementTargetStruct_00434ac4(7, |500 - z|, 0.2, 0.05)`) is the suspect, not these constants.
+
+Pass 9's correction (the static init writes a9c / a98 / aa0) was resolved above in this pass.
+
+Pass 9's note, kept for the record:
 - The static init (0x004b9b68..0x004b9b88) writes `a47aa0 = 0.195` (0x3e47ae15), `a47a98 = X / 0.195` (the fdiv
-  of the FPU top, 6.0 per the pass 8 table, so 30.77), and `a47a9c = 18.33` (0x4192aaaa). `BARBA_DROP` uses the
+  of the FPU top, 6.0 per the pass 8 table, so 30.77), and `a47a9c = 18.33` (0x4192aaaa). `BARBA_DROP` used the
   ASSUMED values 1.0 (a9c), 30.0 (a98) and 0.0 (aa0). The drop reads `liftZero` at its timer step
   (`timer -= 0.3 - liftZero`), so the drop's timer step is 0.105 a tick, not 0.3, if the static init holds.
   Pass 8's "dynamic, no value in the image" was wrong for these three.
