@@ -88,7 +88,16 @@ export const DARVANT = {
   ring: 8, // the circle about the player the chase aims at
   auraReach: 8, // [0xA45A0C]
   auraEvery: 16,
-  // The spat ones (ASSUMED): they dive at the player.
+  // The spat ones. PROVEN (PsoBB.exe 0x00460620, spit state 4 of table 0x009A6794, the factory
+  // 0x00460778 sets it): the flight is a fall under gravity. vy starts at 0 (+0x398), each tick
+  // vy += -0.015 (the constant 0xBC75C290 that 0x00460620 stores once at 0x00A459C8), then
+  // pos += vel. While y >= 6 (the limit: 0x009005A4 at the first tick, then 0x40C00000) it keeps
+  // falling; the first tick y < 6 sets y = 6, vy = 0 and the state to 2
+  // (chase; the spat's chase function 0x004601B0 is not traced). No timer: the flight ends in the
+  // chase. The port still flies straight for spitLife (ASSUMED, not replaced: the chase is open).
+  spitGravity: -0.015,
+  spitTop: 6,
+  // ASSUMED: the straight flight and its timer below.
   spitSpeed: 1.2,
   spitReach: 8,
   spitLife: 600,
@@ -137,11 +146,13 @@ export class Darvant extends DfEntity {
     super(entity, hp);
   }
   // A ring's hit box is on only in its window (the lock-on and the hit read bit 0). The spat
-  // and beam boxes are proven on from their first update and never cleared by the Dark Falz code:
-  // the spat factory (0x00460778) sets bit 0 of [+0x38C]+0x18 at 0x004608D5 when it sets the
-  // spit state (4); the beam's state 0 function (0x00460D34, the update's table entry) sets it at
-  // 0x0046100C every tick it runs. Nothing in 0x0044C000..0x00461000 clears it. Dead ones are not
-  // targetable (the port's rule; the exe's dead test is not traced here, ASSUMED).
+  // and beam boxes are proven on from creation and never cleared by the Dark Falz code: the spat
+  // factory (0x00460778) sets bit 0 of [+0x38C]+0x18 at 0x004608D5 (once, with the spit state 4);
+  // the beam's ctor (0x00460DE4, state 0 set at 0x00461002) sets it at 0x00461012 (once, not per
+  // tick: the state 0 function 0x00460B84 does not touch the box). Nothing in 0x0044C000..0x00461000
+  // clears it. The exe's removal is the due-for-destruction flag (+0x08, value 1; 0x00460590 and
+  // 0x00460CA4: sink at 1/3 a tick, flagged once y < -13); the box is still on while they sink.
+  // Dead ones are not targetable (the port's rule; the exe's hit test is not traced, ASSUMED).
   get targetable(): boolean {
     if (this.gone || this.st === DARVANT.dead) return false;
     if (this.kind === 'ring') return this.boxOn;
@@ -191,6 +202,11 @@ export interface DarkFalzOptions {
   // The control's entity index word (render/combat.ts entityId, 0x1000 | slot ASSUMED). Proven
   // (0x0044CFC0): a Darvant's small id is the control's +0x1C + counter, the entity id is +0x2C +
   // counter, counter = control +0x38C in 1 .. 0x1FD. So the Darvants' words are that base + 1 .. 0x1FD.
+  // Where the base comes from (PROVEN in part): the control's ctor 0x0044C93C calls the record
+  // init (vtable slot 0x14C of 0x00AF6A20 = 0x00786848), which copies the set record's word 3 into
+  // +0x1C; the registry (0x007B4D98 / 0x007B4F54, sorted by +0x1C) counts an id below 0x1000 in
+  // bucket 0xAAE168 and 0x1000..0x3FFF in bucket 0xAAE164 (the enemies). The loader that writes
+  // word 3 is not traced, so 0x1000 | index stays ASSUMED.
   entityId?: number;
 }
 
