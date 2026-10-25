@@ -253,6 +253,42 @@ The owner's `+0x78` and `+0x9c..` copies (rotation) are the same block's neighbo
 **Files.** `client/src/classic/minimap.ts` (Sand / Del rows, comments for Merissa, Zu, Boota, Goran); `tests/minimap.test.ts` (Sand / Del 'rappy'; the Boota and Goran rows stay null). `render/combat.ts` is unchanged.
 
 **Tests.** `node tests/minimap.test.ts`, `node tests/enemyfsm.test.ts`, `NEWSERV=... node tests/combat.test.ts` (5859 checks), `cd client && npx tsc --noEmit -p .`.
+## 2026-10-25: Dark Falz boxes: open items (form 1 box template, control id word, spit flight); two earlier readings corrected
+
+**Outcome.** Form 1's box is on from creation, proven from its template (flags 0x801B, bit 0 set; no writer). The spat and beam Darvants' boxes are on from creation (the writers are their factories, once, not per tick), and their removal is the due-for-destruction flag at y < -13. The spit (state 4) flight is a fall under gravity that ends in a snap to y 6 and the chase: proven; the chase and the port's straight flight stay open. The control's word +0x1C is the set record's word 3 (copied at ctor time, proven); the loader that writes word 3 is not traced, so the 0x1000 | index bias stays ASSUMED. The port's tests keep every expectation; the new checks are in `tests/darkfalz.test.ts` section 9.
+
+**Corrections to the 2026-10-25 "Dark Falz boxes" entry (above).**
+- The form 1 box is NOT stored by the control init 0x0044E4F3. `FUN_0044e4d0` (objdump 0x0044E4D0; the call at 0x0044E4ED, store at 0x0044E4F3) writes control +0x39C from `FUN_00451b38`, a 0x98-byte map object (vtable 0x00AF7238, slot 0 0x00451588) that is not a box (its +0x18 is the parent pointer). Form 1's own box list is built by its ctor `FUN_004570b0` (vtable 0x00AF75A0 at 0x00457106, `FUN_007b9a88(&DAT_009a5d80, 3)` at 0x004571CE, result stored at 0x004571E0 into +0x39C).
+- The beam's box bit is set by its ctor `FUN_00460de4` (objdump 0x00461012: `orl $1` on [+0x38C]+0x18), once. The state 0 function is `FUN_00460b84` (table 0x009A67A8[0]), which does not touch the box. The entry's "0x00460D34 state 0" was wrong: 0x00460D34 is the beam allocator (0x3CC object, then the ctor 0x00460DE4).
+- The control's +0x1C is not written by the base ctor 0x00787A4C. That ctor runs on the 0x20-byte parent object that `FUN_0044c88c` (the factory, table row id 200 at VA 0x009FCBFC, ctor 0x0044C88C, type word 0x200) allocates before the control; it sets that object's +0x1C to 2, nothing more.
+
+**Form 1 (PROVEN box, ctor 0x004570B0).**
+- Template `0x009A5D80`: three records of 0x2C (`tools/exedata.py read 009a5d80 u 33`); the flags word at +0x18 of each is 0x801B (0x009A5D98, 0x009A5DC4, 0x009A5DF0). `FUN_007b9a88` (Ghidra) copies the template's 11 dwords per record and transforms each record's centre (+0x1C..+0x24).
+- Writers of a form 1 box's +0x18 (objdump of 0x00450000..0x0045A000, every mov/or/and/xor/bts/btr/add/sub to a `0x18(%reg)`): 0x00454354 (table fill at 0x00A45280), 0x00457C5E and 0x00457E5F (form 2's body: bit 0 of its own box). None is form 1's. The form 1 update (0x00454838..0x00457BD4) and its helpers in 0x00452000..0x00457BD4 do not write any box flag, and no helper reached from there does (the calls in 0x00454104..0x0045A000 were listed; the ones that touch a record are the factory 0x007B9A88 and the lock refresh 0x006946A8, which does not write +0x18).
+- Port (`client/src/combat/darkfalz1.ts`): `F1_BOX_FLAGS` = 0x801B and `F1_BOX_COUNT` = 3 are exported, and `targetable` ANDs the box bit. The gates stay as before (awake, not dead, not waitKill). ASSUMED: those gates are the exe's hit test (not traced); the exe's form 1 box never goes off.
+
+**Control +0x1C (the id word).**
+- The control's ctor `FUN_0044c93c` (0x0044C93C) takes the set record (`param_3`, the check `param_3[1] == 0x200` at 0x0044C99D) and calls its vtable slot +0x14C (AF6A20 slot 0x14C = `FUN_00786848`, 0x00786848): `*(u16)(this+0x1C) = param_2[3]` (the record's word 3), then the copy of the rest of the record (+0x28..0x3C, +0x50..0x58, the vtable slot +0x150 is `FUN_004adce0`).
+- The registry (`FUN_007b4d98` 0x007B4D98 and `FUN_007b4f54` 0x007B4F54, sorted by +0x1C in `DAT_00aad720`): an id below 0x1000 is counted in `DAT_00aae168`, 0x1000..0x3FFF in `DAT_00aae164` (enemies), above in `DAT_00aae160`. The control ctor registers it at 0x0044CB88 (`FUN_007b4d98`).
+- The Darvant allocator 0x0044CFC0 is as before: small id = [ctrl+0x1C] + counter, entity = [ctrl+0x2C] + counter, counter 1..0x1FD.
+- NOT traced: the loader that builds the 0x40-byte record and writes word 3 (the set file's entries are 0x48 / 0x44 bytes; the file's id fields are marked "runtime" in `formats/setdata.ts`). So `entityId` = 0x1000 | index stays ASSUMED. The exe proves only that the id is the record's word 3, and that enemies are 0x1000..0x3FFF.
+- Port (`client/src/combat/darkfalz.ts`): the `entityId` option comment carries this chain. No value changed.
+
+**Spat and beam (PROVEN).**
+- Spat (vtable 0x00AF7EC0, update 0x0045FF50, table 0x009A6794: [0] 0, [1] 0, [2] 0x004601B0 (chase; its helpers 0x004601E8 / 0x0046032C not traced), [3] 0x00460590 (sink), [4] 0x00460620 (spit flight), [5] = 0x009A67A8's [0] (the beam table, not the spat's)).
+- Spit state 4 (0x00460620): once, 0x00A459C8 = -0.015 (0xBC75C290) and 0x00A459D4 = 5/3 (0x3FD55555). Each tick: vy (+0x398) += -0.015, pos += vel (0x0082EBAC), then the limit (0x009005A4 = 6.0 at the first tick, then 0x40C00000 = 6.0): if the limit is above y, y = 6, vy = 0 (`movl $0, 0x398`), state = 2. Otherwise nothing (it keeps falling). No timer. Horizontal velocity: set at the factory from -pos (the `fchs` pairs at 0x00460805..0x00460816 and 0x00460821), scaled by 0x00A459D8 = 0.25 * 5/3 and by the normalising call 0x0083173C / 0x0082DF08 (the FPU order at 0x00460869..0x0046089D is not fully decoded: the exact speed law is ASSUMED).
+- Spit factory (0x00460778): vy = 0 (0x460808), state 4 (0x4608CB), box on (0x4608DB, once).
+- Sink (state 3, 0x00460590; the beam's is 0x00460CA4 with the same constants): y += -1/3 a tick (0x009005B4 / 0x00900570); at the crossing of 0 a sound/effect (0x0050B510, 0xF3); `+0x5C += 0x111`; when y < -13 (0x009005AC / 0x00900568), `+0x08 |= 1` (due for destruction). The box is not touched.
+- Death of a spat (0x0045FF50): when its owner (+0x380) is not in state 6 (owner +0x384), state = 3 and the owner's count (+0x394) += 1 (0x00460914 has the same death for the beam: owner count, state 3). The beam's dispatcher 0x00460938 runs its state only when state == 3 or owner +0x384 == 8.
+- Beam (vtable 0x00AF8020, ctor 0x00460DE4, update 0x00460938, table 0x009A67A8: [0] 0x00460B84 (rise 10/9 to 6), [2] 0x00460C10 (move with vel; ends on the timer +0x384 < 0 or |(x, z)| > 260, 0x00A459F4), [3] 0x00460CA4 (sink)). Its box: bit 0 once in the ctor (above).
+- Dead ones: the box is NOT cleared at death (no writer; the death writers are 0x0045FF50's and 0x00460914's, neither touches +0x18). The port's `Darvant.targetable` stays false when dead (ASSUMED: the exe's hit / lock test is not traced; it may read the due flag or the state). Not changed: the exes do not contradict the existing expectations.
+
+**Port.**
+- `client/src/combat/darkfalz1.ts`: `F1_BOX_FLAGS`, `F1_BOX_COUNT`, a comment on `targetable`; the rule is the same.
+- `client/src/combat/darkfalz.ts`: the `DARVANT.spitGravity` (-0.015) and `spitTop` (6) constants with the proof; the spit still flies straight for `spitLife` (ASSUMED); comments on the spat and beam boxes (the beam's is the ctor's, once) and on the `entityId` chain.
+- `tests/darkfalz.test.ts`: section 9 (form 1 box flags and target from appear, the awake gate, the two spit constants).
+
+**Tests.** `node tests/darkfalz.test.ts` (passed), `darkfalzwarp`, `darkfalzcamera`, `minimap` (passed), `NEWSERV=vendor/newserv node tests/combat.test.ts` (5859 checks, 0 failures), `cd client && npx tsc --noEmit -p .` (no output).
 
 ## 2026-10-25: Dubchic's radar row is 'own' (vtable 0x00b04760); the Dark Gunner's flinch shows its icon
 

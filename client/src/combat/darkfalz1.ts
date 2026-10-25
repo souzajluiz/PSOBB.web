@@ -170,6 +170,17 @@ export interface Form1Row {
   spitMax: number; // row 57 iparam1: min(6) / 1 when below 2
 }
 
+// The box list (+0x39C) of form 1 (PROVEN, PsoBB.exe): the ctor 0x004570B0 (vtable 0x00AF75A0
+// written at 0x00457106) calls 0x007B9A88 with the template 0x009A5D80, which copies three
+// records of 0x2C (the count is the 3 of the call) and transforms their centres. Each record's
+// flags (+0x18) is read from the template as 0x801B, so bit 0 (the hit bit) is on from creation.
+// No store to a box's +0x18 exists in 0x00454838..0x00457BD4 (the form 1 update and its tables),
+// and none in the rest of the Dark Falz range (0x0044C000..0x00461000, the two stores in the
+// forms 2 and 3 and the table fill at 0x00454354 are other boxes). So the boxes stay on.
+// The control's +0x39C is a different object (0x0044E4D0: a 0x98 map object, not a box).
+export const F1_BOX_FLAGS = 0x801b;
+export const F1_BOX_COUNT = 3;
+
 export class DfForm1 extends DfEntity {
   st: number = F1.appear;
   timer = 0;
@@ -216,8 +227,11 @@ export class DfForm1 extends DfEntity {
     this.updateHeads();
   }
 
+  // The hit box is on from creation (F1_BOX_FLAGS bit 0, see above; nothing clears it), so the
+  // gates are the entity's: the invulnerable flag 0x200 (`awake`), the dead state and waitKill.
+  // ASSUMED: those gates are not traced in the exe's hit test (only the box is).
   get targetable(): boolean {
-    return this.awake && this.st !== F1.dead && this.st !== F1.waitKill;
+    return (F1_BOX_FLAGS & 1) !== 0 && this.awake && this.st !== F1.dead && this.st !== F1.waitKill;
   }
 
   // 0x0045A9E4 / the enter functions of the table.

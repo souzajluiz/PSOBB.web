@@ -10,7 +10,7 @@
 //
 // Run: node tests/darkfalz.test.ts
 import { DARVANT, DarkFalzAi, DarkFalzPartAi, Darvant, DF_ID, SCENE, SCENE_NAMES, darvantBoxStart, darvantBoxStep, darvantRingIcon } from '../client/src/combat/darkfalz.ts';
-import { DfForm1, F1, F1_ANIM_ROWS, pickWeighted } from '../client/src/combat/darkfalz1.ts';
+import { DfForm1, F1, F1_ANIM_ROWS, F1_BOX_COUNT, F1_BOX_FLAGS, pickWeighted } from '../client/src/combat/darkfalz1.ts';
 import { DfForm2, F2, F2_ANIM_ROWS } from '../client/src/combat/darkfalz2.ts';
 import { advanceScale, DfForm3, F3, F3_ANIM_ROWS, HomingBolt, f3Spot } from '../client/src/combat/darkfalz3.ts';
 import { CASKET, CIRCLE, DfAnim, NO_PACKED, SCENE_FRAMES, STALL_TICKS, angDiff, ease, type DfEvent, type DfRow } from '../client/src/combat/darkfalzcommon.ts';
@@ -1266,6 +1266,24 @@ function clearZakoBoth(fi: Fight): void {
   check(f2.targetable, 'form 2 at blend 0: box on, can be hit');
   f2.st = F2.dead;
   check(f2.minimapIcons().some((i) => i.scale === 5), 'form 2: the body icon is not gated by its state (exe update)');
+}
+
+// --- 9. the box flags and the spit's constants (PsoBB.exe, this session) ---------------
+{
+  // Form 1's three boxes start from the template 0x009A5D80 with flags 0x801B: bit 0 on. Nothing
+  // clears it, so the entity's own gates (awake, dead, waitKill) decide.
+  eq(F1_BOX_COUNT, 3, 'form 1: three boxes (0x007B9A88 count 3)');
+  check((F1_BOX_FLAGS & 1) === 1, 'form 1: template flags 0x801B have the hit bit');
+  const fi = fight();
+  toType1(fi);
+  const f1 = fi.c.form1!;
+  check(f1.targetable, 'form 1: targetable from its appear (box on from creation)');
+  f1.awake = false;
+  check(!f1.targetable, 'form 1: the awake gate still applies');
+  f1.awake = true;
+  // The spit (state 4, 0x00460620): gravity -0.015 a tick from vy 0, top 6 (the limit's float).
+  eq(DARVANT.spitGravity, -0.015, 'spit gravity (0xBC75C290 at 0x00A459C8)');
+  eq(DARVANT.spitTop, 6, 'spit limit 6.0');
 }
 if (failures) {
   console.log(`${failures} failure(s)`);
