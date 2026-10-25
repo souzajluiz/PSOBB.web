@@ -229,10 +229,13 @@ export function radarSourceOf(type: string): RadarSource | null {
 // The De Rol Le shell segments (DE_ROL_LE_BODY, the ten DrlSegmentAi entities):
 // their update is FUN_00435294 = handle_derolle_shell_behavior (dump 176942;
 // the exe decompile of 0x00435294, tools/ghidra/decomp.sh, is the same body:
-// the position is the pointer at +0x398 = current_target, then enable_reticle_
-// and unknown_add_minimap_icon3 at the segment's own position with 0x3f99999a
-// (1.2), colour 0xffffa24c, flags 1, dump 176968). Unconditional in the update,
-// so forced whatever the hit box. The icon's owner is the segment, not the
+// the position is the pointer at +0x398 = current_target, copied into x2 (dump
+// 176954-176956), then enable_reticle_ and unknown_add_minimap_icon3
+// at x2 with 0x3f99999a (1.2), colour 0xffffa24c, flags 1, dump 176968 =
+// exe 0x0080575c, the same icon3 the body uses). Only the pause gate precedes
+// it, so forced whatever the hit box (PROVEN 2026-10-25: the only De Rol Le
+// icon callers are UpdateDerolle dump 175250 (2.0) and this one; neither calls
+// the plain icon 0x00805608). The icon's owner is the segment, not the
 // body (the body's own icon is 2.0 above); render/combat.ts minimapEnemies
 // reports the segments under this type.
 export const FORCED_ICON_RULES: Readonly<Record<string, EnemyIconRule>> = {
