@@ -27,6 +27,35 @@
 **Checks.** `node tests/enemyfsmmerissa.test.ts` (all pass, brain checks added), `enemyfsmillgill`, `enemyfsm`, `minimap`, `combatdepth`, `NEWSERV=... node tests/combat.test.ts` (5860 checks), `npx tsc --noEmit -p client`.
 
 **Open.** Decode the row 2 (0x005b5618) chase and the row 3 handler (0x005b5f3c, the flinch or not), the row 4 callbacks (0x005b6384, 0x005b64fc, 0x005b667c, 0x005b63e4), the B gate, the caller of 0x005b6328 (the vanish trigger), and the countdown's start values (+0xc0, +0xc8).
+## 2026-10-25: melee reticle, per-box reach and the weapon point (check_enemy_is_targetable 0x007a2b5c)
+
+**Question.** Which point is the melee reticle's weapon point (open item 1), which box centre and box / entity gates does the exe's test use (item 2), and does the PvP melee cone use the same routine (item 3)?
+
+**Answer.** The weapon point is the player's `weapon_position` (player +0x300), which is the feet in x and z and the feet plus 0.5 times the bloodstain offset in y. The port used the feet plus WEAPON_HEIGHT 20, so it is changed to the exe's point. The test is per box: each enabled box whose flag carries the weapon's kind bit is a candidate with its own centre and radius, and an enemy is a target when one box passes. The port now tests the boxes of the enemy's table (`formats/enemyboxes.ts`) in place of one centre per enemy. The entity gates and the PvP cone are not changed (see Open).
+
+**PROVEN (objdump, refsrc dump, tools/exedata.py).**
+- `UpdatePlayerWeaponPosition_0077a1f4` (dump 751644; objdump 0x0077a1f4..0x0077a23c): x = [ecx+0x38], z = [ecx+0x40]; with the battleparams pointer [ecx+0x2b4] non-null, y = [battleparams+0x10] * 0.5 + [ecx+0x3c] (the constant 0.5 at 0x009780a8, read with `exedata.py read`); the pointer null gives y = [ecx+0x3c]. The result is stored at +0x300 / +0x304 / +0x308.
+- The weapon reticle cases of the reticle setup (dump 784905..784975, the switch on the reticle type, cases 0..9 and 0x12) copy the weapon point from +0x300 / +0x304 / +0x308 into `effective_weapon_targeting_info.weapon_position`. So check_enemy_is_targetable's W is the player's weapon_position, not a model node.
+- The per-box loop (dump 785551..785760): for each box i of `target->collision_data`: flag bit 0 must be set; `(field4 & flags) != 0` (the weapon's kind mask 0x8000, or 0xa000 with the player word +0x8fc); `(field5 & flags) == 0` (0 for weapons); then the reach is `|P.xz - W.xz|^2 <= (box radius + H)^2` with P = the box's `position2`. The cone and elevation tests are on P (as the earlier entry says). A box that passes adds its own target entry (up to 10 per slot). The primary's sort key is the box's XZ distance squared.
+- The entity gate, before the loop: `CheckEntityStepConstructed_008173b4(target) != 0`, `(field6 & entity flags) != 0` and `(field7 & entity flags) == 0`, with field6 = 0x60000000 and field7 = 0x40800 for the weapon (dump 785551 onward; the weapon rows of the reticle setup, cases 0..9 and 0x12). The player's own dead / took_damage bits (2048 / 512) gate the swing.
+- Line 785600s: the same-room test (non battle mode) returns 0 for an entity of type 0x20000000 in another room.
+
+**Port (`render/combat.ts` weaponTargets, `combat/weaponaim.ts` meleeReachAny).**
+1. Weapon point: `weaponPositionY(feet.y)` (the bloodstain offset 0, ASSUMED) in place of feet + WEAPON_HEIGHT.
+2. Per-box test: `enemyBoxRows(e)` (the Vol Opt monitor's row set, else `enemyBoxTable` for the set type, area and variant) gives the boxes; `meleeReachAny` keeps the enabled rows with 0x8000 that pass `inMeleeReach` with their own radius, and the key is the nearest passing box's XZ distance squared. A target with no table keeps the earlier point test (DRL / Barba / Dragon / SM radii).
+3. Box centre = origin + row offset, NOT rotated by the enemy's yaw (the exe's position2 = origin + RotY * position1, ASSUMED unrotated in the port; the offset's y is the aim height as before).
+
+**Open (not changed).**
+- The entity gates (0x60000000 any, 0x40800 none): the port has no enemy +0x30 flags, so `struckShown` / `concealed` / `splitStruckOk` stay as the gate approximation.
+- The live enabled bit of a box: the port reads the static row's bit 0 (the same proxy as `rowsAimHeight`).
+- The bloodstain offset (player +0xe3c, the load at 0x006960e4 sets it from the character record; the value is not traced): ASSUMED 0.
+- The yaw rotation of the box offsets.
+- The tekked row (flag 0 with attack type 2) is still the port's `weaponRange` rule (ASSUMED).
+- Line 7058 (the melee line test without a skeleton) still uses WEAPON_HEIGHT; it is a different path.
+
+**PvP (item 3): not applied.** `check_enemy_is_targetable` is called only from `enable_reticle` (0x006946a8), and the 87 call sites are enemy AI updates (the nearest callers read: EnemyProcessState10_00534394, EnemyAI_ProcessState1_Update_005345dc, DerolleHandleStatusEffect_0051e45c). No player update calls it, so the exe's melee reticle is not shown for remote players. `combat/pvp.ts` keeps its cone from the player (`pvpInReach`). UNCLEAR whether the exe's 6x46 PvP strike uses another list.
+
+**Tests.** `tests/meleereach.test.ts` (new block: the weapon point height, `meleeReachAny` for the kind bit, bit 0, the nearest key, the reach and the radius; all ok. `node tests/rangedaim.test.ts`: all checks passed. `node tests/pvp.test.ts`: ALL PASS. `node tests/combatdepth.test.ts`: 836 checks, 0 failures. `node tests/attack46.test.ts`: ALL PASS. `NEWSERV=... node tests/combat.test.ts`: 5860 checks, 0 failures. `cd client && npx tsc --noEmit -p .`: clean (Node 24). The worktree's `client/node_modules` and `vendor` symlinks were removed before the commit. Not run in Chrome (no Playwright).
 
 ## 2026-10-25: Merissa A / AA, part 2: the attack records and the near / far rolls; no brain yet
 
