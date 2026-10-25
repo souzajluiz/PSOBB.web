@@ -110,12 +110,13 @@ worktrees are left.
    the user), then restart Claude Code. Until then use `tools/ghidra/decomp.sh <addr>`
    (project in `~/Downloads/psobb-master/reverse/ghidra`, read-only, shared by agents).
 6. Smaller leftovers of the day (each in its DEVLOG entry): particle tint 0x100 is closed
-   (DEVLOG 2026-10-25, Particle flag 0x100 colour: the exe's base is the instance's zero
-   +0x50, the owner's tint never reaches it; the port drops the multiply and keeps the flag
-   as the tinted path, `particleShade`, `tests/particletint.test.ts`; visible look not checked
-   in Chrome), Saint-Milion
+   (DEVLOG 2026-10-25, "Particle flag 0x100: the owner's SetId colour is the instance's colour
+   base": the spawn block 0x00509170..0x00509237 copies the owner's ARGB into the instance's
+   +0x4c..+0x58 as floats, and the update uses RGB as the base; the port's `particleShade`
+   uses the tint RGB as the base, `tests/particletint.test.ts`; visible look not checked in
+   Chrome), Saint-Milion
    laser aim (the draw writes +0x38 / +0x44; the length is the exe's ramp (+100 proven), capped at 620 ASSUMED (no exe cap, the wall cut); the origin and heading are node 0x2a's (proven 2026-10-25, the 0x8000 sweep is only the headless fallback), see DEVLOG 2026-10-25), the
-   Savage Wolf / Yowie death side: the side and turn rule is decoded and ported (DEVLOG 2026-10-25, `SavageDeathMotion`); still open: the exe's writer of the velocity at the kill (+0x30c / +0x314 of a wolf; the port uses its last step, ASSUMED), and the Yowie's velocity (no model, +12 kept). The Held weapon's -1 texture ids are done (DEVLOG 2026-10-25: the exe keeps the previous texture; one weapon's first strip stays ASSUMED untextured). The particle 0x100 item was closed on 2026-10-25 (DEVLOG, "Particle flag 0x100 colour"): the tint never reaches the instance, so the exe's tinted colour is the slope term alone.
+   Savage Wolf / Yowie death side: the side and turn rule is decoded and ported (DEVLOG 2026-10-25, `SavageDeathMotion`); still open: the exe's writer of the velocity at the kill (+0x30c / +0x314 of a wolf; the port uses its last step, ASSUMED), and the Yowie's velocity (no model, +12 kept). The Held weapon's -1 texture ids are done (DEVLOG 2026-10-25: the exe keeps the previous texture; one weapon's first strip stays ASSUMED untextured). The particle 0x100 item was closed on 2026-10-25 (DEVLOG, "Particle flag 0x100: the owner's SetId colour is the instance's colour base"): the owner's ARGB is copied into the instance at spawn and is the colour base.
 
 ## State of `main`
 
