@@ -19,7 +19,7 @@ import {
   type CounterItems,
 } from '../client/src/classic/shop.ts';
 import { itemRow, type RowContext } from '../client/src/classic/itempack.ts';
-import { shopRow } from '../client/src/classic/shop.ts';
+import { shopRow, tekkerResultRow } from '../client/src/classic/shop.ts';
 import { ItemPMT } from '../client/src/formats/itempmt.ts';
 import { itemFromHex, ItemNames, type ItemData } from '../client/src/formats/itemnames.ts';
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
@@ -386,6 +386,15 @@ eq([SHOP_DETAIL.x, SHOP_DETAIL.y, SHOP_DETAIL.w, SHOP_DETAIL.h], [400, 50, 240, 
   eq([withPlayer.icon1, withPlayer.nameColor], [0x13, '#00fffc'], 'untekked class-blocked weapon with the player: icon 0x13, untekked name colour');
   eq([without.icon1, without.nameColor, without.iconColor], [0x36, '#ffffff', '#ffffff'], 'no player (GetPlayer null): icon stays 0x36, colours unset');
   eq(shopRow(wrappedUnknown.data, '', noPlayer).icon1, 0x36, 'no player, wrapped: the wrapped return comes first');
+  const tekkedBlocked = inv('000200000000000000000000 02000100 00000000');
+  // The Result row is the item_instance row (tekkerResultRow -> itemRow; the list add is
+  // ListWindowObject_AddItem_00737620 of CreateItemInstance_005c9a40, dump 006d9fe8). The Result item
+  // is a new id, never equipped, so it never gets 0x0c. For the weapons the Result can hold (tekked,
+  // never wrapped) the row equals the compact row field by field.
+  eq([tekkerResultRow(knownSaber.data, ctx).icon1, itemRow(knownSaber, ctx).icon1], [0x36, 0x0c], 'Result row: a fresh instance is not equipped (0x36); the inventory row of the same item is 0x0c');
+  eq([tekkerResultRow(tekkedBlocked.data, ctx).icon1, tekkerResultRow(tekkedBlocked.data, ctx).nameColor], [0x13, '#909090'], 'Result row, tekked class-blocked weapon: icon 0x13, cannot colours');
+  eq(tekkerResultRow(tekkedBlocked.data, ctx), shopRow(tekkedBlocked.data, '', ctx), 'Result row equals the compact row (tekked class-blocked weapon)');
+  eq(tekkerResultRow(knownSaber.data, ctx), shopRow(knownSaber.data, '', ctx), 'Result row equals the compact row (tekked, class ok)');
   pmt.tools[1] = [];
   pmt.weaponKinds = [];
 }

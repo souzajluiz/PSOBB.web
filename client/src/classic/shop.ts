@@ -1251,6 +1251,14 @@ export const TEKKER = {
 export const TEKKER_FEE = 100; // 0x006da050: 99 < meseta; newserv on_identify_item_bb
 export const TEKKER_WAIT = 0x5f; // state 3's timer, frames
 export const TEKKER_RESULT_TITLE = 'Result'; // 0x0096c444 (0x0096c438 on a Japanese client)
+
+// The Result list's row (state 3, 006d9d94; the list add at 006d9fe8 is ListWindowObject_AddItem_00737620
+// with ECX = the list, fed by CreateItemInstance_005c9a40 of the new id's data). So the row is the
+// item_instance row (InitializeItemObject_0072bdd4 -> ItemEntity_UpdateColoring_0072c045), the inventory
+// row, not the compact shop row. ASSUMED: the new instance has dwItemFlags 0 (not equipped).
+export function tekkerResultRow(item: ItemData, ctx: RowContext): ItemRow {
+  return itemRow({ index: 0, state: 1, flags: 0, extensionData1: 0, extensionData2: 0, equipped: false, data: item }, ctx);
+}
 // The two jingles (FUN_00814f0c, the ADX names at 0x0096c428 / 0x009699ac):
 // the appraisal starts with j_kantei.adx, the end of a deal plays miniclear.adx.
 export const TEKKER_APPRAISE_BGM = 'j_kantei.adx';
@@ -1322,7 +1330,7 @@ export class TekkerCounter extends CounterBase {
       const answer = items.identifyResult!;
       const result: ItemData = { data1: answer.data1.slice(), id: items.takeItemId(), data2: answer.data2.slice() };
       this.picture = (await this.env.picture?.(result)) ?? null;
-      this.showList(TEKKER_RESULT_TITLE, [shopRow(result, '', this.env.rowContext())], [result], null, { bar: false });
+      this.showList(TEKKER_RESULT_TITLE, [tekkerResultRow(result, this.env.rowContext())], [result], null, { bar: false });
       this.say(TEKKER.accept);
       // States 4 / 6.
       for (;;) {

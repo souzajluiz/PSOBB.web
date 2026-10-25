@@ -1,5 +1,24 @@
 # Devlog
 
+## 2026-10-25: Tekker Result list: the item_instance row, not the compact row
+
+**Picked:** the tekker Items line's open part, "the Result list is ASSUMED compact".
+
+**Answer.** The Result list is built from an item_instance, so its row is the inventory row. `tekkerResultRow` (`classic/shop.ts`, new) builds it with `itemRow` (`classic/itempack.ts`); `TekkerCounter` uses it for the Result list. `tests/tekker.test.ts` pins it.
+
+**PROVEN (dump `src/Psobb.exe-05112026.c`, Ghidra `tools/ghidra/decomp.sh 0x006d9d94`, objdump of 0x006d9d94..0x006da000).**
+- State 3 of the appraisal window (`FUN_006d9d94`, the list is created at 0x006d9f80 / 0x006d9fa3 with title `u"Result"`): `CreateItemInstance_005c9a40(&param_1[10])` (0x006d9fd2) gives the instance in EAX. The add at 0x006d9fe8 is `ListWindowObject_AddItem_00737620` with ECX = the list (`0x154(%edi)` = `param_1[0x55]`), the instance pushed and a 0 third argument. The decompile shows it as `FUN_00737620(iVar7,0)` because it does not show ECX; the disassembly is the source.
+- `ListWindowObject_AddItem_00737620` (dump 703849) -> `InitializeItemObject_0072bdd4` -> `ItemEntity_UpdateColoring_0072c045`: the item_instance row. The compact path (`ListWindowObject_AddItem_007375a4`, `UIElement_UpdateItemValidationState_0072bab0`) is not used by the Result. The earlier note "the Result (6xB9) is compact data, so its list is ASSUMED compact" is wrong: the 6xB9 data is compact, the list entry is built from it with `CreateItemInstance_005c9a40`.
+- The item path's icon 1 for a weapon (not 0x400, not equipped, `GetItemAttackData(0x10)` = 0): 0x19 if not tekked and rare, else 0x13 when `ValidateItemInstanceForEquip_005c4214` bit 1 is set, else 0x36. The same rule as the compact row (`shopRow`). `CheckItemEquipConditions_005d5f40` sets bit 0x10 only for a tool (class 3: PMT flag 2 clear) and from the `this+0xdc` flags, so a weapon that fails `ValidateItemForEquip` gets 0x10008 (0x8 | 0x10000), not 0x10 (`objdump 0x005d5f40`: `or $0x10000` after the call to `0x005c9e40`; the 0x8 is set before the call). So 0x2a / 0x2b never come from a weapon.
+- `ValidateItemInstanceForEquip_005c4214` writes the low word of `ValidateItemForEquip`'s out flags (objdump 0x005c4214: `movw %dx, (%esi)` from the local at 0x14(%esp)). The Ghidra decompile shows `unaff_retaddr` there; the disassembly shows the real bits, so `& 1` is the port's bit 1.
+- The Result's candidates are weapons only (the vfunc +0x84 filter, 0x005d2fb0), and the identified item is a new id that is not equipped (the swap is a separate 6x29 / 6xBA step).
+
+**Port.** The Result row is now `itemRow({ equipped: false, flags: 0, data: result })`. For every weapon the Result can hold, the row equals the compact row field by field (checked in `tests/tekker.test.ts`: a tekked class-blocked weapon is 0x13 with the cannot colours, a tekked class-ok weapon is 0x36 with the white colours). So nothing on screen changes; the path is now the exe's.
+
+**ASSUMED.** The new instance has `dwItemFlags` 0 (not equipped, not wrapped) and the 0xdc flags 0 (`this+0xdc` is not in the port; `GetItemAttackData` bit 0x10 from `0x80` in 0xdc would give 0x2a and is not modelled). The null-player return of `ItemEntity_UpdateColoring` (GetPlayer(+6)) is not modelled (the Result always has the local player, as for the compact row). `InitializeItemObject_0072bdd4`'s default icon 1 is taken as 0x36 (not decoded here).
+
+**Checks:** `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/tekker.test.ts` (all checks passed, new block), `client/`: `npx tsc --noEmit -p .` (Node 24) clean. Not run in Chrome or Playwright.
+
 ## 2026-10-25: Player elemental resists (EFR / EIC / ETH / ELT / EDK)
 
 **Question.** The Ill Gill specials on the local player assumed EIC / ETH / EDK = 0. Where does the exe keep the player's elemental resists, what fills them, and what reads them?
