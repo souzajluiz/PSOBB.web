@@ -55,6 +55,7 @@ import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
 import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MORFOS, MorfosAi, MorfosBolt, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
+import { IllGillAi } from '../combat/enemyfsmillgill.ts';
 import { EpsilonFx } from './epsilonfx.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DrlSegmentAi, DRL_BEAM, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
@@ -495,6 +496,8 @@ const OWN_FSM = new Set([
   'TBoss3VoloptP02',
   // Episode 4 (combat/saintmilionboss.ts).
   'Episode4Boss',
+  // Ill Gill (combat/enemyfsmillgill.ts): the radar follows its per-state tail (IllGillAi.radar).
+  'TObjEneIllGill',
   // Dark Falz (combat/darkfalz*.ts).
   'TBoss4DarkFalz',
 ]);
@@ -549,7 +552,7 @@ const isSplitPart = (ai: EnemyBrain | null): boolean => ai instanceof SlimeAi ||
 // rule, see applyEnemyHit), and they stay on the radar and lockable.
 const isEp2Hidden = (ai: EnemyBrain | null): boolean => (ai instanceof MericarolAi || ai instanceof GibbonAi) && ai.untargetable;
 export const splitRadarOk = (e: { ai: EnemyBrain | null }): boolean =>
-  (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi | GibblesAi).radar) && !isEp2Hidden(e.ai);
+  (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi | GibblesAi).radar) && !isEp2Hidden(e.ai) && (!(e.ai instanceof IllGillAi) || e.ai.radar);
 const splitLockBase = (e: { ai: EnemyBrain | null }): boolean =>
   (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi | GibblesAi).lockable) && !isEp2Hidden(e.ai);
 // Lock-on and the technique records (the reticle's per-frame lockable flag). A Vol Opt entity is
@@ -1294,6 +1297,14 @@ export class CombatView {
           // AttackData [0] slams, then the two shockwave / swing rows (ENEMY_TYPE_PARAMS order).
           const attacks = params && def ? def.attack.map((i) => params.attack(difficulty, i)) : attack ? [attack] : [];
           ai = new GibblesAi({ ...at, params: setParams, attacks, movement, rng: () => this.rng() });
+        }
+        else if (className === 'TObjEneIllGill') {
+          // Attack1..3 rows (battle params 38..41: the scythe, the ice / thunder rows, the
+          // snare and the tackle), ENEMY_TYPE_PARAMS ILL_GILL.attack.
+          const attacks = params && def ? def.attack.map((i) => params.attack(difficulty, i)) : [];
+          const ill = new IllGillAi({ ...at, movement, attacks, rng: () => this.rng() });
+          ill.health = () => stats.hp / Math.max(1, stats.maxHp);
+          ai = ill;
         }
         else if (className === 'TObjEneMorfos') {
           const mor = new MorfosAi({ ...at, params: setParams, movement, attack, difficulty, radius, phase: head.index, rng: () => this.rng() });
