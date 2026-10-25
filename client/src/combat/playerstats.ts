@@ -100,7 +100,7 @@ export interface EquipmentRange {
   max: number;
 }
 
-export function equipmentRange(item: ItemData, pmt: ItemPMT): EquipmentRange {
+export function equipmentRange(item: ItemLike, pmt: ItemPMT): EquipmentRange {
   const d = item.data1;
   if (d[0] !== 0) return { min: 0, max: 0 };
   const w = pmt.getWeapon(d[1], d[2]);
@@ -120,19 +120,19 @@ export interface WornEquipment {
 }
 
 // Units are group 1 = 1, group 2 = 3 (item_group_2 units = 3).
-export function isUnit(item: ItemData): boolean {
+export function isUnit(item: ItemLike): boolean {
   return item.data1[0] === 1 && item.data1[1] === 3;
 }
 
 // The exe's `group_1 == armors_shields_units && group_2 == sabers_armors` test (armour only).
-function isArmour(item: ItemData): boolean {
+function isArmour(item: ItemLike): boolean {
   return item.data1[0] === 1 && item.data1[1] === 1;
 }
 
 export type CompareSlot = 'weapon' | 'armour' | 'shield';
 
 // The slot a compare candidate goes to (the exe's equipment_slot of the item's type).
-export function compareSlot(item: ItemData): CompareSlot | null {
+export function compareSlot(item: ItemLike): CompareSlot | null {
   const d = item.data1;
   if (d[0] === 0) return 'weapon';
   if (d[0] === 1 && d[1] === 1) return 'armour';
@@ -236,10 +236,30 @@ function applyOption(b: CandidateBlocks, index: number, pmt: ItemPMT, sign: 1 | 
   }
 }
 
+// The data1 an item helper reads (an ItemData, or the worn item of the live combat).
+export interface ItemLike {
+  readonly data1: Uint8Array;
+}
+
+// A weapon's own range contribution, the numbers applyItem adds for a weapon: ROUND((atp + 2 x grind)
+// x set factor + morning) and the item set's range deltas (applySetBonuses). ApplyEquipmentBonuses_005d330c
+// (dump 426168) writes it to the battleparams range (+0x31c), which the live hit reads as
+// attacker->battleparams_attacks->atp_range_min (EntityHitEntity_00773350, dump 747464).
+export function weaponRangeContribution(item: ItemLike, w: { atpMin: number; atpMax: number }, ctx: SetContext | null): AttackRange {
+  const g2 = 2 * item.data1[3];
+  const f = ctx ? setFactorAtp(item, ctx) : 1;
+  const m = ctx ? morningGloryAtpBonus(item, ctx.beatTime) : 0;
+  const t = ctx ? itemSetBonusDelta(item, ctx) : zeroBlocks();
+  return {
+    min: roundF(F(F(F(w.atpMin + g2) * F(f)) + m)) + t.rmin,
+    max: roundF(F(F(F(w.atpMax + g2) * F(f)) + m)) + t.rmax,
+  };
+}
+
 // The item's contribution to the blocks, added (sign 1) or taken away (sign -1). The exe takes
 // an item away with its stored bonuses (UnknownItemFunction19_005d22cc); the same formula with
 // sign -1 is equal when the stored values are the current ones (ASSUMED).
-export function applyItem(b: CandidateBlocks, item: ItemData, pmt: ItemPMT, sign: 1 | -1, ctx: SetContext | null = null): void {
+export function applyItem(b: CandidateBlocks, item: ItemLike, pmt: ItemPMT, sign: 1 | -1, ctx: SetContext | null = null): void {
   const d = item.data1;
   if (d[0] === 0) {
     const w = pmt.getWeapon(d[1], d[2]);
@@ -395,7 +415,7 @@ const slotByte = (it: ItemData | null | undefined, i: number): number => (it ? i
 
 // morning_glory_atp_bonus (FUN_005d3f70): only an item whose sub is 0x94 gets the beat-time term,
 // ((beat >> 1) >>> 30) + beat) >> 2; otherwise the base 0.0 (0x0092c448).
-export function morningGloryAtpBonus(item: ItemData, beatTime: number): number {
+export function morningGloryAtpBonus(item: ItemLike, beatTime: number): number {
   if (item.data1[1] !== 0x94) return SET_F.morningBase;
   return ((((beatTime >> 1) >>> 30) + beatTime) >> 2);
 }
@@ -414,7 +434,7 @@ function galatineFactor(t: number): number {
   return g[1];
 }
 
-export function setFactorAtp(item: ItemData, ctx: SetContext): number {
+export function setFactorAtp(item: ItemLike, ctx: SetContext): number {
   const d = item.data1;
   const { worn } = ctx;
   const shield = slotByte(worn.shield, 2);
@@ -453,7 +473,7 @@ export function setFactorAtp(item: ItemData, ctx: SetContext): number {
 }
 
 // get_equipment_set_dfp_bonus (FUN_005d3780, dump 426335): the armour's DFP factor.
-export function setFactorDfp(item: ItemData, ctx: SetContext): number {
+export function setFactorDfp(item: ItemLike, ctx: SetContext): number {
   const { worn } = ctx;
   const shield = slotByte(worn.shield, 2);
   const weaponSub = slotByte(worn.weapon, 1);
@@ -499,7 +519,7 @@ export function setFactorDfp(item: ItemData, ctx: SetContext): number {
 }
 
 // get_equipment_set_evp_bonus (FUN_005d35d0, dump 426273): the shield's EVP factor.
-export function setFactorEvp(item: ItemData, ctx: SetContext): number {
+export function setFactorEvp(item: ItemLike, ctx: SetContext): number {
   const { worn } = ctx;
   const armour = slotByte(worn.armour, 2);
   const weaponSub = slotByte(worn.weapon, 1);
@@ -533,7 +553,7 @@ export function setFactorEvp(item: ItemData, ctx: SetContext): number {
 // with the colored ring count (barrier_player_proximity_check) by a table of 8 weights on
 // (idx - 0x53) & 7. Writes go into t (the caller adds them with its sign).
 const RING_WEIGHT = [0, 50, 25, 25, 100, 50, 50, 10] as const;
-export function applyColoredRing(item: ItemData, barrier: number, t: CandidateBlocks): void {
+export function applyColoredRing(item: ItemLike, barrier: number, t: CandidateBlocks): void {
   const d = item.data1;
   if (!(d[0] === 1 && d[1] === 2 && d[2] > 0x52 && d[2] < 0x83)) return;
   const k = (d[2] - 0x53) & 7;
@@ -652,7 +672,7 @@ function proofOfSwordSaint(ctx: SetContext, t: CandidateBlocks): void {
 
 // The colored ring and the item set bonus for one candidate (both run for every item in
 // ApplyEquipmentBonuses_005d330c). Writes into t; the caller adds t with its sign.
-export function itemSetBonusDelta(item: ItemData, ctx: SetContext): CandidateBlocks {
+export function itemSetBonusDelta(item: ItemLike, ctx: SetContext): CandidateBlocks {
   const t = zeroBlocks();
   const d = item.data1;
   applyColoredRing(item, ctx.barrier, t);
@@ -663,7 +683,7 @@ export function itemSetBonusDelta(item: ItemData, ctx: SetContext): CandidateBlo
   return t;
 }
 
-function applySetBonuses(item: ItemData, ctx: SetContext, b: CandidateBlocks, sign: 1 | -1): void {
+function applySetBonuses(item: ItemLike, ctx: SetContext, b: CandidateBlocks, sign: 1 | -1): void {
   const t = itemSetBonusDelta(item, ctx);
   for (const k of Object.keys(t) as (keyof CandidateBlocks)[]) b[k] += sign * t[k];
 }
@@ -671,7 +691,7 @@ function applySetBonuses(item: ItemData, ctx: SetContext, b: CandidateBlocks, si
 // One item's stat-block contribution (stat [0] ATP, [1] MST, [5] ATA): what ApplyEquipmentBonuses_005d330c
 // adds to the stat block (its param_4). ValidateItemForEquip_005c9e40 (dump 418164) takes it off the
 // displayed stats of the worn weapon before it compares a candidate's requirements (see itempack.ts).
-export function statContribution(item: ItemData, pmt: ItemPMT): { atp: number; mst: number; ata: number } {
+export function statContribution(item: ItemLike, pmt: ItemPMT): { atp: number; mst: number; ata: number } {
   const b = zeroBlocks();
   applyItem(b, item, pmt, 1);
   return { atp: b.atp, mst: b.mst, ata: b.ata };
@@ -687,7 +707,7 @@ export function statContribution(item: ItemData, pmt: ItemPMT): { atp: number; m
 // dump 426644) over 100 (an integer division), and the products are exact, so ROUND is the identity here.
 export const MAG_STAT_FACTORS = { pow: 2.0, dex: 0.5, def: 1.0, mind: 2.0 } as const;
 
-export function magStatContribution(item: ItemData): { atp: number; mst: number; dfp: number; ata: number } {
+export function magStatContribution(item: ItemLike): { atp: number; mst: number; dfp: number; ata: number } {
   const d = item.data1;
   if (d[0] !== 2) return { atp: 0, mst: 0, dfp: 0, ata: 0 };
   // data1 words: [2] def, [3] pow, [4] dex, [5] mind (the port's magStats / newserv layout).
@@ -765,7 +785,7 @@ function clampToClass(s: CandidateBlocks, charClass: number): void {
 // 569766, the unit1..unit4 loop: the candidate is not given the units back), the candidate goes
 // in (ApplyEquipmentBonuses), the stat block is clamped, and CalculateChallengeDamage gives the
 // six values.
-export function recalculateCandidate(file: CompareStats, item: ItemData, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateStats {
+export function recalculateCandidate(file: CompareStats, item: ItemLike, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateStats {
   const s = blocksFromFile(file, worn, charClass, pmt);
   const ctx = defaultSetContext(worn);
   const slot = compareSlot(item);
@@ -782,7 +802,7 @@ export function recalculateCandidate(file: CompareStats, item: ItemData, worn: W
 // PlayerCalculateItemStats_0068e4e8, the cursor item worn: the item comes out of the copies
 // (and, for an armour, the worn units too; dump 569928), no candidate, no clamp, then
 // CalculateChallengeDamage.
-export function equippedCandidate(file: CompareStats, item: ItemData, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateStats {
+export function equippedCandidate(file: CompareStats, item: ItemLike, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateStats {
   const s = blocksFromFile(file, worn, charClass, pmt);
   const ctx = defaultSetContext(worn);
   applyItem(s, item, pmt, -1, ctx);
@@ -838,6 +858,9 @@ export interface WeaponRangeInput {
   atpMin: number;
   atpMax: number;
   grind: number;
+  // The weapon's range with the set factor and the item set (weaponRangeContribution, live combat
+  // with a SetContext). Absent: the range without a set, atp + 2 x grind.
+  range?: AttackRange | undefined;
 }
 
 // The class's battleparams attack range (rmin, rmax) before any item.
@@ -849,6 +872,7 @@ export function classAttackRange(charClass: number): AttackRange {
 // The range a weapon adds on equip (ASSUMED, see the header).
 export function weaponAttackRange(w: WeaponRangeInput | null | undefined): AttackRange {
   if (!w) return { min: 0, max: 0 };
+  if (w.range) return w.range;
   return { min: w.atpMin + 2 * w.grind, max: w.atpMax + 2 * w.grind };
 }
 

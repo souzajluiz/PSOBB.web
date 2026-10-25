@@ -39,7 +39,7 @@
 //   0x800 (dead). Otherwise flag 0x100 (miss / no damage).
 // The red/white number shown is round(d) of each hit box (FUN_0078a5e8).
 
-import { ataSpecials, PLAYER_CLASS_ATTACK, splitAttack } from './playerstats.ts';
+import { ataSpecials, PLAYER_CLASS_ATTACK, splitAttack, weaponRangeContribution, type AttackRange, type SetContext } from './playerstats.ts';
 
 export { PLAYER_CLASS_ATTACK };
 export type AttackType = 0 | 1 | 2; // normal, heavy, special (player +0x8a4)
@@ -169,19 +169,26 @@ export interface WeaponForCombat {
   // The special slots' ATA: 10 * the byte after each type-5 special (ApplyEquipmentBonuses_005d330c,
   // dump 426168). 0 when the caller has no item data.
   ataSpecials?: number;
+  // The range with the set factor and the item set (weaponRangeContribution), when a SetContext is given.
+  range?: AttackRange | undefined;
 }
 
 // The combat input of an equipped weapon from its ItemData data1 (weapon class 0) and the ItemPMT
 // weapon row; null for a non-weapon or an unknown row. The same numbers for the local player and
-// for a remote player's copy (the remote's data1 is its PlayerInventory's worn weapon).
+// for a remote player's copy (the remote's data1 is its PlayerInventory's worn weapon). The local
+// player passes its live SetContext (the worn equipment): the weapon's range then has the set factor
+// and the morning glory term, the numbers the compare list shows. Without it (remote players, ASSUMED
+// no set) the range is the plain atp + 2 x grind.
 export function weaponForCombat(
-  data1: Uint8Array | readonly number[] | null | undefined,
+  data1: Uint8Array | null | undefined,
   pmt: { getWeapon(a: number, b: number): { atpMin: number; atpMax: number; ata: number } | undefined } | null | undefined,
+  ctx: SetContext | null = null,
 ): WeaponForCombat | null {
   if (!data1 || data1[0] !== 0 || !pmt) return null;
   const w = pmt.getWeapon(data1[1], data1[2]);
   if (!w) return null;
-  return { atpMin: w.atpMin, atpMax: w.atpMax, grind: data1[3], ata: w.ata, ataSpecials: ataSpecials(data1) };
+  const range = ctx ? weaponRangeContribution({ data1 }, w, ctx) : undefined;
+  return { atpMin: w.atpMin, atpMax: w.atpMax, grind: data1[3], ata: w.ata, ataSpecials: ataSpecials(data1), range };
 }
 
 // Player attacker stats (see combat/playerstats.ts for the exe evidence). The saved ATP is the
@@ -198,7 +205,7 @@ export function playerAttacker(
   weapon: WeaponForCombat | null,
 ): AttackerStats {
   const cls = PLAYER_CLASS_ATTACK[charClass] ?? PLAYER_CLASS_ATTACK[0];
-  const split = splitAttack(stats.atp, charClass, weapon ? { atpMin: weapon.atpMin, atpMax: weapon.atpMax, grind: weapon.grind } : null);
+  const split = splitAttack(stats.atp, charClass, weapon ? { atpMin: weapon.atpMin, atpMax: weapon.atpMax, grind: weapon.grind, range: weapon.range } : null);
   return {
     atp: split.base,
     atpSpread: split.variance,
