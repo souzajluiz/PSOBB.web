@@ -129,6 +129,32 @@
 **Open.** Boota's icon path. The gates not ported: Merissa (+0x37c bit 0x8), Zu / Pazuzu (+0x390 bit 0x40000), Ill Gill's per-state icons (the table above), Sand Rappy's state cases. The Sinow Berill sub-entity icons (ASSUMED owners). The Rag Rappy vtable (0x00b00da0) against the port's RAPPY row.
 
 **Tests.** `node tests/minimap.test.ts` (all checks passed), `tests/enemysplits.test.ts`, `NEWSERV=... node tests/combat.test.ts` (5859 checks, 0 failures), `cd client && npx tsc --noEmit -p .` (clean).
+## 2026-10-25: Dark Falz boxes: spat and beam Darvants are hittable from their first update; form 1 and the control have no box writer
+
+**Outcome.** The spat and beam Darvants are targetable (box bit 0 on) from their first update until dead. The port's beam rule kept a rising beam unhittable; that is removed. Form 1 and the control have no box bit 0 writer in the Dark Falz code, so the control stays concealed (proven) and form 1 keeps its ASSUMED on-from-creation rule. The Darvant id base is proven relative to the control's word; the control's own word (0x1000 | index) is still ASSUMED.
+
+**Proven (PsoBB.exe; objdump of the whole .text, every `[reg+0x18]` store in 0x0044C000..0x00461000 listed; tables with `tools/exedata.py read`).**
+- Box record: the Darvant factory 0x0045FBD4 calls 0x007B9A88 and stores the result at [ent+0x38C] (0x0045FCB0). That creation copies the template at 0x009A67C8, whose flags word at +0x18 is 0x807A (bit 0 clear), so every Darvant's box starts off.
+- Readers of [ent+0x38C] (any base register) in the range: the ring tail 0x0045F52E and 0x0045F56C, the spat factory 0x0046087B, the beam state 0 function 0x00460FD5. Nothing else.
+- Every store to [reg+0x18] in the range, in full: ring 0x0045F53A (set, +0x3B0 != 0) and 0x0045F572 (clear, +0x3B0 == 0); spat 0x004608DB (set, inside the spat factory 0x00460778 after it sets the spit state 4 at 0x004608CB); beam 0x00461012 (set, inside the beam state 0 function 0x00460D34); forms 2 and 3 as in the 2026-10-25 radar entry (0x00457C58..5E, 0x00457E59..5F, 0x0045AE6F..75, 0x0045AE93..99). No store clears the spat or the beam box. 0x004611E3 stores to [X+0x18] for an object outside the Darvants (not traced).
+- Beam dispatch: the update 0x00460938 calls table 0x009A67A8 [state] (state 0 0x00460D34, state 1 none, state 2 0x00460DD0, state 3 0x00460E64 dead). State 0's function runs each tick it is in state 0 and sets bit 0 at 0x0046100C, so the beam's box is on from its first update (it rises with the box on).
+- Spat: the update 0x0045FF50 dispatches table 0x009A6794 [state] (states 0 and 1 none, 2 0x004601B0, 3 0x00460590). The spit state 4 has no entry in the four words read; its flight is not traced (ASSUMED, as before). Its box is on from the factory on.
+- Form 1 (update 0x00454838, vtable 0x00AF75A0): no store to a box's +0x18 in 0x00454838..0x00457BD4. The only `[esi+0x18]` store near it (0x00454354) is a table fill at 0x00A45280. Its box is [ent+0x39C], stored by the control's init 0x0044E4F3 from 0x00451B38; that creation's template bits are not traced. ASSUMED: on from creation (unchanged).
+- Control (update 0x0044E5FC, vtable 0x00AF6BD8): no store to a box's +0x18 in 0x0044C000..0x0044F000 (reads only, 0x0044C647..0x0044CCE0). Its +0x38C is the Darvant id counter, not a box. The control stays concealed.
+- Darvant id allocator 0x0044CFC0 (ecx = control, two out pointers): counter = [ctrl+0x38C], valid 1..0x1FD (else 0, no id). Out 1 = word [ctrl+0x2C] + counter (entity), out 2 = word [ctrl+0x1C] + counter (small index, the factory's w at 0x0045FD65); then counter++. The counter starts at 1 (0x0044C98C). So a Darvant's small id is the control's +0x1C plus 1 .. 0x1FD, which is the port's `entityId + id`.
+- Control's own +0x1C: the base entity ctor 0x00787A4C writes 2 (word). The later writer that makes it 0x1000 | head index was not traced. **ASSUMED: `entityId` = 0x1000 | index.** The "+ 4096" in darkfalz.ts is this same ASSUMED bias.
+
+**Port.**
+- `client/src/combat/darkfalz.ts`: `Darvant.targetable` is now: not when gone or dead; a ring by `boxOn`; a spat or beam is on (it was: spat on, beam off while rising). `DarkFalzOptions.entityId` comment states what is proven and what is ASSUMED.
+- `tests/darkfalz.test.ts`: spat on from the spit state, off when dead; beam on while rising and hovering, off when dead. No existing expectation changed (the exe does not contradict one).
+
+**ASSUMED / open.**
+- Dead spat / beam: the port's `dead` test is kept; the exe's dead test for a Darvant is not traced (the box is not cleared at death).
+- Spit state 4 handler and flight (the table entry past index 3 is not read).
+- Form 1 box creation template (0x00451B38) and its bit 0.
+- The control's +0x1C writer (the 0x1000 | index bias).
+
+**Tests.** `node tests/darkfalz.test.ts` (pass), `darkfalzwarp`, `darkfalzcamera`, `minimap` (pass), `NEWSERV=... node tests/combat.test.ts` (5859 checks, 0 failures), `cd client && npx tsc --noEmit -p .` (no output).
 
 ## 2026-10-25: Radar per state for the Dark Gunner; Gillchic and Sinow Gold rows
 

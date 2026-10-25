@@ -1217,6 +1217,23 @@ function clearZakoBoth(fi: Fight): void {
   d.boxOn = false;
   eq(darvantRingIcon(d), null, 'dead: no icon');
   check(!d.targetable, 'dead: cannot be hit');
+  // The spat and beam boxes (PsoBB.exe): the spat factory 0x00460778 sets bit 0 when it sets the
+  // spit state (0x004608D5); the beam's state 0 function 0x00460D34 sets it (0x0046100C) every
+  // tick it runs. Nothing clears either, so they are hittable from the first update until dead.
+  const spit = new Darvant(DF_ID.darvant, 100);
+  spit.kind = 'spit';
+  spit.st = DARVANT.spit;
+  check(spit.targetable, 'spat: box on from the spit state');
+  spit.st = DARVANT.dead;
+  check(!spit.targetable, 'spat: dead cannot be hit');
+  const beam = new Darvant(DF_ID.darvant, 100);
+  beam.kind = 'beam';
+  beam.st = DARVANT.rise;
+  check(beam.targetable, 'beam: box on in the rise (state 0 sets it)');
+  beam.st = DARVANT.hover;
+  check(beam.targetable, 'beam: hovering, box on');
+  beam.st = DARVANT.dead;
+  check(!beam.targetable, 'beam: dead cannot be hit');
   // The creation init (0x0045FBD4): +0x3B4 = 450 * (w % 6 + 1), w = the entity index word
   // (0x1000 + slot): the Darvants start staggered by id.
   eq(darvantBoxStart(0), 450, 'init w 0: 450');
