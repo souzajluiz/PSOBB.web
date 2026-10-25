@@ -82,7 +82,7 @@ import { parseCameraRel, type CameraRel } from '../formats/cameramotion.ts';
 import { F1_ANIM_ROWS } from '../combat/darkfalz1.ts';
 import { F2_ANIM_ROWS } from '../combat/darkfalz2.ts';
 import { F3_ANIM_ROWS } from '../combat/darkfalz3.ts';
-import { BOOMA_BRAIN_TYPES, boomaBrainIconShown, type Icon } from '../classic/minimap.ts';
+import { BOOMA_BRAIN_TYPES, boomaBrainIconShown, radarSourceOf, type Icon } from '../classic/minimap.ts';
 import type { DfEvent, DfRow, DfRows } from '../combat/darkfalzcommon.ts';
 import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
@@ -1899,6 +1899,10 @@ export class CombatView {
     const out: { x: number; z: number; type: string }[] = [];
     for (const e of this.enemies.values()) {
       if (e.dead || e.state === 'death' || !e.instance.root.visible || radarConcealed(e) || !splitRadarOk(e)) continue;
+      // Garanz draws no radar icon (classic/minimap.ts ENEMY_RADAR_SOURCE 'none').
+      if (radarSourceOf(e.slot.type) === 'none') continue;
+      // Claw: its icon is off while its hidden flag (+0x390 bit 0x10000000) is set.
+      if (e.ai instanceof ClawAi && e.ai.hidden) continue;
       // A timed spawn (Shark, Dimenian) keeps its radar icon: the spec's trace found no change in the spawn.
       if (BOOMA_BRAIN_TYPES.has(e.slot.type) && e.ai instanceof EnemyAi && !(e.ai.timedSpawn && e.ai.state === 'spawn') && !boomaBrainIconShown(e.ai.state)) continue;
       // Dark Falz forms 1 and 3 have their own forced icons (minimapIcons).

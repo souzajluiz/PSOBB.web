@@ -71,6 +71,27 @@ Evidence: `tests/qstnonbb.test.ts` checks the XB layout offsets and the unused b
 **Not proven (ASSUMED in the code):** the aura's state-2 writer (sets the length of sub 2); the attack centre (the leader's target, not FindAndProcessSinowberillTarget); the hitbox overlap (0x007b5e40, sphere only); the 0xb0 & 0x10 hold (taken as set); the attack objects 0x208 / 0x209 and the 0x72c packets.
 
 **Tests.** `node tests/barbaray.test.ts` ALL PASS (the 0x18 block added); `client` `tsc --noEmit` clean; `NEWSERV=... node tests/combat.test.ts` 5859 checks, 0 failures.
+## 2026-10-25: Radar survey of the remaining families (PsoBB.exe, Ephinea addresses): Garanz and Claw change, the rest keep the default
+
+**Question.** Which of the unsurveyed enemy families get their radar icon from the shared slot 0x00520618, from their own icon call (0x00805608 or a sibling), or from no icon at all, and which state or flag gates apply?
+
+**Method.** Per family: the real vtable from the ctor's store (`mov [ecx], imm` or `*(this+4) = g_X_vtable`), read with `tools/exedata.py read`; the update from vtable +0x4; the icon path by E8 scan of the code (`exedata.py xref` only finds data pointers) and by indirect `call [reg+0x198]`. Decompiles from `tools/ghidra/decomp.sh` and the dump's labels were used only as hints; the dump labels for Derolle / Lily are wrong in places. Mericarol's slot call is `ff 90 98 01 00 00` (`call [eax+0x198]`, 0x005730eb), the same encoding as every slot caller.
+
+**Verdicts.** PROVEN for the vtable slots, the icon sites and their gates; ASSUMED where noted.
+- Slot 0x00520618 at +0x198, the default's gate `(flags+0x30) & 0x40800 == 0`, plus the pause gate `FUN_004f7c84 != 1` (ASSUMED to change nothing on the radar): Canadine (0x00b02be0, the update calls it at 0x00541d99), Poison Lily and Del Lily (0x00b00fe0, update 0x00529754, call at 0x005297c1), Dubchic (0x00b04a40 / 0x00b04cc0, call at 0x0055a354).
+- Own icon with no 0x40800 test on its path (the port's default stays): Hildebear (0x00affb20, icon at 0x0051360a, pause only), Grass Assassin (0x00b00b60, unconditional at the end of each state), Delsaber (0x00b041e0 / 0x00b03fa0, 0x00551692), Bulclaw (0x00b01b40, 0x00531e77, pause only), Rappy (0x00b00da0, 0x005259dd, the icon ignores 0x40800 but the port's concealed() never reads that family), Nar Lily and Sinow Beat (sibling 0x008056b0 at 0x00606ef5, state and +0x398 gates; ASSUMED the update 0x00606e34 is theirs).
+- Nano Dragon (0x00b074e0): own icon behind `(+0x390) & 0x40000 == 0` (0x0057d663), not the 0x40800 gate. The port's `concealed()` already reads `NanoDragonAi.untargetable` (ASSUMED the same bit).
+- Dark Gunner (0x00b03400): per-state icon from the dispatcher 0x005443c4 on +0x32e: states 1, 2, 3, 4, 6 add it; 0, 5, 8 do not. The update adds one only in the timed-status branch (`+0x98 | +0xa8 | +0xa4`). The port has no Dark Gunner brain with a state, so the default stays (ASSUMED).
+- Claw (0x00b01d80): own icon at 0x005346eb, gated by `(+0x390) & 0x10000000 == 0`. Ported: `minimapEnemies` skips a Claw whose `ClawAi.hidden` is set (ASSUMED that the port's hidden flag is that bit).
+- Garanz (0x00b06130; its slot +0x198 is 0x1, not code; the other vtable 0x00b05f80 is not Garanz): no icon call in 0x56f8b8..0x571000 and no slot. Ported: `none`, `minimapEnemies` skips it.
+- Gillchic: vtable not found (0x00b04760 is another family). Unresolved; the default stays.
+- Sinow Gold: no ctor entry in the type table (enum 19, 16, 71 not traced). Unresolved; the default stays.
+
+**Port.** `classic/minimap.ts` `ENEMY_RADAR_SOURCE` now has 30 rows (`RadarSource` gains `own`, `none`, `gated`). `render/combat.ts` `minimapEnemies` skips `none` (Garanz) and a hidden Claw. `tests/minimap.test.ts` has the rows per family.
+
+**Open.** Dark Gunner's per-state icon (needs a state-carrying brain); Sinow Gold; Gillchic's vtable; the Sinow Beat / Nar Lily update identity (ASSUMED).
+
+**Tests.** `node --experimental-strip-types tests/minimap.test.ts` (all checks passed), `tests/enemysplits.test.ts` (passed), `tests/combat.test.ts` with `NEWSERV` (5859 checks, 0 failures). `cd client && npx tsc --noEmit -p .` clean.
 
 ## 2026-10-25: Booma spawn gate is current_target == 1, set by the Booma ctor: every Booma animates
 

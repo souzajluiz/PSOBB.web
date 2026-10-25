@@ -579,18 +579,24 @@ for (const t of ['EVIL_SHARK', 'PAL_SHARK', 'GUIL_SHARK']) eq(radarSourceOf(t), 
 // Dimenian / La / So (ctor 0x00551d3c, vtable 0x00b041e0): states 1-8 are the Booma handlers, state 9 differs.
 for (const t of ['DIMENIAN', 'LA_DIMENIAN', 'SO_DIMENIAN']) eq(radarSourceOf(t), 'booma', `${t}: states 1-8 are the Booma handlers (vtable 0x00b041e0)`);
 eq([...BOOMA_BRAIN_TYPES].sort().join(','), ['BOOMA', 'DIMENIAN', 'EVIL_SHARK', 'GIGOBOOMA', 'GOBOOMA', 'GUIL_SHARK', 'LA_DIMENIAN', 'PAL_SHARK', 'SO_DIMENIAN'].join(','), 'the brain-gated families are the Booma-table families');
-// The shared slot 0x00520618 at +0x198 of the vtable: Savage Wolf (0x00b00260), Chaos Sorcerer (0x00b09c60),
-// Chaos Bringer (0x00b026e0), Dark Belra (0x00b02280).
-for (const t of ['SAVAGE_WOLF', 'CHAOS_SORCERER', 'CHAOS_BRINGER', 'DARK_BELRA']) eq(radarSourceOf(t), 'slot', `${t}: the enemy-base slot 0x00520618 is in its vtable`);
+// The shared slot 0x00520618 at +0x198 of the vtable (PROVEN by read, DEVLOG 2026-10-25): Savage Wolf (0x00b00260),
+// Chaos Sorcerer (0x00b09c60), Chaos Bringer (0x00b026e0), Dark Belra (0x00b02280), Canadine (0x00b02be0), Poison Lily
+// and Del Lily (0x00b00fe0), Dubchic (0x00b04a40 / 0x00b04cc0).
+for (const t of ['SAVAGE_WOLF', 'CHAOS_SORCERER', 'CHAOS_BRINGER', 'DARK_BELRA', 'CANADINE', 'POISON_LILY', 'DEL_LILY', 'DUBCHIC']) eq(radarSourceOf(t), 'slot', `${t}: the enemy-base slot 0x00520618 is in its vtable`);
 eq(baseIconShown(0), true, 'a slot family with no hidden bits is on the radar (the default)');
 // Rappy (update_rappy, dump 308039): the icon is unconditional in the alive branch.
 eq(radarSourceOf('RAPPY'), 'rappy', 'Rappy: unconditional icon in its alive update (dump 308039)');
-// No slot in the vtable and the own icon calls not traced: the default (alive and visible) stays.
-for (const t of ['HILDEBEAR', 'GRASS_ASSASSIN', 'NANO_DRAGON', 'DUBCHIC', 'GILLCHIC', 'GARANZ', 'DELSABER', 'DARK_GUNNER', 'BULCLAW', 'CLAW']) {
-  eq(radarSourceOf(t), 'unsurveyed', `${t}: no slot in its vtable, own icon untraced (default kept)`);
+// Own icon families (no 0x40800 test on the icon's path): the default (alive and visible) stays.
+for (const t of ['HILDEBEAR', 'GRASS_ASSASSIN', 'NANO_DRAGON', 'DELSABER', 'BULCLAW', 'DARK_GUNNER', 'NAR_LILY', 'SINOW_BEAT']) {
+  eq(radarSourceOf(t), 'own', `${t}: its own icon call, no 0x40800 test (default kept)`);
 }
-eq(radarSourceOf('CANADINE'), null, 'Canadine is not surveyed (no entry, default kept)');
-eq(Object.keys(ENEMY_RADAR_SOURCE).length, 9 + 4 + 1 + 10, 'the survey table has 24 enemy rows');
+// Garanz: no slot and no icon call (E8 scan of 0x56f8b8..0x571000): no icon.
+eq(radarSourceOf('GARANZ'), 'none', 'Garanz: no radar icon (no slot, no icon call)');
+// Claw: its own icon, off while +0x390 bit 0x10000000 (hidden) is set.
+eq(radarSourceOf('CLAW'), 'gated', 'Claw: own icon gated by +0x390 bit 0x10000000');
+for (const t of ['GILLCHIC', 'SINOW_GOLD']) eq(radarSourceOf(t), 'unsurveyed', `${t}: not resolved (default kept)`);
+eq(radarSourceOf('CANADINE_NOT_A_TYPE'), null, 'an unknown type has no radar source');
+eq(Object.keys(ENEMY_RADAR_SOURCE).length, 9 + 8 + 1 + 8 + 1 + 1 + 2, 'the survey table has 30 enemy rows');
 
 if (failures) {
   console.log(`${failures} failure(s)`);
