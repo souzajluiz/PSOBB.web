@@ -1,5 +1,34 @@
 # Devlog
 
+## 2026-10-25: Ill Gill brain (PORTED, partial): the handlers decoded, the radar gate per state corrected
+
+**Question.** The Ill Gill had no port brain, so its radar was 'own' (always on) and the per-state gate of the Episode 4 entry was open. Decode the update 0x0052e7c0 and its handlers, port the brain, gate the radar.
+
+**Verdicts (PROVEN unless marked ASSUMED).**
+- Dispatch: update 0x0052e7c0 switches on unknown_ai_state (+0x32e), jump table 0x0092248c: 0 -> 0x00530554, 1 -> 0x0053044c, 2 -> 0x005301f0, 3 -> 0x0052fb78 (scythe), 4 -> 0x0052f18c (tackle), 5 -> 0x0052ebc0 (shadow snare), 6 -> 0x0052eb3c (idle), 7 -> 0x0052ea00 (damage), 8 -> 0x0052e898 (dying). Every state runs the common tail (the target 0x00770738, the lock-on, the reticle).
+- The earlier DEVLOG names were off by one for the death: state 8 is the death sequence (VERIFIED in `combat/deathfx.ts`), and state 7 is the damage (flinch) state, not a death. Its escape check: hp < max * 0.25 (0x009225d8, strict: `fcompp` / `sahf` / `jbe` at 0x52ea9e..0x52eab7) sets flag 0x2000, drops the target, and makes the position the new home.
+- Attack choice (vtable +0x80, 0x00530cc4): rows g_illgill_battle_attack_stats (+0x0, 0x0C, 0x10, 0x14) = attacks 0..3 (battle params 38..41). Reach = (radius - 1 with hit boxes, 10 without; 0x00922540 / 0x00922544) + max_x_distance, arc = max_y_angle. The first row in reach and arc wins. Mapping (unknown_illgill_determine_scythe_or_charge_state 0x00531024): row 0 or 1 -> scythe (3, lattack or rattack), row 2 -> snare (5, kage), row 3 -> tackle (4, kamae then tackle).
+- Scythe (state 3): sub 0 turns to the target and, within the arc, rolls the variant (0x00922598 = 0.5, 0x0092259c = 0.35): roll > 0.35 and <= 0.5 -> thunder, > 0.5 -> ice, else instant kill (+0x3a0 = 2 / 1 / 3). Ice and thunder: lattack, hit at 30 motion frames (4.2039e-44); instant kill: rattack, hit at 35 (4.90454e-44). One try_hit_entity(1.0) / cause_knockback(damage) at the hit frame, then sub 3 recovers 30 frames and returns to the chase (IllgillHandleAttackCompletion 0x00530f58). The status of each variant (ice, thunder, insta-kill: field25_0x64) is not applied: ASSUMED.
+- Snare (state 5): sub 0 faces the target within attack 2's arc -> kage (slot 4); sub 1 waits 10 frames (check_entity_animation_elapsed_threshold 10.0) -> sub 2 (the snare: a 180-frame flag object, 0x0053114c / 0x00531170, ended by 0x0069375c; NOT ported, ASSUMED no damage); then sub 4 recovers.
+- Tackle (state 4): no target -> hold still with no icon (the exe returns at 0x0052fb75 before the icon call). Sub 1 is the stance (kamae, slot 8) and turns to the target; sub 2 is the dash (the walk speed times 4.5, 0x009225b4; knockback 2.0 per target, 0x009225b8; ends at speed + radius, beyond the sight range 400, or after 120 frames, 0x009225bc). Recovery sub 4 -> chase.
+- Damage (state 7): the damage motion (slot 5); the escape above.
+- Idle (state 6): counter +0x3a4 run; no entry traced (ASSUMED never entered by the port).
+- Constants: sight 400.0 (the Alignment record 0x009bc4cc +0), turn 1024 BAMS (+8). Animation slots (table 0x009bc3e0): 0 wait (motion 0, 0.6, loop), 1 walk (1, 0.8, loop), 2 lattack (4), 3 rattack (5), 4 kage (8), 5 damage (6), 6 dead (9), 7 prekamae (7), 8 kamae (2), 9 tackle (3); the speeds of 2..9 are 1.0.
+
+**Radar gate (objdump, the icon call 0x00805608 is the only one per handler).** The earlier table (DEVLOG 2026-10-25 Episode 4 pass) is WRONG in three places, corrected here:
+- 0x0052eb31 is inside the damage handler 0x0052ea00 (state 7), not state 6. State 7 shows the icon, unconditionally.
+- 0x0052eb8d (state 6) is unconditional: the counter's negative path (0x52eb97) jumps back to 0x52eb80, the icon call. The '+0x3a4 >= 0' gate in the old note does not exist.
+- State 4 shows the icon only with a target (the no-target path returns before 0x0052f9aa). State 8 has no icon.
+Gate: states 0, 1, 2, 3, 5, 6, 7 always; 4 with a target; 8 and the dead one never. `IllGillAi.radar`; `render/combat.ts` splitRadarOk reads it.
+
+**Port.** `client/src/combat/enemyfsmillgill.ts` (IllGillAi, ILL_GILL_ANIM, ILL_GILL). Registered in `render/combat.ts` (OWN_FSM, the TObjEneIllGill branch with the four attack rows) and the radar gate in splitRadarOk. `classic/minimap.ts` comment updated (the 'own' row is unchanged).
+
+**ASSUMED (not traced, marked in the code):** the spawn and the advance (states 0 and 1, one tick each); the chase's turn and walk (the MovementData fparam1 as the walk speed, with a fallback of 1); the target search (the nearest live player within 400, every frame while chasing); the attack cooldown (none: the chase re-picks a reachable attack at once, so the snare and the tackle repeat while the target stays in reach); the windup and recovery counts of the tackle (30 each) and the snare recovery (30); the damage state's return to the chase after the damage motion, and the flinch on every hit; the idle state's entry; the status effects of the scythe variants; the snare's flag object; the variant override field (+0x360 is taken as 0, the roll).
+
+**Tests.** `tests/enemyfsmillgill.test.ts` (new): the constants and motion slots, the radar per state, the attack choice order, the scythe's variant roll / hit frame / recovery (30 / 35 frames, the one hit, 31 frames to the chase), the snare and tackle flows, the damage escape (strict quarter HP), and the dead one. `enemyfsm`, `minimap`, `deathfx`, `enemyfsmep2d`, `enemyfsmruins` and `combat` (5860 checks) pass; `tsc --noEmit` is clean.
+
+**Still open.** The transitions the exe makes through the vtable (+0x15c / +0x160 and the attack-state helpers' callers), so the spawn / advance / idle / damage returns are proven rather than assumed; the snare's flag object and the status effects; the target search's interval (the base's counter at 0x3bc is set 0 in the ctor; the interval is not traced here).
+
 ## 2026-10-25: Olga tail anchor, pass 8: exhaustive asm check of the anchor slots; verdict still NOT PORTED
 
 **Question:** the tail swipe's anchors (+0x640 / +0x644 / +0x648 base, +0x64c / +0x654 tip) need a writer that the port can copy: a model node, a matrix slot, or a follow rule. Is there one in the exe?

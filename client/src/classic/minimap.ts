@@ -363,10 +363,11 @@ export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
   DEL_RAPPY_DESERT: 'rappy', MERISSA_A: 'own', MERISSA_AA: 'own', ZU_CRATER: 'own', ZU_DESERT: 'own',
   PAZUZU_CRATER: 'own', PAZUZU_DESERT: 'own', PIG_RAY: 'own',
   // Ill Gill (factory 0x0052e380 -> ctor 0x0052e44c writes vtable 0x00b01760 at 0x0052e490; update
-  // 0x0052e7c0 switches on unknown_ai_state; plain icons (scale 1, colour 0xffffa24c) in states
-  // 0 (0x00530695), 1 (0x0053054a), 2 (0x0053042b), 3 (0x0053006b), 4 (0x0052f9aa), 5 (0x0052efe4)
-  // and 6 (0x0052eb31, 0x0052eb8d; the second only while the counter +0x3a4 is not below 0); none
-  // in 7 (death) and 8 (dying). Not ported: the port's Ill Gill has no state-gated icon yet.
+  // 0x0052e7c0 switches on unknown_ai_state). The icon call 0x00805608 (scale 1, colour 0xffffa24c)
+  // is on the tail of states 0 (0x00530695), 1 (0x0053054a), 2 (0x0053042b), 3 (0x0053006b),
+  // 5 (0x0052efe4), 6 (0x0052eb8d) and 7 (0x0052eb31, the damage handler 0x0052ea00), always; in
+  // 4 (0x0052f9aa, the tackle) only with a target; none in 8 (dying). The gate is IllGillAi.radar
+  // (combat/enemyfsmillgill.ts, read by render/combat.ts splitRadarOk).
   ILL_GILL: 'own',
 };
 export function radarSourceOf(type: string): RadarSource | null {
