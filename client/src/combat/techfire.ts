@@ -37,8 +37,7 @@ import { enemyBoxTable } from '../formats/enemyboxes.ts';
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import type { AiTarget } from './enemyai.ts';
-import { STATUS } from './status.ts';
-import { TECH, techData, techPower } from './techniques.ts';
+import { TECH, techData, techGroup, techPower } from './techniques.ts';
 
 const TAU = Math.PI * 2;
 const bamsRad = (b: number): number => ((b & 0xffff) * TAU) / 0x10000;
@@ -1110,13 +1109,11 @@ export function inTechReach(tech: number, level: number, dist: number): boolean 
   return dist < techReach(tech, level);
 }
 
-/** The damage an enemy's object does to a player (entity_hit_by_tech group 1 / 2 /
- * 0x13 for a player defender: the same (MST * 0.5 + power) * (100 - resist) *
- * 0.002 as group 0 when the player's resist is 0, which is ASSUMED here). A
- * Gibarta / Rabarta of an enemy also freezes a player: the chance is 0.75 -
- * EIC / 100 (0x00978268, 0x00978264), the roll is get_random_float
- * (0x0077494a). */
-export const ENEMY_FREEZE_CHANCE = f32(0.75);
+/** The damage an enemy's object does to a player is entity_hit_by_tech with the technique's group
+ * (combat/enemytechplayer.ts): (MST * 0.5 + power) * (100 - resist) * 0.002 for the group's resist
+ * (EFR for Foie, EIC for Gibarta / Rabarta / Barta, ETH for Zonde, ELT for Grants). A Gibarta /
+ * Rabarta freezes a player only in the challenge state 1 (the exe's defender +0x32c test), with the
+ * chance 0.75 - EIC / 100 (0x00978268, 0x00978264); the roll and the gate are in the hit, not here. */
 
 export interface FireShotOptions extends CastRequest {
   /** The power an enemy's brain passes (techPower of the level by default). */
@@ -1129,9 +1126,6 @@ export function enemyFire(r: FireShotOptions): FireShot | null {
   const fire = makeFireObject(r);
   if (!fire) return null;
   const power = r.power ?? fire.power;
-  const freeze = fire.kind === 'gibarta' || fire.kind === 'rabarta';
-  const effect: ShotEffect = freeze
-    ? { kind: 'tech', power, ...(r.knockback ? { knockback: r.knockback } : {}), status: { type: STATUS.freeze, chance: ENEMY_FREEZE_CHANCE } }
-    : { kind: 'tech', power, ...(r.knockback ? { knockback: r.knockback } : {}) };
+  const effect: ShotEffect = { kind: 'tech', power, group: techGroup(r.tech), ...(r.knockback ? { knockback: r.knockback } : {}) };
   return new FireShot(fire, effect);
 }
