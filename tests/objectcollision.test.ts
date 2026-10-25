@@ -524,9 +524,34 @@ check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag
     check(!!r && r.shape === 0 && r.radius === 19 && r.halfX === 5 && r.offset[2] === 5 && r.flags === 0x1103, `child box at site ${va.toString(16)} is a sphere r19 at z 5 (flags 0x1103)`);
   }
   check(reaches(0x1b, 0x007ae641, 3) && reaches(0x1b, 0x007aeeb9, 3), 'type 0x1b reaches the two child boxes of the 0x7ae360 / 0x7aea10 ctors (depth 3, child)');
-  // The sites still unresolved (no table, no variant set): the heap block of 0x388/0x389/0x38a (0x00619759, 0x00635e71,
-  // 0x00638261) and the caller-supplied tables (0x00521cb8), stay out of COLLISION_SITES by design.
-  check(!site(0x00619759) && !site(0x00521cb8), 'the still-unresolved heap-block and caller-table sites are not in COLLISION_SITES');
+  // The signed index (2026-10-25 later): v = [this+0x8c], idx = sign(v) * (|v| & 1); only 0 / 1 are variants (ASSUMED v >= 0:
+  // idx -1 reads 0x009c82bc / 0x009c8404, which hold pointers, not boxes, so the generator emits no table there).
+  const v82 = site(0x0065dcd9)?.variants, v96 = site(0x0065e0dd)?.variants, v83 = site(0x0065e7af)?.variants;
+  check(!!v82 && v82[0] === 0x009c8340 && v82[1] === 0x009c83c4 && Object.keys(v82).length === 2, 'site 0x0065dcd9 (type 0x82) takes 0x009c8340 + 132 * idx for idx 0 / 1');
+  check(!!v96 && v96[0] === 0x009c8340 && v96[1] === 0x009c83c4 && Object.keys(v96).length === 2, 'site 0x0065e0dd (type 0x96) takes the same rows (132-byte stride)');
+  check(!!v83 && v83[0] === 0x009c84e0 && v83[1] === 0x009c85bc && Object.keys(v83).length === 2, 'site 0x0065e7af (type 0x83) takes 0x009c84e0 + 220 * idx for idx 0 / 1');
+  check(COLLISION_TABLES[0x009c82bc] === undefined && COLLISION_TABLES[0x009c8404] === undefined, 'the idx -1 tables (0x009c82bc, 0x009c8404) are not boxes: not emitted');
+  for (const va of [0x009c8340, 0x009c83c4, 0x009c84e0, 0x009c85bc]) {
+    check(rowOf(va)?.shape === 1 && (rowOf(va)!.flags & 1) === 1, `signed-index row ${va.toString(16)} is a box with bit 0 set`);
+  }
+  check(reaches(0x82, 0x009c83c4, 1) && reaches(0x83, 0x009c85bc, 1), 'types 0x82 and 0x83 reach their idx 1 rows at depth 1');
+  // The base helper 0x00521c5c (four stack arguments, table = arg3 = the third push, count = arg4): its eight callers are
+  // sites with the caller's constant table and count; 0x00521cb8 (the helper's own init) is resolved through them.
+  const helperCalls: [number, number, number][] = [
+    [0x00426a38, 0x009a3fc0, 17], [0x004cf72c, 0x009ac580, 17], [0x005398eb, 0x009bcbc0, 2], [0x0053cf1e, 0x009bcc4c, 2],
+    [0x0054dabe, 0x009bd3cc, 1], [0x0054db15, 0x009bd3f8, 1], [0x005a9e95, 0x009c07ec, 1], [0x005a9eec, 0x009c0818, 1],
+  ];
+  for (const [va, table, count] of helperCalls) {
+    const st = site(va);
+    check(st?.table === table && st?.via === 0x00521c5c, `site ${va.toString(16)} calls 0x521c5c with table ${table.toString(16)} (via the base helper)`);
+    check(!!COLLISION_TABLES[table] && COLLISION_TABLES[table].length === count, `table ${table.toString(16)} holds ${count} row(s), the helper's count`);
+  }
+  // The 0x116 children (0x005a9e95 / 0x005a9eec) are not the parent's box (CHILD_OBJECT_SITES): its enemy link is still 0x009c07c0.
+  check(ENEMY_COLLISION_LINKS[0x116]?.[0]?.table === 0x009c07c0, 'the 0x116 enemy link stays on its own table 0x009c07c0 (children excluded)');
+  check(reaches(0x116, 0x009c07ec, 2) && reaches(0x116, 0x009c0818, 2), 'type 0x116 reaches its two child boxes (depth 2, reach only)');
+  // The sites still unresolved: the heap blocks of 0x388 / 0x389 / 0x38a (0x00619759, 0x00635e71, 0x00638261: runtime boxes),
+  // stay out of COLLISION_SITES by design.
+  check(!site(0x00619759) && !site(0x00635e71) && !site(0x00638261), 'the still-unresolved heap-block sites are not in COLLISION_SITES');
   // 0x170 and 0x183: no box. The reverse closure of InitEnemyCollisionBoxes (E8, depth 10) holds neither creator (DEVLOG 2026-10-25).
   check(TYPE_COLLISION_TABLES[0x170] === undefined && TYPE_COLLISION_TABLES[0x183] === undefined, '0x170 (TOBoss4Bird) and 0x183 (__LOBBY_PIGEON__) have no box: no init call in their constructors or in the reverse closure');
 }

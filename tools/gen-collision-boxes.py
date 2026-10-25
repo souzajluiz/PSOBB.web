@@ -767,6 +767,10 @@ CHILD_CONST_CALLERS = {
 CHILD_OBJECT_SITES = {
     0x005A9F65: "0x116 child (0xac, this+0x4a4) in the ctor 0x005a9c58",
     0x00586D40: "0x65 child (0x478) built by 0x586b44 in the ctor 0x582ef4",
+    # The 0x116 ctor 0x005a9c58 news two more children (0x5caba4 at 0x005a9e68 and 0x005a9ec5, stored in ebp-0x3c
+    # and passed as ecx), each initialised through the base helper 0x00521c5c with table 0x009c07ec / 0x009c0818, count 1.
+    0x005A9E95: "0x116 child (new'd at 0x005a9e68) in the ctor 0x005a9c58, table 0x009c07ec",
+    0x005A9EEC: "0x116 child (new'd at 0x005a9ec5) in the ctor 0x005a9c58, table 0x009c0818",
     # The two 0x108-byte children of ctor 0x007ae360 (this+0x74 / +0x78; their box is at +0xac) and of 0x007aea10
     # (the same two slots): the box is the child's, not the parent's (ASSUMED, DEVLOG 2026-10-25 SITE_OVERRIDES).
     0x007AE641: "child 0x108 at this+0x74 of ctor 0x7ae360 (type 0x1b reaches it)",
@@ -801,6 +805,17 @@ SITE_OVERRIDES = {
     0x00664461: {"variants": {0: 0x009C8AE0, 1: 0x009C8B0C, 2: 0x009C8B38, 3: 0x009C8B64}, "count": 1},
     # 0x00664647 (type 0x224, ctor 0x00664564): table = 0x009c8f00 + 44 * idx, idx = min(trunc(|[this+0x88]|), 2).
     0x00664647: {"variants": {0: 0x009C8F00, 1: 0x009C8F2C, 2: 0x009C8F58}, "count": 1},
+    # Signed index (type 0x82, ctor 0x0065db10; type 0x96, ctor 0x0065deb8 reached through a pointer): v = [this+0x8c],
+    # idx = sign(v) * (|v| & 1) (cdq / xor / sub / and 1 / xor / sub at 0x0065dcb0..0x0065dcc4), table
+    # 0x009c8340 + 132 * idx (eax = 4 * idx, ebx = 128 * idx, lea 0x9c8340(%eax,%ebx) at 0x0065dcd1), count 3 (push $3 at 0x0065dcae).
+    # idx = -1 would read 0x009c82bc, which holds pointers (0x00938a..), not a box, so it is not a variant. ASSUMED: v >= 0
+    # (the set record's field is never negative), so only idx 0 / 1 are reachable.
+    0x0065DCD9: {"variants": {0: 0x009C8340, 1: 0x009C83C4}, "count": 3},
+    0x0065E0DD: {"variants": {0: 0x009C8340, 1: 0x009C83C4}, "count": 3},
+    # Type 0x83, ctor 0x0065e5bc: the same signed index, table 0x009c84e0 + 220 * idx (ebx = 110 * idx, lea
+    # 0x9c84e0(%ebx,%ebx) at 0x0065e7a7), count 5 (push $5 at 0x0065e780). idx = -1 reads 0x009c8404 (not a box: the
+    # pointers 0x00938b.. of another table), so only 0 / 1 (ASSUMED v >= 0, as above).
+    0x0065E7AF: {"variants": {0: 0x009C84E0, 1: 0x009C85BC}, "count": 5},
     # The sphere rows on the caller's stack (count 1): 0x4b r13, 0x4c r13, 0x4d r22.5, 0x50 r23, 0x51 r3.
     0x00647B4B: {"rows": "sphere13", "count": 1},  # type 0x4b (ctor 0x00647a84)
     0x00647E23: {"rows": "sphere13", "count": 1},  # type 0x4c (ctor 0x00647d5c)
@@ -860,6 +875,39 @@ def index_text(idx):
         arg, disp, width, "true" if signed else "false", mask, idx["base"], idx["stride"], rec))
 
 
+def call_pushes(site, n):
+    """The operands of the last n pushes before a call (AT&T, nearest first), or None."""
+    rows = insns_before(site, span=0x120)
+    pushes = []
+    for _, mnem, ops in reversed(rows):
+        if mnem.startswith("push"):
+            pushes.append(ops)
+            if len(pushes) == n:
+                return pushes
+        elif mnem.startswith(("call", "jmp", "ret")) or "%esp" in ops:
+            break
+    return None
+
+
+# Helpers whose (table, count) are not the last two pushes: the value is the (table, count) pair's
+# index in call_pushes order (nearest push first). 0x0051ff3c takes the table last (the default,
+# stack_args). 0x00521c5c takes four stack arguments (ret 0x10): arg3 (its table) is the third push
+# before the call and arg4 (its count) the fourth (the callers push `$count; $table; reg; reg`), read
+# from objdump at 0x00426a38 / 0x004cf72c / 0x005398eb / 0x0053cf1e / 0x0054dabe / 0x0054db15 /
+# 0x005a9e95 / 0x005a9eec.
+WRAPPER_PUSH_INDEX = {0x00521C5C: (2, 3)}
+
+
+def wrapper_args(c, w):
+    if w not in WRAPPER_PUSH_INDEX:
+        return stack_args(c)
+    ti, ci = WRAPPER_PUSH_INDEX[w]
+    pushes = call_pushes(c, max(ti, ci) + 1)
+    if pushes is None or not pushes[ti].startswith("$") or not pushes[ci].startswith("$"):
+        return None
+    return int(pushes[ti][1:], 16), int(pushes[ci][1:], 16)
+
+
 def wrapper_sites(init_sites, func_of, calls, dynamic_funcs):
     """Constant-argument calls to a helper that passes its own table on to InitEnemyCollisionBoxes.
 
@@ -872,7 +920,7 @@ def wrapper_sites(init_sites, func_of, calls, dynamic_funcs):
     out = []
     for w in sorted(dynamic_funcs):
         for c in by_target.get(w, []):
-            args = stack_args(c)
+            args = wrapper_args(c, w)
             if args is None:
                 continue
             out.append({"site": c, "func": func_of(c), "table": args[0], "count": args[1], "via": w})
