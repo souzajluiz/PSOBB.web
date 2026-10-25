@@ -75,6 +75,35 @@
 - State 3 (`unknown_flags_invincibility == 3`) sends `6x46` without refreshing the targeting block, so the exe would ship the previous strike's targets. The port has no state-3 flag, so this is not modelled.
 - Special strikes (`attackType 2`) are sent like weapon strikes. The exe's special path is not traced to a separate palette slot.
 - `tests/magfeed.test.ts` fails in a worktree without `vendor/newserv` tables (it reads `ROOT/vendor`); unrelated to this change.
+## 2026-10-25: What writes enemy state 9 (Dimenian +0x178): only server-addressed phases; no normal-play writer found, port unchanged
+
+**Outcome.** No code change. The question "what sets `unknown_ai_state` = 9 on a Dimenian" is answered as far as the dump and newserv go: the exe writes 9 only from a network phase packet addressed by entity id, or from another family's own FSM. Nothing in the client, in newserv or in the quest opcodes makes a Dimenian enter state 9 in normal play, so a fresh Dimenian stays in state 0 and `spawn: false` is the right default.
+
+**Proven (PsoBB.exe, `objdump -D`, `tools/exedata.py`, dump `Psobb.exe-05112026.c`, `notes/_dispatch_tables.tsv`).**
+- The writer of the field is `SetEnemyAiState_0051f62c` (0x0051f62c): it calls the old and new state's vtable +0x164 (exit / enter) and stores `unknown_ai_state = param`. `Enemy__UpdateAiState` (dump 180870, VA not read) copies the pending `state_maybe` into `unknown_ai_state` when they differ; `state_maybe` is the other writer's field.
+- The network writers are the 0x60 subcommand table `g_Packet0x60SubcommandTable` (perm mask 0x0004). Each row's payload carries the state at +4 (s16) and the entity id at +2:
+  - 6x10 -> 0x00423a58 `ApplyEnemyTargetAndState_00423a78`: unconditional `SetEnemyAiState(+4)`, +6 to `+0x684`, +8 target. Newserv's `G_DragonBossActions_6x10_6x11` (phase, attack seq, target) has the same layout.
+  - 6x11 -> 0x00423aa8 `ApplyEnemyTargetAndConditionalState_00423ac8`: the same, but only when +4 differs from `+0x32e`.
+  - 6x12 -> 0x00423b00 `action_dragon` (`ApplyEnemyTargetAndUnconditionalState_00423b20`): the same plus the vtable +0x1c call; the port's `onDragonAction` already handles it (for the Dragon only).
+  - 6xA8 -> 0x004cbe80 (dump name `SetEntityInitialParameters_004cbea0`, but the layout is newserv's Gol Dragon 6xA8: phase +4, seq +6, target +8, x / z +0xC / +0x10, attack variant +0x14). The port's `onGolAction` handles 0xA8 the same way.
+  - 6xA9 -> 0x004b98dc `LinkEntityById` -> `SetEnemyTargetAndState_004b98fc` (state +4). 6xAA -> 0x004b9918 -> `SetEnemyTargetStateAndLink_004b9938`. (newserv names 6xA9 / 6xAA as Barba Ray.)
+  - Each handler is reached only by the table (no direct `call` from a Booma path); the `call 0x…` sites are `call next+4` thunks that find the entity by id (`0x00786b3c`).
+- Literal 9 written to `state_maybe` or `unknown_ai_state` in other families' own FSMs: `DeldepthUpdateMovement_005487ac`, `DubchichAIUpdate_005562ec`, `GibblesProcessRecoveryState_0056b248`, `DerolleHandleState2_00581278` (`state_maybe = 9`), and the Hildebear FSM (`HildebearProcessState_00516c60` / `_00516ed8`, state 9 = the dead flag). None of them is on the Dimenian's vtable (its +0x164 is the Booma 0x0052b1b8), so none reaches a Dimenian.
+- The state-9 slot of the Booma dispatcher (`unknown_booma_enemy_ai`, dump 311909) is vtable +0x178. Per family (dump names):
+  - Booma, vtable 0x00b01fc0: +0x178 = 0x0073d160 `or word [+8], 1`: sets bit 0 of the u16 at +8 and changes no state and plays nothing.
+  - Dimenian, vtable 0x00b041e0: +0x178 = 0x005517a0 `EnableDerolleEntity` (+0x398 = 1, call the 0x3b0 object's +0x10, and on 1 `+8 |= 1`).
+  - Shark, vtable 0x00b069b0: +0x178 = 0x0061cdb0, a bare `ret` (the pure-virtual placeholder): state 9 does nothing for a Shark. The Shark's +0x398 is set by its ctor, not by 9.
+  - Poison Lily-named vtables 0x00b05740 / 0x00b05750 / 0x00b04cc0 / 0x00b06320 / 0x00b051c0 / 0x00b08f00: +0x178 = 0x005203fc (`PoisonLilyDeactivate`), and 0x00b05750 = 0x00520528 (`PoisonLilyClearState`). Their families are not checked beyond the vtable.
+  - 0x00b0ef60: +0x178 = 0x0061cdb0 (placeholder), and its +0x154 is not the Booma dispatcher's, so the dispatcher never calls it.
+- Quest opcodes: `construct_delayed_enemy` (0x8B) / `unhide_ene` carry no state; `set_enemy_physical_data` / `attack_data` / `resist_data` / `movement_data` (0xF892..0xF895, newserv `QuestScript.cc`) set battle parameters, not the AI state.
+
+**ASSUMED / open.**
+- Whether the original Sega server ever sent a 6x10 / 6x11 / 6xA9 with phase 9 for a Dimenian. newserv only forwards these (its comment says "the client never sends these"); no newserv path originates one for a Dimenian, so with newserv a Dimenian stays in state 0 for the whole game.
+- A wave-spawned (quest / set-file) Dimenian is created in state 0 (the Booma superclass ctor and `dimenian_constructor` do not write 9); the set-file's initial state is not traced.
+
+**Port.** No code change. The port has no handler for 6x10 / 6x11 / 6xA8 / 6xA9 / 6xAA on generic enemies (6x12 is the Dragon's; 6xA8 / 6xA9 / 6xAA are Gol Dragon / Barba Ray), so there is no existing event to hang a state-9 trigger on. `spawn: className !== 'TObjEneDimedian'` (`client/src/render/combat.ts`) stays.
+
+**Tests.** `tests/enemyfsm.test.ts`: passed. `NEWSERV=…/vendor/newserv node tests/combat.test.ts`: 5859 checks, 0 failures. `cd client && npx tsc --noEmit -p .`: clean.
 
 ## 2026-10-25: Episode 1 bosses: the Dragon's lock and hit are the entrance's box bit 0; De Rol Le's shell segments are on the radar with their box off
 
