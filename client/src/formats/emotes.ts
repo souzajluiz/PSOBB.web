@@ -185,6 +185,14 @@ export function sitEndKey(chair: boolean): string {
   return chair ? 'i' : 'u';
 }
 
+// Whether this poll's keys stand the local sitter up: Alt with the sit's key on
+// its edge (the first two tests of handle_input_state_0xab, 0x0069c0c8). The
+// stand-up is move_stop(dispatch) (LAB_0069c17e): the caller sends 6x3E
+// (dispatch_action_move_stop, dump 587490), which is what a remote sitter reads.
+export function sitStandsUp(chair: boolean, alt: boolean, edge: (key: string) => boolean): boolean {
+  return alt && edge(sitEndKey(chair));
+}
+
 // A received 6x58: body = the whole subcommand (header included).
 export function parseEmoteSubcommand(body: Uint8Array): { clientId: number; slot: number; opposite: boolean } | null {
   if (body.length < 8 || body[0] !== EMOTE_OPCODE) return null;
