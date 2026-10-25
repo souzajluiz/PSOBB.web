@@ -46,6 +46,10 @@ import {
   BOOMA_ICON_STATES,
   baseIconShown,
   boomaIconShown,
+  boomaBrainIconShown,
+  BOOMA_BRAIN_TYPES,
+  ENEMY_RADAR_SOURCE,
+  radarSourceOf,
 } from '../client/src/classic/minimap.ts';
 import { AREA_MAP_MENU_ID, AREA_MAP_WINDOW, AreaMapWindow, type AreaMapEnv, type AreaMapInput } from '../client/src/classic/areamap.ts';
 import { FieldMenu, validateMenuEntry, type FieldMenuEnv, type MenuRules } from '../client/src/classic/fieldmenu.ts';
@@ -556,6 +560,37 @@ eq(boomaIconShown(3), true, 'Booma chase (0x0052afe4, icon 0x0052b148)');
 eq(boomaIconShown(6), false, 'state 6 is an empty slot');
 eq(boomaIconShown(8), false, 'state 8 (0x0052b518) adds no icon');
 eq(boomaIconShown(9), false, 'state 9 (0x0073d160) adds no icon');
+
+// The port's Booma brain states map to the exe's state numbers (classic/minimap.ts BOOMA_BRAIN_EXE_STATE).
+eq(boomaBrainIconShown('spawn'), false, 'Booma brain spawn (exe state 0, 0x00535a6c) hides the icon');
+eq(boomaBrainIconShown('idle'), true, 'Booma brain idle = exe state 1 (wander, icon 0x0052ab6b)');
+eq(boomaBrainIconShown('notice'), true, 'Booma brain notice = exe state 3 (war cry, icon 0x0052b148)');
+eq(boomaBrainIconShown('chase'), true, 'Booma brain chase = exe state 3');
+eq(boomaBrainIconShown('attack'), true, 'Booma brain attack = exe state 5 (icon 0x0052b330)');
+eq(boomaBrainIconShown('recover'), true, 'Booma brain recover = exe state 5 substate 2');
+eq(boomaBrainIconShown('dead'), false, 'Booma brain dead = exe state 8 (0x0052b518) adds none');
+eq(boomaBrainIconShown('unknown-brain'), true, 'an unmapped brain state keeps the default icon');
+
+// Per-enemy radar source (vtable survey, DEVLOG 2026-10-25).
+// Booma table families: Booma, Gobooma, Gigobooma (ctor 0x00535f1c, vtable 0x00b01fc0).
+for (const t of ['BOOMA', 'GOBOOMA', 'GIGOBOOMA']) eq(radarSourceOf(t), 'booma', `${t}: the Booma table (no shared slot in 0x00b01fc0)`);
+// Evil / Pal / Guil Shark (ctor 0x00512bd0, vtable 0x00aff860): states 1-8 are the Booma handlers.
+for (const t of ['EVIL_SHARK', 'PAL_SHARK', 'GUIL_SHARK']) eq(radarSourceOf(t), 'booma', `${t}: states 1-8 are the Booma handlers (vtable 0x00aff860)`);
+// Dimenian / La / So (ctor 0x00551d3c, vtable 0x00b041e0): states 1-8 are the Booma handlers, state 9 differs.
+for (const t of ['DIMENIAN', 'LA_DIMENIAN', 'SO_DIMENIAN']) eq(radarSourceOf(t), 'booma', `${t}: states 1-8 are the Booma handlers (vtable 0x00b041e0)`);
+eq([...BOOMA_BRAIN_TYPES].sort().join(','), ['BOOMA', 'DIMENIAN', 'EVIL_SHARK', 'GIGOBOOMA', 'GOBOOMA', 'GUIL_SHARK', 'LA_DIMENIAN', 'PAL_SHARK', 'SO_DIMENIAN'].join(','), 'the brain-gated families are the Booma-table families');
+// The shared slot 0x00520618 at +0x198 of the vtable: Savage Wolf (0x00b00260), Chaos Sorcerer (0x00b09c60),
+// Chaos Bringer (0x00b026e0), Dark Belra (0x00b02280).
+for (const t of ['SAVAGE_WOLF', 'CHAOS_SORCERER', 'CHAOS_BRINGER', 'DARK_BELRA']) eq(radarSourceOf(t), 'slot', `${t}: the enemy-base slot 0x00520618 is in its vtable`);
+eq(baseIconShown(0), true, 'a slot family with no hidden bits is on the radar (the default)');
+// Rappy (update_rappy, dump 308039): the icon is unconditional in the alive branch.
+eq(radarSourceOf('RAPPY'), 'rappy', 'Rappy: unconditional icon in its alive update (dump 308039)');
+// No slot in the vtable and the own icon calls not traced: the default (alive and visible) stays.
+for (const t of ['HILDEBEAR', 'GRASS_ASSASSIN', 'NANO_DRAGON', 'DUBCHIC', 'GILLCHIC', 'GARANZ', 'DELSABER', 'DARK_GUNNER', 'BULCLAW', 'CLAW']) {
+  eq(radarSourceOf(t), 'unsurveyed', `${t}: no slot in its vtable, own icon untraced (default kept)`);
+}
+eq(radarSourceOf('CANADINE'), null, 'Canadine is not surveyed (no entry, default kept)');
+eq(Object.keys(ENEMY_RADAR_SOURCE).length, 9 + 4 + 1 + 10, 'the survey table has 24 enemy rows');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

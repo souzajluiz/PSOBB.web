@@ -82,7 +82,7 @@ import { parseCameraRel, type CameraRel } from '../formats/cameramotion.ts';
 import { F1_ANIM_ROWS } from '../combat/darkfalz1.ts';
 import { F2_ANIM_ROWS } from '../combat/darkfalz2.ts';
 import { F3_ANIM_ROWS } from '../combat/darkfalz3.ts';
-import type { Icon } from '../classic/minimap.ts';
+import { BOOMA_BRAIN_TYPES, boomaBrainIconShown, type Icon } from '../classic/minimap.ts';
 import type { DfEvent, DfRow, DfRows } from '../combat/darkfalzcommon.ts';
 import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
@@ -1880,11 +1880,14 @@ export class CombatView {
   // hidden, set by +0x184)), called from the family's own update (Mericarol +0x198,
   // Gibbon +0x188). The port's dead / death / radar / concealed tests read those bits.
   // The Booma family adds its icon per state (boomaIconShown), not through the slot:
-  // the port has no Booma state yet, so every alive Booma is drawn here (open).
+  // boomaBrainIconShown maps the brain's state to the exe's (idle 1, notice and chase 3,
+  // attack and recover 5, dead 8). The port has no spawn state yet, so a spawning Booma
+  // is not hidden here (open, classic/minimap.ts BOOMA_BRAIN_EXE_STATE).
   minimapEnemies(): { x: number; z: number; type: string }[] {
     const out: { x: number; z: number; type: string }[] = [];
     for (const e of this.enemies.values()) {
       if (e.dead || e.state === 'death' || !e.instance.root.visible || concealed(e) || !splitRadarOk(e)) continue;
+      if (BOOMA_BRAIN_TYPES.has(e.slot.type) && e.ai instanceof EnemyAi && !boomaBrainIconShown(e.ai.state)) continue;
       // Dark Falz forms 1 and 3 have their own forced icons (minimapIcons).
       if (e.ai instanceof DarkFalzPartAi && (e.ai.entity === DF_ID.form3 || e.ai.entity === DF_ID.form1)) continue;
       const p = e.instance.root.position;
