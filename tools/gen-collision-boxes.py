@@ -168,15 +168,48 @@ def vtable_calls(blob, func_of, starts_va, window=0x400):
     return out
 
 
-def e8_calls(blob):
-    """(site VA, target VA) for every E8 rel32 call inside .text."""
+def global_ptr_calls(blob, func_of, window=0x20):
+    """(call VA, target VA, global VA) for `mov abs, %reg; ...; call *%reg` with the pointer read from the exe.
+
+    The load is `8b /r` with mod 00 and rm 101 (a disp32 absolute: `mov 0x9a6c64, %eax` is 8b 05); the
+    call is `ff /2` with mod 11 on the same register, within `window` bytes, and no other call between
+    (ASSUMED: the first call after the load is the one that uses it). The target is the u32 at the
+    global, read from the exe's .data (ASSUMED: nothing stores to it at run time; the Plot Falz state table
+    0x009a6c64 has three reads and no store in the exe). Plot Falz's constructor 0x0048d814 calls
+    its state-0 enter handler this way (0x0048dad1 / 0x0048dada)."""
     out = []
-    pos = blob.find(b"\xe8")
-    while pos >= 0 and pos + 5 <= len(blob):
-        rel, = struct.unpack_from("<i", blob, pos + 1)
-        out.append((TEXT_LO + pos, TEXT_LO + pos + 5 + rel))
-        pos = blob.find(b"\xe8", pos + 1)
+    for m in re.finditer(rb"\x8b[\x05\x0d\x15\x1d\x35\x3d]", blob):
+        pos = m.start()
+        if pos + 6 > len(blob):
+            continue
+        reg = (blob[pos + 1] >> 3) & 7
+        glob, = struct.unpack_from("<I", blob, pos + 2)
+        slot = u32(glob)
+        if slot is None or not (TEXT_LO <= slot < TEXT_HI):
+            continue
+        for k in range(pos + 6, min(pos + 6 + window, len(blob) - 1)):
+            if blob[k] == 0xE8:  # another call comes first
+                break
+            if blob[k] == 0xFF and 0xD0 <= blob[k + 1] <= 0xD7 and (blob[k + 1] & 7) == reg:
+                out.append((TEXT_LO + k, slot, glob))
+                break
     return out
+
+
+def e8_calls(blob):
+    """(site VA, target VA) for every direct call instruction inside .text.
+
+    Read from objdump, so the sites are instruction-aligned: a raw E8 byte scan also matches an E8 inside
+    another instruction (0x004accd0 is the byte before the call at 0x004accd1; its rel32 is the call's
+    opcode and the next bytes), and those false edges fed the call graph (the 0xcb link through
+    0x004acc98 -> 0x004cb480, DEVLOG 2026-10-25 Plot Falz)."""
+    out = subprocess.run(["objdump", "-d", "--no-show-raw-insn", PATH], capture_output=True, text=True, check=True).stdout
+    res = []
+    for line in out.splitlines():
+        m = re.match(r"^\s*([0-9a-f]+):\s.*\tcalll?\s+0x([0-9a-f]+)\s", line)
+        if m and TEXT_LO <= int(m.group(1), 16) < TEXT_HI:
+            res.append((int(m.group(1), 16), int(m.group(2), 16)))
+    return res
 
 
 # --- objdump argument reading -----------------------------------------------
@@ -808,6 +841,9 @@ def main(argv):
     # in the same function is the object's vtable; the register is not matched).
     vt_calls = vtable_calls(blob, func_of, starts_va)
     slot_targets = {t for _, t, _ in vt_calls}
+    # Global function pointers (`mov abs, %reg; call *%reg`): the pointer's target is a function start.
+    gp_calls = global_ptr_calls(blob, func_of)
+    slot_targets |= {t for _, t, _ in gp_calls}
     starts_va = sorted(set(starts_va) | slot_targets)
     # Function starts read from the disassembly (checked by main): Plot Falz's constructor (after an
     # `xor; jmp` epilogue, DEVLOG), the SEH epilogue cases 0x662ef0 (after `jmp; nop`), the Dragon's
@@ -822,6 +858,10 @@ def main(argv):
         if f is not None and TEXT_LO <= target < TEXT_HI:
             callees[f].add(func_of(target) or target)
     for site, target, _ in vt_calls:
+        f = func_of(site)
+        if f is not None:
+            callees[f].add(func_of(target) or target)
+    for site, target, _ in gp_calls:
         f = func_of(site)
         if f is not None:
             callees[f].add(func_of(target) or target)

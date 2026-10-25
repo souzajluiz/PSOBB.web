@@ -441,6 +441,18 @@ check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag
   check(childBoxTable(0xc2, 5)?.table === 0x009a512c, 'the Vol Opt monitor child 5 still resolves through its masked variant (5 & 3 = 1)');
 }
 
+// Plot Falz (0xca) and Sinow Berill (0xcb), DEVLOG 2026-10-25 Plot Falz. 0xca's constructor 0x0048d814 calls its
+// state-0 enter handler through the pointer 0x009a6c64 (`call eax` at 0x0048dada): that handler is a stub that
+// clears two words (0x0048f30c), so no box comes from it. 0xcb's table 0x009ac120 was a misread: the chain
+// 0x004acc98 -> 0x004cb480 came from an E8 byte inside another instruction (0x004accd0), not a call, so 0xcb has
+// no proven table. Both stay unlinked (ASSUMED: no own box).
+{
+  check(ENEMY_COLLISION_LINKS[0xca]?.every((l) => l.table === null) === true, '0xca (Plot Falz) has no proven box table');
+  check(ENEMY_COLLISION_LINKS[0xcb]?.every((l) => l.table === null) === true, '0xcb (Sinow Berill) has no box table: the 0x009ac120 link was a misaligned E8 byte');
+  check(!Object.values(COLLISION_TABLES).some((rows) => rows === undefined), 'every table key of the generated map has rows');
+  check(ENEMY_COLLISION_LINKS[0x65]?.[0]?.table === 0x009bf3e4 && ENEMY_COLLISION_LINKS[0x65]?.[0]?.depth === 1, 'the 0x65 link is the depth-1 table 0x009bf3e4 once the call graph uses instruction-aligned calls');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exitCode = 1;
