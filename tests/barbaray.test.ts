@@ -840,6 +840,35 @@ const runTicks = (b: BarbaRayAi, n: number) => {
   void done;
 }
 {
+  // The drop's z after sub 3 (asm 0x004b7040 at 0x4b7455..0x4b74c7, 0x42cdc0, 0x434ac4): when the speed
+  // is <= 0 the easing starts from the body's z (speed = z), with max 7, dist |500 - z|, accel 0.2,
+  // decel 0.05; each tick z = speed - pos (fsub [0x690]) while the easing returns not-done, then z is
+  // not written again. The easing's pos is unsigned (ApplyVelocityEasing adds v >= 0), so z only falls
+  // from the apex. PROVEN for the sign and the shape; the apex (the speed at the rise) is the clock's
+  // output (ASSUMED 1 a tick, see docs/bosses/barbaray-map.md Pass 11).
+  const b = brain({ leader: false });
+  b.applyPhase(BARBA_PHASE.drop, null);
+  let guard = 0;
+  while (b.moveSub !== 3 && guard++ < 3000) b.tick([]);
+  check(b.moveSub === 3, `drop z: reaches sub 3 (got ${b.moveSub})`);
+  const apex = b.f754;
+  check(b.ez.max === 7 && b.ez.accel === 0.2 && Math.abs(b.ez.decel - 0.05) < 1e-6, 'drop z: easing max 7, accel 0.2, decel 0.05 (0x4b7485..8d)');
+  check(Math.abs(b.ez.dist - Math.abs(500 - apex)) < 1e-6, `drop z: easing dist |500 - apex| (${b.ez.dist})`);
+  check(b.ez.pos >= 0, 'drop z: the easing pos is unsigned (ApplyVelocityEasing)');
+  // Settled: once sub 3 is set, z stays put for many ticks (the easing is done, no more z writes).
+  const zDone = b.z;
+  let moved = 0;
+  for (let k = 0; k < 50; k++) {
+    const z0 = b.z;
+    b.tick([]);
+    if (b.z !== z0) moved++;
+  }
+  eq(moved, 0, 'drop z: z is settled after sub 3 (no tick moves it)');
+  near(b.z, zDone, 'drop z: the settled z is the one sub 3 reached');
+  // The last write is z = apex - pos (0x4b74c1): the settled z is the apex minus the easing's pos.
+  near(b.z, apex - b.ez.pos, 'drop z: settled z = apex - easing pos (0x4b74c1 fsub [0x690])');
+}
+{
   // The fall's speed clamp (906e74 = -7) is never reached in the fall: 21 ticks at -0.2 give -4.2.
   const b = brain({ leader: false });
   b.applyPhase(BARBA_PHASE.drop, null);

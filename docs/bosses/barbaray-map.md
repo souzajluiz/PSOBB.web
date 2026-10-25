@@ -818,3 +818,36 @@ Pass 9's note, kept for the record:
   ASSUMED values 1.0 (a9c), 30.0 (a98) and 0.0 (aa0). The drop reads `liftZero` at its timer step
   (`timer -= 0.3 - liftZero`), so the drop's timer step is 0.105 a tick, not 0.3, if the static init holds.
   Pass 8's "dynamic, no value in the image" was wrong for these three.
+
+## Pass 11: the drop's z after sub 3 (the easing sign), verdict NOT a port bug, 2026-10-25
+
+Question (Pass 10's follow-up): after the drop's sub 3 the body's z keeps falling (-302 to -575 over 60 ticks). Is the
+easing's sign wrong in the port?
+
+Proven (objdump -d -M intel ~/Downloads/psobb-client/PsoBB.exe; `tools/exedata.py calls / xref`):
+- Drop sub 3 rise (0x004b7040, the branch on f758 > 0 at 0x4b74a5..0x4b74c7): `call 0x42cdc0` (Player__ApplyVelocityEasing
+  on this+0x678); `cmp eax, 3; je` sets 0x730 = 3 (done) and does NOT write z; else `fld [0x754]; fsub [0x690]; fstp [0x40]`,
+  i.e. z = speed - easing.pos (0x690 = 0x678 + 0x18, the pos). Ghidra body (`HandleSinowberillMovementState_004b7040`,
+  refsrc Psobb.exe-05112026.c line 238247) says the same: `*(0x40) = *(0x754) - *(0x690)`.
+- The easing init (0x4b7455..0x4b749d): dist = |500 - z| (`fabsf`), `0x40e00000` (7.0) = max, `0x3e4ccccd` (0.2) = accel,
+  `0x3d4ccccd` (0.05) = decel, `call 0x434ac4` (InitializeMovementTargetStruct_00434ac4), then speed (0x754) = z (0x40).
+  The `else` branch (f758 = 0) takes speed -= 0.2 and inits when speed <= 0.0 (`0x906f64` 0.2, `0x8fd044` 0.0).
+- ApplyVelocityEasing (0x42cdc0) and the port's `BarbaEase.tick` match instruction for instruction: state 0 v += accel up to
+  max; state 1 holds v until pos > brake, then v -= decel; state 2 v -= decel until v < 0 (state 3, v = 0); pos = min(pos + v,
+  dist). pos is never negative, so the sign of z - pos is the exe's own. Normalize (0x434a3c) with the constants 1.0
+  (8fcc40), -1.0 (8fcc44), -2.0 (8fcc3c), 0.5 (8fcc38) matches the port's `normalize()`.
+
+Conclusion: the port's easing and the drop's z formula are the exe's. No code change to `BarbaEase` (shared with the transition
+and the arc in `barbaray.ts`; no other port uses it). The "keeps falling" is the exe branch with a negative speed: the port's
+clock (ASSUMED one a tick, `timer += 1`) makes sub 0 -> 1 -> 2 -> 3 run in 3 ticks at clock 21..24 (the thresholds 10.5 / 16 /
+22 are already past), so the rise speed (f758 = 1.096) adds once to -4.2 and sub 3 starts at -1.55 <= 0. The easing then starts
+from the body's z at -302.4 (not the designed apex near 300), with dist 802.4, and z settles after the easing is done:
+at tick 228 after the drop starts (moveSub 3), z = -1103.908 = -302.408 - 801.5 (pos stops at 801.5, state 3 with v = 0), and
+it stays there (checked 50 more ticks). So the body settles; it does not run away.
+
+What is still open (ASSUMED): the clock 0xc0 is the animation time (Player__Animate not ported). If the exe's clock runs slower
+or resets at the slot 4 change, sub 1 / 2 last longer, the rise reaches the apex near 300, and the drop ends near 100. That
+needs Player__Animate (the 0xc0 writers) to decide; the easing is not the cause.
+
+Test: `tests/barbaray.test.ts`, the drop block after the enter / fall checks: the easing's max / accel / decel / dist from
+the apex, pos >= 0, z settled (no tick moves it over 50 ticks) and z = apex - pos (`node tests/barbaray.test.ts` ALL PASS).

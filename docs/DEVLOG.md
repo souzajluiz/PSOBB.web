@@ -1,5 +1,19 @@
 # Devlog
 
+## 2026-10-25: Barba Ray's drop z after sub 3 (the easing sign): not a port bug
+
+**Question:** after the drop's sub 3 (0x0d, `HandleSinowberillMovementState_004b7040`) the body's z keeps falling (-302 to -575 over 60 ticks). Is the easing's sign wrong in the port (`BarbaEase`, `Player__ApplyVelocityEasing` / `InitializeMovementTargetStruct_00434ac4`)?
+
+**Evidence:** refsrc `HandleSinowberillMovementState_004b7040` (Psobb.exe-05112026.c line 238247): z = speed - `ez.pos` (`*(0x40) = *(0x754) - *(0x690)`), the easing init with max 7, dist |500 - z|, accel 0.2, decel 0.05, and speed = z. Disassembly of `~/Downloads/psobb-client/PsoBB.exe` (objdump -d -M intel) confirms the same: `fsub [ebx+0x690]` at 0x4b74c1; `ApplyVelocityEasing` at 0x42cdc0 and `InitializeMovementTargetStruct_00434ac4` (0x434ac4) / `NormalizeMovementTarget_00434a3c` (0x434a3c) match `BarbaEase.tick` / `init` / `normalize` instruction for instruction. The pos is unsigned (v >= 0), so the exe's own z falls from the apex. JP decomp (`psobb-client-source`) has no body for these addresses in this build, so the Ghidra dump and the disassembly are the references.
+
+**Finding:** the easing and the z formula are the exe's. The fall comes from the clock (ASSUMED one a tick): sub 0 -> 1 -> 2 -> 3 run in 3 ticks at clock 21..24, so the rise speed adds once and sub 3 starts with speed -1.55 <= 0. The easing then starts from z = -302.4, not the designed apex near 300. The body settles: z = -1103.908 at sub 3 (tick 228), constant after.
+
+**Port:** no code change to the easing. `tests/barbaray.test.ts` drop block: the easing's max / accel / decel / dist, pos >= 0, z settled over 50 ticks, z = apex - pos.
+
+**Left open:** the clock 0xc0 (Player__Animate not ported) decides whether the rise reaches the apex (ASSUMED).
+
+**Tests:** `node tests/barbaray.test.ts` ALL PASS; `node tests/combat.test.ts` 5852 checks, 0 failures (NEWSERV set); `client` `tsc --noEmit` clean.
+
 ## 2026-10-25: Non-BB download `.qst` writer (DC / PC / GC command structs)
 
 **Question:** the open-file and write-file commands of a DC / PC / GC `.qst`, online (44 / 13) and download (A6 / A7), byte for byte as newserv writes them, and the download writer hooked up where the online `.qst` writer lives (`packQst`).
