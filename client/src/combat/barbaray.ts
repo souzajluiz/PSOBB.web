@@ -354,6 +354,8 @@ export const BARBA_DROP = {
   attackB: 6 / 0.195, // a47a98 = 6.0 / a47aa0 (PROVEN, static init 0x004b9b72; float32 30.769229)
   liftZero: 0.195, // a47aa0 = 0x3e47ae15 (PROVEN, static init 0x004b9b68)
   z0: 300,
+  // The clock's stride in the drop (+0xc8), ASSUMED 0.3 (see playerAnimate and the map's Pass 12).
+  clockStride: 0.3,
   zTarget: 500,
   zMaxRise: 7,
   zAccel: 0.2,
@@ -638,6 +640,8 @@ export class BarbaRayAi extends BrainBase {
   private dropCount = 0;
   // Phase 0x0f / 0x10: the sweep's sub-state (+0x734) and the volopt kind (+0x70c, 0..2).
   private voloptSub = 0;
+  // The animation clock's stride in effect (+0xc8, see playerAnimate).
+  private animStride = 0;
   private voloptKind = 0;
   private followSpeed = 0;
   f744 = 0;
@@ -1292,12 +1296,28 @@ export class BarbaRayAi extends BrainBase {
     this.f750 = 0;
     this.f754 = 0;
     this.f758 = 0;
+    // The enter writes no +0xc0 (PROVEN: no store in 0x004b7040 event 4). ASSUMED: the stride in
+    // effect is the entering slot's (1, 0.6); the exe's stale stride is not traced.
+    this.animStride = BARBA_DROP.clockStride;
   }
 
-  // Event 0 of 0x0d. ASSUMED: +0xc0 (the timer) is the animation clock, one a tick (Player__Animate
-  // is not ported), and the animation hold (0xb0 bit 4) is clear, so sub 1 passes in one tick.
+  // The animation clock: +0xc0 = current_animation_elapsed (PROVEN: NJM_UpdateAnimation(+0xf8, +0xc0)).
+  // Player__Animate (refsrc Psobb.exe-05112026.c line 791218) is called first by the drop's event 0
+  // (line 238386, `param_1 == 0`): +0xc0 += the stride (+0xc8, PROVEN field), unless the hold 0x40 of
+  // +0xb0 (PROVEN in Player__Animate; ASSUMED clear here). The stride is written by Enemy__InitAnimation
+  // (the row speed, table 0x009aba20 +8: PROVEN, the Barba ctor stores 0x009aba20 at +0xd8, and the static
+  // init writes slots 0 / 1 / 3 / 4 / 5 as 0.7 / 0.6 / 0.4 / 0.3 / 0.5), by the sType 1 / 3 / 4 paths, and
+  // NOT by the drop (no +0xc8 store in 0x004b7040). Player__StartNpcAnimation's else branch writes +0xcc,
+  // not +0xc8, so a slot change does not change the stride. ASSUMED: the stride in effect in the drop is
+  // 0.3 (BARBA_DROP.clockStride): the one value that makes the sub 2 / lift constants exact (see the
+  // map's Pass 12). The exe's stale +0xc8 is not traced.
+  private playerAnimate(): void {
+    this.timer += this.animStride;
+  }
+
+  // Event 0 of 0x0d (asm 0x004b7040 param 0): Player__Animate first, then the sub-states.
   private dropFrame(): void {
-    this.timer += 1;
+    this.playerAnimate();
     if (this.moveSub === 0) {
       // The fall: 21 ticks, the speed drops 0.2 a tick to -7 and z follows it.
       this.moveCounter += 1;

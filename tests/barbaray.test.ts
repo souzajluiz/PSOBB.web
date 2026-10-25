@@ -849,8 +849,19 @@ const runTicks = (b: BarbaRayAi, n: number) => {
   const b = brain({ leader: false });
   b.applyPhase(BARBA_PHASE.drop, null);
   let guard = 0;
-  while (b.moveSub !== 3 && guard++ < 3000) b.tick([]);
+  let peak = -Infinity;
+  let zMin = Infinity;
+  while (b.moveSub !== 3 && guard++ < 3000) {
+    b.tick([]);
+    peak = Math.max(peak, b.z);
+    zMin = Math.min(zMin, b.z);
+  }
   check(b.moveSub === 3, `drop z: reaches sub 3 (got ${b.moveSub})`);
+  // The exe's drop (clock at the stride 0.3): the fall bottoms near -373, the rise peaks above 300 (the
+  // design's z0 = 300 is the rise formula's target, and the sub 3 halving overshoots it), then the easing
+  // settles on z 500 (anchor 1). Not the -1104 of the one-a-tick clock.
+  check(zMin > -400 && zMin < -360, `drop z: the fall bottoms near -373 (got ${zMin})`);
+  check(peak > 300 && peak < 600, `drop z: the rise peaks above 300 (got ${peak})`);
   const apex = b.f754;
   check(b.ez.max === 7 && b.ez.accel === 0.2 && Math.abs(b.ez.decel - 0.05) < 1e-6, 'drop z: easing max 7, accel 0.2, decel 0.05 (0x4b7485..8d)');
   check(Math.abs(b.ez.dist - Math.abs(500 - apex)) < 1e-6, `drop z: easing dist |500 - apex| (${b.ez.dist})`);
@@ -867,6 +878,7 @@ const runTicks = (b: BarbaRayAi, n: number) => {
   near(b.z, zDone, 'drop z: the settled z is the one sub 3 reached');
   // The last write is z = apex - pos (0x4b74c1): the settled z is the apex minus the easing's pos.
   near(b.z, apex - b.ez.pos, 'drop z: settled z = apex - easing pos (0x4b74c1 fsub [0x690])');
+  check(Math.abs(b.z - 500) < 0.5, `drop z: the body lands on z 500 (anchor 1), got ${b.z}`);
 }
 {
   // The fall's speed clamp (906e74 = -7) is never reached in the fall: 21 ticks at -0.2 give -4.2.
@@ -878,34 +890,48 @@ const runTicks = (b: BarbaRayAi, n: number) => {
     minV = Math.min(minV, b.f754);
   }
   check(minV >= -7 - 1e-9 && minV > -4.3, `drop: the fall speed stays above -4.2 (min ${minV})`);
-  // The rise speed (sub 0 -> 1, asm 0x004b7040): ((A + B) * -vy + (300 - z)) / ((0.5 A + B) A) with
-  // A = 18.333 (a47a9c), B = 30.769 (a47a98), vy = -4.2 and z = -296.2: 802.43 / 732.2 = 1.0959.
-  b.tick([]); // the 22nd tick: moveSub 1 -> 2
-  b.tick([]); // the 23rd: the sub 0 -> 1 transition (dropTimers, timer 23 >= 10.5)
-  check(Math.abs(b.f758 - 802.43 / 732.2) < 1e-3, `drop sub 0 -> 1: rise speed with the static-init A and B (got ${b.f758})`);
+  // The rise speed (sub 0 -> 1, asm 0x004b7040): ((A + B) * -vy + (300 - z)) / ((0.5 A + B) A), A = 18.333
+  // (a47a9c), B = 30.769 (a47a98). The clock reaches 10.5 (0x906cf0) on the 35th tick at a stride of 0.3
+  // (fall 21 ticks + 14 ticks of the sub 2 wait; the speed reaches -7 there), so the rise starts then.
+  const b2 = brain({ leader: false });
+  b2.applyPhase(BARBA_PHASE.drop, null);
+  let tr = -1;
+  let expect = NaN;
+  for (let k = 0; k < 200 && tr < 0; k++) {
+    const vPrev = b2.f754;
+    const zPrev = b2.z;
+    b2.tick([]);
+    if ((b2 as unknown as { dropSub: number }).dropSub === 1) {
+      tr = k;
+      expect = ((BARBA_DROP.attackA + BARBA_DROP.attackB) * -vPrev + (BARBA_DROP.z0 - zPrev)) / ((0.5 * BARBA_DROP.attackA + BARBA_DROP.attackB) * BARBA_DROP.attackA);
+    }
+  }
+  check(tr >= 34 && tr <= 36, `drop sub 0 -> 1: the clock reaches 10.5 on the 35th tick (got tick ${tr})`);
+  check(Math.abs(b2.f758 - expect) < 1e-9, `drop sub 0 -> 1: rise speed with the static-init A and B (got ${b2.f758}, want ${expect})`);
 }
 {
   // The static init (0x004b99a0, PROVEN): a47aa0 = 0.195, a47a98 = 6 / 0.195, a47a9c = 18.333.
   near(BARBA_DROP.liftZero, 0.195, 'drop constants: a47aa0 = 0.195');
   near(BARBA_DROP.attackB, 6 / 0.195, 'drop constants: a47a98 = 6.0 / a47aa0');
   check(Math.abs(BARBA_DROP.attackA - 18.333332) < 1e-6, `drop constants: a47a9c = 18.333 (got ${BARBA_DROP.attackA})`);
-  // The sub 2 timer step is 1 - (0.3 - 0.195) = 0.895 a tick (the clock +1, then the lift's -0.105);
-  // the other sub-states of 0x0d keep the clock at +1. The sub 2 span is timer 16..22.
+  // The clock (+0xc0) steps by the stride (+0xc8, 0.3 ASSUMED) on each drop tick (Player__Animate). In
+  // the lift (734 == 2) the sub-state also takes 0.3 - 0.195 off (asm 0x004b7040 fsub a47aa0), so the
+  // net step is the lift zero 0.195 and the span 16..22 lasts 6 / 0.195 = 30.77 ticks (= B).
   const b = brain({ leader: false });
   b.applyPhase(BARBA_PHASE.drop, null);
-  for (let k = 0; k < 400 && b.moveSub !== 2; k++) b.tick([]); // the fall, then sub 2 (moveSub 2)
-  let steps = 0;
+  let lift = 0;
   let other = 0;
-  for (let k = 0; k < 400 && b.moveSub === 2; k++) {
+  for (let k = 0; k < 400 && b.moveSub !== 3; k++) {
     const t0 = b.timer;
+    const sub = (b as unknown as { dropSub: number }).dropSub;
+    const inLift = b.moveSub === 2 && sub === 2;
     b.tick([]);
     const d = b.timer - t0;
-    if (Math.abs(d - 0.895) < 1e-9) steps++;
-    else if (Math.abs(d - 1) < 1e-9) other++;
+    if (inLift && Math.abs(d - 0.195) < 1e-9) lift++;
+    else if (!inLift && b.moveSub === 2 && Math.abs(d - 0.3) < 1e-9) other++;
   }
-  // The timer is already past 22 when sub 2 starts (23), so sub 2 lasts one tick (sub 3 at 22 passes).
-  check(steps === 1, `drop sub 2: the clock steps 0.895 a tick (lift zero 0.195; got ${steps} such ticks)`);
-  check(other >= 1, `drop: the other sub-states step the clock by 1 (got ${other})`);
+  check(lift >= 29 && lift <= 32, `drop sub 2: the lift steps the clock 0.195 a tick, about 30.77 ticks (got ${lift})`);
+  check(other >= 1, `drop: the other sub-states step the clock by the stride 0.3 (got ${other})`);
 }
 {
   // Leader with the gate open: the table steps once the drop is done (event 9), not on the pace.

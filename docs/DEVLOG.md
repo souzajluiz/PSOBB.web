@@ -1,5 +1,17 @@
 # Devlog
 
+## 2026-10-25: Barba Ray drop clock (+0xc0): the stride, not one a tick
+
+**What changed:** `combat/barbaray.ts` drops the one-a-tick clock of the drop (0x0d). Event 0 now runs `playerAnimate()` (the exe's Player__Animate: +0xc0 += the stride), and the sub 2 lift steps the clock 0.3 - 0.105. `BARBA_DROP.clockStride` = 0.3 (ASSUMED). Docs: `docs/bosses/barbaray-map.md` Pass 12.
+
+**Proven:** +0xc0 = current_animation_elapsed; Player__Animate (refsrc line 791218) is its writer, called by the drop's event 0 each tick (line 238386); the drop's enter writes neither +0xc0 nor +0xc8; the stride +0xc8 comes from Enemy__InitAnimation (the table 0x009aba20 +8, the Barba ctor stores it at +0xd8; the static init's speeds checked by objdump); Player__StartNpcAnimation's else branch writes +0xcc, not +0xc8.
+
+**ASSUMED:** stride 0.3 in the drop (the exe's stale +0xc8 is not traced; the constants 5.5 / 0.3 = A, 6 / 0.195 = B and 10.5 / 0.3 = 35 ticks fit it exactly).
+
+**Result:** the drop no longer settles at z -1104. Probe: the fall bottoms near -373, the peak ~559, the easing lands on z 500 (anchor 1). The docs' "apex near 300" is NOT reproduced (the rise overshoots the 300 formula target); not settled.
+
+**Tests:** `node tests/barbaray.test.ts` ALL PASS (the drop block rewritten for the 35-tick start, the 0.195 lift, z 500 landing); `node tests/combat.test.ts` 5852 checks, 0 failures; `client` `tsc --noEmit` clean.
+
 ## 2026-10-25: the near-enemy flag (character_flags 0x100000): the setter is enemy-only, the NPC guard stays clear
 
 **Question:** which exe code sets / clears `in_guard_stance` (0x100000, newserv `is_near_enemy`), from what distance test, and does the port already have it for the local player (so an NPC could reuse it)?
