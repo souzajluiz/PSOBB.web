@@ -228,6 +228,11 @@ export class PlayerStatus {
     return f;
   }
 
+  // Slot 0's type (the exe's player +0x25c): 0x0f poison, 0x10 paralysis, 0 none.
+  get slot0Type(): number {
+    return this.slot0.type;
+  }
+
   has(type: StatusType): boolean {
     return (this.flags & STATUS_FLAG[type]) !== 0;
   }

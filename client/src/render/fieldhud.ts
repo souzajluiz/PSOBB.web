@@ -148,6 +148,12 @@ export interface FieldHudOptions {
   telepipeAllowed?: () => boolean;
   // The local player's status flags (combat/status.ts), for Antidote / Antiparalysis.
   statusFlags?: () => number;
+  // The status slot 0 type (combat/status.ts slot0Type), for the tools tab's class 6 rule.
+  statusSlot0Type?: () => number;
+  // Whether a challenge game runs (the tools tab's g_ChallengeObject rule; ASSUMED mapping).
+  challengeObject?: () => boolean;
+  // The material use check (combat/materials.ts materialUsable), for the tools tab's class 0x0b rule.
+  materialUsable?: (kind: number) => boolean;
   // The Moon Atomizer's target (render/combat.ts atomizerTarget), null when none.
   atomizerTarget?: () => number | null;
   // The Star Atomizer's 6x66 list (render/combat.ts starTargets), null when none.
@@ -515,6 +521,11 @@ export class FieldHud {
       .filter((it) => it.equipped)
       .map((it) => ({ data1: it.data.data1, data2: it.data.data2, magLevel: it.data.data1[0] === 2 ? magStats(it.data).level : 0 }));
     const hasMag = c.inventory.some((it) => it.equipped && it.data.data1[0] === 2);
+    // The MST of the stat block (the battle params): the saved MST with the worn equipment, as the
+    // compare list's current row (compareRows).
+    const file: CompareStats = { atp: c.stats.atp, dfp: c.stats.dfp, mst: c.stats.mst, ata: c.stats.ata, evp: c.stats.evp, lck: c.stats.lck };
+    const worn = wornEquipment(c.inventory.filter((o) => o.equipped).map((o) => o.data));
+    const mst = displayedStats(file, worn, c.charClass, pmt, liveBeatTime()).mst;
     return {
       pmt,
       safeMap: isSafeMap(area),
@@ -523,6 +534,12 @@ export class FieldHud {
       charClass: c.charClass,
       equipped,
       magStage: hasMag ? 0 : null,
+      telepipe: this.opts.telepipeAllowed?.() ?? false,
+      challengeObject: this.opts.challengeObject?.() ?? false,
+      mst,
+      techLevels: c.techLevels,
+      statusType: this.opts.statusSlot0Type?.() ?? 0,
+      materialUsable: (kind: number) => this.opts.materialUsable?.(kind) ?? false,
     };
   }
 

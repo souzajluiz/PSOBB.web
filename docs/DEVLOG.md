@@ -1,5 +1,36 @@
 # Devlog
 
+## 2026-10-25: Quick menu tools tab: the rest of the tool branch (class_check, cures, Telepipe, scrolls, grinder, materials)
+
+**Question.** The mag cell rule was ported; the other tool branches of `CheckItemEquipConditions_005d5f40` were ASSUMED off. Which of them can the port decide, and with what data?
+
+**Answer.** `classic/quickmenu.ts` `toolCheckerBits` (+ `classCheck`, `techniqueMinMst`, `techniqueScrollUsable`), the new context fields in `ToolCheckContext`, fed by `render/fieldhud.ts` `toolChecks` (`gameview.ts` wires the three new options; `combat/status.ts` gets `slot0Type`). `tests/quickmenu.test.ts`: 30 new checks (class_check, the flag 0x8 / 0x40 tests, class 6, class 7, the grinder with a PMT stub, the material variants, the scroll MST / learned / cap / 0xff cases). `node tests/quickmenu.test.ts`: 210 ok, ALL PASS (was 180). `cd client && npx tsc --noEmit -p .`: exit 0. `NEWSERV=... node tests/combat.test.ts`: 5860 checks, 0 failures. `tests/items.test.ts` needs `vendor/newserv/system/tables` (absent in this worktree), so it did not run here.
+
+**PROVEN (Ghidra dump `src/Psobb.exe-05112026.c`, names; every branch re-checked with objdump of PsoBB.exe 0x005d5f40..0x005d6400).**
+- Flag tests, when the PMT has the tool (`in_stack != 0`, objdump 0x005d5f9a path is the tail): flag 0x2 clear -> 0x10; flag 0x4 -> 4; flag 0x8 clear and `class_check(player, 0xd7)` nonzero -> block; flag 0x10 clear and not `is_current_map_safe` -> block; flag 0x20 clear and `current_map_is_boss_map` -> block; flag 0x40 clear and `g_ChallengeObject` non-null -> block.
+- `class_check` (0x005ca3d0, dump 418805): reads the class flags word at player +0x964 (= `CLASS_FLAGS`, progression.ts) against the mask. Each flag group demands one mask bit (0x20 -> 1, else 0x40 -> 2, else 4; 0x10 -> 0x10, else 0x8 -> 0x20, else 0x4 -> 8; 0x1 -> 0x40, else 0x2 -> 0x80). Returns 1 for the androids. **Note the sense:** flag 0x8 clear with class_check 1 blocks, so the android is blocked and a HUmar is not, on a tool without flag 0x8.
+- Class 6 (0x005d6391): antidote (data1[2] == 0) blocked unless player +0x25c == 0x0f; antiparalysis (== 1) unless +0x25c == 0x10; other variants not tested. +0x25c is status slot 0's type (combat/status.ts: poison 0x0f, paralysis 0x10).
+- Class 7 (0x005d637a): blocked unless `SinowberillChallengePlayer_IsTelepipeEnabled_0068bfa0` (the same predicate the use side already calls).
+- Class 2 (0x005d62df, dump 427777..427797): `GetTechniqueData_006ded14(data1[4], data1[2])` (the tool row is `getTool(2, data1[4])`, and nothing above level 0x1d, objdump 0x005d28fc). Blocked when: player MST (battleparams mst, stat block [1]) < the record's +0x14 word (signed short; the port's `TABLE[tech][5]`, named `charge` in combat/techniques.ts, is that word); or the learned level (`CalculateEffectiveTechniqueLevel_006ad17c`, unless `IsValueUnlimited_006ad1cc` == 0xff) is >= the scroll's level (0-based effective = the port's 1-based `techLevels` - 1); or `GetPMTTechniqueValue_005e5260(class, tech)` is 0xff or below the scroll's level.
+- Class 0x0a (0x005d628e): no equipped item in slot 6 (`weapon`) -> block. Else `pmt_get_item(copy)` (`max_grind`) and block when `max_grind <= grind`, a weapon with no PMT entry is not blocked.
+- Class 0x0b (0x005d6103, dump 427830..427880): variants 0, 1, 2, 5, 6 block unless the stat (current battle params) is below the class maximum AND `can_use_material` returns 0 (it returns nonzero at the cap). Variants 3 and 4 block at `>= 0xfa` of `CalculateEffectiveHP_005c55b0` / `CalculateEffectiveDEF_005c5630`. The dump names the second `DEF`, but it reads player `field_0x2c2`, which the setter at dump 552677 fills from the inventory byte 2 (the TP bonus, as `items.ts` `tpFromMaterials`). So variant 4 is TP. Other variants: not tested. `combat/materials.ts` `materialUsable(kind)` already has this rule (stat below the class max, the total below the cap, HP / TP bonus below 0xfa), so the port calls it.
+- Mag cell (0x005d609e): unchanged (`can_use_030C_mag_cell`).
+
+**ASSUMED.**
+- The challenge object (flag 0x40): the port's `game.info.challenge` stands for `g_ChallengeObject`.
+- The MST is `displayedStats(...).mst` (the saved MST with the worn equipment), the battle params' value as the port has it.
+- The grinder's grind is the equipped weapon's `data1[3]`. The dump's name for that byte is a stale stack slot (`SUB41(in_stack_ffffffe4, 3)`); the objdump reads byte 3 of the compact copy after `get_item_compact_representation` (0x005d62be). What that copy writes to byte 3 is in the vtable `FUN_005d8ef0`, which is not decoded.
+- The weapon slot 6 is the port's equipped item with group 0 (the grinder's existing rule).
+- A scroll's `GetTechniqueData` never returns null (the null path is not decoded).
+
+**OPEN (not ported, left off).**
+- The second challenge rule at the end of the function (0x005d5f9a): `g_QuestStarted` and group 3 and `g_ChallengeAllowedItemTypes + 0x1c` bit 0x40 -> block. The table is not in the port.
+- The armour rule (class 0x0f, 0x005d60ca): no armour in slot 2 -> block, else the item's vtable +0x94 > 3 -> block. The vtable slot is not named, so it stays off.
+- The unit terms of the material variants 3 / 4: the exe subtracts `CalculateSpecialAttackPower_005d2458` of the units from the HP / TP bonus (`CalculateEffectiveHP` / `DEF`). The port keeps the bonus alone.
+- The state-4 tool slot action (`UpdateQuickMenuToolTechSlotState_00741c08`): not done.
+
+**Behaviour change.** A tool missing from the PMT no longer gets the flag bits (the exe skips the flag tests without a tool). A technique scroll's flags come from its class 2 row (`getTool(2, data1[4])`, as `itemnames.ts` does; the old lookup used the level). A scroll now needs the MST, a level above its learned level, and a level within the class maximum. The antidote, the antiparalysis, the Telepipe, the grinder at max grind, a material the player cannot use, and an android on a tool without flag 0x8 are now blocked.
+
 ## 2026-10-25: Quick menu tools tab: the mag cell rule (can_use_030C_mag_cell)
 
 **Question.** The quick menu's tools tab (the two-handed list, `ListWindowObject_PopulateTwoHandedWeapons_0074b620`) lists a tool when its checker bit 2 is set and bit 1 is clear. The mag cell (class 0x0c) bit 1 was left off: which rule blocks a mag cell, and what does the port's mag need to answer it?
