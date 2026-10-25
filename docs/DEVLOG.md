@@ -24,6 +24,42 @@
 - Status code (`combat/status.ts`) takes no resist; the status chances are only in the special path.
 
 **Verdict.** With no resist item worn the values stay 0, so the port's behaviour is unchanged for a bare character (the freeze / shock chance is 0.75 and the insta-kill is power - 0 as before). A character wearing a unit with EIC, ETH or EDK now gets the exe's chance.
+## 2026-10-25: Ill Gill assumptions, part 2: the tackle's counts, the spawn timer, the advance
+
+**Question.** The DEVLOG "Ill Gill assumptions resolved" left three items ASSUMED: (1) the tackle's windup and recovery at 30 / 30, the counters fed by three `fistp` sites (0x0052f391, 0x0052f6cb, 0x0052f94a); (2) the spawn's length, which waits on the state timer 0x00576c48; (3) the advance's exit (0x0053044c). Decode each and port the exact values.
+
+**Answer.** The counts and the spawn length are PROVEN (objdump, the refsrc decompile, the data read from the exe). The advance has no exit of its own: its handler writes no state. The port now uses the exact values; the walls and probes not ported are listed below.
+
+**(1) The tackle counters (IllgillUpdateAI_0052f18c, PROVEN).**
+- The counter at `+0x3a4` is an int: the code at 0x0052f980 is `mov eax,[esi+0x3a4]; add eax,-1; ... jl`, so the decompile's float typing of that field is wrong.
+- The `fistp` source is `[0xa7336c]`, the pointer to MovementData row 38: 0x005311e8 stores `0x0077a6cc(38)` there (0x0077a6cc = `[0xa9b1d0] + 0x30 * i`, the movement block, as in `docs/bosses/barbaray-map.md`). The `fld dword [edi]` reads its `fparam1` at +0x0.
+- Each `fistp` runs with the control word `| 0xc00` (RC = truncate): the count is **trunc(fparam1)**, not the `ROUND` the decompile prints. The three sites are the dash's end (0x0052f391, sub 2 to sub 4), and the two sub-0 / sub-1 paths where neither acquire probe passes (0x0052f6cb and 0x0052f94a, sub 4 with no dash).
+- The windup: sub 1 is entered at 0x0052f742 with `mov dword [esi+0x3a4], 0xa` (int 10), the kamae (slot 8). Its counter runs down and sub 2 (the dash, slot 9) starts when it goes below zero. The windup is therefore **10 ticks**, not 30.
+- The probes (`SorcererAcquireTarget_00771c8c`, PROVEN from its body) return 1 when the spot is acquirable: ground found, no line-of-sight block (`EnemyAI_CheckLineOfSight_00771e14`), no map-geometry ray. Probe 0 is the dash's landing spot, probe 1 the target's weapon position. Both fail: sub 4 with no dash. Either passes: the windup. The map and line-of-sight tests are not ported, so the port assumes the probes pass (ASSUMED).
+- Values from `BattleParamEntry*.dat` (the `movement` accessor, row 38, difficulties 0..3): Ep1/2 offline `BattleParamEntry.dat` fparam1 = 1.2, 1.3, 1.5, 1.75 (count 1 each); `_on` = 1.24, 1.35, 1.55, 1.8 (1 each); `_lab` = 20, 15, 10, 0; `_lab_on` = 10, 10, 5, 0; the Ep4 files read 0.0 in fparam1 (their row 38 block carries other values in the iparam slots: layout not checked). So the recovery is 1 tick (Ep2) and not 30.
+- Dash speed (open): `field358` is the Alignment record 0x009bc4cc, so the dash's speed `field358[1]` is the float at 0x009bc4d0 = **0.0**. The `vtable+0x48` call takes `0.0 * 4.5`. The travel must come from the animation's stride (`animation_frame_stride = field3_0x8 * 2.0`, not traced). The port still steps at fparam1 times 4.5 (ASSUMED, see the code comment).
+- Turns: the aim and windup turn `fild(1024) * 2.0` (2048 BAMS per tick), the dash `* 4.5` (4608). The aim gate is the arc of attacks[3] (`max_y_angle`), read after the turn. The port now does both.
+- Sub 4's end clears the target and keeps state 4 (`set_enemy_target(-1)`); the port returns to the chase (ASSUMED, the outer transition is not traced).
+
+**(2) The spawn's state timer (ChaosSorcererUpdate_00530554, PROVEN).**
+- Timer object: `enemy + 0x37c` (the `material_count` field, the ctor 0x0052e494 calls its ctor 0x00576a48). Vtable `0x00b069b0`: slot 1 (0x00576a64) sets `+0x14 = 2.0 / arg`; slot 5 (0x00576b18) is the tick `t += +0x14` (float32 store), done when `t >= 2.0` (0x00927234); the init 0x00576c48 calls slot 1 with 10, then `+0x18 = +0x14 * -30.0` (0x0092720c).
+- So the step is 0.2f and the start is -6.0f. Simulated in float32 (`spawnTicks`): **41 timer ticks** reach 2.2 (the sum is 2.19999886 after 41 steps; exact arithmetic would finish in 40). With the init tick: **42 ticks** of state 0 before the wander (sub 2).
+- The Shark / Dimenian notes use the same constants (2.0 / 10, init -30): the same class is assumed there, its vtable not re-checked here.
+- The wander (sub 2) is state 0 and is not traced. The port holds one tick and then goes to the advance (ASSUMED).
+
+**(3) The advance (ChaosSorcererInit_0053044c, PROVEN).**
+- No timer. It zeroes the anim slot (0 = wait), calls the projectile step `EnemyAI_Projectile_Update_00772a14` with speed `0x9bc4d0 * 2.0 = 0`, and drops the target when `400^2 < d^2`, where `d^2` is the squared xz distance between the Ill Gill and the point one unit ahead of its home (the return of the step, `vec3_xz_distance_sq`).
+- It writes no `+0x32e`: the dispatcher `IllgillUpdate_0052e7c0` has no transition out of state 1, and the state is set from outside (a request not traced here). So the exit condition in this code is **none**. The port keeps the advance in place, drops the target by that rule, and starts the chase when a live player is in sight: that is the stand-in for the request (ASSUMED).
+
+**Port changes** (`client/src/combat/enemyfsmillgill.ts`):
+- `ILL_GILL.windup` / `recover` (30 / 30, ASSUMED) are replaced by `tackleWindup: 10` and the constructor's `recoverFrames = trunc(movement.fparam1)` (0 with no movement row).
+- The spawn is `tickSpawn`: init, timer ticks in float32, the wander tick, then the advance. `spawnTicks()` exports the count (42).
+- The advance is `tickAdvance`: holds, drops the target (home rule), exits on a player in sight.
+- The tackle's aim gate and turn factors (2.0 and 4.5); `turnTo(t, factor)`.
+
+**Tests** (`tests/enemyfsmillgill.test.ts`): the preambles use `wake()` (the 42-tick spawn and the advance); new checks for the spawn's 42 ticks and the float32 step, the advance's hold, the drop beyond 400 from home and the chase stand-in, and the tackle recovery (fparam1 2.9 gives 2 counted ticks, the chase on the third).
+
+**Still ASSUMED / open.** The tackle's probes (always pass), the dash's travel (the animation stride), the sub 4 exit to the chase, the spawn's wander and the advance's external request, the Ep4 row 38 layout (fparam zero in the Ep4 files), the walk speed and turn of the chase, and the player's elemental resists (0 in the port).
 
 ## 2026-10-25: Merissa A / AA, part 3: the brain (OWN_FSM 'MerissaA') and the radar gate
 
