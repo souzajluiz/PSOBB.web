@@ -690,7 +690,7 @@ This supersedes the "still open" list of pass 7 for these phases.
 | 0x10 | same (side 2) | ported | as 0x0f with side 2 |
 | 0x11 / 0x12 | `ProcessPlayerAction4_004b30fc` | ported (pass 9) | enter: slot 1, anchor = side; sub 0 windup 11 frames then slot 7 / 8; the jump on the clock 6 / 13 / 20 / 25; event 2 = the keyboard (Left 0xe, Right 0xc ASSUMED) |
 | 0x17 | `ProcessSinowberillActionState_004B6D08` | ported | enter: slot 0xc, gate open, anchor 3; event 9 at `b8 == 0xf`; 0x3ec at timer 10.0 |
-| 0x18 | `ProcessSinowberillPlayerState_004b6300` | open | targets a player (`FindAndProcessSinowberillTarget_00521324`), map ray cast, attack sub-entities |
+| 0x18 | `ProcessSinowberillPlayerState_004b6300` | ported (pass 15) | targets a player (`FindAndProcessSinowberillTarget_00521324`), map ray cast, attack sub-entities |
 | 0x19 / 0x1a | `ProcessSinowberillAction_004b4684` | ported | enter: slot 0xe, gate open; event 9 at `b8 == 1`; 0x3ed at timer 8.0 |
 | dispatch 0 | `SetEnemyAnimationState_004b9e54` | ported | enter writes `b8 = 1`; the frame runs `Player__Animate` only |
 | dispatch 1 | `HandleSinowberillSpecialAttackState_004b8034` | open | the intro: photon-blast check, NPC camera, cues at 60 / 83 / 105 / 85 / 98; table step on `GetGlobalGameState()+2 & 1` |
@@ -1007,3 +1007,34 @@ chain's frame (within one tick of the clock's `frameCount - 1`); the arc's sound
 tick 15); the shot block (the sound at tick 22, with the chain); the jump block (the landing at `1 + ceil(25 / 0.28)` ticks,
 the 15.0 crossing tick, x and yaw on the last descent frame from the clock); the drop block unchanged. `node tests/barbaray.test.ts`
 ALL PASS; `client` `tsc --noEmit` clean; `NEWSERV=... node tests/combat.test.ts` 5859 checks, 0 failures.
+
+## Pass 15: the player attack (0x18, 0x004b6300) and its area hit, 2026-10-25
+
+**Question (pass 4's open items 3 and 5):** what record is `*(root+0x628)`, and what is the area-hit dispatch `DAT_00a72eb4` vt+0x30 / +0x34? Then port 0x18 on the shared clock with the hit.
+
+**Record (PROVEN).** The root ctor (0x004af634) stores `0x0077a6cc(15)` at root+0x628. `0x0077a6cc(i) = [0xa9b1d0] + 0x30*i`, the table that the loader 0x0077b462..0x0077b491 fills with the block pointers (`a9b1dc` physical 0x24 rows, `a9b1d8` attack 0x30 rows at +0xd80 (read by 0x0077a698), `a9b1d4` resist 0x20 rows at +0x1f80, `a9b1d0` movement 0x30 rows at +0x2b80). So the record is **MovementData[15]**, not an AttackData row. The 0x18 hit reads its dword 0 (`0x004b669a..0x004b66a9`: `[[root+0x628]]`) as the float power, which is `fparam1` (lab file: 250 normal, 720 hard, 1300 very hard, 2400 ultimate solo; the online file 300..2590). The movement row 15 is also the pool row of the same root (Pass 5 / `barbaPartPool`), so one row serves both. ASSUMED: the port's `movement(d, 15)` (the kind-major layout of `formats/battleparams.ts`) is the row the exe's block layout reaches at index 15; the pools already rely on it.
+
+**Dispatch (PROVEN).** `DispatchSinowberillAttackEffect_0051fc9c(root, to, rec, hitlist)` (refsrc line 303366) makes `g_pDerolleObject` (an enemy instance, base vtable 0x00b009a0) carry the transform `to` and the attacker (+0xac = root). Then: `rec[2] > 100.0` (0x009216d4) -> vt+0x30 (0x00521cf8) with radius `rec[2]`; else vt+0x34 (0x00521cdc) -> vt+0x30 with radius 100.0. The 0x18 call has `rec[2]` = 120.0 (0x009abba8), so the 120 branch.
+
+- `EnemyUpdateLogic_00521cf8(obj, rec+0xc, rec, hitlist, radius)`: flag bit 0 of rec+0x10 (= 1) -> `Entity_CheckAllCollisions_007b8618(obj, radius)`: each player (g_EntityArray up to g_PlayerEntityCount) with `dist^2 <= radius^2` on xz from `to`, not the attacker, not `obj+0x30 & 0x800` and not the 0x80000800 entity flags, then `CheckTwoHitboxCollision_007b5e40` (the box overlap, NOT ported) sets the box flag 0x4000000 and the player goes to `g_CollisionResultCache`.
+- Then for each cached player (`+0x96 == 1`, not the attacker, `+0x30 & 0x4000000 == 0`): skip if in the hitlist (`root+0x720`, the once-per-attack list); else append and call vt+0x4c (0x005221c0, `DerolleProcessAttackHit`).
+- `DerolleProcessAttackHit`: the first hitbox with 0x4000000 -> `entity_hit_by_tech(player, root, rec[0] (0.0 = group 0), rec[1] as float, &box.position1, -1, -1)`. Then (episode 2 and the result == DAT_009216f8 = 0.0) return; `player+0x32c == 2` return; else vt+0x48 (0x00522154, `EnemyAI_MoveTowardsTarget`): the player's +0x30c / +0x314 += the unit xz vector (player - `to`) * 20.0 (rec[3] = 0x009abbb0). The knockback rule for zero damage never fires here (power > 0).
+
+**The timeline (PROVEN from the body; `attackFrame` in `barbaray.ts`).** Event 0 runs Player__Animate first.
+- enter (event 4): gate open (0x630 bit 2 clear, bit 8 set), anchor 3, slot 0xf (beamwait, the enter writes +0xb8 = 0xf), 0x730 / 0x734 / the hitlist 0.
+- sub 0: the 0x734 counter; the 20th frame ends it (`iVar8 < 0x14` keeps counting): hitlist cleared, +0xb8 = 0xd (beam_b, speed 0.3, blends from 15), the target point, sound 0x3f6.
+- sub 1: waits for the clock `>= 13.0` (0x906d50, `>=`); the clock is set to 13.0, sound 0x3f7, sub 2. (The 12.0 mark, 0x906d4c, only runs the aura's pending flags.)
+- sub 2: the clock is pinned at 13.0; the ground point (`0x780` from the aura position's ray cast, `0x0051fc9c` each frame) and the area hit each frame; the aura's state 2 ends sub 2 (`IsSinowberillAuraActive_004baf7c` = aura+0x1c == 2, PROVEN; the aura starts at state 1 in `InitializeSinowberillAuraEffect_004baec4`, PROVEN).
+- sub 3: the animation hold (0xb0 bit 0x10) -> sub 4; sub 4 is the done state (the leader's event 9 steps the table).
+
+Ticks (port): the windup 20; the blend wrap on the 21st, the clock from 0 at 0.3 a tick, 13.0 on about the 44th; then the aura hold and sub 3. The hit comes on the first sub 2 frame and never again for the same player.
+
+**ASSUMED (marked in the code):**
+- the aura hold, `BARBA_ATTACK.aura = 30` frames: the writer of aura state 2 (the aura object's update, not decoded) decides sub 2's length;
+- the area's centre is the leader's target position (6xAA target, `targetGround`); FindAndProcessSinowberillTarget (0x00521324) and the aura's ray-cast ground point (0x004bae8c) are not decoded or ported; with no target the body is the centre;
+- the hitbox overlap (0x007b5e40) is not ported: the sphere (radius 120 on xz) decides;
+- the sub 3 hold (0xb0 & 0x10) is taken as set (the volopt's rule);
+- the 0x208 / 0x209 attack objects (`InitializeSinowberillSubEntity_004ba894`) and the aura's particles are not spawned; the 0x72c counter and the event-2 packets (0x18 / 0x19 to the server) are not ported;
+- the knockback unit: the port's `damage.hit(…, knockback)` is taken as the exe's +0x30c / +0x314 step of 20.0 (not re-traced in the renderer).
+
+**Changes:** `barbaray.ts` (BARBA_ATTACK, BARBA_PHASE.attack, `enterAttack`, `attackFrame`, `targetGround`, `attackArea`, the `hit` event, the done hook); `render/combat.ts` (`barbaDrain` case `hit`: the local player only, `enemyTechHitsPlayer` with the row's power and knockback 20); `tests/barbaray.test.ts` (the 0x18 block: enter, the 20-frame windup, the fire at the clock, one hit inside 120 and not the far or dead player, the power and knockback, the range edge, the target point). `node tests/barbaray.test.ts` ALL PASS; `client` `tsc --noEmit` clean; `NEWSERV=... node tests/combat.test.ts` 5859 checks, 0 failures.

@@ -127,6 +127,7 @@ export const BARBA_PHASE = {
   shot2: 0x1a, // 0x004b4684 (the same handler)
   arc0: 0x04, // 0x004b0ee0 (Ghidra dispatch: FUN_004b0ee0(p, 0, 2))
   arc2: 0x0a, // 0x004b0ee0 (FUN_004b0ee0(p, 2, 0))
+  attack: 0x18, // 0x004b6300 (ProcessSinowberillPlayerState): the player attack, see BARBA_ATTACK
   timed: 0x1b, // 0x004b60c4
   finale: 0x1c, // 0x004b5d1c
   dead: 0x1d, // 0x004b5c98
@@ -558,10 +559,30 @@ export function barbaRows(captures: readonly (readonly [number, number, number])
   }
 }
 
+// State 0x18 (0x004b6300, ProcessSinowberillPlayerState; refsrc Psobb.exe-05112026.c 237615). PROVEN
+// from the body unless marked. The root's attack record is MovementData[15] (0x0077a6cc(15) = the
+// movement table row, stored at root+0x628; the hit reads its dword 0 as the float power). The area
+// hit is 0x0051fc9c -> the g_pDerolleObject's vt+0x30 (EnemyUpdateLogic 0x00521cf8, the sweep
+// Entity_CheckAllCollisions 0x007b8618 at radius rec+8 = 120.0) -> the hit callback 0x005221c0
+// (entity_hit_by_tech group 0, power = the row's dword 0) and the knockback 0x00522154 (20.0).
+export const BARBA_ATTACK = {
+  windup: 20, // sub 0 (0x730 = 0): the 0x734 counter; the 20th frame ends the sub (iVar8 < 0x14 keeps counting)
+  slot: 13, // sub 0's end writes +0xb8 = 0xd (beam_b, speed 0.3)
+  fire: 13.0, // sub 1: the clock >= 13.0 (0x906d50); sub 1 then sets the clock to 13.0 and sub 2
+  radius: 120, // rec+8 (0x009abba8 = 120.0); above 100.0 (0x009216d4), so the vt+0x30 branch
+  knockback: 20, // rec+0xc (0x009abbb0 = 20.0): the hit's step on the player's +0x30c / +0x314
+  seStart: 0x3f6, // sub 0's end (0x004b6300, play_directional_sound_effect)
+  seFire: 0x3f7, // sub 1's end (the clock 13.0)
+  // ASSUMED: sub 2 holds this many frames. The aura's exit is its state 2 (IsSinowberillAuraActive,
+  // aura +0x1c == 2, PROVEN), but its writer (the aura object's update) is not decoded.
+  aura: 30,
+} as const;
+
 // --- events the render layer reads ----------------------------------------
 
 export type BarbaEvent =
   | { kind: 'send'; phase: number; cursor: number; target: number | null }
+  | { kind: 'hit'; clientId: number; x: number; z: number; power: number; knockback: number }
   | { kind: 'se'; id: number }
   | { kind: 'effect'; id: number; part: number | null; up?: number; back?: number }
   | { kind: 'spawn'; group: number; index: number; count: number }
@@ -649,6 +670,16 @@ export class BarbaRayAi extends BrainBase {
   private animStride = BARBA_SLOTS[0]!.speed;
   private startedSlot = 0;
   private blendOn = false;
+  // State 0x18: the sub-state (+0x730), its counter (+0x734), the once-per-attack hit list (+0x720,
+  // cleared at the windup's end and at the enter), the target's ground point (0x774..0x77c, the
+  // target's position here) and the aura's hold (ASSUMED, see BARBA_ATTACK.aura).
+  attackSub = 0;
+  private attackCount = 0;
+  private attackHits = new Set<number>();
+  private attackCenter: { x: number; z: number } | null = null;
+  private attackAura = 0;
+  // The area's power: MovementData[15] fparam1 (the root's record at +0x628, dword 0 as a float).
+  private attackPower: number;
   private voloptKind = 0;
   private followSpeed = 0;
   f744 = 0;
@@ -699,6 +730,8 @@ export class BarbaRayAi extends BrainBase {
     this.floor = opts.floor ?? 0;
     this.leader = opts.leader;
     const mv = opts.movement;
+    // The attack power (PROVEN: the root's attack record is row 15; ASSUMED 0 when there is no row).
+    this.attackPower = mv ? mv.fparam1 : 0;
     // The root pools (ASSUMED record: MovementData[15] iparam[0] / [2]).
     this.bodyHp = mv && mv.iparam[0] > 0 ? mv.iparam[0] : BARBA_HP;
     this.shellHp = mv && mv.iparam[2] > 0 ? mv.iparam[2] : BARBA_HP;
@@ -889,6 +922,7 @@ export class BarbaRayAi extends BrainBase {
     if (phase === BARBA_PHASE.run0 || phase === BARBA_PHASE.run2) this.enterFollow();
     else if (phase === BARBA_PHASE.drop) this.enterDrop();
     else if (phase === BARBA_PHASE.beam) this.enterBeam();
+    else if (phase === BARBA_PHASE.attack) this.enterAttack();
     else if (isShotPhase(phase)) this.enterShot();
     else if (phase === BARBA_PHASE.volopt0 || phase === BARBA_PHASE.volopt2) this.enterVolopt(phase === BARBA_PHASE.volopt2 ? 2 : 0);
     else if (phase === BARBA_PHASE.wall0 || phase === BARBA_PHASE.wall2) this.enterSwim();
@@ -1238,6 +1272,85 @@ export class BarbaRayAi extends BrainBase {
     this.tFrom = 3;
     this.teleport(3);
     this.moveSub = 0;
+  }
+
+  // 0x004b6300 enter (event 4, param 4): the gate open (0x630: bit 2 cleared, bit 8 set), the body to
+  // anchor 3 (ProcessPlayerAction4), slot 0xf (beamwait, set by slotOnEnter), the sub-state, counter
+  // and hit list reset (0x730 / 0x734 / the 0x720 list).
+  private enterAttack(): void {
+    this.flags = (this.flags & ~4) | 0x100;
+    this.tFrom = 3;
+    this.teleport(3);
+    this.attackSub = 0;
+    this.attackCount = 0;
+    this.attackHits.clear();
+    this.attackCenter = null;
+  }
+
+  // Event 0 of 0x18 (asm 0x004b6300, PROVEN steps): Player__Animate first; then the sub-state.
+  // Sub 0: 20 windup frames, then the slot 13 (beam_b) and the target's ground point, the 0x3f6 sound.
+  // Sub 1: waits for the clock to reach 13.0 (0x906d50, `>=`), then the clock is set to 13.0, the
+  // 0x3f7 sound, and sub 2. Sub 2: the area hit each frame at the ground point (the hit list keeps a
+  // player to one hit per attack), held for BARBA_ATTACK.aura frames (ASSUMED). Sub 3: the animation
+  // hold (0xb0 & 0x10, ASSUMED set as the volopt treats it). Sub 4 is the done state (event 9 steps).
+  private attackFrame(targets: readonly AiTarget[]): void {
+    const A = BARBA_ATTACK;
+    this.animateClock();
+    switch (this.attackSub) {
+      case 0: {
+        const n = this.attackCount + 1;
+        if (n < A.windup) {
+          this.attackCount = n;
+          return;
+        }
+        this.attackCount = 0;
+        this.attackSub = 1;
+        this.attackHits.clear();
+        this.setSlot(A.slot); // the id change: the blend starts on the next Player__Animate (PROVEN)
+        this.attackCenter = this.targetGround(targets);
+        this.events.push({ kind: 'se', id: A.seStart });
+        return;
+      }
+      case 1:
+        if (this.timer >= A.fire) {
+          this.timer = A.fire;
+          this.attackSub = 2;
+          this.attackAura = A.aura;
+          this.events.push({ kind: 'se', id: A.seFire });
+        }
+        return;
+      case 2:
+        this.timer = A.fire;
+        this.attackArea(targets);
+        if (--this.attackAura <= 0) this.attackSub = 3;
+        return;
+      case 3:
+        this.attackSub = 4;
+        return;
+      default:
+        return;
+    }
+  }
+
+  // The target's ground point (0x774..0x77c, from FindAndProcessSinowberillTarget). ASSUMED: the target
+  // is the leader's target id (6xAA) and its position is the point; null when it is not in range.
+  private targetGround(targets: readonly AiTarget[]): { x: number; z: number } | null {
+    const t = targets.find((p) => p.clientId === this.targetId);
+    return t ? { x: t.x, z: t.z } : null;
+  }
+
+  // The area hit (0x0051fc9c -> EnemyUpdateLogic 0x00521cf8 -> the sweep 0x007b8618): each living player
+  // whose xz distance to the point is within BARBA_ATTACK.radius (PROVEN: the sweep's `dist^2 <= r^2`),
+  // once per attack (the hit list). ASSUMED: the box test (CheckTwoHitboxCollision 0x007b5e40) is not
+  // ported, so the sphere alone decides; the point falls back to the body when no target is found.
+  private attackArea(targets: readonly AiTarget[]): void {
+    const c = this.attackCenter ?? { x: this.x, z: this.z };
+    for (const t of targets) {
+      if (t.dead || this.attackHits.has(t.clientId)) continue;
+      if (Math.hypot(t.x - c.x, t.z - c.z) > BARBA_ATTACK.radius) continue;
+      this.attackHits.add(t.clientId);
+      this.events.push({ kind: 'hit', clientId: t.clientId, x: c.x, z: c.z, power: this.attackPower, knockback: BARBA_ATTACK.knockback });
+    }
   }
 
   // Event 0 of 0x17 (asm 0x004b6d08): the counter (730) counts the frames; at timers 10..14 with
@@ -1771,6 +1884,8 @@ export class BarbaRayAi extends BrainBase {
     if (isVoloptPhase(this.phase)) return this.voloptSub === 2;
     // The beam (0x17): event 9 steps once the beam_a motion has chained into beamwait (slot 15).
     if (this.phase === BARBA_PHASE.beam) return this.slot === 15;
+    // The player attack (0x18): event 9 steps once the sub 4 (the attack is over) is reached.
+    if (this.phase === BARBA_PHASE.attack) return this.attackSub === 4;
     // The shot (0x19 / 0x1a): event 9 steps at slot 1 (the beam_c motion chained into idle).
     if (isShotPhase(this.phase)) return this.slot === 1;
     return this.moveSub === 1;
@@ -1803,6 +1918,9 @@ export class BarbaRayAi extends BrainBase {
         return;
       case BARBA_PHASE.beam:
         this.beamFrame();
+        return;
+      case BARBA_PHASE.attack:
+        this.attackFrame(targets);
         return;
       case BARBA_PHASE.shot0:
       case BARBA_PHASE.shot2:
