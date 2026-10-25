@@ -16,6 +16,9 @@
 // on the first link of the chain that has a trigger object, then kills the built enemies of each link
 // in chain order (combat applyEnemyHit with 9999 damage: the kill flow, 6x76 and the wave's
 // enemies-dead flag), which runs the next link's trigger_event; then it watches.
+// Once a group's wave is built, the player is walked into its reach if the trigger left it more than
+// 150 units away (engageWave): the Sinow search radius is 200, so a trigger that far from the wave
+// otherwise never engages it (the enemies cycle lost -> home -> spawn, invulnerable throughout).
 // Each floor has a time cap (EP2_FLOOR_CAP_S, default 300 s): a group that starts after the cap is not
 // run (counted in notRun). One screenshot per floor (client/test-results, JPEG).
 // Against a local newserv (e2e/README.md).
@@ -245,9 +248,15 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
         let maxBuilt = 0;
         let waveSpawned = false;
         const ticks = Math.ceil(WATCH_MS / POLL_MS);
+        let engaged = false;
         for (let i = 0; i < ticks; i++) {
           await page.waitForTimeout(POLL_MS);
           const list = (await enemyStates(page)).filter((e) => e.room === g.room && e.wave === g.wave);
+          if (list.length && !engaged) {
+            // The wave is built: walk the player into its reach once (engageWave), then just watch.
+            engaged = true;
+            await engageWave(page, g.room, g.wave);
+          }
           if (list.length) waveSpawned = true;
           maxBuilt = Math.max(maxBuilt, list.length);
           for (const e of list) {
@@ -370,6 +379,33 @@ function chainOf(d: Awaited<ReturnType<typeof floorData>>, eventIds: number[]): 
 // (visible), and every living one has left its spawn state (not invulnerable; the exe's spawn-state
 // enemies take no hit, and a wave that has not started has no enemy object yet). Times out with why.
 const READY_MS = Number(process.env.EP2_READY_S ?? 30) * 1000;
+// Walks the player into reach of a built wave. The Sinow families (SinowBerillAi) search 200 units
+// from their spawn point (BERILL.search); with no target for 90 frames ('lost') they go 'home' and
+// re-spawn, and they stay invulnerable in every state but the engaged ones (chase, lunge, melee ...).
+// The trigger object of a wave can sit 225+ units from the wave's enemies, so the player placed on it
+// never reaches them: the wave cycles lost -> home -> spawn -> rise -> lost (the 10-25 "stuck in spawn"
+// reading was this cycle and the invulnerable flag, not a stalled tick). Once the wave is built and
+// the player is out of reach (more than 150 units from every living enemy), the player moves to the
+// midpoint between the trigger and the wave's nearest enemy (about 120 units away). Returns the distance
+// before the move (null when nothing was built).
+async function engageWave(page: Page, room: number, wave: number): Promise<{ moved: boolean; dist: number } | null> {
+  return page.evaluate(
+    ([rm, w]) => {
+      const v = (window as any).classicGame.view;
+      const list = [...v.combat.enemies.values()].filter((e: any) => e.slot?.set?.section === rm && e.slot?.set?.wave === w && !e.dead && e.ai);
+      const me = v.view?.playerPositions().get(v.game.selfId);
+      if (!list.length || !me) return null;
+      const d = (e: any) => Math.hypot(e.ai.x - me.x, e.ai.z - me.z);
+      const nearest = list.reduce((a: any, b: any) => (d(a) <= d(b) ? a : b));
+      const dist = d(nearest);
+      if (dist <= 150) return { moved: false, dist };
+      v.placePlayer(v.game.selfId, (me.x + nearest.ai.x) / 2, me.y, (me.z + nearest.ai.z) / 2, 0);
+      return { moved: true, dist };
+    },
+    [room, wave] as const,
+  );
+}
+
 async function waitReady(
   page: Page,
   room: number,
@@ -378,10 +414,20 @@ async function waitReady(
 ): Promise<{ ok: boolean; secs: number; why: string }> {
   const t0 = Date.now();
   let why = 'no enemy built';
+  let engaged = false;
   for (;;) {
     const list = (await enemyStates(page)).filter((e) => e.room === room && e.wave === wave && !e.dead);
+    if (list.length && !engaged) {
+      engaged = true;
+      await engageWave(page, room, wave);
+      await page.waitForTimeout(POLL_MS);
+      continue;
+    }
     if (list.length && list.every((e) => e.vis && !e.inv)) return { ok: true, secs: (Date.now() - t0) / 1000, why: '' };
-    if (list.length) why = `${list.filter((e) => e.inv).length} of ${list.length} still in spawn`;
+    if (list.length) {
+      const inv = list.filter((e) => e.inv);
+      why = `${inv.length} of ${list.length} invulnerable (states ${[...new Set(inv.map((e) => e.state))].join(',') || '-'})`;
+    }
     if (Date.now() - t0 >= timeoutMs) return { ok: false, secs: (Date.now() - t0) / 1000, why };
     await page.waitForTimeout(POLL_MS);
   }

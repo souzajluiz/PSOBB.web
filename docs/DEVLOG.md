@@ -475,6 +475,25 @@ Port: `client/src/formats/njcm.ts` emits no `texture` op for an index record wit
 - `tests/beattime.test.ts` (42 checks): the frame arithmetic, the offline base (00:00 -> 666, 12:00 -> 166, 16:00 -> 333), the B1 base with a UTC server at a UTC+4 machine (same beat), the fold, the live follow of the clock, and the galatine ladder and morning glory through the SetContext and the compare.
 
 **ASSUMED:** the purpose of 0x1a5e00 (16 h of frames, offline clock + 16 h) is not proven; no server means the base stays at 0x1a5e00 and the beat follows the local clock. The base is not stored in the save file (newserv's `server_time_delta_frames` at system file +0x08 is 1728000 by default, the same value, but the exe's read/write of it is not found).
+## 2026-10-25: Ep2 floor 5 "Sinow stuck in spawn" is the watch's reading and a far trigger, not the tick gate
+
+**Question:** built Sinow Berill / Spigell stay in `spawn` for 30 s+ on floor 5 (the chain watch: 51 not ready, 311 / 411 `spawn`). Does `tickEnemies` (render/combat.ts) skip them?
+
+**Trace (own Vite on 5174; the tick wrapped from the page, no source change: `tickEnemies` call count and each Sinow AI's `tick`, logged with state, frame counter and root visibility):**
+- Tick gate: `tickEnemies` runs at 30 Hz (`ticks` +30 a second). A visible Sinow is ticked every frame: `spawn f1..f6`, then `rise` (0.2 s, the 7th tick). Not stalled.
+- Hidden Sinow (`root.visible` false, `spawn/0`) are not ticked, by design: the wave's set entries stay hidden until the wave event shows them (enemyview `setVisible`), and `tickEnemies` skips `!root.visible`. The 311 / 411 / 3/2 enemies were never shown: their waves never ran in those samples.
+- The floor-5 root (51, room 5 wave 1) was visible and cycling: `lost` (90 frames with no target) -> `home` -> `spawn` -> `rise` -> `lost`, a cycle of about 6 s (`dbg` tick log, enemy 739: `lost 2.53s`, `home 5.53s`, `spawn 5.87s`, `rise 6.07s`, `lost 7.43s`, ...).
+- Why it never engages: the player placed on trigger 51 is 225-263 units from the wave's enemies (`dist` 242 / 225 / 263 at their spawn points). `BERILL.search` is 200 (`enemyfsmep2c.ts`), so `lost` never finds a target.
+- Placing the player at the midpoint to the wave's nearest enemy (about 120 units): `723: spawn 1.0s > appear 1.2s > fade 2.6s > drop 4.4s > lost 7.0s > chase 7.1s > lunge 7.1s > chase 9.3s > melee 10.0s > ...`; `728` the same, with `chase` at 6.9 s. Spawn lasts 0.2 s.
+
+**The spec's reading.** `waitReady` in `ep2-floors-watch.spec.ts` counted `invulnerable` as "still in spawn". `SinowBerillAi.invulnerable` is true in `rise`, `appear`, `fade`, `lost` and `home` as well (the exe's +0x184 flag, `enter` in enemyfsmep2c.ts), so a cycling Sinow reads as stuck. The 10-25 entry's "spawn verdict" (no code change) was right that the spawn exit is not the problem; the stall was the far trigger plus this label.
+
+**Changed (e2e only, no game code, so no unit test):**
+- `client/e2e/ep2-floors-watch.spec.ts`: `engageWave` moves the player to the midpoint of the player and the wave's nearest enemy when no living enemy is within 150 units, once per group, after the wave is built (in `waitReady` and in the watch loop). The "not ready" reason now names the invulnerable AI states.
+
+**Checks:** `cd client && npx tsc --noEmit -p .` exit 0. `EP2_WATCH_FLOORS=5 EP2_WATCH_SECONDS=30 EP2_FLOOR_CAP_S=200` (own Vite 5174, webtest): see the run line below.
+
+**Open:** whether the exe's trigger for the Sinow waves places the player nearer than the spec does (the 5/1 trigger is 225+ from its enemies in the port's set data). Not traced here.
 
 ## 2026-10-25: Team invite layout: the 6xC1 invite is built inline, the global-copy sender is the 6xC2 answer
 
