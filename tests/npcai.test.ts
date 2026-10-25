@@ -41,6 +41,8 @@ import {
   HEAD_STATE_CAST,
   HEAD_STATE_IDLE,
   HEAD_STATE_MOVE,
+  headChainBranch,
+  CHARACTER_FLAG_DEAD,
   HEAD_TWO_TECH_TABLE,
   HEAD_WALL_MASK,
   HEAD_RAY_HEIGHT,
@@ -765,6 +767,38 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
   check(src.includes('if (this.isPioneer2()) {') && src.includes('head.fieldUpdate({') && src.includes('head.afterDispatch();'), 'town: the field branch runs fieldUpdate off Pioneer 2, and the 2764 resets run after the dispatch');
   const combatSrc2 = readFileSync(join(HERE, '../client/src/render/combat.ts'), 'utf8');
   check(/npcCastTechnique[\s\S]*?if \(isFireTech\(tech\)\)[\s\S]*?this\.spawnFire\(tech, level, from, me\.angle, listed, first/.test(combatSrc2), 'npcCastTechnique: the Foie family makes its object at the NPC and hits through spawnFire / techHitEnemy');
+
+  // --- the chain's gate and the 0x800 branch (exe: SinowberillChallengePlayer_Update_007aefd4 .c:794696..794747).
+  // The owner's dead flag stops the chain; the NPC's dead flag runs the dead branch; the 2764 runs after both.
+  check(CHARACTER_FLAG_DEAD === 0x800, 'the dead flag is character_flags dead = 2048 (0x800, dump enum character_flags)');
+  check(headChainBranch(0x800, 0) === 'owner-dead' && headChainBranch(0x800, 0x800) === 'owner-dead', 'chain: the owner dead stops the chain whatever the NPC is (.c:794710)');
+  check(headChainBranch(0, 0x800) === 'npc-dead', 'chain: the NPC dead alone runs the 0x800 branch (.c:794711)');
+  check(headChainBranch(0, 0) === 'live' && headChainBranch(0x100000, 0x100000) === 'live', 'chain: the other flags (guard stance 0x100000) are not dead');
+  // A dead NPC does not walk: the state is idle, so no state-1 send is measured, and the send target goes to the anchor
+  // (the NPC's own spot) when the standing reset runs (.c:797043..797054 with the idle state).
+  {
+    const d = headWith(13);
+    d.state = HEAD_STATE_MOVE;
+    d.sendTarget = { x: 40, y: 0, z: 40 };
+    d.moveTarget = { x: 40, y: 0, z: 40 };
+    const npcAt = { x: 3, y: 0, z: 4 };
+    const sender = new NpcMoveSender();
+    const sent: string[] = [];
+    for (let tick = 0; tick < 60; tick++) {
+      d.deadStep(npcAt);
+      const dist = headSendDistance(d, npcAt);
+      if (dist === null) sender.reset();
+      else sent.push(String(sender.tick(dist, d.leash)));
+      d.afterDispatch();
+    }
+    check(sent.length === 0, 'dead NPC: no state-1 send in 60 ticks (the head is idle)');
+    check(d.sendTarget.x === 3 && d.sendTarget.z === 4 && d.state === HEAD_STATE_IDLE, 'dead NPC: the send target is the anchor, the NPC stops where it stands');
+    check(sender.isRunning === false, 'dead NPC: the run flag (0x8) is cleared (.c:797050)');
+    check(d.t62 === 60 && d.inputState === 4, 'dead NPC: +0x62 counts 60 ticks under the cap, input 4 (.c:794721)');
+  }
+  const townSrc3 = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
+  check(townSrc3.includes('headChainBranch(this.ownerDead(leader) ? CHARACTER_FLAG_DEAD : 0, npcFlags)') && townSrc3.includes("if (branch === 'owner-dead') return;") && townSrc3.includes("if (branch === 'npc-dead') {"), 'town: the chain gate picks the owner-dead return and the NPC-dead branch');
+  check(townSrc3.includes('const npcFlags = 0; // ASSUMED'), 'town: the NPC flags stay ASSUMED alive (no port source)');
 }
 
 if (failures) {

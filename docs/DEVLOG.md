@@ -17,6 +17,29 @@
 **Checks:** `node tests/objectcollision.test.ts`: all checks passed (Darvant children 0 and 79 resolve, 80 does not, the row is one disabled sphere; the Vol Opt child 5 still resolves to 0x009a512c). `node tests/collision.test.ts`, `townfield`, `darkfalz`: pass. `client/node_modules/typescript/bin/tsc --noEmit -p client` (Node 24): clean. `tools/gen-collision-boxes.py` rerun: the only diff is the new `0x00c8` line and the comment. Not run in Chrome or Playwright.
 
 **Left (ROADMAP line):** 0xca's own init (the constructor's indirect call through 0x009a6c64) and 0xcb's table are still not settled; the 27 unresolved call sites and the enemies' use of the tables are unchanged.
+## 2026-10-25: NPC head's 0x800 downed branch: the chain gate, the dead source not found
+
+**Question:** the ROADMAP's open "0x800 downed branch" of the NPC head: what does the NPC do when its player is down (stop, revive wait, sends), and where does the NPC's dead flag come from?
+
+**Exe evidence** (dump `src/Psobb.exe-05112026.c`, read with `tools/refsrc.sh body`):
+- Chain `SinowberillChallengePlayer_Update_007aefd4` (.c:794690): owner (+0x74) dead 0x800 (`character_flags` of its +0x94 player) stops everything (.c:794710); the NPC's (+0x78) 0x800 picks the dead branch (.c:794719..794745) instead of UpdateState_007af1a8 / 007af7ec / 007b00bc / AIUpdate_007b1134; `SinowberillHead_AIUpdateState_007b2764` runs after either branch (.c:794746, outside the if / else).
+- Dead branch: `+0x62` counts; input 4 while under 0x400 with `+0x84 == 0` (and `+0x5c` cleared); 5 from the cap; `+0x7c = 0` (idle); flags `&= 0xffffefcf`; anchor = the NPC's `weapon_position` (player struct +0x300, the dump's `struct player` field 0x300 block).
+- 2764 with idle: no 6x40 / 6x42 (the state-1 send is the only one, .c:797015..797033); the resets clear flag 8 and set the send target to the anchor (.c:797043..797054 with the standing gate).
+- Dead writers: the Sinowberill-named updater `UpdatePlayerStateInSinowberillFight_004cee30` (.c:249152) sets `dead` from state 0x15 / 0x17 on `+0x32e`, but it has no caller in the dump and DEVLOG 2026-10-25 / the 0x004cee30 entry (boss sub-entity copies) shows it is the Sinowberill boss's sub-entity updater, not the NPC head's. The other `dead` setters are enemy AI state updates (`OlgaUpdateMainLoop_00423b7c`, `ProcessEnemyAiState4`, `PlayerVoloptInteractionHandler`: the dump's `player` / `enemy` structs overlap there). No NPC-player writer of 0x800 was found.
+
+**Port:**
+- `client/src/quest/npchead.ts` `headChainBranch(ownerFlags, npcFlags)` → `'owner-dead' | 'npc-dead' | 'live'` and `CHARACTER_FLAG_DEAD` (0x800): the chain's gate as the exe reads it.
+- `client/src/quest/town.ts` `stepNpcHead` uses the gate: owner-dead returns (as before), npc-dead runs `head.deadStep(npc)` and the 2764 still runs (as before, now through the gate). The NPC's flags are `npcFlags = 0` (ASSUMED alive), so the dead branch stays dormant, as before.
+- Dead branch behaviour checked: no state-1 send for 60 ticks, the send target is the anchor, the run flag is cleared, +0x62 counts, input 4 (`tests/npcai.test.ts`).
+
+**ASSUMED:**
+- The anchor is the NPC's position: the exe takes `weapon_position` (+0x300). The port has no NPC weapon position; x / z are taken as the position (the same stand-in as the field update's `npcWeapon`).
+- The NPC's dead flag is never set in the port: no NPC HP or action state (+0x32e) is modelled, and no source for a player's 0x800 in the NPC path was traced.
+- The owner's dead flag is the local player's only (other players are alive).
+
+**Not done / open:** the NPC's dead source (what sets 0x800 on an NPC player, through the player's HP or the server's relay), the revive (what clears 0x800 and the +0x62 counter after a Resta on a dead NPC).
+
+**Tests:** `node tests/npcai.test.ts` ok (new block: `headChainBranch` cases, the dead NPC's no-send ticks, the town wiring). `npcs`, `questflow`, `quests`, `questmisc`, `questboard` pass with Node 24. `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome, no Playwright.
 
 ## 2026-10-25: the near-enemy flag (character_flags 0x100000): the setter is enemy-only, the NPC guard stays clear
 
