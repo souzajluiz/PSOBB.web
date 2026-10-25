@@ -585,6 +585,11 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
 // clears its body boxes' bit 0 (ProcessEnemySinowbeatDragonPhase phase 4 of 0x1d calls
 // SaintEmilionPart_DisableAll 0x007ba03c, dump 159373; phase 5 calls EnableAllEntityHitboxes
 // 0x007b9fbc, dump 159657). See combat/dragon.ts untargetable.
+// The struck loops' visibility test (EntityHitEntity has no reticle or display test). A Vol Opt
+// monitor's proxy is shown only while its wall is exposed (syncVolopt), but the exe strikes a
+// monitor whatever its wall (see VoloptMonitor.hittable), so for it the head's visibility decides.
+const struckShown = (e: EnemyRuntime): boolean =>
+  e.instance.root.visible || (e.ai instanceof VoloptPartAi && e.ai.part instanceof VoloptMonitor && !!e.parent?.instance.root.visible);
 // Vol Opt is decided per entity first (voloptRadar).
 export const radarConcealed = (e: { ai: EnemyBrain | null }): boolean => {
   const vr = voloptRadar(e.ai);
@@ -6894,7 +6899,7 @@ export class CombatView {
       if (e.dead) continue;
       // An enemy whose wave has not spawned yet is not in the room (its model
       // is hidden by render/waves.ts), so it cannot be hit.
-      if (!e.instance.root.visible || concealed(e) || !splitStruckOk(e)) continue;
+      if (!struckShown(e) || concealed(e) || !splitStruckOk(e)) continue;
       const p = e.instance.root.position;
       const dx = p.x - from.x;
       const dz = p.z - from.z;
@@ -7116,7 +7121,7 @@ export class CombatView {
       this.opts.log(`gun bullet reaches player ${b.player + 1}: its victim rolls the hit`);
       return;
     }
-    if (this.disposed || e.dead || !e.instance.root.visible || concealed(e) || !splitStruckOk(e)) return;
+    if (this.disposed || e.dead || !struckShown(e) || concealed(e) || !splitStruckOk(e)) return;
     const p = e.instance.root.position;
     const now = { x: p.x, y: p.y + this.aimHeightOf(e), z: p.z };
     if (bulletMissed(b.origCentre, now)) {
@@ -7906,7 +7911,7 @@ export class CombatView {
   npcEnemies(): Array<{ id: number; x: number; z: number; boxes: EnemyBoxHit[] }> {
     const out: Array<{ id: number; x: number; z: number; boxes: EnemyBoxHit[] }> = [];
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible || concealed(e) || !splitStruckOk(e)) continue;
+      if (e.dead || !struckShown(e) || concealed(e) || !splitStruckOk(e)) continue;
       const p = this.hitPoint(e);
       out.push({ id: 0x1000 | e.index, x: p.x, z: p.z, boxes: this.enemyBoxHits(e) });
     }
@@ -8110,7 +8115,7 @@ export class CombatView {
     const pool = this.fireTargets;
     let n = 0;
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible || concealed(e) || !splitStruckOk(e)) continue;
+      if (e.dead || !struckShown(e) || concealed(e) || !splitStruckOk(e)) continue;
       const p = e.instance.root.position;
       const t = pool[n] ?? (pool[n] = { id: 0, x: 0, z: 0, radius: 0, y: 0 });
       t.id = e.index;
@@ -8288,7 +8293,7 @@ export class CombatView {
   }
 
   private techWorld(): TechWorld {
-    const live = (e: EnemyRuntime | undefined): e is EnemyRuntime => !!e && !e.dead && e.instance.root.visible && !concealed(e) && splitStruckOk(e);
+    const live = (e: EnemyRuntime | undefined): e is EnemyRuntime => !!e && !e.dead && struckShown(e) && !concealed(e) && splitStruckOk(e);
     const enemyOf = (id: number): EnemyRuntime | undefined => (id >= 0x1000 ? this.enemies.get(id - 0x1000) : undefined);
     return {
       rng: () => this.rng(),
