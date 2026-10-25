@@ -408,11 +408,15 @@ export class TechBolt extends EnemyShot {
   private radius: number;
   private speed: number;
   private pierce: boolean;
+  private wallBlocks: ((from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) => boolean) | undefined;
   private struck = new Set<number>();
 
   // pierce: it flies on and hits each player once (the Chaos Bringer's laser).
-  constructor(opts: { x: number; y: number; z: number; angle: number; speed: number; range: number; radius: number; effect: ShotEffect; color: number; pierce?: boolean; tech?: { id: number; level: number } }) {
+  // wallBlocks: the step from the old point to the new one meets the map (the bolt ends,
+  // no hit this frame). The points are the shot's own (y above the launch ground).
+  constructor(opts: { x: number; y: number; z: number; angle: number; speed: number; range: number; radius: number; effect: ShotEffect; color: number; pierce?: boolean; tech?: { id: number; level: number }; wallBlocks?: ((from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) => boolean) | undefined }) {
     super(opts.x, opts.y, opts.z);
+    this.wallBlocks = opts.wallBlocks;
     this.tech = opts.tech;
     this.angle = opts.angle;
     this.speed = Math.max(0.5, opts.speed);
@@ -428,9 +432,14 @@ export class TechBolt extends EnemyShot {
   tick(targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return [];
     this.frames++;
+    const from = { x: this.x, y: this.y, z: this.z };
     this.x += this.vx;
     this.z += this.vz;
     this.travelled += this.speed;
+    if (this.wallBlocks?.(from, { x: this.x, y: this.y, z: this.z })) {
+      this.done = true;
+      return [];
+    }
     if (this.travelled >= this.range) this.done = true;
     if (this.pierce) {
       const hits = this.within(targets, this.radius).filter((t) => !this.struck.has(t.clientId));

@@ -1,5 +1,29 @@
 # Devlog
 
+## 2026-10-25: Zu / Pazuzu: the fireball and the tech bolt traced, the counters and speeds from the Zu's row, the map rays wired, the blocked aim's sign fixed
+
+**Question.** Where is the fireball (state 10) and what does the tech bolt fire (speed, travel, damage)? Where do the counters, the walk and the dash come from? Which map ray does the Zu use, and what sets the wide volley?
+
+**Answer.** State 10 is `zu_fireball_state` at 0x005b38b4. The tech bolt is `EnemyAI_SpawnTechProjectile_0057ff44` with the projectile update 0x0057fcc0: its speed is the Zu's MovementData fparam2, it ends after 500 units of travel, its power is iparam4, and a map ray stops it. Every counter, the walk, the dash and the slide come from the Zu's own MovementData row (`zu_constructor` 0x005b4884), not from the animation table. The ray is `cast_ray_at_map_collision_geometry` (0x0077fffc, mask -1), now passed into `ZuAi` from render/combat.ts. The wide flag is the set's p6 bit 0 OR `is_monster_rare` (the second half is not ported).
+
+**PROVEN (objdump of the ranges, tools/exedata.py, the dump).**
+- Dispatch: `handle_zu_ai` 0x005b2980 jumps through the table 0x0092ac40. Index 10 is at 0x005b29b1, calling 0x005b38b4 (the fireball). Index 14 (the lunge) is 0x005b2995.
+- The row: `g_ZuConfigArray[wide]` (0x00a749c8) is filled by 0x005b4d34 through the getter 0x0077a6cc, which is base + 0x30 * wide. So the rare Pazuzu is the row after the Zu's (the port's ZU_* / PAZUZU_* rows 7 / 8 and 27 / 28 agree).
+- Walk: fparam1 x 0x0092ad78 (= 0x3e3da12f, 5/27) into +0x394 (0x005b4c82..0x005b4c92). Dash: fparam3 x the same scale into +0x39c. Slide: 0x00a74994 (= 0x3fc97b42, 85/54, written at 0x005b4f3e) into +0x398, pushed by state 11 at 0x005b3825 for `EnemyAI_UpdateProjectileVtable_0077a0d0`.
+- Counters (int copies, the row's iparams at +0x18..+0x2c): fireball charge = iparam1 (+0x3c4, read on phase 0); volley = iparam2 (+0x3cc, read at 0x005b3c39); recover = 30 (+0x3c8, read at 0x005b3bd0, a constant); tech charge = iparam3 (+0x3e0); tech recover = 10 (+0x3e4); lunge = iparam5 (+0x400); dash wait = iparam6 (+0x414). Ranges and arcs are constants: fire 60 / 0x2000, tech 180 / 0x1000, lunge 250 / 0x400 (+0x3bc, +0x3c0, +0x3d8, +0x3dc, +0x3f0, +0x3f4).
+- Tech bolt: `EnemyAI_SpawnTechProjectile_0057ff44` writes the vtable `g_TechProjectile_VTable` 0x00b07690 (at 0x0057ffb5). Its velocity is (weapon point - origin) scaled to the length `_g_NanoDragonAI_Config_0x10`, which `UpdateProjectileGlobals_005b4758` loads from fparam2 into 0x00a74180. The projectile's update (vtable slot 1 = 0x0057fcc0): position += velocity; the travel +0xdc gains 0x00a74180 each frame; the bolt is done at 500.0 (0x00927b8c). Each step runs `cast_ray_at_map_collision_geometry` (0x0077fffc, mask -1) first: a hit ends it with no hit. Then each targetable entity whose point (+0x300) is within the step (squared distance below speed squared, the call 0x0078ea2c) takes the entity vtable +0x60 with the float iparam4 (loaded from 0x00a74170 at 0x005b4791) as the power argument. g_ProjectileBaseDamage (0x00a74178) is 0 for the Zu (UpdateProjectileGlobals stores 0).
+- The blocked aim (`GoranSetupProjectileAttack_005b30c8`): the ray from the player's weapon point to the Zu's point (mask -1). A hit puts the aim at the Zu's point plus (-dZ, 0, dX) * 400, where d is the weapon point minus the Zu's point on XZ and 400 is 0x0092ae2c. The port had this mirrored; fixed (test added).
+- Retreat (the fireball's phase 3 sweep): three rays through `cast_ray_at_map_collision_geometry(from, to, -1)`, as `ZuAi.retreat` already modelled.
+- Wide (`zu_constructor`): `(set p6 word at +0x3c) & 1` gives wide = 1; otherwise `is_monster_rare(*(short*)(this+0x2c))`, the floor's list (`g_FloorInitFlags`, 16 shorts) whose loader is not traced.
+
+**ASSUMED (not traced).** The set record's p6 word at +0x3c (the port reads `set.params[5]`, newserv's DAT param6 is at 0x40, so the runtime record is taken to match the port's Rappy / Slime rules). The wall ray's height (the Zu's world y, flat; the exe uses the weapon point). The bolt's hit radius (one step; the return of 0x0078ea2c is read as the squared distance). The bolt's power meaning (the entity hit's damage formula is not traced; the port feeds iparam4 as the TechBolt's power). The Zu's row base (the port's bp rows). The `is_monster_rare` list loader. The wanderer, the lunge's melee reach (15), the player's level, the foie's mouth height (0).
+
+**Still open.** The wanderer (`unknown_enemy_behavior_wanderer`); the flinch on hit (the hit vtable slot); the writer of bit 0x40000 (the radar gate stays inert); the writers of states 3 and 7; the floor's rare list for `wide`; the set record's p6 offset.
+
+**Port changes.** `combat/enemyfsmep4.ts`: the tunables read from the row (walk, dash, slide, the counters, the tech speed and power, the 500 travel); `ZuWall` takes 3-D points and `ZuOptions.y` gives the height; the blocked aim's sign; the bolt gets `wallBlocks`. `combat/enemyshots.ts`: `TechBolt` takes an optional `wallBlocks` (a walled step ends the bolt with no hit, before the hit test, as update 0x0057fcc0 does). `render/combat.ts`: the Zu brain gets its y and `wall = wallHit(from, to, -1)`. `tests/enemyfsmep4.test.ts`: the row tunables, the 3-D wall, the bolt's wall stop, the side aim.
+
+**Checks.** `node --experimental-strip-types tests/enemyfsmep4.test.ts`, `enemyfsm`, `minimap`, `combatdepth` (836 checks), `NEWSERV=... tests/combat.test.ts` (5860 checks), `npx tsc --noEmit -p client`: all pass.
+
 ## 2026-10-25: Merissa A / AA, part 2: the attack records and the near / far rolls; no brain yet
 
 **Question.** What do the transition 0x005b5768's gates and the 40-byte records at 0x009c1ac0 decide, and which attack is which?
