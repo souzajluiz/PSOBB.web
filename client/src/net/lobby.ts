@@ -23,6 +23,7 @@ import { WORD_SELECT_SUBCOMMAND, wordSelectSubcommandPayload, type WordSelectMes
 import { parseWordSelectSubcommand } from './wordselect.ts';
 import { tradeIO, type TradeHost } from './tradeio.ts';
 import { TradeZone } from './tradezone.ts';
+import { parseInviteAnswer, TEAM_INVITE_ANSWER_SUB, TEAM_INVITE_SIZE } from './team.ts';
 
 export interface LobbyPlayer {
   clientId: number;
@@ -382,6 +383,12 @@ export class Lobby {
       if (sub === 0x06 && body.length >= 0x10c) this.emit('guildCardSent', body);
       // 6xA6 is the trade proposal / answer / offer subcommand (net/trade.ts receive).
       if (sub === TRADE_SUB && body.length >= TRADE_SUB_SIZE) this.trade.receive(body);
+      // 6xC2: the invitee's answer to our Team Invite (6xC1, net/team.ts); the next one resolves the waiter.
+      if (sub === TEAM_INVITE_ANSWER_SUB && body.length >= TEAM_INVITE_SIZE && this.inviteWaiter) {
+        const w = this.inviteWaiter;
+        this.inviteWaiter = null;
+        w(parseInviteAnswer(body));
+      }
       // 6x74 word select, in the lobby and in a game (handle_packet0x60_subcommand0x74, dump 664363:
       // the same handler in both): the balloon is drawn by the screen (classic/chat.ts receiveWord).
       if (sub === WORD_SELECT_SUBCOMMAND) {
@@ -457,6 +464,14 @@ export class Lobby {
   }
 
   // Sends one 6x subcommand via 60. `payload` excludes the 4-byte header.
+  // The next 6xC2 answer to a Team Invite (waitInviteAnswer). One waiter at a time.
+  private inviteWaiter: ((a: { guildCard: number; action: number }) => void) | null = null;
+  waitInviteAnswer(): Promise<{ guildCard: number; action: number }> {
+    return new Promise((resolve) => {
+      this.inviteWaiter = resolve;
+    });
+  }
+
   sendSubcommand(sub: number, payload: Uint8Array, command = 0x60): void {
     const body = new Uint8Array(4 + payload.length);
     body[0] = sub;

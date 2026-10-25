@@ -460,6 +460,59 @@ export class TeamClient {
   }
 }
 
+// --- Team invite (Home menu > Team > Invite, 0x29) and Point Regist (0x2d) -------------------
+//
+// Invite is a peer message, not a team command. The inviter sends the 6xC1 subcommand with the
+// 0x62 relay to the picked player (ChallengeMenuWindow_Process_0074c964 state 3 -> FUN_00800464 ->
+// FUN_007d3fcc): a 0x5C-byte body (size word 0x17 dwords) with +0 0xC1, +1 0x17, +2 the sender's
+// client id (ASSUMED, the 6x header convention), +4 u32 guild card (newserv's guild_card_number;
+// the exe copies the window's +0x20, ASSUMED the picked player's card), +8 u32 action (0 = invite),
+// +0xC the inviter's name (24 UTF-16 units), +0x3C the team name (16 units). newserv relays 6xC1 as
+// it is (ReceiveSubcommands.cc forward_subcommand). The invitee answers with 6xC2 (the 0x60 table
+// entry 0xC2 = 0x0078be84): +4 the accepter's card, +8 the action (2 = accept, other = declined).
+// On accept the inviter sends 03EA with that card (FUN_007f323c) and waits for 04EA (the flag).
+//
+// Point Regist (0x2d) sends 6xCC: [0xCC, 3, sender id (u16 at +2), item id u32, amount u32]
+// (send_packet0x60_subcommand0xcc, dump 570353; sent only in a game, newserv
+// on_exchange_item_for_team_points_bb).
+
+export const TEAM_INVITE_SUB = 0xc1;
+export const TEAM_INVITE_ANSWER_SUB = 0xc2;
+export const TEAM_INVITE_SIZE = 0x5c;
+export const TEAM_INVITE_ACCEPT = 2;
+export const TEAM_POINTS_SUB = 0xcc;
+export const TEAM_POINTS_SIZE = 0x0c;
+const INVITE_NAME_UNITS = 0x18;
+
+// The inviter's 6xC1 body; the caller targets it at the picked player's client id (0x62 flag).
+export function inviteSubcommand(o: { selfId: number; guildCard: number; name: string; teamName: string; action?: number }): Uint8Array {
+  const b = new Uint8Array(TEAM_INVITE_SIZE);
+  const dv = new DataView(b.buffer);
+  b[0] = TEAM_INVITE_SUB;
+  b[1] = TEAM_INVITE_SIZE / 4;
+  dv.setUint16(2, o.selfId, true);
+  dv.setUint32(4, o.guildCard >>> 0, true);
+  dv.setUint32(8, (o.action ?? 0) >>> 0, true);
+  b.set(utf16(o.name, INVITE_NAME_UNITS), 0x0c);
+  b.set(utf16(o.teamName, TEAM_NAME_UNITS), 0x3c);
+  return b;
+}
+
+// The 6xC2 answer as received: the accepter's card and the action.
+export function parseInviteAnswer(body: Uint8Array): { guildCard: number; action: number } {
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return { guildCard: dv.getUint32(4, true), action: dv.getUint32(8, true) };
+}
+
+// The 6xCC body (the 4-byte header included; the caller's sendSubcommand writes the sender id).
+export function exchangeTeamPointsPayload(itemId: number, amount: number): Uint8Array {
+  const b = new Uint8Array(TEAM_POINTS_SIZE - 4);
+  const dv = new DataView(b.buffer);
+  dv.setUint32(0, itemId >>> 0, true);
+  dv.setUint32(4, amount >>> 0, true);
+  return b;
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new TeamError(what, -1)), ms);

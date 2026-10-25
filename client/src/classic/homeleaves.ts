@@ -6,7 +6,9 @@
 //   0x13 Simple Mail     (SimpleMailMenu, simplemail.ts; Team Member List > Send Mail: MailCompose)
 //   0x25 Team Member List (TeamMemberListWindow, teammenu.ts; needs a team)
 //   0x27 Team Log        (TeamLogWindow, teammenu.ts; needs a team; the rows show / hide the team chat window)
+//   0x29 Team Invite     (TeamInviteWindow, teammenu.ts; needs a team; 14EA list, 6xC1 invite)
 //   0x2B Team Info       (TeamInfoWindow, teammenu.ts; needs a team)
+//   0x2D Point Regist    (TeamPointWindow, teammenu.ts; needs a team; 6xCC in a game)
 // The lobby (classic/lobby.ts) and the field (classic/fieldmenu.ts) both open them through
 // this class, so the window glue is written once. The fkey path (input/shortcuts.ts,
 // unknown_handle_fkey_inputs) and the main menu open the same leaves; the exe's
@@ -22,11 +24,11 @@ import { ChatShortcutMenu } from './chatshortcutmenu.ts';
 import { MailCompose, SimpleMailMenu, type SimpleMailHost } from './simplemail.ts';
 import { SymbolChatList } from './symbolchatlist.ts';
 import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
-import { MEET_FRAMES, TeamInfoWindow, TeamLogWindow, TeamMemberListWindow, type TeamHost } from './teammenu.ts';
+import { MEET_FRAMES, TeamInfoWindow, TeamInviteWindow, TeamLogWindow, TeamMemberListWindow, TeamPointWindow, type TeamHost } from './teammenu.ts';
 import type { TeamChat } from './teamchat.ts';
 import type { WindowSkin } from './stage.ts';
 
-export const HOME_LEAF_IDS: ReadonlySet<number> = new Set([0x0e, 0x11, 0x12, 0x13, 0x25, 0x27, 0x2b]);
+export const HOME_LEAF_IDS: ReadonlySet<number> = new Set([0x0e, 0x11, 0x12, 0x13, 0x25, 0x27, 0x29, 0x2b, 0x2d]);
 
 // What the leaves read from the session: the local player and the other players come from
 // the lobby object (a Game is one: its connection, players and self).
@@ -59,6 +61,8 @@ export class HomeLeaves {
   private teamList: TeamMemberListWindow | null = null;
   private teamInfo: TeamInfoWindow | null = null;
   private teamLog: TeamLogWindow | null = null;
+  private teamInvite: TeamInviteWindow | null = null;
+  private teamPoint: TeamPointWindow | null = null;
   // Team Member List > Send Mail (exe states 0xb..0xe): the keyboard over the list.
   private teamMail: MailCompose | null = null;
   // Guild Card > Search > Send Mail (state 0x21): the keyboard for the result's card.
@@ -75,7 +79,7 @@ export class HomeLeaves {
   }
 
   get open(): boolean {
-    return !!(this.guildCard || this.shortcuts || this.mail || this.symbolList || this.teamList || this.teamInfo || this.teamLog || this.teamMail || this.searchMail);
+    return !!(this.guildCard || this.shortcuts || this.mail || this.symbolList || this.teamList || this.teamInfo || this.teamLog || this.teamInvite || this.teamPoint || this.teamMail || this.searchMail);
   }
 
   // Opens the leaf for a Home menu id; false when this leaf cannot open here (no session, no team).
@@ -177,6 +181,30 @@ export class HomeLeaves {
         this.teamLog.show();
         return true;
       }
+      case 0x29: {
+        // handle_player_menu_select team_invite_menu (0x29): the lobby's team info list (14EA) and the invite.
+        const team = h.team();
+        const nearby = team?.nearby;
+        const invite = team?.invite;
+        if (!team || !nearby || !invite) return false;
+        this.teamInvite = new TeamInviteWindow(
+          { nearby: () => nearby.call(team), invite: (gc) => invite.call(team, gc) },
+          (i) => text(11, i),
+        );
+        this.teamInvite.show();
+        return true;
+      }
+      case 0x2d: {
+        // handle_player_menu_select team_point_menu (0x2d): the inventory's items for the team points.
+        const team = h.team();
+        if (!team || !team.itemRows) return false;
+        this.teamPoint = new TeamPointWindow(
+          { itemRows: () => team.itemRows?.() ?? [], exchange: (id, amount) => team.exchangeItem?.(id, amount) },
+          (i) => text(11, i),
+        );
+        this.teamPoint.show();
+        return true;
+      }
       case 0x2b: {
         const team = h.team();
         if (!team) return false;
@@ -191,6 +219,11 @@ export class HomeLeaves {
 
   // The windows' own clocks (the Team Member List's search and meet timers).
   tick(): void {
+    // The Invite window closes itself when the invitee's answer comes (its promise), so the owner's menu gets the keys back here.
+    if (this.teamInvite && !this.teamInvite.open) {
+      this.teamInvite = null;
+      this.settle();
+    }
     if (this.teamList) {
       this.teamList.tick();
       if (!this.teamList.open) {
@@ -244,6 +277,10 @@ export class HomeLeaves {
       if (!this.teamInfo.key(e)) this.teamInfo = null;
     } else if (this.teamLog) {
       if (!this.teamLog.key(e)) this.teamLog = null;
+    } else if (this.teamInvite) {
+      if (!this.teamInvite.key(e)) this.teamInvite = null;
+    } else if (this.teamPoint) {
+      if (!this.teamPoint.key(e)) this.teamPoint = null;
     }
     this.settle();
   }
@@ -351,6 +388,8 @@ export class HomeLeaves {
     this.teamList?.draw(ctx, skin, extra);
     this.teamInfo?.draw(ctx, skin, extra);
     this.teamLog?.draw(ctx, skin, extra);
+    this.teamInvite?.draw(ctx, skin, extra);
+    this.teamPoint?.draw(ctx, skin, extra);
     this.teamMail?.draw(ctx, skin);
   }
 
@@ -381,6 +420,10 @@ export class HomeLeaves {
     this.teamList = null;
     this.teamInfo = null;
     this.teamLog = null;
+    this.teamInvite?.close();
+    this.teamInvite = null;
+    this.teamPoint?.close();
+    this.teamPoint = null;
     this.teamMail = null;
     this.searchMail = null;
     this.meetFrames = null;
