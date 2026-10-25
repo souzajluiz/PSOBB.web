@@ -42,12 +42,15 @@ interface Log {
   revived: number;
   consumed: number[];
   logs: string[];
+  // Every send in order: 'consume', '31' (6x31), '4f' (6x4F), 'revivable' (6x4E).
+  sent: string[];
+  revivalItemUsed: number;
 }
 
 // A player with the events of the death flow; `item` is what the drop check finds
 // (undefined: the event is absent, the flow without an inventory).
 function makePlayer(item: { id: number; scapeDoll: boolean } | null | undefined, live: { item: { id: number; scapeDoll: boolean } | null } | null = null) {
-  const log: Log = { deaths: [], revivable: 0, revived: 0, consumed: [], logs: [] };
+  const log: Log = { deaths: [], revivable: 0, revived: 0, consumed: [], logs: [], sent: [], revivalItemUsed: 0 };
   const events: PlayerDamageEvents = {
     motion: () => {},
     push: () => {},
@@ -55,10 +58,23 @@ function makePlayer(item: { id: number; scapeDoll: boolean } | null | undefined,
     sendHit: () => {},
     sendShieldAttack: () => {},
     sendDeath: (_killer, flags) => log.deaths.push(flags),
-    sendRevivable: () => log.revivable++,
-    sendRevived: () => log.revived++,
+    sendRevivable: () => {
+      log.revivable++;
+      log.sent.push('revivable');
+    },
+    sendRevived: () => {
+      log.revived++;
+      log.sent.push('4f');
+    },
+    sendRevivalItemUsed: () => {
+      log.revivalItemUsed++;
+      log.sent.push('31');
+    },
     log: (m) => log.logs.push(m),
-    sendConsumeItem: (id) => log.consumed.push(id),
+    sendConsumeItem: (id) => {
+      log.consumed.push(id);
+      log.sent.push('consume');
+    },
   };
   if (item !== undefined) {
     events.findDropCheckItem = () => (live ? live.item : item);
@@ -105,10 +121,12 @@ function killAndFade(pd: PlayerDamage, maxTicks = 1000): void {
   for (let i = 0; i < 1000 && pd.state === 'dead'; i++) pd.tick();
   check(log.consumed.length === 1 && log.consumed[0] === 0x1234, 'the fade end sends 6x29 for the Scape Doll once');
   check(log.revivable === 0, 'the revivable marker (6x4E) is not sent');
-  // Exe: dispatch_action_0x4f sends 6x31 then 6x4F; the port sends 6x4F only (ASSUMED).
+  // Exe: dispatch_action_0x4f sends 6x31 (0x92c & 4) then 6x4F.
   check(log.revived === 1, 'the revive sends 6x4F once');
+  check(log.revivalItemUsed === 1, 'the revive sends 6x31 once (the revival item was used)');
+  check(log.sent.join(',') === 'consume,31,4f', 'the order is 6x29, 6x31, 6x4F');
   check(pd.state === 'reviving', 'the player is in the revive state (0x12)');
-  check(pd.hp === 13 && pd.invuln === 300 && !pd.dead, 'revived with invulnerability 300 (exe) and HP 13 (ASSUMED 1/8 of max)');
+  check(pd.hp === pd.maxHp && pd.hp === 100 && pd.invuln === 300 && !pd.dead, 'revived at full HP (Player_DisableMovement -> PlayerRestoreHealthAndTP_0068fda4) with invulnerability 300');
   check(log.logs.some((m) => m.includes('revives you')), 'the revive is logged');
   // The revive motion ends: alive again, and no second consume.
   for (let i = 0; i < 1000 && pd.state !== 'alive'; i++) pd.tick();
@@ -124,6 +142,7 @@ function killAndFade(pd: PlayerDamage, maxTicks = 1000): void {
   check(pd.state === 'reviving' && log.revivable === 0, 'a non-doll triple revives (exe: HandleDropItemAction returns 1)');
   check(log.consumed.length === 1 && log.consumed[0] === 0x55, 'a non-doll triple is used up with 6x29');
   check(log.revived === 1, 'a non-doll triple sends the 6x4F revive');
+  check(log.revivalItemUsed === 1 && log.sent.join(',') === 'consume,31,4f', 'a non-doll triple sends 6x31 before 6x4F');
   check(log.deaths[0] === 0, 'a non-doll triple also clears bit 2 (the exe found an item)');
 }
 

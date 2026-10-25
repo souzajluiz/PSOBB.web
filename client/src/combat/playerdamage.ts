@@ -57,6 +57,9 @@
 //   6x4D G_PlayerDied_6x4D        {header, u32 death_flags}       (player+0x92c)
 //   6x4E G_PlayerRevivable_6x4E   {header}                        - Reverser target
 //   6x4F G_PlayerRevived_6x4F     {header}
+//   6x31 G_UseMedicalCenter_6x31  {header}  - the revival item was used
+//     (dispatch_action_0x4f, 0x0069da2c: sent before the 6x4F when 0x92c & 4;
+//     newserv only forwards it, ReceiveSubcommands.cc 6x31 table entry)
 //
 // The motion tables below are the field motion tables 0x009cbeec (records) /
 // 0x009cbf04 (rlc index lists) read out of PsoBB.exe, [motion type][weapon
@@ -248,6 +251,10 @@ export interface PlayerDamageEvents {
   // 6x4E / 6x4F.
   sendRevivable(): void;
   sendRevived(): void;
+  // 6x31 (G_UseMedicalCenter_6x31, client id only): the first send of
+  // dispatch_action_0x4f when an automatic revival item revived the player
+  // (player+0x92c & 4); sent right before the 6x4F. Absent: not sent.
+  sendRevivalItemUsed?(): void;
   log(msg: string): void;
   // A sound effect at the player (play_sound_effect_at_player).
   sound?(id: number): void;
@@ -443,10 +450,11 @@ export class PlayerDamage {
   }
 
   // Another player's Reverser / Moon Atomizer, or the web client's own revive
-  // key, and the automatic revival item (the exe's own revive, see the fade end).
+  // key (HP ASSUMED 1/8, not traced), and the automatic revival item (the exe's
+  // own revive, see the fade end: `autoItem`, HP = max, 6x31 before the 6x4F).
   // The 6x4F path with the exe's invulnerability 300 and state 0x12
-  // (ForceExitSpecialState_0069db5c tail). HP is ASSUMED (1/8, not traced).
-  revive(hp = Math.max(1, Math.round(this.maxHp * 0.125))): void {
+  // (ForceExitSpecialState_0069db5c tail).
+  revive(hp = Math.max(1, Math.round(this.maxHp * 0.125)), autoItem = false): void {
     if (!this.dead) return;
     this.state = 'reviving';
     this.hp = Math.min(this.maxHp, Math.max(1, hp));
@@ -456,6 +464,7 @@ export class PlayerDamage {
     this.fadeTicks = -1;
     this.startMotion('revive');
     this.events.fx?.({ kind: 'revive' });
+    if (autoItem) this.events.sendRevivalItemUsed?.();
     this.events.sendRevived();
     this.events.log(`revived with ${this.hp}/${this.maxHp} HP`);
   }
@@ -533,11 +542,13 @@ export class PlayerDamage {
           if (found) {
             this.events.sendConsumeItem?.(found.id);
             this.events.log('an automatic revival item revives you');
-            // ASSUMED timing and HP: the exe sends 6x31 then 6x4F from
-            // dispatch_action_0x4f (0x0069da2c, tail 0x0069da73: 6x4F size 1) when
-            // the dead state's interrupt runs (HandleDeadStateInterrupt
-            // 0x0069e34c), not here. The port revives at once; HP is ASSUMED.
-            this.revive();
+            // Proven (Ephinea dump): Player_DisableMovement_0068fd74, called by
+            // HandleDropItemAction before the 6x29, runs PlayerRestoreHealthAndTP
+            // _0068fda4: HP = max_hp1 (clamped), TP = max_tp2. So the revive is at
+            // full HP. The 6x31 then 6x4F are dispatch_action_0x4f's (0x0069da2c,
+            // 0x92c & 4 set). ASSUMED: that dispatch runs at the state 0x12 transition
+            // (not traced), the port sends it at the fade end.
+            this.revive(this.maxHp, true);
             break;
           }
           // The return-to-Pioneer-2 routine: 6x4E, the revivable marker.

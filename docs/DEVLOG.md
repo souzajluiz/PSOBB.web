@@ -31,6 +31,31 @@
 **Left:** the Pofuilly exe motion 4 and the +0x3f4 readers (ROADMAP line); the generic last-frame step-back (`NodeAnimator`, all enemies).
 
 **Checks:** `node tests/morfosnodes.test.ts` (all checks passed), `node tests/enemyfsmep2d.test.ts` (all checks passed), `NEWSERV=.../vendor/newserv node tests/combat.test.ts` (5859 checks, 0 failures), `node tests/enemies.test.ts` (exit 0). `client` `npx tsc --noEmit -p .` (Node 24): clean. Not run in Chrome or Playwright.
+## 2026-10-25: Scape Doll revive: full HP, 6x31 before 6x4F (Ephinea 1.25.13, second pass)
+
+**Question:** after the fade's end consumes the revival item, what sets the HP, which packets go out, and what does the exe's state 0x12 do? The previous entry left the HP (1/8) and the 6x31 ASSUMED.
+
+**Exe evidence (Ephinea dump `reverse/refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, names carry the Ephinea addresses; the disasm was not re-run for this pass):**
+- `HandleDropItemAction_006923dc` (573653): `Player_DisableMovement_0068fd74(player)` runs before the `[+0x92c] |= 4` and the 6x29. `Player_DisableMovement` (571388) calls `PlayerRestoreHealthAndTP_0068fda4` (571402: `ClampEntityHP(max_hp1)`, `tp2 = max_tp2`). **Proven: the revive is at full HP** (max_hp1, not half and not 1/8). The unconditional full restore is the `0068fda4` variant, not `0068fddc` (the conditional one that halves HP in an unsafe map, used by `Player_ResumeMovement`). The `1/8` was wrong.
+- `dispatch_action_0x4f` (583545): `[+0x92c] & 4` set -> `dispatch_action_0x31` (554791: `[31 01 cid]`, skipped when `[+0x32c] == 2`), then the IsSeabedTuriganeChallenge check; clear -> `dispatch_action_0xa1` (571828: 6xA1). Then the 6x4F (skipped when `[+0x32c] == 2`). So **proven: 6x31 then 6x4F** on the item path.
+- newserv `ReceiveSubcommands.cc`: 6x31 is `G_UseMedicalCenter_6x31` (`CommandFormats.hh` 4146, client id header), table entry `on_forward_check_game`: forwarded, no HP change. 6x4F `on_player_revived` forwards, and only the infinite-HP cheat maximises HP. So the server does not set the revive HP; the exe's `Player_DisableMovement` does.
+- `ForceExitSpecialState_0069db5c` (583620; state 0x12 entry via `handle_input_state_0x4f(this, 0)`): `invuln = 300`, `max_hp` (the photon accumulator float) = 0, `max_tp = 0x30`, `SetPlayerInputState(0x12)`. HP is not written here.
+- `handle_input_state_0x4f` (583468): phase 5 (dispatch) = `dispatch_action_0x4f`; in the state 0x12 switch (581915, the dispatch-phase function) and in `HandleDeadStateInterrupt_0069e34c` (584116, phase 3 of the dead state) when `[+0x30] & 0x800 == 0`. **The dispatch-phase call is the one that fires on a requested transition to 0x12** (`handle_input_movement_related(this, [+0x6ca], dispatch)` at 555821, the `in_animation` path of 555790), not per tick.
+- `PlayerDieAction_0069ac2c` (580931) sets `[+0x30] |= 0x800` on the dead entry (584280 in `HandlePlayerInputAndState_0069e458`). So the interrupt's 0x800 test is normally false (no 6x31 / 6x4F from it). The dead state's interrupt is therefore not the path that sends the revive packets in the normal flow; the earlier note that it is was an over-reading of 584119. (The "fires on a requested transition" reading of 555821 is an inference, ASSUMED.)
+
+**Port:**
+- `client/src/combat/playerdamage.ts`: the fade's end calls `revive(this.maxHp, true)`: HP = max, 6x29 before it, then `sendRevivalItemUsed` (6x31) and `sendRevived` (6x4F) inside `revive()`. The Reverser / web revive path keeps the 1/8 HP and no 6x31 (its HP is still ASSUMED).
+- `client/src/net/game.ts`: `sendRevivalItemUsed()` = subcommand 0x31, empty body (same shape as 6x4F). `client/src/render/combat.ts` wires it.
+- `tests/scapedoll.test.ts`: the revive is at max HP (100 of 100); the send order is `consume, 31, 4f`; the non-doll triple sends 6x31 too.
+
+**ASSUMED / open:**
+- When the dispatch-phase send (6x31 / 6x4F) runs: the port sends at the fade's end, the exe at the requested transition to 0x12 (`[+0x6ca]` / `in_animation` path). The chain that requests 0x12 is not traced (`CanTransitionPlayerInputState_00694430` has no caller in the dump).
+- The TP restore (`max_tp2`) is not modelled in the port (no TP in `PlayerDamage`).
+- The revive motion (`REVIVE_MOTIONS`) and the state 0x12 per-tick handler (`ProcessInputState_0x4F_WeaponColor_006a2994`, phase 6) are not compared to the port's `reviving` state.
+- Reverser / Moon Atomizer / web revive HP: still ASSUMED 1/8.
+
+**Checks:** `node tests/scapedoll.test.ts` (31 checks), `node tests/returnprompt.test.ts` (62/62), `node tests/combatdepth.test.ts` (836, 0 failures), `NEWSERV=<main>/vendor/newserv node tests/combat.test.ts` (5859, 0 failures), `tsc --noEmit -p client` (Node 24) clean. Not run in Chrome.
+
 ## 2026-10-25: Scape Doll: the exe's drop-check items, the use-up, and the revive packets (Ephinea 1.25.13)
 
 **Question:** after `HandleDropItemAction_006923dc` finds the item, what does the exe do to the player? The port's revive (HP 1/8, 6x4F, invulnerability 300, motion) was ASSUMED. What are the other two drop-check triples?

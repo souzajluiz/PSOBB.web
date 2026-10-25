@@ -1362,6 +1362,12 @@ export class Game extends Lobby {
     this.sendSubcommand(0x4e, new Uint8Array(0));
   }
 
+  // 6x31 (G_UseMedicalCenter_6x31, 4): the automatic revival item was used
+  // (dispatch_action_0x4f's first send when player+0x92c & 4). Forwarded by newserv.
+  sendRevivalItemUsed(): void {
+    this.sendSubcommand(0x31, new Uint8Array(0));
+  }
+
   // 6x4F (G_PlayerRevived_6x4F, 4).
   sendPlayerRevived(): void {
     this.sendSubcommand(0x4f, new Uint8Array(0));
