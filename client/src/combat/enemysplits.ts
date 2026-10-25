@@ -983,6 +983,7 @@ const SLIME_ANIM = {
   look: loop(10, 0.5), // animation 1 (chains to 2, motion 13)
   spit: once(2, 0.8), // animation 3
   hurt: once(3, 0.8), // animation 5
+  stun: once(8, 0.8), // animation 4 (row 4 of 0x009bfc80: mode 3, motion 8, speed 0.8; 0x0059856c)
 };
 
 // The body's transform (PsoBB.exe 0x00596264, the slime's draw, vtable +0x08):
@@ -1044,6 +1045,10 @@ export const SLIME_MORPH: Readonly<Record<SlimeState, number>> = {
 };
 
 const HIDDEN_STATES: ReadonlySet<SlimeState> = new Set(['sink', 'crawl', 'thrown']);
+// The states whose entry writes +0x3f4 = 1 (PsoBB.exe: search 0x597f1a, confused 0x597fb1,
+// approach 0x59801b, spit 0x598061, arm 0x598338 (the arm entry 0x598070..0x598368), stun
+// 0x5985b5). The other entries write 0 (0x597b86 puddle ... 0x5987bb thrown).
+const RETICLE_STATES: ReadonlySet<SlimeState> = new Set(['search', 'confused', 'approach', 'spit', 'arm', 'stun']);
 // DAT_009bfda0[rare]: the puddle morph's BML motion (exe 0x00597b0c -> 0x00599c7c(7)).
 export const PUDDLE_MOTION = { normal: 4, rare: 5 } as const;
 // ASSUMED: the puddle pose plays at the wait rate (the spawn motion's 0.5).
@@ -1129,6 +1134,16 @@ export class SlimeAi extends BrainBase {
 
   get untargetable(): boolean {
     return this.hidden || this.state === 'puddle';
+  }
+
+  // +0x3f4 != 0 (the entries' flag above). SinowzoaUpdate (0x00596104, 0x00596168) then calls
+  // enable_reticle (0x006946a8) for the slime: check_enemy_is_targetable fills the players'
+  // targeting records only inside that call, so the slime is a lock-on / technique target
+  // of a player only in these states. SinowzoaClearControlFlag (0x00596248) clears bit 0x1
+  // of the sub-object's flags (+0x18) when +0x3f4 is 0; the bit is set again each frame at
+  // 0x005961d4 (not modelled: its readers are not traced).
+  get lockable(): boolean {
+    return RETICLE_STATES.has(this.state);
   }
 
   get invulnerable(): boolean {
@@ -1273,13 +1288,14 @@ export class SlimeAi extends BrainBase {
         this.play(out, SLIME_ANIM.hurt);
         break;
       case 'stun':
-        // 0x0059856c: scale 1, the counter (+0x39c) to 0, morph 4, the motion table to 4
-        // (ASSUMED: the port plays its hurt animation; the exe's motion 4 is not mapped),
-        // +0x3f4 = 1 (not modelled: nothing in the port reads it).
+        // 0x0059856c: scale 1, the counter (+0x39c) to 0, morph 4 (the sub-object's +4), then
+        // EnemyLoadAnimationOrModel_00599c7c(4) sets the animation slot +0xb8 = 4: row 4 of the
+        // motion table 0x009bfc80 (mode 3, motion 8, speed 0.8). Only this entry loads slot 4.
+        // +0x3f4 = 1 (`lockable`).
         this.xf.sx = this.xf.sy = this.xf.sz = 1;
         this.timer = 0;
         this.morph = SLIME_MORPH.stun;
-        this.play(out, SLIME_ANIM.hurt);
+        this.play(out, SLIME_ANIM.stun);
         break;
     }
   }
