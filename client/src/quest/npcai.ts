@@ -285,8 +285,8 @@ export class NpcAttackGate {
 // does not set it). The flag is cleared on a tick when the head is not in state 1 (.c:797032).
 // The NPC's +0x30 (character_flags) with 0x100000 (in_guard_stance) makes the state-1 send walk-only
 // (.c:797015..797031: SendMoveStart every tick, no run, the head's run flag untouched) and sets the 6x40
-// flags word to 8 (SendMoveStart_007b298c .c:797079). The guard bit's source for an NPC is not in the
-// port (ASSUMED clear). The send rules and the packet layout are exe-read. The packet's x / z are the
+// flags word to 8 (SendMoveStart_007b298c .c:797079). The guard bit's source for an NPC is clear in the
+// port: the exe's proximity setter (ClearEnemyHitbox_0052ac5c) has enemy callers only (DEVLOG 2026-10-25). The send rules and the packet layout are exe-read. The packet's x / z are the
 // head's send target (+0xac / +0xb4, quest/npchead.ts NpcHead.sendTarget), as in the exe
 // (SendMoveStart_007b298c, SendMove_007b29f0). The send's distance is from that target to the NPC.
 export const NPC_MOVE_WALK = 0x40; // action_type move_start = 64 (dump enum input_state_1)

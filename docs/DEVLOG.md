@@ -1,5 +1,29 @@
 # Devlog
 
+## 2026-10-25: the near-enemy flag (character_flags 0x100000): the setter is enemy-only, the NPC guard stays clear
+
+**Question:** which exe code sets / clears `in_guard_stance` (0x100000, newserv `is_near_enemy`), from what distance test, and does the port already have it for the local player (so an NPC could reuse it)?
+
+**Exe evidence** (dump `src/Psobb.exe-05112026.c`; `tools/refsrc.sh addr 0052ac5c`; thresholds read with `tools/exedata.py read 00922330 f 4`):
+- Proximity setter `ClearEnemyHitbox_0052ac5c` (.c:311401, community name). Target = `GetTargetableNPC_00770738` (`get_targetable_npc(target_idx)`). No target: clear the bit. Target not a player, or the entity's vtable+0x44(0x1e) test fails (ASSUMED: a liveness / state test): set the bit. Otherwise xz distance squared from the target's position (`x`, `z`) to the entity's `x2` / `z2`, with the class of the TARGET (`gender_race_job_flags` +0x964 & (Force|Ranger|Hunter) == Hunter):
+  - hunter: enter when dist² < `g_HunterGuardStanceEntryDistanceSq` (0x922334 = 2500), leave when > `ExitDistanceSq` (0x922330 = 10000).
+  - others: enter < 0x92233c (10000), leave > 0x922338 (22500).
+  - hysteresis: off turns on inside enter; on turns off beyond exit.
+- Callers (all enemy AIs): `unknown_enemy_behavior_1` (.c:311239), `LilyAI_Update_0052ad80` (.c:311614), `unknown_booma_enemy_chase_target` (.c:311565 area), `RappyRangedAttackState_00553084` (.c:337973). No NPC / head caller in the dump.
+- Other writers, all explicit: `SetPlayerGuardStance_006a29f4` (.c:588331, the got-hit-light `end` case, .c:584666 / 585213); the 6x3E relay `action_stop_move` (.c:579263, bit from the packet's flag word: 1 set, 0 clear, .c:579309..579317); the 6x3F relay `handle_packet0x60_subcommand0x3f` (.c:579329, .c:579370..579375).
+- Readers of the NPC's bit: the 6x40 flags word (`SinowberillHead_SendMoveStart_007b298c` .c:797079), the 6x42 path, and the 6x3E / 6x3F sends.
+
+**Port:**
+- The local player's guard is `render/playermove.ts` `guardStance` (hysteresis and the 2500 / 10000 / 10000 / 22500 values match the exe's constants) fed by `render/lobbyview.ts` `setGuard(..., mine.charClass)`. The distance is to the lock-on target. The port uses the MOVER's class; the exe's setter tests the TARGET's class. The port's comment says the local guard is the 0x0052ac5c rule, but that function has no player caller in the dump, so the local rule is ASSUMED, not proven. Left as is (not changed here).
+- Nothing reusable for an NPC: the proximity rule is not an NPC rule in the exe, so the NPC's guard stays `false` in `quest/town.ts` `stepNpcHead` (comment updated). The walk-only branch and the 6x40 flags word stay dormant, exactly as before.
+
+**ASSUMED:**
+- The dump grep is complete for `in_guard_stance` / `0x100000` writers (decompiled names only; inlined literal masks were searched for `0x100000` / `0xffefffff` / `0xfffeffff` and gave other fields).
+- The `vtable+0x44(0x1e)` test in 0x0052ac5c is a liveness check (not decoded).
+- An NPC's bit can only arrive from a server relay of 6x3E / 6x3F with the NPC's slot (not traced in newserv).
+
+**Not done:** the 0x800 downed branch of the NPC head (the ROADMAP's next open NPC piece) was not started in this pass.
+
 ## 2026-10-25: NPC attack AI: the guard stance's walk-only send and the 6x40 flags word
 
 **Question:** the ROADMAP's "NPC players' attack AI" line left open the 6x40 flags word and the 0x100000 gate of the state-1 send. What does the exe do with the NPC's guard stance there?

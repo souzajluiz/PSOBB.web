@@ -840,7 +840,8 @@ export class QuestTown {
     }
     // Not in state 1: no send, and the run flag is cleared (2764's flag 0x8 reset).
     let send: 'walk' | 'run' | null = null;
-    // The NPC's guard stance (character_flags 0x100000) is not tracked by the port: ASSUMED clear.
+    // The NPC's guard stance (character_flags 0x100000) stays clear: the exe has no proximity setter for
+    // NPC entities (DEVLOG 2026-10-25 guard setter); the bit only comes from 6x3E / 6x3F relays.
     const guard = false;
     if (dist === null) sender.reset();
     else send = sender.tick(dist, head.leash, guard);
