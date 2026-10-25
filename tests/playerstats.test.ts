@@ -8,13 +8,20 @@ import { ItemPMT } from '../client/src/formats/itempmt.ts';
 import { itemFromHex } from '../client/src/formats/itemnames.ts';
 import { compareColor, compareStatRows, equipStatRows, VALUE_COLOR, type StatBlock } from '../client/src/classic/itemdetail.ts';
 import {
+  applyColoredRing,
   applyItem,
   blocksFromFile,
+  defaultSetContext,
   displayedStats,
   equipmentRange,
   equippedCandidate,
+  itemSetBonusDelta,
   magStatContribution,
+  morningGloryAtpBonus,
   recalculateCandidate,
+  setFactorAtp,
+  setFactorDfp,
+  setFactorEvp,
   wornEquipment,
   type CompareStats,
   type WornEquipment,
@@ -149,6 +156,119 @@ const MAG = itemFromHex('02010a005e01e304d0027003');
 eq(magStatContribution(MAG), { atp: 24, mst: 16, dfp: 3, ata: 35 }, 'mag: POW x2 to ATP, MIND x2 to MST, DEF x1 to DFP, DEX x10 x0.5 to ATA (tenths)');
 eq(magStatContribution(SWORD_G2), { atp: 0, mst: 0, dfp: 0, ata: 0 }, 'mag effect: a weapon adds none here');
 eq(magStatContribution(itemFromHex('02010a006300000000000000')), { atp: 0, mst: 0, dfp: 0, ata: 0 }, 'mag effect: under one level adds nothing');
+
+// --- set bonuses, colored rings and the item set bonus (2026-10-25; Ghidra addresses in the module) ---
+const F = (x: number) => Math.fround(x);
+const it = (hex: string) => itemFromHex(hex.padEnd(24, '0'));
+const W_G1_I5 = it('000105');  // weapon group 1 idx 5 (a sabre-like weapon, the 1.5 set)
+const W_G1_I8 = it('000108');  // galatine (beat-time ladder)
+const W_G2_I0 = it('000300');  // weapon sub 3 idx 0 (no set)
+const S_26 = it('010226');     // shield 0x26
+const A_28 = it('010128');     // armour 0x28
+const A_45 = it('010145');     // sweetheart armour
+const A_18 = it('010118');     // hunter/ranger/force armour
+const S_92 = it('010292');     // honeycomb reflector
+const S_2A = it('01022a');     // shield 0x2a
+const S_55 = it('010255');     // colored ring (0x55: k = 2)
+const S_57 = it('010257');     // k = 4 (ATA range)
+const S_58 = it('010258');     // k = 5 (ATP range)
+const S_5B = it('01025b');     // k = 0 (nothing)
+const S_85 = it('010285');     // handle_barrier: weapon sub switch
+const S_87 = it('010287');
+const A_56 = it('010156');     // frame: weapon sub 0x10 idx < 7
+const WPN_10_2 = it('001002'); // weapon sub 0x10 idx 2
+const WPN_65 = it('006500');
+const WPN_7_8 = it('000708');
+const WPN_BF = it('00bf00');
+const WPN_B4 = it('00b400');
+const WPN_6_8 = it('000608');
+const WPN_14_1 = it('001401');
+const WPN_SWORD_SAINT = it('000309'); // the proof table's first triple
+const UNIT_H = it('010348');
+const UNIT_P = it('010350');
+const MAG_H = it('024800');
+const A_40 = it('010140');     // an armour with no DFP set
+
+// The factor functions read the worn slots: a worn shield / armour / weapon of the given items.
+const ctxOf = (worn: WornEquipment, over: Partial<ReturnType<typeof defaultSetContext>> = {}) => ({
+  ...defaultSetContext(worn),
+  ...over,
+});
+const wornOf = (over: Partial<WornEquipment>): WornEquipment => ({ weapon: null, armour: null, shield: null, units: [], mag: null, ...over });
+
+// get_equipment_set_atp_bonus_weapon: the set conditions on the worn shield / armour.
+eq(setFactorAtp(W_G1_I5, ctxOf(wornOf({ shield: S_26, armour: A_28 }))), F(1.5), 'ATP set: weapon 1/5 with shield 0x26 and armour 0x28 is 1.5');
+eq(setFactorAtp(W_G1_I5, ctxOf(wornOf({ shield: S_26 }))), F(1.0), 'ATP set: without the armour the factor is 1.0');
+eq(setFactorAtp(W_G2_I0, ctxOf(wornOf({ shield: S_26, armour: A_28 }))), F(1.0), 'ATP set: a weapon with no set row is 1.0');
+// The galatine ladder (beat time): 0.33 up to 124, 0.5, 1.0, 2.0, 3.0, 2.0, 1.0 (749..875), 0.5 after.
+const galatine = (beat: number) => setFactorAtp(W_G1_I8, ctxOf(wornOf({}), { beatTime: beat }));
+eq([0, 124, 125, 249, 300, 400, 500, 700, 800, 875, 900].map(galatine), [0.33, 0.33, 0.5, 0.5, 1, 2, 3, 2, 1, 0.5, 0.5].map(F), 'galatine ladder by beat time');
+// Morning glory: only sub 0x94 gets floor(beat / 4); other subs get 0.0.
+eq(morningGloryAtpBonus(it('009400'), 400), 100, 'morning glory: beat 400 gives 100');
+eq(morningGloryAtpBonus(W_G2_I0, 400), 0, 'morning glory: other subs give 0');
+// The armour set factor (DFP): the sweetheart's teammates, the party loop, the honeycomb reflector.
+const dfpOf = (item: ReturnType<typeof it>, over: Partial<ReturnType<typeof defaultSetContext>>, worn = wornOf({})) => setFactorDfp(item, ctxOf(worn, over));
+eq([1, 2, 3, 0].map((n) => dfpOf(A_45, { nearby: n })), [0.85, 0.8, 0.75, 1.0].map(F), 'DFP set: sweetheart 0x45 by teammates 1..3 (0 is 1.0)');
+eq(dfpOf(A_45, { nearby: 2 }, wornOf({ shield: S_2A })), F(1.1), 'DFP set: shield 0x2a (1.1) replaces the sweetheart factor (assignment in the exe)');
+eq(dfpOf(A_18, { party: [0x19] }), F(1.2), 'DFP set: a hunter/ranger/force armour with a 0x19 in the party is 1.2');
+eq(dfpOf(A_18, { party: [0x1b] }), F(1.0), 'DFP set: no matching party armour is 1.0');
+eq(dfpOf(it('010126'), {}, wornOf({ weapon: it('000205'), shield: it('010224') })), F(1.5), 'DFP set: armour 0x26 with weapon 2/5 and shield 0x24 is 1.5');
+eq(dfpOf(A_40, { movement: 0 }, wornOf({ shield: S_92 })), F(0.5), 'DFP set: honeycomb reflector (shield 0x92) not standing and still is 0.5');
+eq(dfpOf(A_40, { movement: 4 }, wornOf({ shield: S_92 })), F(1.0), 'DFP set: honeycomb reflector moving is 1.0');
+eq(dfpOf(A_40, { movement: 2 }, wornOf({ shield: S_92 })), F(1.0), 'DFP set: honeycomb reflector standing leaves the factor alone');
+// The shield's EVP factor: the weapon / armour pairs and the 0x92 movement rule.
+const evpOf = (item: ReturnType<typeof it>, over: Partial<ReturnType<typeof defaultSetContext>>, worn = wornOf({})) => setFactorEvp(item, ctxOf(worn, over));
+eq(evpOf(it('01021a'), {}, wornOf({ weapon: it('001a00') })), F(2.0), 'EVP set: shield 0x1a with a weapon of sub 0x1a is 2.0');
+eq(evpOf(S_26, {}, wornOf({ weapon: it('000105'), armour: A_28 })), F(1.5), 'EVP set: shield 0x26 with weapon 1/5 and armour 0x28 is 1.5');
+eq([evpOf(S_92, { movement: 2 }), evpOf(S_92, { movement: 0 }), evpOf(S_92, { movement: 4 })], [1.5, 0.5, 1.0].map(F), 'EVP set: shield 0x92 standing 1.5, still 0.5, moving 1.0');
+// applyItem scales the weapon's range by the set factor and the morning bonus (ROUND, dump 426168).
+const block = () => ({ atp: 0, mst: 0, evp: 0, dfp: 0, ata: 0, lck: 0, rmin: 0, rmax: 0, ataMin: 0, resEvp: 0, resDfp: 0 });
+pmt.weapons[1] = [];
+pmt.weapons[1][5] = { id: 50, usabilityFlags: 0xff, atpRequired: 0, mstRequired: 0, ataRequired: 0, atpMin: 10, atpMax: 20, mst: 0, ata: 0, statBoostEntryIndex: 0 } as never;
+pmt.armors[0x28] = { id: 40, usabilityFlags: 0xff, requiredLevel: 0, dfp: 0, evp: 0, statBoostEntryIndex: 0 } as never;
+pmt.shields[0x26] = { id: 41, usabilityFlags: 0xff, requiredLevel: 0, dfp: 0, evp: 0, statBoostEntryIndex: 0 } as never;
+const setWorn = wornOf({ armour: A_28, shield: S_26 });
+const setBlock = block();
+applyItem(setBlock, W_G1_I5, pmt, 1, defaultSetContext(setWorn));
+eq([setBlock.rmin, setBlock.rmax], [15, 30], 'applyItem: the set 1.5 scales the weapon range (ROUND(10 x 1.5), ROUND(20 x 1.5))');
+const plainBlock = block();
+applyItem(plainBlock, W_G1_I5, pmt, 1);
+eq([plainBlock.rmin, plainBlock.rmax], [10, 20], 'applyItem with no context: the range is the PMT range');
+// The compare: the weapon 1/5 scaled by the worn set (range max 20 x 1.5 = 30) against the unscaled 20.
+const setStats: CompareStats = { atp: 100, dfp: 30, mst: 52, ata: 200, evp: 40, lck: 3 };
+eq(recalculateCandidate(setStats, W_G1_I5, setWorn, 0, pmt).atp, 100 + 10 + 30, 'compare: ATP = base + class range max 10 + the scaled range max 30');
+eq(recalculateCandidate(setStats, W_G1_I5, wornOf({ armour: A_28 }), 0, pmt).atp, 100 + 10 + 20, 'compare: without the shield the range max stays 20');
+
+// Colored rings (colored_ring_matching_boosts): a shield 0x53..0x82 with barrier count n.
+const ringBlock = (item: ReturnType<typeof it>, barrier: number) => {
+  const t = block();
+  applyColoredRing(item, barrier, t);
+  return t;
+};
+eq([ringBlock(S_55, 2).resEvp], [50], 'colored ring: idx 0x55 (k = 2): EVP += 25 x 2');
+eq([ringBlock(S_57, 2).ataMin], [200], 'colored ring: idx 0x57 (k = 4): ATA range += 100 x 2');
+eq([ringBlock(S_58, 2).rmin, ringBlock(S_58, 2).rmax], [100, 100], 'colored ring: idx 0x58 (k = 5): ATP range += 50 x 2 on both ends');
+eq(ringBlock(S_5B, 3), block(), 'colored ring: idx 0x5b (k = 0) adds nothing');
+eq(ringBlock(it('010155'), 3), block(), 'colored ring: an armour in the same index range adds nothing');
+eq(ringBlock(S_55, 0), block(), 'colored ring: no teammate (the default) adds nothing');
+
+// handle_item_set_bonus: each handler keyed by the candidate's sub / index, the worn items as the condition.
+const sets = (item: ReturnType<typeof it>, worn: WornEquipment, over: Partial<ReturnType<typeof defaultSetContext>> = {}) => {
+  const t = itemSetBonusDelta(item, ctxOf(worn, over));
+  return t;
+};
+eq(sets(WPN_B4, wornOf({ units: [UNIT_H] })).ataMin, 300, 'item set: weapon sub 0xb4 with a unit H worn: ATA range +300');
+eq(sets(WPN_B4, wornOf({})).ataMin, 0, 'item set: weapon sub 0xb4 without the unit: nothing');
+eq(sets(WPN_6_8, wornOf({ mag: MAG_H })).lck, 100, 'item set: weapon sub 6 idx 8 with the mag H: LCK +100');
+eq(sets(S_87, wornOf({ weapon: WPN_BF })).resEvp, 50, 'item set: shield 0x87 with a weapon sub 0xbf: EVP +50');
+eq(sets(S_85, wornOf({ weapon: WPN_65 })).ataMin, 300, 'item set: shield 0x85 with a weapon sub 0x65: ATA range +300');
+eq([sets(S_85, wornOf({ weapon: WPN_7_8 })).ataMin, sets(S_85, wornOf({ weapon: WPN_7_8 })).resDfp], [-200, -10], 'item set: shield 0x85 with weapon 7/8: ATA -200 and DFP -10');
+eq(sets(S_2A, wornOf({ weapon: WPN_14_1 })).ataMin, 300, 'item set: shield 0x2a with weapon 0x14/1: ATA range +300');
+eq(sets(A_56, wornOf({ weapon: WPN_10_2 })).ataMin, 200, 'item set: armour 0x56 with weapon 0x10 (idx < 7): ATA range +200');
+eq(sets(A_56, wornOf({ weapon: WPN_65 })).ataMin, 0, 'item set: armour 0x56 with another weapon: nothing');
+eq(sets(UNIT_P, wornOf({ weapon: WPN_SWORD_SAINT })), { ...block(), ataMin: 300, resEvp: 60, resDfp: -20 }, 'item set: unit P with a proof weapon: ATA +300, EVP +60, DFP -20');
+eq(sets(UNIT_P, wornOf({ weapon: WPN_65 })), block(), 'item set: unit P with a weapon outside the table: nothing');
+eq(wornEquipment([MAG_H]).mag === MAG_H, true, 'wornEquipment: the mag slot is kept');
 
 console.log(failures === 0 ? 'ALL PASS' : `${failures} FAILED`);
 if (failures) process.exitCode = 1;
