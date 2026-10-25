@@ -77,15 +77,20 @@ export const ITEM_GROUND_PROBE = 300; // g_ItemFloatingYOffset 0x0092bb70
 export const SE_PICKUP = 0x571; // HandlePlayerPickupSuccess_005c4c1c
 export const PARTICLE_ITEMGET = 0x9b; // w_itemget
 
-// set_item_y_floating: the height of a floor item's origin.
-export function floorItemHeight(item: { x: number; z: number; y?: number }, ground: (x: number, z: number, fromY: number) => number | null): number {
+// set_item_y_floating (0x005c49a4): the height of a floor item's origin. The probe is
+// get_ground(pos, 0x41) (pushl $0x41 at 0x005c49c7), not the player's 0x5f.
+export const ITEM_GROUND_MASK = 0x41;
+export function floorItemHeight(
+  item: { x: number; z: number; y?: number },
+  ground: (x: number, z: number, fromY: number, mask?: number) => number | null,
+): number {
   const y = item.y ?? 0;
-  const g = ground(item.x, item.z, y + ITEM_GROUND_PROBE);
+  const g = ground(item.x, item.z, y + ITEM_GROUND_PROBE, ITEM_GROUND_MASK);
   return g === null ? y : g + ITEM_GROUND_OFFSET;
 }
 
 export interface FloorItemLayerOptions {
-  ground: (x: number, z: number, fromY: number) => number | null;
+  ground: (x: number, z: number, fromY: number, mask?: number) => number | null;
   // The map ray of a drop's line of sight (mask -1); absent: no walls.
   wallBlocks?: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) => boolean;
   // The object boxes a drop spot must stay clear of (FUN_007b5318); absent: none.

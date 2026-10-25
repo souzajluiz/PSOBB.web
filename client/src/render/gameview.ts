@@ -190,7 +190,7 @@ export class GameView {
       return layout.counts;
     };
     this.floorItems = new FloorItemLayer(viewer, this.files, this.items, {
-      ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
+      ground: (x, z, fromY, mask) => (this.collision ? this.collision.groundHeight(x, z, fromY, mask) : viewer.groundHeight(x, z, fromY)),
       // The drop's line of sight: cast_ray_at_map_collision_geometry(eye, spot, -1) (net/dropspot.ts).
       wallBlocks: (a, b) => (this.collision ? this.collision.segmentHit([a.x, a.y, a.z], [b.x, b.y, b.z], 0xffffffff) !== null : false),
       // The drop spot's body test (FUN_007b5318) over the object boxes (render/collision.ts obstacles).

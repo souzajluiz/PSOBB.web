@@ -29,6 +29,9 @@ eq([ITEM_GROUND_OFFSET, ITEM_GROUND_PROBE, SE_PICKUP, DROP_RING_STEP], [6, 300, 
   eq(floorItemHeight({ x: 1, z: 2, y: 50 }, ground), 26, '6x2A: probed from its own y');
   eq(probes, [300, 350], 'probe heights');
   eq(floorItemHeight({ x: 1, z: 2, y: 7 }, () => null), 7, 'no ground: y kept');
+  const masks: (number | undefined)[] = [];
+  floorItemHeight({ x: 0, z: 0 }, (_x, _z, _y, mask) => (masks.push(mask), 0));
+  eq(masks, [0x41], 'get_ground mask 0x41 (pushl $0x41 at 0x005c49c7), not the player 0x5f');
 }
 
 // --- the drop's spot search (net/dropspot.ts, FUN_006a44fc) ---
