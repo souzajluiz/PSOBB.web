@@ -787,6 +787,34 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     b.tick([player(1, 5000, 5000)]);
     eq(b.events.filter((e) => e.kind === 'seStop' && e.id === SM_LASER.se).length, 1, 'the laser sound stops after the end');
   }
+  // The aim (+0x44) is origin + length * forward (the draw: translate to the node 0x2a's block, rotate by its heading,
+  // translate by (0, 0, length)): the origin is the node's translation and the forward is its z axis in XZ, read by the
+  // render. Without the render's record the ASSUMED stand-in sweep is used (distance = the length, the boss's centre).
+  {
+    const aimOf = (b: SaintMilionAi, k: number) => (b as unknown as { laserAim(k: number): { x: number; z: number } }).laserAim(k);
+    const SLOT = SM_LASER.headingSlot;
+    const b = make(true, { x: 120, z: -40 });
+    b.tick([player(1, 5000, 5000)]);
+    const fallback = aimOf(b, 0);
+    eq(Math.round(Math.hypot(fallback.x - 120, fallback.z + 40)), 100, 'no node record: the stand-in aim is the length 100 from the boss');
+    b.nodesKnown = true;
+    b.nodes.fill(0);
+    b.nodes[SLOT * 3] = 10;
+    b.nodes[SLOT * 3 + 1] = 5;
+    b.nodes[SLOT * 3 + 2] = 20;
+    b.axesKnown = true;
+    b.axes.fill(0);
+    b.axes[SLOT * 2] = 3;
+    b.axes[SLOT * 2 + 1] = 4;
+    const near = (p: { x: number; z: number }, x: number, z: number, what: string) =>
+      check(Math.abs(p.x - x) < 1e-6 && Math.abs(p.z - z) < 1e-6, `${what}: got (${p.x}, ${p.z}), want (${x}, ${z})`);
+    near(aimOf(b, 0), 70, 100, 'node 0x2a: update 0 aims 100 along the z axis (3, 4) from the node (10, 20)');
+    near(aimOf(b, 5), 370, 500, 'node 0x2a: update 5 aims 600 along the axis');
+    near(aimOf(b, 6), 382, 516, 'node 0x2a: update 6 is capped at 620');
+    b.axes[SLOT * 2] = 0;
+    b.axes[SLOT * 2 + 1] = -2;
+    near(aimOf(b, 0), 10, -80, 'node 0x2a: a z axis of (0, -2) aims straight back along -z');
+  }
   // The frame count of bm_obj_ep4_boss09_laser.bml (motion 0) against the client's archive, when it is there.
   {
     const dir = process.env.PSOBB_DATA ?? join(process.env.HOME ?? '', 'Downloads/psobb-client/data');

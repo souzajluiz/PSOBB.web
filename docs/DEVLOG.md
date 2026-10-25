@@ -21,6 +21,30 @@
 - Writer: none in the gunner range (0x00543e8c-0x00546300). Every `movl $0x3, 0x37c(...)` there is in the Death Gunner control (update_death_gunner, 0x0054363f / 0x00543663 / 0x005438ea) and writes the control's own pending state. ASSUMED no gunner reaches 3. Still open.
 
 **Tests.** `tests/minimap.test.ts`: the flinch maps to 4 with icon; DUBCHIC is 'own'. `tests/minimap.test.ts`, `tests/enemyfsm.test.ts`, `tests/enemyfsmruins.test.ts`, `tests/galgryphonai.test.ts`: ok. `NEWSERV=.../vendor/newserv node tests/combat.test.ts`: 5859 checks, 0 failures. `cd client && npx tsc --noEmit -p .`: no output (clean). Not run in Chrome (no Playwright).
+## 2026-10-25: Saint-Milion laser aim: the 0x8000 sweep is node 0x2a's z axis (proven); the +100 step is proven, the 620 cap stays ASSUMED
+
+**Outcome.** The aim's heading (the "0x8000 sweep") is not a constant: the render takes it from the boss's node 0x2a block, so the port now aims from the recorded node. The length step 100 is proven (0x00976100). The cap 620 has no exe constant (the exe's cap is the first wall, the cut 0x0077fffc); it stays ASSUMED. The 0x8000 sweep stays only as the fallback for a headless run (no render record).
+
+**Chain (PsoBB.exe, objdump; decoded here).**
+- The laser's ctor 0x00765c68 is called by 0x0076b85c (state 19 / 20, phase 4) with `lea eax,[boss+0xe94]`, but only when 0x00768964(boss, 0x2a) is nonzero (slot in 0..0x2a). So laser+0x54 = boss+0xe94, the 4x4 block of matrix slot 0x2a (the port's `SM_NODES[0x2a]`, model node 85, from the table at 0x009f6960; the draw searches that table at 0x00767b57).
+- Render slot 2 (0x00765ed8): `v = (0, 0, 1)`, out = v times M by 0x0082eab8. Reading the callee's loads and the caller's stack order (`lea edx` after the push), out.x = M[+0x20], out.z = M[+0x28], so out is the block's third row, the node's z axis.
+- The heading: `fpatan(out.x, out.z)`, times 65536 / 2pi (0x009760e0 / 0x009760d8), `fistp`: h = atan2(z.x, z.z) in BAMS.
+- The draw: translation = block translation (+0x30..+0x38) through the current matrix (0x0082d838); then rotation about Y by h (0x0082d8bc; sin = [0x0098b560 + 4*idx], cos = [0x0098c560 - 4*idx], idx = (h >> 4) & 0xfff, checked against the table values); the callback's pass 0 keeps the origin, pass 2 translates by (0, 0, L) in the rotated frame. With the rotation's two rows (row 0' = c row0 - s row2, row 2' orthogonal) the offset is (L sin h, 0, L cos h).
+- So aim (+0x44) = origin (+0x38) + L * (sin h, 0, cos h) = origin + L * unit(z.x, z.z) of node 0x2a.
+- Length: the update 0x00765d7c (after the child slot 1 test 0x00765a90) does `fld [0x976100]` (100.0), `fadd [edi+0x50]`, `fstp [edi+0x50]`; the ctor zeroes +0x50 (0x00765cfb..). So L after update k = 100 (k + 1), the proven step. No 620 anywhere in the exe; the wall cut 0x0077fffc (mask -1, origin to aim) sets +0x50 on a hit, and the port has no wall geometry.
+
+**Port.**
+- `client/src/render/combat.ts` (the Saint-Milion draw, next to the node positions): records the z axis of each matrix slot (`matrixWorld` elements 8 and 10, the column-major third column) into `SaintMilionAi.axes`, `axesKnown`.
+- `client/src/combat/saintmilionboss.ts`: `laserAim(k)` (now public for the test) = node 0x2a's translation + laserLength(k) times the unit XZ axis; the stand-in sweep (SM_LASER.sweep, centred on the boss's heading) only when no record exists. `nodeAxis(slot)` accessor. The hit (SmLaser) is unchanged: it takes r and the bearing from the boss (the dispatcher's "r = |aim - boss|").
+- `client/src/combat/saintmilionents.ts`: `SM_LASER.headingSlot = 0x2a`; the comments carry the chain; `sweep` is marked as the headless fallback.
+
+**ASSUMED / not reproduced.**
+- The laser's own object (+0x28, the current matrix at the draw) is taken as identity, so the origin is the node's translation as recorded. Not traced further.
+- The cap 620 (no exe constant; the wall cut is not in the port). The arena's range is a stand-in only.
+- The one-draw lag: the exe's update reads the last draw's aim; the port reads the last draw's node too, with this update's length.
+- The node positions and axes come from the port's model (three.js world matrix); the exe's block is the NJ matrix. Same orientation assumed.
+
+**Tests.** `tests/saintmilionboss.test.ts` ALL PASS (new in section 12: the fallback is 100 from the boss; node 0x2a at (10, 20) with axis (3, 4) aims (70, 100) at update 0, (370, 500) at update 5, (382, 516) at update 6 (cap); axis (0, -2) aims (10, -80)). `tests/saintmilion.test.ts` all passed, `tests/bossrooms.test.ts` ALL PASS, `tests/combat.test.ts` (NEWSERV = vendor/newserv) 5859 checks, 0 failures. `client`: `npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome.
 
 ## 2026-10-25: Radar per state for the Dark Gunner; Gillchic and Sinow Gold rows
 
