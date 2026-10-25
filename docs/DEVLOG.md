@@ -48,6 +48,21 @@
 **ASSUMED:** the port's `dead` state stands for the dead bit; took_damage (the flinch) has no port flag, so it is not checked.
 
 **Checks:** `cd client && npx tsc --noEmit -p .` (Node 24) clean. `node tests/traps.test.ts` all checks pass (sections 1-9). `node tests/batching.test.ts`, `node tests/fieldhud.test.ts`, `node tests/townfield.test.ts` pass. Not run: Playwright / Chrome.
+## 2026-10-25: Tekker Items left: the compact row's null-player return (GetPlayer +6)
+
+**What changed:** `RowContext.player` (optional, `classic/itempack.ts`; absent = present) and `shopRow` (`classic/shop.ts`) return after the wrapped check when it is `false`: icon 1 stays 0x36 and the colours stay unset. No caller sets it, so the shop, bank and Result rows are unchanged. `tests/tekker.test.ts` gets a block: an untekked, class-blocked weapon (`weapons[2][0]`, usability 0) is icon 0x13 with the player and 0x36 / white without; a wrapped one returns first either way. ROADMAP's tekker Items line is updated.
+
+**Exe evidence (`PsoBB.exe`, dump `src/Psobb.exe-05112026.c`):**
+- `UIElement_UpdateItemValidationState_0072bab0` (dump 694290): wrapped -> colour -1, return; then `GetPlayer_0068d5a8(*(short *)(this+6))` null -> return, before `ValidateItemForEquip_005c9e40`, the tekked test and the 0x19 / 0x13 writes. So the null return leaves 0x36.
+- The `+6` short is the element's player slot: `BaseEntity_InitializeBase_00729838` (dump 692731) writes `this+6 = param_1`, reached from `UIElement_Constructor_00729f3c` (693035) and `BaseEntity_Constructor_007298c8` (692762).
+- `GetPlayer_0068d5a8` (558440) returns `g_pPlayerPointers[slot]` for slot 0..11 and null otherwise.
+- The only writers of `g_pPlayerPointers`: the registration (dump 552365, named `SinowberillChallengePlayer_Register_00685f9c`, 'sets slot = this') and `Player_ClearEntityReferences_00685370` (dump 551788, clears the slot when the entity is removed). So the slot is null only before a player registers or after its entity is removed.
+
+**Port state:** the port has no player-removed state while a counter is open; `RowContext` always has the local character. The null branch is therefore modelled, not reached.
+
+**ASSUMED / open:** that the shop's list slot is the local player's. `ShopDialog_Initialize_006d3a10` (dump 632442) passes `*(short *)(dialog+0x24 + 0x1c)` to `ListWindowObject_Create_0073ff34` (711116), and that field's writer is not traced; the game-list path passes `g_CurrentPlayerSlotIndex` (`GameListMenuWindow_Update_0073ff1c`, 711110). That the shop / counter closes before the local entity is removed (`Player_ClearEntityReferences_00685370`) is not traced. The default colours (white name and icon) are the row's start, not a traced write. The Result list path stays ASSUMED compact (unchanged).
+
+**Checks:** `node tests/tekker.test.ts` (all checks passed, new block), `tests/shop.test.ts`, `tests/fieldhud.test.ts`, `tests/items.test.ts` (all passed), `tests/itemmodels.test.ts` (ALL PASS, 4623 checks), `tests/magfeed.test.ts` (all checks passed). `client/`: `node_modules/typescript/bin/tsc --noEmit -p .` (Node 24) clean. Not run: Chrome, Playwright (per the brief). `vendor/newserv` and `client/node_modules` are links to main's, removed before the commit.
 
 ## 2026-10-25: Darvant child link: the constant table of the Dark Falz grid
 
