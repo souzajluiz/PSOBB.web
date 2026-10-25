@@ -80,6 +80,21 @@
 - Ultimate: the rod is not built (as before). The dump's "VoloptForm7*" names (the 0x0045xxxx icon sites) are Dark Falz's, not Vol Opt's.
 
 **Port.** `client/src/render/combat.ts`: `voloptRadar(ai)` (`always` | `never` | `concealed`); `radarConcealed` uses it before the Dragon rule; `minimapEnemies` accepts a rod whose model root is hidden while its control is visible (`onField`). `tests/volopt.test.ts`: the rule for the control, the rod (untargetable but on the radar, still not lockable), the prison, a monitor, pillar and core (unchanged), and the body (not ready, on the radar).
+## 2026-10-25: Barba Ray player attack (0x18) Pass 16: the aura hold is 14 updates, the sub 3 hold is the play-once end
+
+**Outcome.** Two of the four Pass 15 ASSUMED points are proven and ported: the aura hold (sub 2) is 14 bodies, not 30 (the aura's own update 0x004bacc0 sets its state 2 on the 14th update: scale 80.0 + 30.0 a update reaches 500.0), and the sub 3 hold waits for the animation's play-once end (`animation_flags & 0x10`, set by Player__Animate at clock 25.0, so 40 ticks from the 13.0 pin). The hitbox overlap is proven to run after the sphere (0x007b5e40, a null player list rejects the player) but its attacker records are not decoded, so the port stays sphere-only. The attack centre is proven NOT to be the target: the area centre is the aura's ground point (0x780), which moves from origin + dir * 80 to origin + dir * 500 over the hold; the origin and the map ray-cast are not decoded, so the target stays as a documented stand-in. Map: `docs/bosses/barbaray-map.md` Pass 16.
+
+**Proven (PsoBB.exe; refsrc dump `Psobb.exe-05112026.c` and `tools/ghidra/decomp.sh`).**
+- The aura state writer is the aura's vtable update 0x004bacc0 (vtable 0x00afb048 slot +4; ctor 0x004bac40 = FUN_004babbc sets +0x4c = 80.0). `IsSinowberillAuraActive_004baf7c` only reads it. The constants: 0x00907220 = 30.0, 0x00907218 = 500.0.
+- The area centre: sub 2 writes `to = &field_0x780` (spawn point, then the map ray-cast hit), and the dispatch 0x0051fc9c takes it; 0x774 (the target) is only the aura's direction (+0x2c).
+- The sweep 0x007b8618 calls 0x007b5e40 (in Ghidra FUN_007b5318) after the sphere: the player's hitbox list must exist and overlap the attacker's; the hit flag 0x4000000 goes to the matched record.
+- `animation_flags & 0x10` is set by Player__Animate (refsrc 791218) when a type 3 row reaches `elapsed >= frame_count - g_AnimationTimeOffset` (1.0 at 0x0097d97c).
+
+**ASSUMED / open.** The aura origin (cast+0x84 / +0x90, field offsets not named in the dump) and the map ray-cast; the attacker's hitbox records; the motion 3 frame count's off-by-one (26 or 27 frames in the exe, the threshold 25.0 or 26.0); the aura update running once a tick; the attack objects 0x208 / 0x209, the aura particles, the 0x72c counter and the 0x18 / 0x19 packets (unchanged).
+
+**Changes.** `client/src/combat/barbaray.ts`: `BARBA_ATTACK.aura` 30 -> 14 and the new `animEnd` 25; sub 3 waits for `timer >= animEnd`; comments for the centre and the box test. `tests/barbaray.test.ts`: the 0x18 block counts sub 2 bodies (14) and sub 3 ticks (40). `docs/bosses/barbaray-map.md` Pass 16.
+
+**Tests.** `node tests/barbaray.test.ts` ALL PASS; `client` `tsc --noEmit` clean; `NEWSERV=... node tests/combat.test.ts` (see the commit).
 
 ## 2026-10-25: Xbox (XB) .qst: parse and pack, newserv byte cross-check
 

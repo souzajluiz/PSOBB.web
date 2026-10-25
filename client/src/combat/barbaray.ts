@@ -573,9 +573,17 @@ export const BARBA_ATTACK = {
   knockback: 20, // rec+0xc (0x009abbb0 = 20.0): the hit's step on the player's +0x30c / +0x314
   seStart: 0x3f6, // sub 0's end (0x004b6300, play_directional_sound_effect)
   seFire: 0x3f7, // sub 1's end (the clock 13.0)
-  // ASSUMED: sub 2 holds this many frames. The aura's exit is its state 2 (IsSinowberillAuraActive,
-  // aura +0x1c == 2, PROVEN), but its writer (the aura object's update) is not decoded.
-  aura: 30,
+  // Sub 2 holds while the aura is in state 1. PROVEN: the writer of aura +0x1c == 2 is the aura's vtable
+  // update 0x004bacc0 (the aura is built at sub 0 end with +0x4c = 80.0, 0x42a00000; each update adds
+  // 0x00907220 = 30.0 and sets state 2 once +0x4c >= 0x00907218 = 500.0). 80 + 30 * 14 = 500, so the
+  // 14th update sets state 2; the sub 2 body sees it on the next tick (either update order gives 14 bodies).
+  aura: 14,
+  // Sub 3 holds while the animation is not ended: PROVEN, Player__Animate sets +0xb0 bit 0x10 when a
+  // play-once row (type 3) reaches `elapsed >= frame_count - g_AnimationTimeOffset` (1.0, 0x0097d97c).
+  // Slot 13 is motion 3 (26 frames, the njm count from the map Pass 14). ASSUMED: the exe's frame count
+  // carries the +0/+1 off-by-one the map notes (so the threshold is 25.0 or 26.0). The clock is 13.0
+  // at the sub 2 end and climbs 0.3 a tick: about 40 ticks.
+  animEnd: 25,
 } as const;
 
 // --- events the render layer reads ----------------------------------------
@@ -1291,8 +1299,9 @@ export class BarbaRayAi extends BrainBase {
   // Sub 0: 20 windup frames, then the slot 13 (beam_b) and the target's ground point, the 0x3f6 sound.
   // Sub 1: waits for the clock to reach 13.0 (0x906d50, `>=`), then the clock is set to 13.0, the
   // 0x3f7 sound, and sub 2. Sub 2: the area hit each frame at the ground point (the hit list keeps a
-  // player to one hit per attack), held for BARBA_ATTACK.aura frames (ASSUMED). Sub 3: the animation
-  // hold (0xb0 & 0x10, ASSUMED set as the volopt treats it). Sub 4 is the done state (event 9 steps).
+  // player to one hit per attack), held while the aura is in state 1 (BARBA_ATTACK.aura = 14 updates,
+  // PROVEN). Sub 3: the animation hold until the play-once end (0xb0 & 0x10, BARBA_ATTACK.animEnd).
+  // Sub 4 is the done state (event 9 steps).
   private attackFrame(targets: readonly AiTarget[]): void {
     const A = BARBA_ATTACK;
     this.animateClock();
@@ -1325,15 +1334,18 @@ export class BarbaRayAi extends BrainBase {
         if (--this.attackAura <= 0) this.attackSub = 3;
         return;
       case 3:
-        this.attackSub = 4;
+        // 0xb0 bit 0x10 (the play-once end of slot 13, see BARBA_ATTACK.animEnd): sub 3 holds until then.
+        if (this.timer >= A.animEnd) this.attackSub = 4;
         return;
       default:
         return;
     }
   }
 
-  // The target's ground point (0x774..0x77c, from FindAndProcessSinowberillTarget). ASSUMED: the target
-  // is the leader's target id (6xAA) and its position is the point; null when it is not in range.
+  // The target's position (0x774..0x77c, from FindAndProcessSinowberillTarget, sub 0 end). PROVEN: the exe
+  // uses it only as the aura's direction (aura +0x2c); the area centre is the aura's ground point (0x780),
+  // not this. ASSUMED stand-in until that point is ported: the leader's target id (6xAA) and its position;
+  // null when it is not in range.
   private targetGround(targets: readonly AiTarget[]): { x: number; z: number } | null {
     const t = targets.find((p) => p.clientId === this.targetId);
     return t ? { x: t.x, z: t.z } : null;
@@ -1341,8 +1353,10 @@ export class BarbaRayAi extends BrainBase {
 
   // The area hit (0x0051fc9c -> EnemyUpdateLogic 0x00521cf8 -> the sweep 0x007b8618): each living player
   // whose xz distance to the point is within BARBA_ATTACK.radius (PROVEN: the sweep's `dist^2 <= r^2`),
-  // once per attack (the hit list). ASSUMED: the box test (CheckTwoHitboxCollision 0x007b5e40) is not
-  // ported, so the sphere alone decides; the point falls back to the body when no target is found.
+  // once per attack (the hit list). ASSUMED: the box test (CheckTwoHitboxCollision 0x007b5e40, PROVEN to
+  // run after the sphere and to reject a player with no hitbox list) is not ported, so the sphere alone
+  // decides. ASSUMED: the point is the target (see targetGround); the exe's point is the aura's ground
+  // point, which moves from 80 to 500 units out along the aura's direction over the hold.
   private attackArea(targets: readonly AiTarget[]): void {
     const c = this.attackCenter ?? { x: this.x, z: this.z };
     for (const t of targets) {
