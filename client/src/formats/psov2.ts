@@ -17,9 +17,8 @@
 // position, so the pad changes nothing it keeps; this port encrypts the exact
 // length and gets the same bytes.
 //
-// The .qst packing of these payloads (the DC / PC / GC open-file and write-file
-// command structs, newserv encode_qst_file) is not ported here; see
-// docs/QUESTFILES.md.
+// The .qst packing of these payloads (the DC / PC / GC A6 / A7 command structs,
+// newserv encode_qst_file) is in formats/qst.ts (packQstFiles, parseQstFiles).
 
 import { prsDecompress } from './prs.ts';
 

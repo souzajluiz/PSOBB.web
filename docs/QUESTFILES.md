@@ -7,7 +7,8 @@ and `formats/prs.ts`. The write side, the foundation of a quest editor, is:
 |---|---|
 | `formats/prscompress.ts` | `prsCompress` |
 | `formats/questwrite.ts` | `serializeQuestBin`, `serializeQuestDat`, `buildQuestDat`, `setQuestDatChunk`, `buildQuestBin` |
-| `formats/qst.ts` | `parseQst`, `packQst` |
+| `formats/qst.ts` | `parseQst`, `packQst`, `parseQstFiles`, `packQstFiles`, `qstVersion` (BB, DC, PC, GC) |
+| `formats/psov2.ts` | `PsoV2Cipher`, `encodeDownloadQuestData`, `decodeDownloadQuestData` |
 | `formats/questasm.ts` | `disassembleQuest`, `assembleQuest`, `QuestAssemblyError` |
 | `formats/questdata.ts` | `decodeTypedData`, `encodeTypedData`, `decodeCString` (the typed data labels of the disassembly) |
 
@@ -32,7 +33,8 @@ buildQuestBin(input: NewQuestBinInput): QuestBin     // header fields + code + l
 parseQst(bytes: Uint8Array): ParsedQst
 interface ParsedQst { name: string; files: QstFile[]; binFilename: string; datFilename: string; bin: QuestBin; dat: QuestDat }
 interface QstFile { filename: string; compressed: Uint8Array; data: Uint8Array }   // data = decompressed
-packQst(bin: QuestBin, dat: QuestDat, opts?: { filename?: string; name?: string }): Uint8Array
+packQst(bin: QuestBin, dat: QuestDat, opts?: { filename?: string; name?: string; download?: boolean; version?: QstVersion; seeds?: { bin: number; dat: number } }): Uint8Array
+// non-BB (DC / PC / GC) .qst: parseQstFiles / packQstFiles below
 
 // formats/questasm.ts
 disassembleQuest(bin: QuestBin, opts?: { header?: boolean }): string
@@ -98,9 +100,39 @@ else the file name), 23 characters at most. `parseQst` accepts chunks in any ord
 order) and write commands whose size includes the 4 padding bytes. Download quests use the same bodies with A6 (open) and
 A7 (write) instead of 44 / 13: `parseQst` reads them (`download: true`) and `packQst(..., { download: true })` writes them.
 ASSUMED: the BB A6/A7 files are plain PRS, like the 44 / 13 ones (the exe's receive path decompresses them without a
-decrypt). The PSO V2 encrypted download format (newserv `encode_download_quest_data`: an 8-byte header, then the PRS
-stream encrypted with PSO V2) is the DC / PC / GC / XB one; `parseQst` still rejects non-BB files. The cipher and the
-payload are ported (see the next section); the non-BB `.qst` command structs are not.
+decrypt). newserv's `decode_qst_data_t` decodes every A6 file as a download payload, BB included, so this assumption is
+open (see Open below).
+
+### Non-BB `.qst` (DC / PC / GC)
+
+`formats/qst.ts` handles four versions, `QstVersion = 'BB' | 'DC' | 'PC' | 'GC'` (XB is refused). The layouts are newserv's
+`encode_qst_file`, `add_open_file_command_t` and `add_write_file_commands_t` (`src/Quest.cc`), `S_OpenFile_DC_44_A6`,
+`S_OpenFile_PC_GC_44_A6` and `S_WriteFile_13_A7` (`src/CommandFormats.hh`), and the command headers (`src/PSOProtocol.hh`):
+
+| Version | Command header | Open body (0x38) | Write body (0x414) |
+|---|---|---|---|
+| BB | `u16 size, u16 cmd, u32 flag` (8 bytes, 8-aligned, +4 pad after each write) | 0x50: filename 0x24, size 0x34, name 0x38 (0x18) | filename 0x00, data 0x10, data_size 0x410 |
+| PC | `u16 size, u8 cmd, u8 flag` (4 bytes, no alignment) | name 0x00 (0x22), u16 type 0x22, filename 0x24 (0x10), size 0x34 | the same |
+| DC | `u8 cmd, u8 flag, u16 size` (4 bytes) | name 0x00 (0x22), u8 type 0x22, filename 0x23 (0x11), size 0x34 | the same |
+| GC | `u8 cmd, u8 flag, u16 size` (4 bytes) | as PC | the same |
+
+`size` counts the header (open 0x3C, write 0x418 on DC / PC / GC). Write `flag` is the chunk index (one byte outside BB).
+Opens come first, then the writes. The name is `PSO/<name>` (raw, up to 0x22 bytes). On a download `.qst` the DC / PC /
+GC file bytes are the download payload (`psov2.ts`, an 8-byte header and the PRS stream encrypted with PSO V2), and the
+open's `file_size` is the payload's size. Online (44 / 13) files are the plain PRS.
+
+```ts
+packQstFiles(files: RawQstFile[], name: string, download?: boolean, version?: QstVersion): Uint8Array
+  // RawQstFile = { filename, data /* PRS */, seed? /* required for a DC / PC / GC download */ }
+parseQstFiles(bytes: Uint8Array): ParsedQstFiles   // any version: version, name, download, files (seed on DLQ files)
+qstVersion(bytes: Uint8Array): QstVersion          // from the first command, as newserv's decode_qst_data
+packQst(bin, dat, { version: 'PC', download: true, seeds: { bin, dat } })   // seeds required for a non-BB download
+```
+
+`parseQst` (the BB quest parse) refuses non-BB files; use `parseQstFiles` for them. Tests: `tests/qstnonbb.test.ts`.
+Its layout checks read the bytes at newserv's offsets, and with `vendor/newserv/build/newserv` it checks: newserv's
+`encode-qst` output (DC v2, PC, GC; online and download) parses, and our re-pack of newserv's streams and seeds gives its
+file byte for byte; newserv's `decode-qst` reads our download `.qst` and returns our files.
 
 ## PSO V2 download payload
 
@@ -124,11 +156,15 @@ C++ loop (not from the port): seed `0x12345678` gives the keystream `DAE88B96 CB
 bytes 0..10 with size 0x1234 gives `3412000078563412968aead9bd6536cc604746`. Round trips cover every length 0..4096
 (including partial words), a PRS stream through `decodeDownloadQuestData`, and a wrong size on decode.
 
-Not ported: the `.qst` command structs for these versions (newserv `encode_qst_file`: `S_OpenFile_DC_44_A6`,
-`S_OpenFile_PC_GC_44_A6`, `S_OpenFile_XB_44_A6` and the `PSOCommandHeaderDCV3` / `PSOCommandHeaderPC` write commands,
-with the `xb_filename` and the quest number), the `create_download_quest` language override of the `.bin` header, and
-the download-quest menu. The cipher is not yet checked against a newserv build's output (no build is run here; the
-Python transcription is the reference).
+The cipher and the payload are checked against newserv's own output in `tests/qstnonbb.test.ts` (the DLQ payload of a
+newserv `encode-qst --download` file decodes with `decodeDownloadQuestData` and re-encodes byte for byte).
+
+Open (not ported):
+- XB `.qst` files (`S_OpenFile_XB_44_A6`: 0x50-byte open body with `xb_filename`, `content_meta` = `0x30000000 | quest number`).
+- `create_download_quest`'s language override of the `.bin` header (`Quest.cc` 868); `packQst` writes the `.bin` as it is.
+- The BB A6 payload: newserv decodes it as a download payload (`decode_qst_data_t`, `BIN_DAT_DLQ`), the port reads it as plain PRS.
+- `packQst` for a name longer than the field (`base + ".bin"` over 11 characters on BB / PC / GC) now throws; before it was truncated silently.
+- The download-quest menu (the A0 / A5 / A2 side of the lobby) is not part of this writer.
 
 ## Script text
 

@@ -1,29 +1,42 @@
-// .qst: a Blue Burst online quest as one file, the 44 / 13 command stream the
-// server would send, recorded back to back. Layout from newserv
-// src/Quest.cc (decode_qst_data_t, encode_qst_file, MIT license) and
-// src/CommandFormats.hh (S_OpenFile_BB_44_A6, S_WriteFile_13_A7):
+// .qst: a quest as one file, the command stream the server would send, recorded
+// back to back. Layouts from newserv src/Quest.cc (decode_qst_data, encode_qst_file,
+// add_open_file_command_t, add_write_file_commands_t, encode_download_quest_data),
+// src/CommandFormats.hh (S_OpenFile_BB_44_A6, S_OpenFile_PC_GC_44_A6,
+// S_OpenFile_DC_44_A6, S_WriteFile_13_A7) and src/PSOProtocol.hh (the command
+// headers), MIT license.
 //
-//   for each file (bin, then dat):   44 open file
-//   for each file, each 0x400 chunk: 13 write file
+//   for each file (bin, then dat):   open file   (44 online, A6 download)
+//   for each file, each 0x400 chunk: write file  (13 online, A7 download)
 //
-// Every command starts with the 8-byte BB header
-//   u16 size (including the header), u16 command, u32 flag
-// and the stream is aligned to 8 bytes.
+// Command header by version (the size counts the header):
+//   BB:      u16 size, u16 command, u32 flag   8 bytes; every command is 8-aligned
+//            (a write command is 0x41C bytes + 4 zero bytes)
+//   PC:      u16 size, u8 command, u8 flag     4 bytes, no alignment
+//   DC, GC:  u8 command, u8 flag, u16 size     4 bytes, no alignment
+// flag is 0 for an open file and the chunk index (offset / 0x400) for a write.
 //
-//   44 body (0x50): u8 unused[0x22], u16 type (0), char filename[0x10],
-//                   u32 file_size, char name[0x18] ("PSO/<quest name>")
-//                   size = 0x58, flag = 0
-//   13 body (0x414): char filename[0x10], u8 data[0x400], u32 data_size
-//                   size = 0x41C, flag = chunk index; 4 zero bytes follow to
-//                   keep the next command 8-byte aligned (size 0x41C is
-//                   not a multiple of 8)
+// Bodies:
+//   BB open (0x50):   u8 unused[0x22], u16 type, char filename[0x10] at 0x24,
+//                     u32 file_size at 0x34, char name[0x18] at 0x38 ("PSO/<name>")
+//   PC / GC open (0x38): char name[0x22] ("PSO/<name>") at 0, u16 type at 0x22,
+//                     char filename[0x10] at 0x24, u32 file_size at 0x34
+//   DC open (0x38):   the same with a u8 type at 0x22 and filename[0x11] at 0x23
+//   write (0x414, all versions): char filename[0x10], u8 data[0x400], u32 data_size
+//                     at 0x410
 //
-// file_size is the size of the PRS-compressed file; the chunks are slices of
-// the compressed bytes. The .bin and .dat inside are the same PRS files the
-// server sends (net/quests.ts).
+// file_size is the size of the file as it is stored: the PRS stream on BB; on
+// DC / PC / GC the download payload (psov2.ts, an 8-byte header and the PRS stream
+// encrypted with PSO V2) for an A6 / A7 .qst, and the plain PRS stream for a 44 / 13
+// one. The chunks are slices of the stored bytes. The .bin and .dat inside are the
+// same PRS files the server sends (net/quests.ts).
+//
+// Not handled: Xbox (XB) .qst files (their open body has xb_filename and
+// content_meta). The BB download payload is ASSUMED to be plain PRS (see below):
+// newserv decodes every A6 file as a download payload, BB included.
 
 import { prsDecompress } from './prs.ts';
 import { prsCompressOptimal } from './prscompress.ts';
+import { decodeDownloadQuestData, encodeDownloadQuestData } from './psov2.ts';
 import { parseQuestBin, type QuestBin } from './questbin.ts';
 import { parseQuestDat, type QuestDat } from './questdat.ts';
 import { serializeQuestBin, serializeQuestDat } from './questwrite.ts';
@@ -31,44 +44,77 @@ import { serializeQuestBin, serializeQuestDat } from './questwrite.ts';
 export const QST_COMMAND_OPEN_FILE = 0x44;
 export const QST_COMMAND_WRITE_FILE = 0x13;
 // The download-quest pair (the original client's memory-card quests, and the
-// lobby's A6/A7 transfer): the same bodies as 44 / 13. The file bytes are the
-// same PRS streams on Blue Burst (exe receive path, decompress_received_quest_files),
-// so only the command numbers differ. newserv encodes download quests for the
-// other versions only (its BB path refuses them), so an A6/A7 .qst is a BB
-// file of unknown origin: ASSUMED to be plain PRS like the 44 / 13 one.
+// lobby's A6/A7 transfer): the same bodies as 44 / 13. On DC / PC / GC the files
+// are the PSO V2 download payload (psov2.ts); on BB they are ASSUMED to be plain
+// PRS like the 44 / 13 ones (the exe's receive path decompresses them without a
+// decrypt). newserv's decoder would also treat a BB A6 file as a download payload,
+// so that BB assumption is open.
 export const QST_COMMAND_OPEN_FILE_DOWNLOAD = 0xa6;
 export const QST_COMMAND_WRITE_FILE_DOWNLOAD = 0xa7;
 export const QST_CHUNK_SIZE = 0x400;
-const HEADER_SIZE = 8;
-const OPEN_FILE_BODY = 0x50;
-const WRITE_FILE_BODY = 0x414;
+
+// The game versions a .qst is written for. XB is not ported.
+export type QstVersion = 'BB' | 'DC' | 'PC' | 'GC';
+
+interface QstLayout {
+  headerSize: number; // 8 on BB, 4 otherwise
+  openBody: number; // 0x50 on BB, 0x38 otherwise
+  nameAt: number; // offset of the "PSO/<name>" field in the open body
+  nameMax: number; // its size in bytes
+  nameTerminated: boolean; // BB writes it as a C string; the others copy the bytes raw (newserv assign_raw)
+  filenameAt: number; // offset of the file name in the open body
+  filenameMax: number; // its size in bytes (the name is at most filenameMax - 1 characters)
+  align: boolean; // BB only: commands are 8-aligned and write commands carry 4 zero bytes
+}
+
+const LAYOUTS: Record<QstVersion, QstLayout> = {
+  BB: { headerSize: 8, openBody: 0x50, nameAt: 0x38, nameMax: 0x18, nameTerminated: true, filenameAt: 0x24, filenameMax: 0x10, align: true },
+  DC: { headerSize: 4, openBody: 0x38, nameAt: 0, nameMax: 0x22, nameTerminated: false, filenameAt: 0x23, filenameMax: 0x11, align: false },
+  PC: { headerSize: 4, openBody: 0x38, nameAt: 0, nameMax: 0x22, nameTerminated: false, filenameAt: 0x24, filenameMax: 0x10, align: false },
+  GC: { headerSize: 4, openBody: 0x38, nameAt: 0, nameMax: 0x22, nameTerminated: false, filenameAt: 0x24, filenameMax: 0x10, align: false },
+};
+const FILE_SIZE_AT = 0x34; // in the open body, every version
+const WRITE_BODY = 0x414;
+const WRITE_DATA_SIZE_AT = 0x410; // in the write body
+const WRITE_DATA_AT = 0x10;
 
 export interface QstFile {
   filename: string; // e.g. "q101.bin"
-  compressed: Uint8Array; // as stored in the .qst (PRS)
+  compressed: Uint8Array; // the PRS stream (decrypted when the file was a DC / PC / GC download payload)
   data: Uint8Array; // decompressed
+  seed?: number; // the PSO V2 seed of a DC / PC / GC download payload
 }
 
-export interface ParsedQst {
+export interface ParsedQstFiles {
+  version: QstVersion;
   name: string; // the "PSO/..." name without the prefix
   files: QstFile[]; // in the order their open-file commands appear
   download: boolean; // written with A6 / A7 rather than 44 / 13
   binFilename: string;
   datFilename: string;
+}
+
+export interface ParsedQst extends ParsedQstFiles {
   bin: QuestBin;
   dat: QuestDat;
 }
 
 export interface PackQstOptions {
-  // Base file name without extension; default "q<quest number>". At most 12
-  // characters (the field is 0x10 bytes with ".bin"/".dat" and a terminator).
+  // Base file name without extension; default "q<quest number>". The name plus
+  // ".bin" must fit the version's file name field (at most 11 characters on BB,
+  // PC and GC, 12 on DC).
   filename?: string;
   // The "PSO/<name>" string; default the quest's header name when that is
-  // ASCII, else the file name. Truncated to the
-  // 0x18-byte field.
+  // ASCII, else the file name. Truncated to the version's name field.
   name?: string;
   // Write the A6 / A7 download pair instead of 44 / 13.
   download?: boolean;
+  // The game version of the .qst. Default BB.
+  version?: QstVersion;
+  // PSO V2 seeds of the .bin and the .dat payloads of a DC / PC / GC download
+  // .qst (required there: newserv picks random ones, this port needs them to be
+  // reproducible). Each must be 1..0xFFFFFFFF.
+  seeds?: { bin: number; dat: number };
 }
 
 const readCString = (d: Uint8Array, offset: number, max: number): string => {
@@ -82,7 +128,57 @@ const readCString = (d: Uint8Array, offset: number, max: number): string => {
 const QST_MAX_COMPRESSED = 8 * 1024 * 1024;
 const QST_MAX_DECOMPRESSED = 16 * 1024 * 1024;
 
-export function parseQst(bytes: Uint8Array): ParsedQst {
+// The version of a .qst from its first command (newserv decode_qst_data): BB
+// starts 58 00 44 / A6 00, PC 3C 00 44 / A6 (the size, then the command byte),
+// DC and GC 44 / A6 ?? 3C 00. DC and GC are told apart by the open body's type
+// field: a DC file has a file name's first character there, which is above 3.
+export function qstVersion(bytes: Uint8Array): QstVersion {
+  if (bytes.length < 8) throw new Error('qst: file too short');
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const isOpen = (c: number): boolean => c === QST_COMMAND_OPEN_FILE || c === QST_COMMAND_OPEN_FILE_DOWNLOAD;
+  if (dv.getUint16(0, true) === 0x58 && isOpen(dv.getUint16(2, true))) return 'BB';
+  if (dv.getUint16(0, true) === 0x3c && isOpen(bytes[2])) return 'PC';
+  if (isOpen(bytes[0]) && dv.getUint16(2, true) === 0x3c) {
+    if (bytes.length < 4 + 0x24) throw new Error('qst: open file command too short');
+    return dv.getUint16(4 + 0x22, true) > 3 ? 'DC' : 'GC';
+  }
+  if (isOpen(bytes[0]) && dv.getUint16(2, true) === 0x54) throw new Error('qst: Xbox (XB) .qst files are not supported');
+  throw new Error('qst: not a Blue Burst, PC, DC or GC quest file');
+}
+
+interface CommandHeader {
+  size: number;
+  command: number;
+  flag: number;
+}
+
+function readHeader(dv: DataView, at: number, version: QstVersion): CommandHeader {
+  if (version === 'BB') return { size: dv.getUint16(at, true), command: dv.getUint16(at + 2, true), flag: dv.getUint32(at + 4, true) };
+  if (version === 'PC') return { size: dv.getUint16(at, true), command: dv.getUint8(at + 2), flag: dv.getUint8(at + 3) };
+  return { size: dv.getUint16(at + 2, true), command: dv.getUint8(at), flag: dv.getUint8(at + 1) };
+}
+
+function writeHeader(dv: DataView, at: number, version: QstVersion, size: number, command: number, flag: number): void {
+  if (version === 'BB') {
+    dv.setUint16(at, size, true);
+    dv.setUint16(at + 2, command, true);
+    dv.setUint32(at + 4, flag, true);
+  } else if (version === 'PC') {
+    dv.setUint16(at, size, true);
+    dv.setUint8(at + 2, command);
+    dv.setUint8(at + 3, flag);
+  } else {
+    dv.setUint8(at, command);
+    dv.setUint8(at + 1, flag);
+    dv.setUint16(at + 2, size, true);
+  }
+}
+
+// Reads the command stream of a .qst (any of the four versions) and returns its
+// files, decoding the download payloads of DC / PC / GC. Does not parse the quest.
+export function parseQstFiles(bytes: Uint8Array): ParsedQstFiles {
+  const version = qstVersion(bytes);
+  const layout = LAYOUTS[version];
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   interface Pending {
     filename: string;
@@ -96,13 +192,11 @@ export function parseQst(bytes: Uint8Array): ParsedQst {
   let download: boolean | null = null;
   let at = 0;
   while (at < bytes.length) {
-    at = (at + 7) & ~7;
+    if (layout.align) at = (at + 7) & ~7;
     if (at >= bytes.length) break;
-    if (at + HEADER_SIZE > bytes.length) throw new Error(`qst: truncated command header at 0x${at.toString(16)}`);
-    const size = dv.getUint16(at, true);
-    const command = dv.getUint16(at + 2, true);
-    const flag = dv.getUint32(at + 4, true);
-    const body = at + HEADER_SIZE;
+    if (at + layout.headerSize > bytes.length) throw new Error(`qst: truncated command header at 0x${at.toString(16)}`);
+    const { size, command, flag } = readHeader(dv, at, version);
+    const body = at + layout.headerSize;
     const isOpen = command === QST_COMMAND_OPEN_FILE || command === QST_COMMAND_OPEN_FILE_DOWNLOAD;
     const isWrite = command === QST_COMMAND_WRITE_FILE || command === QST_COMMAND_WRITE_FILE_DOWNLOAD;
     if (isOpen || isWrite) {
@@ -111,99 +205,130 @@ export function parseQst(bytes: Uint8Array): ParsedQst {
       download = isDownload;
     }
     if (isOpen) {
-      if (size !== HEADER_SIZE + OPEN_FILE_BODY || body + OPEN_FILE_BODY > bytes.length) throw new Error(`qst: open file command at 0x${at.toString(16)} has size ${size}, not ${HEADER_SIZE + OPEN_FILE_BODY} (is this a Blue Burst qst?)`);
-      const filename = readCString(bytes, body + 0x24, 0x10);
+      if (size !== layout.headerSize + layout.openBody || body + layout.openBody > bytes.length) {
+        throw new Error(`qst: open file command at 0x${at.toString(16)} has size ${size}, not ${layout.headerSize + layout.openBody} (${version} layout)`);
+      }
+      const filename = readCString(bytes, body + layout.filenameAt, layout.filenameMax);
       if (pending.has(filename)) throw new Error(`qst: file ${filename} is opened twice`);
-      const p: Pending = { filename, name: readCString(bytes, body + 0x38, 0x18).replace(/^PSO\//, ''), size: dv.getUint32(body + 0x34, true), blocks: [] };
+      const p: Pending = {
+        filename,
+        name: readCString(bytes, body + layout.nameAt, layout.nameMax).replace(/^PSO\//, ''),
+        size: dv.getUint32(body + FILE_SIZE_AT, true),
+        blocks: [],
+      };
       pending.set(filename, p);
       order.push(p);
     } else if (isWrite) {
       // Some tools stored the 4 alignment bytes inside the command size.
-      if (size < HEADER_SIZE + WRITE_FILE_BODY || body + WRITE_FILE_BODY > bytes.length) throw new Error(`qst: write file command at 0x${at.toString(16)} has size ${size}`);
+      if (size < layout.headerSize + WRITE_BODY || body + WRITE_BODY > bytes.length) throw new Error(`qst: write file command at 0x${at.toString(16)} has size ${size}`);
       const filename = readCString(bytes, body, 0x10);
-      const dataSize = dv.getUint32(body + 0x414 - 4, true);
+      const dataSize = dv.getUint32(body + WRITE_DATA_SIZE_AT, true);
       if (dataSize > QST_CHUNK_SIZE) throw new Error(`qst: chunk ${filename}:${flag} claims ${dataSize} bytes`);
       const p = pending.get(filename);
       if (!p) throw new Error(`qst: chunk for ${filename} before its open file command`);
       if (flag * QST_CHUNK_SIZE + dataSize > p.size) throw new Error(`qst: chunk ${filename}:${flag} extends past the end of the file`);
       if (flag) inOrder = false;
-      p.blocks.push({ index: flag, data: bytes.subarray(body + 0x10, body + 0x10 + dataSize) });
+      p.blocks.push({ index: flag, data: bytes.subarray(body + WRITE_DATA_AT, body + WRITE_DATA_AT + dataSize) });
     } else {
       throw new Error(`qst: unexpected command 0x${command.toString(16)} at 0x${at.toString(16)}`);
     }
-    at += Math.max(size, HEADER_SIZE);
+    at += Math.max(size, layout.headerSize);
   }
 
+  const isDownload = download === true;
   const files: QstFile[] = order.map((p) => {
     if (p.size > QST_MAX_COMPRESSED) throw new Error(`qst: ${p.filename} claims ${p.size} bytes`);
-    const compressed = new Uint8Array(p.size);
+    const stored = new Uint8Array(p.size);
     if (inOrder) {
       // Chunk indexes all zero: some tools wrote them that way. Assume order.
       let o = 0;
       for (const b of p.blocks) {
-        compressed.set(b.data, o);
+        stored.set(b.data, o);
         o += b.data.length;
       }
     } else {
-      for (const b of p.blocks) compressed.set(b.data, b.index * QST_CHUNK_SIZE);
+      for (const b of p.blocks) stored.set(b.data, b.index * QST_CHUNK_SIZE);
     }
-    return { filename: p.filename, compressed, data: prsDecompress(compressed, QST_MAX_DECOMPRESSED) };
+    if (isDownload && version !== 'BB') {
+      const dlq = decodeDownloadQuestData(stored);
+      return { filename: p.filename, compressed: dlq.compressed, data: prsDecompress(dlq.compressed, QST_MAX_DECOMPRESSED), seed: dlq.seed };
+    }
+    return { filename: p.filename, compressed: stored, data: prsDecompress(stored, QST_MAX_DECOMPRESSED) };
   });
   const binFile = files.find((f) => f.filename.endsWith('.bin'));
   const datFile = files.find((f) => f.filename.endsWith('.dat'));
   if (!binFile || !datFile) throw new Error(`qst: expected a .bin and a .dat, found ${files.map((f) => f.filename).join(', ') || 'no files'}`);
   return {
+    version,
     name: order[0]?.name ?? '',
     files,
     binFilename: binFile.filename,
     datFilename: datFile.filename,
-    download: download === true,
-    bin: parseQuestBin(binFile.data),
-    dat: parseQuestDat(datFile.data),
+    download: isDownload,
   };
 }
 
-const writeAscii = (d: Uint8Array, offset: number, max: number, s: string): void => {
-  for (let i = 0; i < Math.min(s.length, max - 1); i++) d[offset + i] = s.charCodeAt(i) & 0x7f;
+// Blue Burst only: the .bin and .dat are parsed as BB quests. Other versions
+// give their files from parseQstFiles.
+export function parseQst(bytes: Uint8Array): ParsedQst {
+  const q = parseQstFiles(bytes);
+  if (q.version !== 'BB') throw new Error(`qst: ${q.version} quest files are not parsed as quests; use parseQstFiles`);
+  const binFile = q.files.find((f) => f.filename === q.binFilename)!;
+  const datFile = q.files.find((f) => f.filename === q.datFilename)!;
+  return { ...q, bin: parseQuestBin(binFile.data), dat: parseQuestDat(datFile.data) };
+}
+
+// Writes ASCII into a fixed field; a terminated field keeps its last byte for the NUL.
+const writeAscii = (d: Uint8Array, offset: number, max: number, s: string, terminated = true): void => {
+  const n = Math.min(s.length, terminated ? max - 1 : max);
+  for (let i = 0; i < n; i++) d[offset + i] = s.charCodeAt(i) & 0x7f;
 };
 
 export interface RawQstFile {
   filename: string; // "<base>.bin" / "<base>.dat"
   data: Uint8Array; // already PRS-compressed
+  seed?: number | undefined; // the PSO V2 seed of the download payload (DC / PC / GC download .qst)
 }
 
-// Writes the open-file and write-file commands for PRS-compressed files. The
-// name is "PSO/<name>" (truncated to the 0x18-byte field).
-export function packQstFiles(files: RawQstFile[], name: string, download = false): Uint8Array {
+// Writes the open-file and write-file commands for PRS-compressed files, in the
+// given order: every open file command first, then the write commands. The name
+// is "PSO/<name>" (truncated to the version's name field). On a DC / PC / GC
+// download .qst each file's bytes are encoded with PSO V2 (psov2.ts) under its
+// seed; BB writes the PRS bytes as they are.
+export function packQstFiles(files: RawQstFile[], name: string, download = false, version: QstVersion = 'BB'): Uint8Array {
+  const layout = LAYOUTS[version];
   const openCmd = download ? QST_COMMAND_OPEN_FILE_DOWNLOAD : QST_COMMAND_OPEN_FILE;
   const writeCmd = download ? QST_COMMAND_WRITE_FILE_DOWNLOAD : QST_COMMAND_WRITE_FILE;
+  const entries = files.map((f) => {
+    if (!download || version === 'BB') return { filename: f.filename, stored: f.data };
+    if (f.seed === undefined) throw new RangeError(`qst: ${f.filename} needs a seed for a ${version} download .qst`);
+    return { filename: f.filename, stored: encodeDownloadQuestData(f.data, f.seed) };
+  });
+  const maxFlag = version === 'BB' ? 0xffffffff : 0xff; // the flag is one byte outside BB
+  const writeSize = layout.headerSize + WRITE_BODY + (layout.align ? 4 : 0);
   let total = 0;
-  for (const f of files) total += HEADER_SIZE + OPEN_FILE_BODY + Math.ceil(f.data.length / QST_CHUNK_SIZE) * (HEADER_SIZE + WRITE_FILE_BODY + 4);
+  for (const e of entries) total += layout.headerSize + layout.openBody + Math.ceil(e.stored.length / QST_CHUNK_SIZE) * writeSize;
   const out = new Uint8Array(total);
   const dv = new DataView(out.buffer);
   let at = 0;
-  const header = (size: number, command: number, flag: number): void => {
-    dv.setUint16(at, size, true);
-    dv.setUint16(at + 2, command, true);
-    dv.setUint32(at + 4, flag, true);
-  };
-  for (const f of files) {
-    header(HEADER_SIZE + OPEN_FILE_BODY, openCmd, 0);
-    const body = at + HEADER_SIZE;
-    writeAscii(out, body + 0x24, 0x10, f.filename);
-    dv.setUint32(body + 0x34, f.data.length, true);
-    writeAscii(out, body + 0x38, 0x18, `PSO/${name}`);
-    at += HEADER_SIZE + OPEN_FILE_BODY;
+  for (const e of entries) {
+    writeHeader(dv, at, version, layout.headerSize + layout.openBody, openCmd, 0);
+    const body = at + layout.headerSize;
+    writeAscii(out, body + layout.nameAt, layout.nameMax, `PSO/${name}`, layout.nameTerminated);
+    writeAscii(out, body + layout.filenameAt, layout.filenameMax, e.filename);
+    dv.setUint32(body + FILE_SIZE_AT, e.stored.length, true);
+    at += layout.headerSize + layout.openBody;
   }
-  for (const f of files) {
-    for (let z = 0, index = 0; z < f.data.length; z += QST_CHUNK_SIZE, index++) {
-      const chunk = f.data.subarray(z, z + QST_CHUNK_SIZE);
-      header(HEADER_SIZE + WRITE_FILE_BODY, writeCmd, index);
-      const body = at + HEADER_SIZE;
-      writeAscii(out, body, 0x10, f.filename);
-      out.set(chunk, body + 0x10);
-      dv.setUint32(body + 0x10 + QST_CHUNK_SIZE, chunk.length, true);
-      at += HEADER_SIZE + WRITE_FILE_BODY + 4; // 4 zero alignment bytes
+  for (const e of entries) {
+    for (let z = 0, index = 0; z < e.stored.length; z += QST_CHUNK_SIZE, index++) {
+      if (index > maxFlag) throw new RangeError(`qst: ${e.filename} has more chunks than a ${version} write command can index`);
+      const chunk = e.stored.subarray(z, z + QST_CHUNK_SIZE);
+      writeHeader(dv, at, version, layout.headerSize + WRITE_BODY, writeCmd, index);
+      const body = at + layout.headerSize;
+      writeAscii(out, body, 0x10, e.filename);
+      out.set(chunk, body + WRITE_DATA_AT);
+      dv.setUint32(body + WRITE_DATA_SIZE_AT, chunk.length, true);
+      at += writeSize; // BB: 4 zero alignment bytes, already zero in the buffer
     }
   }
   return out;
@@ -212,17 +337,23 @@ export function packQstFiles(files: RawQstFile[], name: string, download = false
 // Packs a quest into a .qst. The .bin and .dat are serialized (questwrite.ts)
 // and PRS-compressed here.
 export function packQst(bin: QuestBin, dat: QuestDat, opts: PackQstOptions = {}): Uint8Array {
+  const version = opts.version ?? 'BB';
+  const download = opts.download === true;
   const base = opts.filename ?? `q${bin.header.questNumber}`;
   if (!/^[\x21-\x7e]{1,12}$/.test(base)) throw new Error(`qst: file name "${base}" must be 1..12 printable ASCII characters`);
+  const fieldMax = LAYOUTS[version].filenameMax;
+  if (base.length + 4 > fieldMax - 1) throw new Error(`qst: "${base}.bin" does not fit the ${version} file name field (${fieldMax} bytes)`);
+  if (download && version !== 'BB' && !opts.seeds) throw new RangeError(`qst: a ${version} download .qst needs seeds for its .bin and .dat`);
   // The field is ASCII; a Japanese quest name falls back to the file name.
   const questName = bin.header.name;
   const name = opts.name ?? (/^[\x20-\x7e]+$/.test(questName) ? questName : base);
   return packQstFiles(
     [
-      { filename: `${base}.bin`, data: prsCompressOptimal(serializeQuestBin(bin)) },
-      { filename: `${base}.dat`, data: prsCompressOptimal(serializeQuestDat(dat)) },
+      { filename: `${base}.bin`, data: prsCompressOptimal(serializeQuestBin(bin)), seed: opts.seeds?.bin },
+      { filename: `${base}.dat`, data: prsCompressOptimal(serializeQuestDat(dat)), seed: opts.seeds?.dat },
     ],
     name,
-    opts.download === true,
+    download,
+    version,
   );
 }
