@@ -67,47 +67,6 @@ check(chat.open === true, 'Team Log show row opens the team chat window');
 logLeaves.key({ key: 'Enter', preventDefault() {} } as unknown as KeyboardEvent);
 check(logLeaves.open === false && chat.open === true, 'Enter on show closes the Team Log and keeps the window');
 
-// Team Invite (0x29) and Point Regist (0x2d): shared leaves that need a team and its hooks.
-const key = (k: string) => ({ key: k, preventDefault() {} }) as unknown as KeyboardEvent;
-const flush = () => new Promise((r) => setTimeout(r, 0));
-check(HOME_LEAF_IDS.has(0x29) && HOME_LEAF_IDS.has(0x2d), 'Invite and Point Regist are listed as shared leaves');
-check(noTeam.openLeaf(0x29) === false && noTeam.openLeaf(0x2d) === false, 'Invite and Point Regist need a team');
-check(new HomeLeaves(() => host({ team: () => ({}) as never })).openLeaf(0x29) === false, 'Invite needs the team nearby / invite hooks');
-check(new HomeLeaves(() => host({ team: () => ({}) as never })).openLeaf(0x2d) === false, 'Point Regist needs the team item rows');
-
-const invites: number[] = [];
-const invTeam = {
-  nearby: async () => [{ name: 'Ann', guildCard: 7 }],
-  invite: async (gc: number) => {
-    invites.push(gc);
-    return 'declined' as const;
-  },
-};
-const invLeaves = new HomeLeaves(() => host({ team: () => invTeam as never }));
-let invClosed = 0;
-invLeaves.onAllClosed = () => invClosed++;
-check(invLeaves.openLeaf(0x29) === true && invLeaves.open === true, 'Invite opens in a team');
-await flush();
-invLeaves.key(key('Enter'));
-check(invites.length === 1 && invites[0] === 7 && invLeaves.open === true, 'Enter on the row invites that card; the menu waits');
-await flush();
-invLeaves.tick();
-check(invLeaves.open === false && invClosed === 1, 'the answer closes Invite, and the owner gets its keys back once');
-
-const pointed: number[][] = [];
-const ptTeam = {
-  itemRows: () => [{ id: 0x100, name: 'Sword', count: 1, teamPoints: 4 }],
-  exchangeItem: (id: number, amount: number) => pointed.push([id, amount]),
-};
-const ptLeaves = new HomeLeaves(() => host({ team: () => ptTeam as never }));
-check(ptLeaves.openLeaf(0x2d) === true && ptLeaves.open === true, 'Point Regist opens in a team');
-ptLeaves.key(key('Enter')); // the Sword: one item, Yes / No with No on the cursor
-ptLeaves.key(key('ArrowUp'));
-ptLeaves.key(key('Enter'));
-check(JSON.stringify(pointed) === '[[256,1]]', 'Yes on Point Regist sends the exchange for one Sword');
-ptLeaves.key(key('Enter')); // the result line closes
-check(ptLeaves.open === false, 'a key closes the Point Regist result');
-
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

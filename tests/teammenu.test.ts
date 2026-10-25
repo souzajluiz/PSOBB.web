@@ -23,8 +23,6 @@ import {
   T15_TEAM,
   TEAM_LOG_POS,
   TeamLogWindow,
-  TeamInviteWindow,
-  TeamPointWindow,
   type TeamHost,
 } from '../client/src/classic/teammenu.ts';
 import { TeamChat } from '../client/src/classic/teamchat.ts';
@@ -882,97 +880,6 @@ async function openMaster(h: TeamHost) {
   log.close();
   log.draw(ctx, skin, 0);
   check(true, 'draw smoke');
-}
-
-// --- Home menu > Team > Invite (0x29): the nearby list, the invite and the answer ---------------
-{
-  const flush = () => new Promise((r) => setTimeout(r, 0));
-  const sent: number[] = [];
-  let answer: 'declined' | 'joined' | 'full' | 'failed' | 'absent' = 'declined';
-  const host = {
-    nearby: async () => [
-      { name: 'Ann', guildCard: 7 },
-      { name: 'Bo', guildCard: 9 },
-    ],
-    invite: async (gc: number) => {
-      sent.push(gc);
-      return answer;
-    },
-  };
-  const inv = new TeamInviteWindow(host, t11);
-  eq([inv.open, inv.pending], [false, false], 'Invite closed before show');
-  inv.show();
-  eq([inv.open, inv.pending], [true, false], 'Invite opens at once (the list comes with the answer)');
-  await flush();
-  inv.key(k('ArrowDown'));
-  inv.key(k('Enter'));
-  eq([sent, inv.pending], [[9], true], 'Enter on row 2 invites its card and waits for the answer');
-  inv.key(k('Escape'));
-  eq(inv.open, true, 'Cancel is ignored while the answer is pending (ASSUMED)');
-  await flush();
-  eq([inv.open, inv.pending], [false, false], 'a declined answer closes the window');
-
-  // Cancel closes the list with no invite.
-  const quiet = new TeamInviteWindow(host, t11);
-  quiet.show();
-  await flush();
-  eq([quiet.key(k('Escape')), quiet.open, sent.length], [false, false, 1], 'Cancel closes the list, nothing sent');
-
-  // A failed nearby request leaves no rows (Enter does nothing).
-  const bad = new TeamInviteWindow({ nearby: () => Promise.reject(new Error('x')), invite: host.invite }, t11);
-  bad.show();
-  await flush();
-  bad.key(k('Enter'));
-  eq([bad.open, bad.pending, sent.length], [true, false, 1], 'no rows after a failed list: Enter invites nobody');
-
-  const skin = { frame: {} as CanvasImageSource, bars: {} as CanvasImageSource };
-  inv.show();
-  inv.draw(ctx, skin, 0);
-  inv.close();
-  inv.draw(ctx, skin, 0);
-  check(true, 'Invite draw smoke');
-}
-
-// --- Home menu > Team > Point Regist (0x2d): the items, the amount, Yes / No and the 6xCC -------
-{
-  const exchanged: number[][] = [];
-  const rows = [
-    { id: 0x100, name: 'Sword', count: 1, teamPoints: 4 },
-    { id: 0x200, name: 'Mate', count: 5, teamPoints: 2 },
-    { id: 0x300, name: 'Trash', count: 3, teamPoints: 0 },
-  ];
-  const pt = new TeamPointWindow(
-    { itemRows: () => rows, exchange: (id, amount) => exchanged.push([id, amount]) },
-    t11,
-  );
-  pt.show();
-  eq([pt.open, pt.state], [true, 'items'], 'Point Regist opens on the item list');
-  eq(pt.key(k('ArrowDown')) && pt.key(k('Enter')) && pt.state, 'quantity', 'a stack asks the amount (Mate, 5)');
-  pt.key(k('ArrowDown'));
-  pt.key(k('ArrowDown'));
-  pt.key(k('Enter'));
-  eq([pt.state, pt.points], ['confirm', 0], 'amount 3 goes to Yes / No (no points yet)');
-  pt.key(k('ArrowUp')); // the cursor starts on No
-  pt.key(k('Enter'));
-  eq([exchanged, pt.state, pt.points], [[[0x200, 3]], 'done', 6], 'Yes sends 6xCC for 3 Mates: 3 x 2 team points');
-  eq(pt.key(k('Enter')), false, 'a key on the result line closes the window');
-  eq(pt.open, false, 'closed');
-
-  // Single item, No goes back to the list; Cancel on the list closes.
-  const single = new TeamPointWindow({ itemRows: () => rows, exchange: (id, amount) => exchanged.push([id, amount]) }, t11);
-  single.show();
-  single.key(k('Enter'));
-  eq(single.state, 'confirm', 'a single item asks Yes / No at once');
-  single.key(k('Enter')); // cursor on No
-  eq([single.state, exchanged.length], ['items', 1], 'No returns to the item list, nothing sent');
-  eq([single.key(k('Escape')), single.open], [false, false], 'Cancel on the list closes');
-
-  const skin = { frame: {} as CanvasImageSource, bars: {} as CanvasImageSource };
-  pt.show();
-  pt.draw(ctx, skin, 0);
-  pt.close();
-  pt.draw(ctx, skin, 0);
-  check(true, 'Point Regist draw smoke');
 }
 
 console.log(failures ? `${failures} of ${checks} FAILED` : `ALL PASS (${checks} checks)`);

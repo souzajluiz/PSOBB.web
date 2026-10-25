@@ -343,43 +343,6 @@ Open: the other phases still use one clock tick a frame.
 
 **Tests:** `node tests/barbaray.test.ts` ALL PASS (the drop block rewritten for the 35-tick start, the 0.195 lift, z 500 landing); `node tests/combat.test.ts` 5852 checks, 0 failures; `client` `tsc --noEmit` clean.
 
-## 2026-10-25: Home menu > Team > Invite (0x29) and Point Regist (0x2d) ported
-
-**Exe (Ghidra decompiles of the dump's bodies; the dump's names are partly wrong, the bodies are the reading):**
-- Dispatch `handle_player_menu_select` (dump 700402 / 700419): 0x29 = `team_invite_menu` (41) -> `ChallengeMenuWindow_Constructor_0074c860`; 0x2d = `team_point_menu` (45) -> `ChallengePlayerInfoWindowListWindow_Constructor_0074f1e8`.
-- **Invite, state machine `0074c964`** (vtable 0x00b41e68 slot 1; the process is unnamed in the dump, found through the vtable with `tools/exedata.py read 00b41e68 p 3`). Title unitxt (11, 0x15a) at get_gui_position(0x15) = (13, 256) (VERIFIED in the constructor). Its rows are the 15EA team info records (`ChallengeMenuListWindow_UpdateItems_0074d37c`: stride 0x85C, guild card at +0x34, name at +0x3c; the same layout as `parseLobbyTeamInfo`), so the list comes from 14EA / 15EA (the list request's send point is ASSUMED: on open).
-- State 3 (a decided row): finds the player's slot among the 12 records by guild card (`FUN_0068d5a8`, `+0xeb4`), then `FUN_00800464(slot)` sends the 0x62 relay (`FUN_007d3fcc`) with the 6xC1 body: `0xC1`, size word `0x17` (92 bytes, so the send length is `[1] * 4`), the own name (`FUN_006936b4`, 24 units at +0xC), the team name (`DAT_00a9ab78`, 16 units at +0x3C), a u32 at +4 and action 0 at +8. newserv's `G_TeamInvitationAction_BB_6xC1_6xC2_6xCD_6xCE` (CommandFormats.hh 5855) has the same shape (card at +4, action at +8) and relays it unchanged (`ReceiveSubcommands.cc:5796`).
-- **Answer flags** (the 0x60 table at 0x00a0fba0, stride 8, read with `exedata.py` and a small decode: 0xC1 -> 0x0078bc44, 0xC2 -> 0x0078be84):
-  - `DAT_00a98474 & 0x20`: a 6xC2 arrived (set by 0x0078be84, the answer handler). `DAT_00a9c8c4` = its action (`+8`); action 2 copies `+4` into `DAT_00a9c8c0` (the accepter's card) and the body's rest into the block at `DAT_00a9c8c8`; any other action copies a name string instead.
-  - 04EA (`0x007c1a14`, EA table entry 4): `func_0x0078bf4c(flag)` sets `DAT_00a9c928 = 1` (the add answer is ready) and `DAT_00a9c924 = flag` (the 04EA header flag). The 03EA itself has no EA handler (table entry 3 is 0).
-  - The window: 2 = accept, then `FUN_007f323c(DAT_00a9c8c0)` is the 03EA add of the accepter's card (`0x0C` bytes: size, 0xEA, sub 3, flag 0, card); 3 = declined (the message path); other = the error path.
-  - The invitee's side (0x0078bc44, the 6xC1 receiver): action 1 clears the prompt, action 0 stores the inviter's card and sets `DAT_00a98474 |= 0x10` when the player is free (the busy case replies through `FUN_00800464`); not ported (the port has no invitee prompt).
-- The 300-frame counter of state 2 (`DAT_00973a48` = 300.0) is traced, not ported (ASSUMED: no idle close).
-- The messages (waiting `FUN_0079317c(0x14c)`, the answers 0x14d / 0x14f / 0x150..0x153 / 0x182 / 0x183 / 0x185, and the info window) use the per-file string table `FUN_0079317c`, not unitxt; they are not identified, so the port shows none and logs the outcome (ASSUMED texts are not written here).
-- **Point Regist, state machine `ProcessState_0074f2dc`** (named in the dump; vtable 0x00b42120): the item list is the local inventory (`ChallengePlayerListWindow_PopulateInventory_00751ee8`). A chosen item with one in the stack asks Yes / No (state 5, unitxt (11, 0x172) is its text); a stack asks the amount first (state 4, a numeric list). Yes -> `send_packet0x60_subcommand0xcc` (dump 570353: `0xCC`, size 3, the sender's client id, item id, amount; only when `player_is_in_lobby` is false). newserv `on_exchange_item_for_team_points_bb` (ReceiveSubcommands.cc 4409) takes the points from the item table (`get_item_team_points`) times the amount, removes the item and relays a 6x29. The result line is unitxt (11, 0x173) with the points (`AddItem_0074f7cc`, a `%d`).
-
-**Port changes:**
-- `client/src/net/team.ts`: `inviteSubcommand` (the 6xC1 body, 0x5C bytes), `parseInviteAnswer` (6xC2: card at +4, action at +8), `exchangeTeamPointsPayload` (6xCC: item id, amount).
-- `client/src/net/lobby.ts`: `waitInviteAnswer()` (one pending waiter, resolved by the next 6xC2 in the 0x60 / 0x62 subcommand loop).
-- `client/src/formats/itemnames.ts`: `teamPoints(item)` (the ItemPMT team points, the same lookup as `itemId`, the raw subtype as newserv).
-- `client/src/classic/teammenu.ts`: `TeamInviteWindow` (the list, the cancel-blocking wait, closes on the outcome) and `TeamPointWindow` (items with team points, quantity, Yes / No, the result line); `TeamHost` gets `nearby`, `invite`, `exchangeItem` (optional); `TeamItemRow.teamPoints`.
-- `client/src/classic/homeleaves.ts`: 0x29 and 0x2d are shared leaves (need a team and the hooks); `tick` closes the Invite window's own state.
-- `client/src/classic/main.ts`: the team host's `nearby` (14EA), `invite` (the lobby player with the card -> 0x62 with the 6xC1 body, the answer, then `addMember` for the accept), `exchangeItem` (6xCC in a game, then `InventoryModel.remove` locally), `teamItemRows` carries the team points.
-
-**ASSUMED (not proven):**
-- The C1 +4 field: newserv calls it `guild_card_number`; the exe copies the window's `+0x20` (the picked card or the own slot is not settled by the reads). The port sends the picked player's card. The C2 echo and the 03EA card depend on it.
-- The C1 +2 header client id (the exe leaves the two bytes unset in the decompile; the port writes the sender's id, the 6x header convention).
-- The invite list's rows come from 15EA (ASSUMED that 14EA is sent when the window opens); the row value is the guild card.
-- The Yes / No default (No) and the Point Regist list's title (unitxt (11, 0x170)); the result line's position (299, 256).
-- The lobby case of 6xCC: the exe sends nothing in the lobby; the port sends nothing and still shows the result line (ASSUMED the exe shows it too).
-- Cancel is ignored while the invite answer is pending; the invitee's busy and cancel replies are not ported.
-- Team points are 0 without the ItemPMT table, so Point Regist lists nothing then.
-- Equipped items are not checked before the 6xCC (the exe's `Player_ValidateAndUnequipWeapon` after the send is not traced).
-
-**Not checked:** the texts and layout in a Chrome view (the brief says no Playwright); a real two-client invite against newserv (the 6xC1 relay and the 6xC2 answer are not run live).
-
-**Checks:** `node tests/teammenu.test.ts` (ALL PASS, 201 checks: the Invite and Point Regist blocks), `node tests/homeleaves.test.ts` (Invite and Point Regist leaves), `node tests/team.test.ts` (the 6xC1 / 6xC2 / 6xCC layouts). `node tests/lobbymenu.test.ts`, `lobbymain`, `fieldhud`, `chatline`, `trade`, `trademenu`, `tradezone` pass (Node 24). `client` `npx tsc --noEmit -p .` clean (Node 24).
-
 ## 2026-10-25: the near-enemy flag (character_flags 0x100000): the setter is enemy-only, the NPC guard stays clear
 
 **Question:** which exe code sets / clears `in_guard_stance` (0x100000, newserv `is_near_enemy`), from what distance test, and does the port already have it for the local player (so an NPC could reuse it)?

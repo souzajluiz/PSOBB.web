@@ -181,28 +181,6 @@ export class ItemNames {
     }
   }
 
-  // The item's team points (ItemPMT), as newserv ItemParameterTable::get_item_team_points reads
-  // them (the raw subtype, no S-rank remap). undefined when the item has no table entry.
-  teamPoints(item: ItemData): number | undefined {
-    const [c0, c1, c2, , c4] = item.data1;
-    const p = this.pmt;
-    switch (c0) {
-      case 0:
-        return p.getWeapon(c1, c2)?.teamPoints;
-      case 1:
-        if (c1 === 1) return p.armors[c2]?.teamPoints;
-        if (c1 === 2) return p.shields[c2]?.teamPoints;
-        if (c1 === 3) return p.units[c2]?.teamPoints;
-        return undefined;
-      case 2:
-        return p.mags[c1]?.teamPoints;
-      case 3:
-        return c1 === 2 ? p.getTool(2, c4)?.teamPoints : p.getTool(c1, c2)?.teamPoints;
-      default:
-        return undefined;
-    }
-  }
-
   // Bare item name (no grind, specials or counts)
   baseName(item: ItemData): string {
     const id = this.itemId(item);
