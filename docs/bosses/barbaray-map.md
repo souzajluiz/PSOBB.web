@@ -851,3 +851,32 @@ needs Player__Animate (the 0xc0 writers) to decide; the easing is not the cause.
 
 Test: `tests/barbaray.test.ts`, the drop block after the enter / fall checks: the easing's max / accel / decel / dist from
 the apex, pos >= 0, z settled (no tick moves it over 50 ticks) and z = apex - pos (`node tests/barbaray.test.ts` ALL PASS).
+
+## Pass 12: the drop's clock (+0xc0, Player__Animate), 2026-10-25
+
+**Question:** who writes +0xc0 on this entity, at what rate in the drop motion, and when is it reset? Pass 10 / 11 assumed one a tick, which runs the drop's sub 0 -> 1 -> 2 -> 3 in 3 ticks and settles at z -1104.
+
+**Proven (refsrc `Psobb.exe-05112026.c`; objdump `~/Downloads/psobb-client/PsoBB.exe`):**
+- +0xc0 is `current_animation_elapsed` (enemy struct, line 74933). NJM_UpdateAnimation is called with (+0xf8 current_njm, +0xc0 elapsed) at lines 174946 / 234146 (same struct layout).
+- Writer: `Player__Animate` (line 791218). Each call: `elapsed += stride` (+0xc8, `animation_frame_stride`) unless `animation_flags & 0x40` (+0xb0); then the id check (`animation_id` +0xb8 vs `field99_0xba`, `Player__StartNpcAnimation` on a change); then the sType 1..5 wraps (sType 4 resets `elapsed = g_AnimationFrameStride`; sType 5 is a net-zero hold).
+- The drop calls it once per tick: the drop's event 0 (`HandleSinowberillMovementState_004b7040`, `param_1 == 0`, line 238386) runs `Player__Animate(this)` before its sub-states. The per-frame root `UpdateSinowberillEntity_004b8584` (line 239279) calls `vt+0x164(state, 0)` (the dispatcher 0x004b02b4 = `PlayerActionDispatch`, line 232924) each tick, so event 0 of phase 0x0d runs every tick. (The root vt+0xac / vt+0xb0 are countdowns, 0x007782b4 / 0x00778580, not the clock.)
+- The drop's enter (event 4, line 238247..) writes +0xb8 = 1, the gate, 0x6c8 = 3 and the 0x730..0x758 words. It does NOT write +0xc0 or +0xc8. So the clock is not reset at the enter (the value it carries is the previous motion's; the port resets it to 0 in the generic enter, ASSUMED, and it does not matter: see below).
+- The stride: `Enemy__InitAnimation` (line 791358) sets +0xc8 = the row speed `unknown_animation_data[id] +8` (the table is 0x009aba20: the Barba ctor 0x004af634 stores it at +0xd8, `objdump` 0x4af894). The static init 0x004b9bd8 writes slot 0/1/3/4/5 speeds as 0.7 / 0.6 / 0.4 / 0.3 / 0.5 (objdump 0x4b9bf6..0x4b9c1e, the port's table is right).
+- `Player__StartNpcAnimation` (line 791013), the else branch, writes `animation_speed` at +0xcc (player struct, line 76371), not +0xc8. So a slot change alone does NOT change the drop's stride.
+- The sub 2 lift step (line 238527): `elapsed -= (0.3 - a47aa0)` with `a47aa0 = 0.195`.
+
+**Consequence (the clock is exact at a stride of 0.3 ASSUMED):** the designed constants line up only with a stride of 0.3 in the drop:
+- sub 0 (fall, 21 ticks) + sub 2's wait (734 == 0, 14 ticks) = 35 ticks, the clock 10.5 (0x906cf0) at 35 x 0.3 (the speed reaches the -7 clamp, 906e74, on the same tick).
+- sub 2 (734 == 1, the accel): 16 - 10.5 = 5.5 = 18.33 x 0.3, so A = a47a9c = 18.333 ticks.
+- sub 2 (734 == 2, the lift): net 0.3 - 0.105 = 0.195 a tick, 22 - 16 = 6, so B = 6 / 0.195 = 30.77 ticks = a47a98.
+These exact matches are the evidence for 0.3, but the stride itself is not traced: it is the +0xc8 value left by the last `Enemy__InitAnimation` / sType path, which this pass did not find. ASSUMED: 0.3 (`BARBA_DROP.clockStride`).
+
+**Port (`combat/barbaray.ts`):** `playerAnimate()` (the add) runs first in `dropFrame()`; the lift step is `- (0.3 - liftZero)`; the stride is `BARBA_DROP.clockStride` (0.3). The one-a-tick `timer += 1` is gone. The sub-state thresholds, the rise formula and the easing are unchanged.
+
+**Result (probe, 900 ticks):** the fall bottoms near z -373 at tick 35; the rise (sub 1 accel 18 ticks, sub 2 lift 31 ticks) peaks near 559 at the sub 3 halving and sub 3 / 4's deceleration; the easing then settles on z 500 (anchor 1) and stays there. The body no longer runs away to -1104.
+
+**NOT matching the docs' "apex near 300":** with these constants the peak is ~559, not 300. The 300 is the rise formula's target (`z0`), and the rise overshoots it by the 14 ticks of sub 2's fall (the speed reaches -7 before the accel) and by the sub 3 / 4 deceleration after the speed halving. Whether the exe really peaks near 300 is NOT settled: the stride or the start clock could differ (a different fall stride gives a different sub 0 / 2 split), and the exe's apex is unproven. Open for the next pass: the +0xc8 writer that sets 0.3 before the drop (the previous motion's `Enemy__InitAnimation`, or a sType 4 wrap), and the njm frame counts of motions 10 / 11 (not decoded: the mode 1 / 2 wraps are ASSUMED not to fire in the drop's ~60 ticks).
+
+**ASSUMED (marked in code):** the stride 0.3 (`clockStride`), the hold 0x40 clear, the blend branch of StartNpc not taken, the generic enter's clock reset to 0, the sType 1 / 2 wraps not reached in the drop.
+
+**Tests (`tests/barbaray.test.ts`, the 0x0d block):** the rise speed is checked at the 35th tick (the clock reaches 10.5) against the formula with the values before that tick; the lift steps the clock 0.195 for ~30 ticks; the other sub-states step 0.3; the fall bottoms near -373, the peak lies in (300, 600), the body lands on z 500 (+-0.5) after the easing.
