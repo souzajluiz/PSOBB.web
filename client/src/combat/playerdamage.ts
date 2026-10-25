@@ -170,10 +170,13 @@ export const DEATH_FLAG_NO_DROP = 2;
 // The three items the death check looks for, in the exe's order
 // (CheckForDropItemInInventory_0069248c @ 0x0069248c: FindItemInInventory on the
 // compact triple group_1, group_2, group_idx). The first one found is the one
-// HandleDropItemAction_006923dc (0x006923dc) consumes. [3, 9, 0] is the Scape
-// Doll (tool subtype 9: newserv QuestScript "030900"; init_item_tools[9] =
-// 0x005dfd50). The other two are not identified (ASSUMED: the weapon 0x0D / 3
-// and the armour 0x52 of group 1 subtype 2).
+// HandleDropItemAction_006923dc (0x006923dc, Ephinea) consumes. [3, 9, 0] is the
+// Scape Doll (tool subtype 9: newserv QuestScript "030900"; init_item_tools[9] =
+// 0x005dfd50). [0, 0x0D, 3] is the Phoenix Claw (names-v4.json "000D03") and
+// [1, 2, 0x52] the Ragol Ring ("010252"; QuestScript wrap rule). newserv
+// CommandFormats 6x70 death_flags names the Scape Doll and the Ragol Ring as the
+// automatic revival items; the Phoenix Claw is the exe's third item (decode in
+// DEVLOG 2026-10-25).
 export const DROP_CHECK_ITEMS: readonly (readonly [number, number, number])[] = [
   [3, 9, 0],
   [0, 0xd, 3],
@@ -440,8 +443,9 @@ export class PlayerDamage {
   }
 
   // Another player's Reverser / Moon Atomizer, or the web client's own revive
-  // key. The real client cannot revive itself; this is the 6x4F path
-  // (ForceExitSpecialState_0069db5c: invulnerability 300, state 0x12).
+  // key, and the automatic revival item (the exe's own revive, see the fade end).
+  // The 6x4F path with the exe's invulnerability 300 and state 0x12
+  // (ForceExitSpecialState_0069db5c tail). HP is ASSUMED (1/8, not traced).
   revive(hp = Math.max(1, Math.round(this.maxHp * 0.125))): void {
     if (!this.dead) return;
     this.state = 'reviving';
@@ -518,17 +522,21 @@ export class PlayerDamage {
         this.fadeTicks++;
         this.fade = Math.min(DEATH_FADE_MAX, this.fadeTicks * DEATH_FADE_STEP);
         if (this.fadeTicks >= DEATH_FADE_TICKS) {
-          // The return-to-Pioneer-2 routine (unknown_dead_player_return_to_p2_related)
-          // first runs HandleDropItemAction, which returns early when the drop
-          // check found an item. A Scape Doll is then used up (6x29) and the
-          // player does not go to the revivable marker.
-          // ASSUMED: the revive in place (6x4F, invulnerability 300, HP from
-          // revive()) is not traced in the exe yet; the exe's HP and state
-          // after the doll are open (DEVLOG).
+          // unknown_dead_player_return_to_p2_related (0x006920ac) first runs
+          // HandleDropItemAction (0x006923dc), which returns 1 when the drop check
+          // found any of the three items (Ephinea dump 573527..573530: the routine
+          // returns at once, so no 6x4E and no return to Pioneer 2). The found item
+          // is used up with 6x29 (amount 1), and 0x92c |= 4 ("revived by an
+          // automatic revival item") is set. Proven: the item is consumed whatever
+          // its class (the port used to revive only a Scape Doll).
           const found = this.events.findDropCheckItem?.() ?? null;
-          if (found?.scapeDoll) {
+          if (found) {
             this.events.sendConsumeItem?.(found.id);
-            this.events.log('a Scape Doll revives you');
+            this.events.log('an automatic revival item revives you');
+            // ASSUMED timing and HP: the exe sends 6x31 then 6x4F from
+            // dispatch_action_0x4f (0x0069da2c, tail 0x0069da73: 6x4F size 1) when
+            // the dead state's interrupt runs (HandleDeadStateInterrupt
+            // 0x0069e34c), not here. The port revives at once; HP is ASSUMED.
             this.revive();
             break;
           }

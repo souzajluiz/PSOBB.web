@@ -105,22 +105,25 @@ function killAndFade(pd: PlayerDamage, maxTicks = 1000): void {
   for (let i = 0; i < 1000 && pd.state === 'dead'; i++) pd.tick();
   check(log.consumed.length === 1 && log.consumed[0] === 0x1234, 'the fade end sends 6x29 for the Scape Doll once');
   check(log.revivable === 0, 'the revivable marker (6x4E) is not sent');
-  check(log.revived === 1, 'the revive sends 6x4F once (ASSUMED: not traced)');
-  check(pd.state === 'reviving', 'the player is in the revive state');
-  check(pd.hp === 13 && pd.invuln > 0 && !pd.dead, 'revived with the revive() HP (ASSUMED 1/8 of max) and invulnerability');
-  check(log.logs.some((m) => m.includes('Scape Doll')), 'the revive is logged');
+  // Exe: dispatch_action_0x4f sends 6x31 then 6x4F; the port sends 6x4F only (ASSUMED).
+  check(log.revived === 1, 'the revive sends 6x4F once');
+  check(pd.state === 'reviving', 'the player is in the revive state (0x12)');
+  check(pd.hp === 13 && pd.invuln === 300 && !pd.dead, 'revived with invulnerability 300 (exe) and HP 13 (ASSUMED 1/8 of max)');
+  check(log.logs.some((m) => m.includes('revives you')), 'the revive is logged');
   // The revive motion ends: alive again, and no second consume.
   for (let i = 0; i < 1000 && pd.state !== 'alive'; i++) pd.tick();
   check(pd.state === 'alive' && log.consumed.length === 1, 'back to alive with one consume');
 }
 
 {
-  // A non-doll item of the drop check is not used by the revive (the exe consumes
-  // it too, ASSUMED open): the player goes to the revivable marker as before.
+  // A Phoenix Claw / Ragol Ring of the drop check: the exe's HandleDropItemAction
+  // consumes it (6x29) and returns 1 whatever the class, so the fade end revives
+  // the player and sends no 6x4E.
   const { pd, log } = makePlayer({ id: 0x55, scapeDoll: false });
   killAndFade(pd);
-  check(pd.state === 'revivable' && log.revivable === 1, 'a non-doll triple does not revive');
-  check(log.consumed.length === 0, 'a non-doll triple is not consumed by the port');
+  check(pd.state === 'reviving' && log.revivable === 0, 'a non-doll triple revives (exe: HandleDropItemAction returns 1)');
+  check(log.consumed.length === 1 && log.consumed[0] === 0x55, 'a non-doll triple is used up with 6x29');
+  check(log.revived === 1, 'a non-doll triple sends the 6x4F revive');
   check(log.deaths[0] === 0, 'a non-doll triple also clears bit 2 (the exe found an item)');
 }
 
