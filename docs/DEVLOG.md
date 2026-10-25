@@ -49,6 +49,21 @@
 - Not drawn in Chrome (no Playwright); the draw code follows `Question` / `drawMenuWindow` and the exe positions.
 
 **Checks:** `client/node_modules` symlink to the main checkout (removed before commit). `node client/node_modules/typescript/bin/tsc --noEmit -p client` exit 0 (Node 24). `tests/team.test.ts` ALL PASS (81 checks, the window and receiver blocks new); `teammenu`, `homeleaves` (its fake lobby now has a receiver), `lobbymenu`, `lobbymain`, `fieldhud` pass under Node 24.
+## 2026-10-25: Pofuilly Slime radar, lock-on and hit: the exe's icon, reticle and box rules
+
+**Question:** the port's lock-on cursor, radar icon and hit test for the Pofuilly Slime still used `untargetable` (hidden or puddle). What does the exe use?
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13; dump `Psobb.exe-05112026.c`):**
+- Radar: `SinowzoaUpdate_00596104` (dump 380905) calls `unknown_add_minimap_icon` after its update whenever `field_0x38c != 0xd`, the death state (the state 13 entry is 0x00598648). Proven: every non-dead frame, puddle and burrow included, no visibility or alpha test.
+- Lock-on: the same function calls `enable_reticle` only while `+0x3f4 != 0`. The writers are the state entries, unchanged from the 2026-10-25 Pofuilly entry: 1 in search (0x597e7c), confused (0x597f2c), approach (0x597fc0), spit (0x59802c), arm (0x598070) and stun (0x59856c); 0 in the others. Proven: lock-on and technique records are the `lockable` set.
+- Hit box: the entries write the sub-object's box flags (`+0x394`, `+0x18`) with the mask `0xf5fff297` and then either `|= 0xa000528` (puddle 0x597b0c, rise 0x597ba0, sink 0x597bec, flinch 0x5985c4, thrown 0x598740, dead 0x598648), `|= 0xa000028` (crawl 0x597c3c, emerge 0x597dbc, burrow 0x597e1c), or nothing (the six lockable entries above, which only clear). `SetEnemyInvulnerableAndImmune_0053fdf0` is `|= 0x28`, so the box is off (invulnerable and immune) in the complement of `lockable`. Proven: the writes. ASSUMED: the hit test reads the 0x28 bits of this box (the reader is not traced; the port's `applyEnemyHit` treats `invulnerable` as the exe's "0" text).
+- Side fix: emerge and burrow were targetable in the port; the exe clears no box bit there (0x597dbc / 0x597e1c set 0x28), so they are not struck and not locked on.
+
+**Port:**
+- `SlimeAi.radar` (`state !== 'dead'`), `SlimeAi.invulnerable` (`!lockable`); `SlimeAi.untargetable` is gone. `render/combat.ts` exports `slimeRadarOk`, `slimeLockOk` and `slimeStruckOk`; the radar, the lock-on, the melee / gun / technique / NPC hit lists use them. `SlimeControl` and the Pan Arms keep `concealed`.
+- Tests: `tests/enemysplits.test.ts` checks the three rules in all 15 states, the non-slime pass-through, and the emerge / search box change (the old "emerged: it can be hit" assertion was the port's guess, now corrected).
+
+**Still ASSUMED:** the reader of the box's 0x28 bits in the hit path; the `SlimeControl` untargetable (its own control object; not traced here).
 
 ## 2026-10-25: Revive HP / TP by source: the item's TP restore ported, Reverser and Moon Atomizer already on the exe rule
 

@@ -829,7 +829,10 @@ export class PanHalfAi extends BrainBase {
 // (0x00597914, the took-damage handler at vtable +0x100: `unknown_get_current_combo_step`
 // of the last hitter == 2, state != 12, the slot scan over the control's slots),
 // and Gibarta / Rabarta (0x005987c8, the technique group 2, before the hit).
-// Flags 0xa000528 (states 0, 1, 2, 12, 13, 14): ASSUMED untargetable.
+// The box flags (the sub-object's +0x18; SetEnemyInvulnerableAndImmune_0053fdf0 sets 0x28):
+// the entries of 0 (0x597b0c), 1 (0x597ba0), 2 (0x597bec), 3 (0x597c3c: 0xa000028), 4 (0x597dbc),
+// 5 (0x597e1c), 12, 13 and 14 set them; the entries of 6..11 (0x597e7c, 0x597f2c, 0x597fc0,
+// 0x59802c, 0x598070, 0x59856c) clear them. The set is the complement of `lockable`.
 // The puddle (state 0, 0x00597b0c) is morph 7: its motion is DAT_009bfda0[rare]
 // (4 normal, 5 rare, the exe table), so the puddle is drawn as that pose; the
 // sink / crawl / thrown states keep the body hidden (ASSUMED).
@@ -1053,7 +1056,6 @@ const RETICLE_STATES: ReadonlySet<SlimeState> = new Set(['search', 'confused', '
 export const PUDDLE_MOTION = { normal: 4, rare: 5 } as const;
 // ASSUMED: the puddle pose plays at the wait rate (the spawn motion's 0.5).
 const PUDDLE_SPEED = 0.5;
-const UNTARGETABLE: ReadonlySet<SlimeState> = new Set(['puddle', 'rise', 'sink', 'crawl', 'flinch', 'thrown', 'dead']);
 
 // The map queries the crawl needs (render/combat.ts wires them to the map).
 // Heights are relative to the floor under the body at the frame's start (0 there),
@@ -1132,8 +1134,11 @@ export class SlimeAi extends BrainBase {
     return HIDDEN_STATES.has(this.state);
   }
 
-  get untargetable(): boolean {
-    return this.hidden || this.state === 'puddle';
+  // The radar icon (PsoBB.exe SinowzoaUpdate_00596104: unknown_add_minimap_icon runs every
+  // frame while field_0x38c != 0xd, the death state 13): the puddle, the burrow and the emerge
+  // are on the radar too. render/combat.ts minimapEnemies reads it.
+  get radar(): boolean {
+    return this.state !== 'dead';
   }
 
   // +0x3f4 != 0 (the entries' flag above). SinowzoaUpdate (0x00596104, 0x00596168) then calls
@@ -1146,8 +1151,10 @@ export class SlimeAi extends BrainBase {
     return RETICLE_STATES.has(this.state);
   }
 
+  // The box is off (0x28 set, see the table above): the slime is not struck, and the hit
+  // shows "0" (render/combat.ts applyEnemyHit). ASSUMED: the hit test reads the 0x28 bits.
   get invulnerable(): boolean {
-    return UNTARGETABLE.has(this.state);
+    return !this.lockable;
   }
 
   // What render/combat.ts draws (slimeView): the body's transform and alpha,
