@@ -1293,7 +1293,7 @@ for (const side of [0, 2]) {
   eq(fireSe, 1, 'attack fire: the 0x3f7 sound once at sub 1 end');
   check(b.timer === BARBA_ATTACK.fire, `attack fire: the clock is pinned at 13.0 (got ${b.timer})`);
   check(fireTick > 40 && fireTick < 60, `attack fire: about 44 ticks at 0.3 after the blend wrap (got ${fireTick})`);
-  // Sub 2 holds BARBA_ATTACK.aura frames (ASSUMED), with one area hit on the player inside 120 on xz.
+  // Sub 2 holds BARBA_ATTACK.aura bodies (PROVEN, the aura's state 2), with one area hit on the player inside 120 on xz.
   // The enter teleports the body to anchor 3, so the players are placed from the body's position.
   const bx = b.x;
   const bz = b.z;
@@ -1302,11 +1302,19 @@ for (const side of [0, 2]) {
   const corpse = { clientId: 3, x: bx + 10, z: bz, charClass: 0, dead: true };
   const targets = [near, far, corpse];
   const hits: Extract<BarbaEvent, { kind: 'hit' }>[] = [];
+  let sub2Ticks = 0;
+  let sub3Ticks = 0;
   for (let k = 0; k < 200 && b.attackSub !== 4; k++) {
+    if (b.attackSub === 2) sub2Ticks++;
+    if (b.attackSub === 3) sub3Ticks++;
     b.tick(targets);
     for (const e of b.drain()) if (e.kind === 'hit') hits.push(e);
   }
   eq(b.attackSub, 4, 'attack: sub 4 (done) after sub 2 and sub 3');
+  // PROVEN: the aura (+0x4c 80.0, +30.0 a update) reaches state 2 at 500.0, the 14th update, so sub 2 has 14 bodies.
+  eq(sub2Ticks, BARBA_ATTACK.aura, 'attack aura: sub 2 holds 14 bodies (80 + 30 * 14 = 500)');
+  // PROVEN shape: sub 3 holds until the play-once end (clock 13.0 + 0.3 a tick reaches animEnd 25.0): 40 ticks.
+  eq(sub3Ticks, 40, 'attack hold: sub 3 holds 40 ticks to the animation end (clock 13.0 to 25.0 at 0.3)');
   eq(hits.length, 1, 'attack: one hit over the whole attack (the hit list keeps a player to one)');
   eq(hits[0]?.clientId ?? -1, 1, 'attack: the hit is on the player at 50 (inside 120), not the far or dead one');
   eq(hits[0]?.power ?? -1, 250, 'attack: the power is MovementData[15] fparam1');
