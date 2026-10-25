@@ -155,8 +155,9 @@ export function boomaIconShown(state: number): boolean {
 // attack, then substate 2 with the 15-tick wait, 0x0052b290); dead = state 8.
 // spawn = state 0 (unknown_booma_enemy_spawn_handler 0x00535a6c, dump 319268: the
 // spawn animation 0xb, invulnerable, then state 1). The Booma brain's 'spawn'
-// state (combat/enemyai.ts EnemyAi) is that handler; the Shark (0x00552704) and
-// the Dimenian (0x005ad51c) spawns are not ported, so they never report it.
+// state (combat/enemyai.ts EnemyAi) is that handler. The Shark (0x00552704) and
+// the Dimenian (0x005ad51c) spawns report it too (their timer, not an animation);
+// render/combat.ts keeps their radar icon through that spawn (timedSpawn).
 export const BOOMA_BRAIN_EXE_STATE: Readonly<Record<string, number>> = {
   spawn: 0,
   idle: 1,

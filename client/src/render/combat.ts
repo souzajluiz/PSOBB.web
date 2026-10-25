@@ -1448,7 +1448,8 @@ export class CombatView {
           wander: Math.max(0, head.slot.set.params[1]),
           // The spawn animation branch: booma_constructor (0x00535f1c) writes the
           // current_target == 1 test value, so every Booma (floor or wave) animates.
-          // Only the Booma profile has a spawn state.
+          // Booma: the spawn animation; Shark and Dimenian: their spawn timer (AI_PROFILES.spawnTimer).
+          // The Dimenian's +0x398 == 1 writer is not identified (ASSUMED, the Shark's is 0x00512ed4).
           spawn: true,
         });
         // The Monest's own states are its spawner (combat/enemyfsm.ts).
@@ -1898,7 +1899,8 @@ export class CombatView {
     const out: { x: number; z: number; type: string }[] = [];
     for (const e of this.enemies.values()) {
       if (e.dead || e.state === 'death' || !e.instance.root.visible || radarConcealed(e) || !splitRadarOk(e)) continue;
-      if (BOOMA_BRAIN_TYPES.has(e.slot.type) && e.ai instanceof EnemyAi && !boomaBrainIconShown(e.ai.state)) continue;
+      // A timed spawn (Shark, Dimenian) keeps its radar icon: the spec's trace found no change in the spawn.
+      if (BOOMA_BRAIN_TYPES.has(e.slot.type) && e.ai instanceof EnemyAi && !(e.ai.timedSpawn && e.ai.state === 'spawn') && !boomaBrainIconShown(e.ai.state)) continue;
       // Dark Falz forms 1 and 3 have their own forced icons (minimapIcons).
       if (e.ai instanceof DarkFalzPartAi && (e.ai.entity === DF_ID.form3 || e.ai.entity === DF_ID.form1)) continue;
       const p = e.instance.root.position;
@@ -2138,6 +2140,11 @@ export class CombatView {
       // A Pofuilly Slime's parts are placed by slimeView (the body is drawn at alpha > 0, not by `hidden`);
       // a Morfos's by morfosView (its arm has its own life).
       if (r.hidden !== undefined && !(ai instanceof SlimeAi) && !(ai instanceof MorfosAi)) for (const c of root.children) c.visible = !r.hidden;
+      // The Shark / Dimenian timed spawn (combat/enemyai.ts tickSpawnTimer): its sound at the enemy, then its particles.
+      if (r.spawnFx) {
+        this.playSeAt(r.spawnFx.sound, root.position);
+        for (const fx of r.spawnFx.effects) this.particle({ id: fx.id }, new THREE.Vector3(root.position.x, root.position.y + fx.dy, root.position.z));
+      }
       if (ai instanceof EpsilonAi) for (const ev of ai.events.splice(0)) this.playSeAt(ev.id, root.position);
       // The Grass Assassin's emerge (the abeast spawn sound and particles) and
       // the Nano Dragon's power-up charge (sound 0x111, particle 0xfa).
