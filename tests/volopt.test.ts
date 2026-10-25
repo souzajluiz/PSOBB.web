@@ -42,8 +42,8 @@ import {
   barStartHeight,
   type Form2Options,
 } from '../client/src/combat/volopt2.ts';
-import { VoloptPart } from '../client/src/combat/volopt.ts';
-import { radarConcealed, voloptRadar } from '../client/src/render/combat.ts';
+import { VoloptPart, VoloptRod } from '../client/src/combat/volopt.ts';
+import { radarConcealed, splitLockOk, splitStruckOk, voloptLockOk, voloptRadar } from '../client/src/render/combat.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 import { bossPhaseOf } from '../client/src/audio/bossbgm.ts';
@@ -1188,6 +1188,72 @@ function toPhase2(over: Parameters<typeof fight>[0] = {}): Fight {
   eq(voloptRadar(f.f2), 'always', 'the body has an icon every live frame (0x00444692, flag 0x4000 only)');
   check(f.f2.untargetable && !f.f2.ready, 'the body is not ready yet and not lockable');
   check(!radarConcealed({ ai: f.f2 }), 'a body that is not ready is on the radar (its root shows once awake)');
+}
+
+{
+  // Lock-on (render/combat.ts voloptLockOk: the enable_reticle_ sites per entity and state, PsoBB.exe
+  // 0x007aa094). The lock is not the hit: a part can be lockable while its hit (targetable) is off.
+  const f = fight();
+  const part = (kind: 'prison' | 'monitor' | 'pillar' | 'core', targetable: boolean) => {
+    const p = new VoloptPart(kind, 0, VO_ID[kind], 1);
+    p.targetable = targetable;
+    return new VoloptPartAi(p, f.c);
+  };
+  const lockOf = (ai: VoloptPartAi | VoloptForm2Ai | VoloptAi) => splitLockOk({ ai });
+  eq(voloptLockOk(f.c), false, 'the control is never lockable (no enable_reticle_ site, 0x0043c508..0x0043e338)');
+  eq(lockOf(f.c), false, 'the control is not locked through splitLockOk either');
+  const prison = part('prison', true);
+  eq(voloptLockOk(prison), false, 'the prison is never lockable (no site, 0x00449c33..0x0044a0d8)');
+  // Monitors: no site in the monitor code (0x004414d8..0x00442254), so never locked even when it is hit.
+  const mon = new VoloptMonitor(0, 1, 1, f.c, 0, 0);
+  const monAi = new VoloptPartAi(mon, f.c);
+  mon.targetable = true;
+  eq(voloptLockOk(monAi), false, 'a monitor is never lockable (no site in its code)');
+  eq(lockOf(monAi), false, 'a monitor on the core wall is not locked');
+  check(!monAi.untargetable && splitStruckOk({ ai: monAi }), 'the hit path is not the lock: an exposed monitor is still struck');
+  // Core: sites in states 1, 2, 4, 5, 7, 9, 10 minus the refused 7 (the 0x40000 window); none in 0, 3, 6, 8.
+  const core = (st: number) => {
+    const c = new VoloptCore(1, 120, f.c, 0, 0);
+    c.st = st;
+    return new VoloptPartAi(c, f.c);
+  };
+  for (const st of [1, 2, 4, 5, 9, 10]) eq(voloptLockOk(core(st)), true, `a core in state ${st} is lockable`);
+  for (const st of [0, 3, 6, 7, 8]) eq(voloptLockOk(core(st)), false, `a core in state ${st} is not lockable`);
+  const lockedCore = core(2);
+  check(lockedCore.untargetable && lockOf(lockedCore), 'a core in state 2 is locked while its hit stays off (targetable false)');
+  // Pillars: sites in 2, 4, 5, 9 (0 is refused by its 0x40000 window); 1, 3, 6, 7, 8 have none.
+  const pillar = (st: number) => {
+    const p = new VoloptPillar(0, 1, f.c, 0, 0);
+    p.st = st;
+    return new VoloptPartAi(p, f.c);
+  };
+  for (const st of [2, 4, 5, 9]) eq(voloptLockOk(pillar(st)), true, `a pillar in state ${st} is lockable`);
+  for (const st of [0, 1, 3, 6, 7, 8]) eq(voloptLockOk(pillar(st)), false, `a pillar in state ${st} is not lockable`);
+  // Rods: sites in 4 and 5 only. States 0 and 1 (the hanging rod) have no site: shootable, not lockable.
+  const rod = (st: number) => {
+    const r = new VoloptRod(450, 0, 0);
+    r.st = st;
+    return new VoloptPartAi(r, f.c);
+  };
+  for (const st of [4, 5]) eq(voloptLockOk(rod(st)), true, `a rod in state ${st} is lockable`);
+  for (const st of [0, 1, 2, 7]) eq(voloptLockOk(rod(st)), false, `a rod in state ${st} is not lockable`);
+  const hanging = rod(1);
+  hanging.part.targetable = true; // the rod's tick sets it for state 1 (and 4)
+  check(!hanging.untargetable && !lockOf(hanging), 'a hanging rod (state 1) is struck but not locked');
+  // Body: sites in 0, 2, 5, 9, 10, 11, 12; 1 and 4 have none; 7 is refused by its 0x40000 window.
+  const st0 = f.f2.st;
+  for (const st of [0, 2, 5, 9, 10, 11, 12]) {
+    f.f2.st = st;
+    eq(voloptLockOk(f.f2), true, `the body in state ${st} is lockable`);
+  }
+  for (const st of [1, 3, 4, 6, 7, 8]) {
+    f.f2.st = st;
+    eq(voloptLockOk(f.f2), false, `the body in state ${st} is not lockable`);
+  }
+  f.f2.st = st0;
+  check(f.f2.untargetable && lockOf(f.f2) === false, 'a body that is not ready is not locked');
+  // Other enemies keep their own lock rule.
+  eq(splitLockOk({ ai: null }), true, 'a non-Vol Opt enemy is not gated by the Vol Opt rule');
 }
 
 {

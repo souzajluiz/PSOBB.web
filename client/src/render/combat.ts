@@ -68,7 +68,7 @@ import { shareMeshResources } from './dispose.ts';
 import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
 import { SPINNER_X, spinnerScale } from '../combat/saintmilion.ts';
 import { PLAYER_AIM_HEIGHT, PLAYER_RADIUS, TechBolt, type EnemyShot } from '../combat/enemyshots.ts';
-import { VoloptAi, VoloptCore, VoloptMonitor, VoloptPartAi, VoloptPillar, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
+import { VoloptAi, VoloptCore, VoloptMonitor, VoloptPartAi, VoloptPillar, VoloptRod, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import { GalgryphonMinionManager } from '../combat/galgryphon.ts';
@@ -544,14 +544,23 @@ const isSplitPart = (ai: EnemyBrain | null): boolean => ai instanceof SlimeAi ||
 const isEp2Hidden = (ai: EnemyBrain | null): boolean => (ai instanceof MericarolAi || ai instanceof GibbonAi) && ai.untargetable;
 export const splitRadarOk = (e: { ai: EnemyBrain | null }): boolean =>
   (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi | GibblesAi).radar) && !isEp2Hidden(e.ai);
-export const splitLockOk = (e: { ai: EnemyBrain | null }): boolean =>
+const splitLockBase = (e: { ai: EnemyBrain | null }): boolean =>
   (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi | GibblesAi).lockable) && !isEp2Hidden(e.ai);
+// Lock-on and the technique records (the reticle's per-frame lockable flag). A Vol Opt entity is
+// judged by voloptLockOk (its lock is not its hit); the other enemies by splitLockBase.
+export const splitLockOk = (e: { ai: EnemyBrain | null }): boolean => {
+  const vo = voloptLockOk(e.ai);
+  return vo !== null ? vo : splitLockBase(e);
+};
 export const splitStruckOk = (e: { ai: EnemyBrain | null }): boolean => {
   if (isEp2Hidden(e.ai)) return false;
   if (e.ai instanceof GibblesAi) return e.ai.hittable;
   return !isSplitPart(e.ai) || !(e.ai as SlimeAi | PanArmsAi | PanHalfAi).invulnerable;
 };
 const techRecordOk = splitLockOk;
+// The concealed() test of the lock-on and the technique records: a Vol Opt entity is decided by
+// voloptLockOk alone (concealed() is its hit gate, see voloptLockOk).
+const lockConcealed = (e: { ai: EnemyBrain | null }): boolean => (voloptLockOk(e.ai) !== null ? false : concealed(e));
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   (e.ai instanceof SlimeControl && e.ai.untargetable) ||
   ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
@@ -629,6 +638,52 @@ export const voloptRadar = (ai: EnemyBrain | null): VoloptRadar | null => {
     if (ai.part.kind === 'prison') return 'never';
     if (ai.part.kind === 'rod') return ai.part.dead ? 'concealed' : 'always';
     return 'concealed';
+  }
+  return null;
+};
+
+// Vol Opt's lock-on (PsoBB.exe enable_reticle_ 0x007aa094, one `calll` per entity handler; the
+// reticle filter is check_enemy_is_targetable 0x007a2b28, which reads the entity's flags at the
+// time of the lock). The lock is decided here, apart from the hit: EntityHitEntity 0x00773350 has
+// no lock or reticle test, so a part can be lockable and not struck (concealed() stays the hit).
+// The sites (objdump; the dispatch tables read with tools/exedata.py read; each site's handler
+// found with tools/ghidra/decomp.sh):
+//   - control (0x0043c508..0x0043e338) and prison (0x00449c33..0x0044a0d8): no site, never;
+//   - monitor (0x004414d8..0x00442254): no site in its code, never (ASSUMED no base-class helper
+//     reached through its vtable calls it);
+//   - core (dispatch 0x0043f17c, table 0x008fe0bc): sites in states 1 (0x0043fb90), 2 (0x0043f6c8),
+//     4 (0x0043f560), 5 (0x0043f52c), 7 (0x0043f458), 9 (0x00440298), 10 (0x0043f1c8); none in 0
+//     (0x0043fcfc), 3, 6, 8. State 7 is inside the 0x40000 window: sub 0 sets it (0x0043f473) before
+//     the site (0x0043f4e7) and it is cleared only on the exit frame (0x0043f50d), so the record
+//     filter (field7 0x40000) refuses it. The sites are not gated by the exposed monitor
+//     (DAT_00a447ac is read after them). State 4's window writes (0x0043f5a3) are ASSUMED to leave
+//     its site reachable;
+//   - pillar (dispatch 0x00442730): sites in states 0 (0x00443b46, after the window set 0x00443b33
+//     of its sub 0: refused, so not listed), 2 (0x00442ec0; window sets on some sub paths, ASSUMED
+//     those paths are the refused ones only), 4 (0x00442c98), 5 (0x00442770; the window set comes
+//     after its site), 9 (0x004428b0). 1, 3, 6, 7, 8 have none;
+//   - rod (dispatch 0x00440e84): sites in states 4 (0x004410f7, handler 0x004410c0) and 5 (0x00440ff9,
+//     0x0044102a, handler 0x00440fd0); state 7 (0x00440ef8) calls once on its entry frame (0x00440f2a)
+//     and then sets the window (0x00440f39), so it is refused; states 0 and 1 (0x00440ebc) have none.
+//     So a hanging rod (state 1) is shootable (targetable) but not lockable;
+//   - body (dispatch 0x004446fc, table 0x008fe588): sites in states 0 (0x0044833c), 2 (0x00446f90), 5
+//     (0x00446948), 7 (0x00446838), 9 (0x00445e84), 10 (0x00445874), 11 (0x0044534c) and 12
+//     (0x00444758), 17 sites in all; 1 (0x00448328) and 4 (0x00446d08) have none. State 7 sets the
+//     window (0x0044687f) on every path before its site (0x00446889), so it is refused.
+// The state lists below are the sites minus the refused window states. Returns null for an entity
+// that is not Vol Opt.
+const VOLOPT_CORE_LOCK: ReadonlySet<number> = new Set([1, 2, 4, 5, 9, 10]);
+const VOLOPT_PILLAR_LOCK: ReadonlySet<number> = new Set([2, 4, 5, 9]);
+const VOLOPT_BODY_LOCK: ReadonlySet<number> = new Set([0, 2, 5, 9, 10, 11, 12]);
+export const voloptLockOk = (ai: EnemyBrain | null): boolean | null => {
+  if (ai instanceof VoloptAi) return false;
+  if (ai instanceof VoloptForm2Ai) return VOLOPT_BODY_LOCK.has(ai.st);
+  if (ai instanceof VoloptPartAi) {
+    const p = ai.part;
+    if (p instanceof VoloptCore) return VOLOPT_CORE_LOCK.has(p.st);
+    if (p instanceof VoloptPillar) return VOLOPT_PILLAR_LOCK.has(p.st);
+    if (p instanceof VoloptRod) return p.st === 4 || p.st === 5;
+    return false; // the monitor and the prison
   }
   return null;
 };
@@ -5034,7 +5089,7 @@ export class CombatView {
   private enemyTargets(self: EnemyRuntime): AiTarget[] {
     const out: AiTarget[] = [];
     for (const o of this.enemies.values()) {
-      if (o === self || o.dead || o.state === 'death' || !o.instance.root.visible || o.ai?.invulnerable || concealed(o) || !splitLockOk(o)) continue;
+      if (o === self || o.dead || o.state === 'death' || !o.instance.root.visible || o.ai?.invulnerable || concealed(o) || !splitLockBase(o)) continue;
       const p = o.instance.root.position;
       out.push({ clientId: 0x1000 | o.index, x: p.x, z: p.z, charClass: -1, dead: false });
     }
@@ -6413,7 +6468,7 @@ export class CombatView {
     let best: EnemyRuntime | null = null;
     let bestSq = 220 * 220; // ASSUMED lock-on range
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible || (e.ai instanceof ClawAi && e.ai.hidden) || concealed(e) || !splitLockOk(e)) continue;
+      if (e.dead || !e.instance.root.visible || (e.ai instanceof ClawAi && e.ai.hidden) || lockConcealed(e) || !splitLockOk(e)) continue;
       const p = e.instance.root.position;
       let diff = Math.atan2(p.x - from.x, p.z - from.z) - me.angle;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
@@ -7962,7 +8017,7 @@ export class CombatView {
     const half = data.angleH * BAMS_TO_RAD;
     const list: Array<{ e: EnemyRuntime; d: number }> = [];
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible || concealed(e) || !techRecordOk(e)) continue;
+      if (e.dead || !e.instance.root.visible || lockConcealed(e) || !techRecordOk(e)) continue;
       const p = e.instance.root.position;
       const dx = p.x - from.x;
       const dz = p.z - from.z;
@@ -7995,7 +8050,7 @@ export class CombatView {
     const cands: Candidate[] = [];
     const byId = new Map<number, EnemyRuntime>();
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible || concealed(e) || !techRecordOk(e)) continue;
+      if (e.dead || !e.instance.root.visible || lockConcealed(e) || !techRecordOk(e)) continue;
       const p = e.instance.root.position;
       cands.push({ id: e.index, x: p.x, y: p.y + this.aimHeightOf(e), z: p.z, radius: this.hitRadiusOf(e) });
       byId.set(e.index, e);
