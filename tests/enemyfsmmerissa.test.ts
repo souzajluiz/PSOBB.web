@@ -12,6 +12,15 @@ import {
   merissaRadarIconShown,
   merissaStateRow,
   merissaStatesWithRadarHide,
+  MERISSA_ATTACK_RECORDS,
+  MERISSA_ATTACK_SELECT,
+  MERISSA_FREEZE_MASK,
+  MERISSA_FREEZE_RECORD,
+  merissaAttackRecord,
+  merissaInAttackRange,
+  merissaPickFarAttack,
+  merissaPickNearAttack,
+  merissaRngBucket,
   merissaVanishStep,
 } from '../client/src/combat/enemyfsmmerissa.ts';
 
@@ -79,6 +88,44 @@ eq(frames, 150, 'frames to removal from 0');
 check(merissaVanishStep(0).countdown < 0 && !merissaVanishStep(0).removed, 'one step from 0 is not removal');
 check(!merissaVanishStep(-14.5).removed, 'above -15 stays');
 check(merissaVanishStep(-15).removed === (merissaVanishStep(-15).countdown < -15), 'removal test is strict below -15');
+
+// Attack records (part 2). Init words from the initializer 0x005b6f2c (objdump immediates):
+// range 1600 / 3600 / 10000 (0x44c80000, 0x45610000, 0x461c4000), start 10 (0x41200000),
+// windows as listed in the module, freeze scale 1.5 (file word at 0x009c1bc0).
+eq(MERISSA_ATTACK_RECORDS.length, 7, 'seven attack records');
+eq(MERISSA_ATTACK_RECORDS.map((r) => r.rangeSq), [1600, 1600, 3600, 3600, 10000, 10000, 1600], 'record ranges');
+eq(MERISSA_ATTACK_RECORDS.map((r) => r.angle), [1820, 1820, 8192, 8192, 10922, 10922, 1820], 'record angle limits (BAMS)');
+eq(MERISSA_ATTACK_RECORDS.map((r) => r.callback), [0x5b6384, 0x5b6384, 0x5b64fc, 0x5b64fc, 0x5b667c, 0x5b667c, 0x5b63e4], 'record callbacks');
+eq(MERISSA_ATTACK_RECORDS.map((r) => r.start), [10, 10, 10, 10, 10, 10, 10], 'record start times');
+eq(merissaAttackRecord(6)?.windowEnd, 90, 'freeze window end');
+eq(merissaAttackRecord(2)?.windowStart, 6, 'B window start');
+eq(merissaAttackRecord(9), null, 'no record past 6');
+eq(MERISSA_ATTACK_SELECT, [{ near: 0, mid: 2, far: 4 }, { near: 1, mid: 3, far: 5 }], 'variant record ids (table 0x009c1dbc)');
+eq(MERISSA_FREEZE_RECORD, 6, 'freeze record is 0x009c1bb0 = 0x009c1ac0 + 40 * 6');
+eq(MERISSA_FREEZE_MASK, 0x10, 'freeze mask');
+
+// Range gate: dist^2 strictly below the range and the angle strictly below the limit.
+const recA = merissaAttackRecord(0)!;
+check(merissaInAttackRange(recA, 1599, 1819), 'inside the A gate');
+check(!merissaInAttackRange(recA, 1600, 0), 'dist^2 equal to the range is outside');
+check(!merissaInAttackRange(recA, 100, 1820), 'angle equal to the limit is outside');
+
+// RNG buckets: floor(n * u / 2^32) on the unsigned value.
+eq(merissaRngBucket(0, 3), 0, 'bucket of 0');
+eq(merissaRngBucket(0xffffffff, 3), 2, 'bucket of the top value, n = 3');
+eq(merissaRngBucket(0x80000000, 3), 1, 'bucket of 2^31 (the sign bit set is unsigned), n = 3');
+eq(merissaRngBucket(-1, 10), 9, 'a negative RNG word is read unsigned');
+eq(merissaRngBucket(0x19999999, 10), 0, 'just under 0.1 of 2^32 is bucket 0 for n = 10');
+eq(merissaRngBucket(0x1999999a, 10), 1, 'at 0.1 of 2^32 the bucket is 1 for n = 10');
+
+// A branch: a flagged target never rolls; a roll of 0 freezes; otherwise the stab.
+eq(merissaPickNearAttack(0, 0, true), { record: 0, freeze: false }, 'flagged target stabs without a roll');
+eq(merissaPickNearAttack(1, 0, false), { record: 6, freeze: true }, 'roll 0 freezes');
+eq(merissaPickNearAttack(1, 0x80000000, false), { record: 1, freeze: false }, 'other rolls stab with the AA record');
+// C branch: 1 in 10 takes the far record.
+eq(merissaPickFarAttack(0, 0), 4, 'far roll 0 takes record C');
+eq(merissaPickFarAttack(1, 0x80000000), null, 'far roll other than 0 fails');
+eq(merissaPickFarAttack(1, 0), 5, 'variant AA far record is 5');
 
 if (failures) {
   console.log(`enemyfsmmerissa: ${failures} failure(s)`);

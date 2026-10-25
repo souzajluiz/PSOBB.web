@@ -1,5 +1,29 @@
 # Devlog
 
+## 2026-10-25: Merissa A / AA, part 2: the attack records and the near / far rolls; no brain yet
+
+**Question.** What do the transition 0x005b5768's gates and the 40-byte records at 0x009c1ac0 decide, and which attack is which?
+
+**Answer.** The transition is a three-gate attack picker: a near stab (record A, 40 units, 10 degrees), a mid gate (record B, 60 units, 45 degrees) and a far gate (record C, 100 units, 60 degrees), each with a roll. The near roll of 3 gives a freeze stab (record 6, +0x37c |= 0x10) one time in three when the target has no 0x20 flag; the far roll of 10 gives record C one time in ten. The brain itself is still not registered.
+
+**PROVEN (objdump, the initializer, tools/exedata.py).**
+- The records are written at run time, not in the file. The initializer 0x005b6f2c writes the floats of records 0..6 (movl $imm at 0x005b6f4a..0x005b70a8). The file words only hold the int and callback fields: +0x4 angle (1820, 8192, 10922 BAMS = 10, 45, 60 degrees), +0xc kind (3, 4, 5), +0x24 callback (0x005b6384, 0x005b64fc, 0x005b667c, 0x005b63e4 for the freeze).
+- The record gate is dist^2 (XZ, `flds 0x68`) below the record's float at +0x0 (fcomps 0x005b59af, `jae` skip), then the angle below +0x4 (cmpl 0x005b59ba). The +0x0 values are the squared ranges 1600 (40), 3600 (60) and 10000 (100); the initializer's globals 0x00a749f4 (1600), 0x00a74a04 (3600), 0x00a74a08 (10000) are the same numbers.
+- The variant table 0x009c1dbc + 20 * variant holds the record ids per gate: variant 0 (A) uses 0, 2, 4; variant 1 (AA) uses 1, 3, 5. The transition reads `0x380 * 5` as the row index (`leal (%ebp,%ebp,4)`).
+- The transition's first gate is the 250 range acquire (0x005b5e5c, 0x00a749f0 = 250.0f); the 1600 gate (0x00a749f4) sends a far target to the 0x005b5974 path, the near one to the attack path.
+- The near roll: u = the RNG as unsigned (sign fix at 0x005b59e5..0x005b59ec), t = floor(3u / 2^32) (fildl, fmul by 3, fdiv by 2^32 = 0x0092b038, truncate). A target with its +0x30 bit 0x20 takes record A with no roll (0x005b5974 `andl $0x20`, stored at 0x6c(%esp)). Otherwise t == 0 gives record 6 (0x009c1bb0, range 1600, angle 1820, scale 1.5, windows 28 and 90) with `orl $0x10` on +0x37c (0x005b5a34..0x005b5a3f); t != 0 gives record A.
+- The far roll: t = floor(10u / 2^32); t == 0 enters state 4 with record C (0x005b5b0a..0x005b5b56), otherwise the transition returns 0.
+- Every attack entry ends at 0x005b5b5c: it clears +0x37c with `andl $-0xf` (bits 0x2, 0x4, 0x8, the 0x10 freeze survives), writes the record id to +0x3c0, sets state 4 (+0x32e = 4, EnemyProcessState_005b61a0, the row 4 mask 0x2), motion from row 4 (-1, no write) and the row 4 hook.
+- The row 4 handler (EnemyProcessState_005b61a0, dump 401782) reads the record at +0x3c0: +0x14 is the start time it chases the target until (SorcererAcquireTarget_00771c8c), the window +0x18 / +0x1c calls the callback at +0x24 (called with ecx = this). The callbacks: 0x005b6384 (sfx from table 0x009c1c88, target vtable +0x50 and +0x5c, flag 0x400 on the target's +0x30), 0x005b63e4 (the freeze: checks the enemy's own +0x37c bit 0x20), 0x005b64fc (EnemyProcessAttackWindow_005b64fc, dump) and 0x005b667c (not named in the dump).
+
+**ASSUMED (not traced).** The helper 0x007a9018 (the angle that the record's +0x4 is compared with; read as the angle between the enemy and the target), the RNG 0x00763498 on the +0x168 object, 0x00770738 as the targetable NPC (dump name GetTargetableNPC_00770738, used as such), the B branch (record 2 / 3, with the 0x0077fffc obstacle test and the 0x3d8 / 0x3d4 speed write of EnemyProcessStateUpdate_005b60bc), the failure path 0x005b5cf2 (the acquire returned 0xffff), and the names of the callbacks (merissa_stab_attack is ASSUMED to be 0x005b6384, unknown_merissa_freeze_stab_attack ASSUMED to be 0x005b63e4; the dump has only the global g_MerissaFreezeStabAttackSfxPointers). The Ghidra decompile of 0x005b5768 still times out, so the transition's shape is the objdump read above.
+
+**Port.** `combat/enemyfsmmerissa.ts` gets the record table (MERISSA_ATTACK_RECORDS, 7 rows), the variant selection, the range gate, `merissaRngBucket`, `merissaPickNearAttack` and `merissaPickFarAttack`. Tests in `tests/enemyfsmmerissa.test.ts`.
+
+**Not done.** No brain is registered (the update still has no OWN_FSM row, so the Merissa stands where it spawns). The wander and approach handlers (rows 0 and 1, the unnamed 0x005b53dc and 0x005b54cc) are not decoded; the B branch is not modelled. The radar gate is not wired into `minimapEnemies`: the port's Merissa has no `ai` object that could carry the +0x37c word, so the gate stays the pure `merissaRadarIconShown` function.
+
+**Checks.** `node tests/enemyfsmmerissa.test.ts`, `enemyfsm`, `minimap`, `combatdepth`, `NEWSERV=... node tests/combat.test.ts` (5860 checks), `npx tsc --noEmit -p client`: all pass.
+
 ## 2026-10-25: weapon hit pipeline (box overlap to EntityHitEntity); Vol Opt monitors are struck on any wall
 
 **Question.** Which gates decide a weapon hit in the exe, and does a Vol Opt monitor need an exposed wall to be struck (the port's `targetable = exposed`)?
