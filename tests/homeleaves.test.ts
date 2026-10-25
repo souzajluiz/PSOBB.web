@@ -3,6 +3,7 @@
 // Psobb.exe-05112026.c line 700118). Run: node tests/homeleaves.test.ts
 import { HomeLeaves, HOME_LEAF_IDS, type HomeLeafHost } from '../client/src/classic/homeleaves.ts';
 import { TeamChat } from '../client/src/classic/teamchat.ts';
+import { TeamInviteReceiver } from '../client/src/net/team.ts';
 
 let failures = 0;
 const check = (ok: boolean, what: string) => {
@@ -13,7 +14,7 @@ const check = (ok: boolean, what: string) => {
 };
 
 const text = (g: number, i: number) => `t${g}.${i}`;
-const lobby = { self: undefined, selfId: 0, players: new Map() } as unknown as HomeLeafHost['lobby'];
+const lobby = { self: undefined, selfId: 0, players: new Map(), teamInvites: new TeamInviteReceiver() } as unknown as HomeLeafHost['lobby'];
 const host = (over: Partial<HomeLeafHost> = {}): HomeLeafHost => ({
   text,
   lobby,

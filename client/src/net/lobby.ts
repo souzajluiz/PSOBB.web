@@ -23,7 +23,7 @@ import { WORD_SELECT_SUBCOMMAND, wordSelectSubcommandPayload, type WordSelectMes
 import { parseWordSelectSubcommand } from './wordselect.ts';
 import { tradeIO, type TradeHost } from './tradeio.ts';
 import { TradeZone } from './tradezone.ts';
-import { parseInviteAnswer, TEAM_INVITE_ANSWER_SUB, TEAM_INVITE_SIZE } from './team.ts';
+import { parseInviteAnswer, TEAM_INVITE_ANSWER_SUB, TEAM_INVITE_SIZE, TEAM_INVITE_SUB, TeamInviteReceiver } from './team.ts';
 
 export interface LobbyPlayer {
   clientId: number;
@@ -175,6 +175,10 @@ export class Lobby {
   // the view plays and sends them (render/lobbyview.ts).
   readonly emoteQueue = new EmoteQueue();
   selfId = -1;
+  // Team Invite received (6xC1, net/team.ts TeamInviteReceiver). `teamInviteFree` is the receiver's
+  // gate: the menus set it (classic/homeleaves.ts); a refused invite is answered here at once.
+  readonly teamInvites = new TeamInviteReceiver();
+  teamInviteFree: () => boolean = () => true;
   // Player trade (net/trade.ts, the Home menu's Trade Window). The host gives the
   // session the character and the notices; the session is made for the current self id
   // on first use (6xA6 / D1 / D4 may arrive before any window is open).
@@ -384,6 +388,11 @@ export class Lobby {
       // 6xA6 is the trade proposal / answer / offer subcommand (net/trade.ts receive).
       if (sub === TRADE_SUB && body.length >= TRADE_SUB_SIZE) this.trade.receive(body);
       // 6xC2: the invitee's answer to our Team Invite (6xC1, net/team.ts); the next one resolves the waiter.
+      // 6xC1: a Team Invite from another player (0x0078bc44; net/team.ts). A refused one is answered at once.
+      if (sub === TEAM_INVITE_SUB && body.length >= TEAM_INVITE_SIZE) {
+        const refusal = this.teamInvites.receive(body, this.teamInviteFree());
+        if (refusal) this.conn.send(0x62, refusal.target, refusal.answer);
+      }
       if (sub === TEAM_INVITE_ANSWER_SUB && body.length >= TEAM_INVITE_SIZE && this.inviteWaiter) {
         const w = this.inviteWaiter;
         this.inviteWaiter = null;

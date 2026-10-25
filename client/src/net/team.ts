@@ -411,6 +411,16 @@ export class TeamClient {
     return (await this.ask(addMemberPacket(guildCard), TEAM_CMD.addResult)).flag;
   }
 
+  // The invitee's wait for the add-member result after an accept (04EA, add_member_result_handler
+  // 0x00a0...; the exe's prompt state 7 waits for it with no time-out). Null when none comes in time
+  // (ASSUMED: the time-out is the port's, the exe has none).
+  joinResult(timeoutMs = 10000): Promise<number | null> {
+    return withTimeout(this.conn.waitFor(TEAM_CMD.addResult), timeoutMs, 'no join result').then(
+      (c) => c.flag,
+      () => null,
+    );
+  }
+
   // 11EA -> 11EA (header.flag = result).
   async setPrivilege(guildCard: number, privilege: number): Promise<number> {
     return (await this.ask(privilegePacket(guildCard, privilege), TEAM_CMD.privilege)).flag;
@@ -467,7 +477,8 @@ export class TeamClient {
 // not copy any global. Layout (0x5C bytes, size word 0x17 dwords; relayed by 0x62 to the picked
 // client id: 0x00800464 -> 0x007d3fcc, body size = buffer[1] * 4):
 //   +0 u8 0xC1, +1 u8 0x17, +2 u16 NOT written by the exe (stack garbage; ours sends the sender id),
-//   +4 u32 the window's +0x20 (ASSUMED the card the menu sends; not proven to be the picked player's),
+//   +4 u32 the window's +0x20 = the inviter's own player slot (0x0074d128; PROVEN as the slot the answer
+//      relays to, see inviteSubcommand; the picked card is not sent),
 //   +8 u32 action 0 = invite (the exe's withdraw is 1: 0x0074c7fd, header + action 1 only),
 //   +0xC inviter name, 0x18 UTF-16 units (0x006936b4 result, ASSUMED the local player's name),
 //   +0x3C team name, 0x10 units (copied max 0xF units from the global string 0x00a9ab78, ASSUMED).
@@ -512,13 +523,16 @@ export const TEAM_POINTS_SIZE = 0x0c;
 const INVITE_NAME_UNITS = 0x18;
 
 // The inviter's 6xC1 body; the caller targets it at the picked player's client id (0x62 flag).
-export function inviteSubcommand(o: { selfId: number; guildCard: number; name: string; teamName: string; action?: number }): Uint8Array {
+// +4 is the inviter's own player slot (PROVEN 2026-10-25: 0x0074d128 stores the window's +0x20, the
+// slot the window passes to GetPlayer at 0x0074ce17, and the invitee relays its 6xC2 to that word;
+// the window's +0x20 is the menu owner's slot, ASSUMED). It is not the picked card.
+export function inviteSubcommand(o: { selfId: number; name: string; teamName: string; action?: number }): Uint8Array {
   const b = new Uint8Array(TEAM_INVITE_SIZE);
   const dv = new DataView(b.buffer);
   b[0] = TEAM_INVITE_SUB;
   b[1] = TEAM_INVITE_SIZE / 4;
   dv.setUint16(2, o.selfId, true);
-  dv.setUint32(4, o.guildCard >>> 0, true);
+  dv.setUint32(4, o.selfId >>> 0, true);
   dv.setUint32(8, (o.action ?? 0) >>> 0, true);
   b.set(utf16(o.name, INVITE_NAME_UNITS), 0x0c);
   b.set(utf16(o.teamName, TEAM_NAME_UNITS), 0x3c);
@@ -557,13 +571,98 @@ export function inviteTarget(invite: Uint8Array): number {
   return new DataView(invite.buffer, invite.byteOffset, invite.byteLength).getUint32(4, true);
 }
 
+export const TEAM_INVITE_INVITE = 0; // 6xC1 action 0: the invite (0x0078bc44 keeps it when the gate opens)
+export const TEAM_INVITE_WITHDRAW = 1; // 6xC1 action 1: the inviter withdrew it (0x0078bd54 sets 0x00a9c8c4)
+// The refusal the receiver answers with at once (0x0078bd39): the body with +4 = 0 and +8 = 4.
+export const TEAM_INVITE_REFUSED = 4;
+const INVITE_NAME_BYTES = 0x30; // the inviter's name at +0xC is 0x18 units (0x006936b4 result)
+
+// The invite as the receiver keeps it (the global copy of +4..+0x5B, 0x00a9c8c0).
+export interface InviteRequest {
+  body: Uint8Array;
+  target: number; // +4: the inviter's slot, the relay target of the answer (PROVEN, see inviteSubcommand)
+  inviterName: string; // +0xC, unitxt 11 0x14a's first argument (ASSUMED order)
+  teamName: string; // +0x3C, its second argument
+}
+
+export function parseInviteRequest(body: Uint8Array): InviteRequest {
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return {
+    body: body.slice(0, TEAM_INVITE_SIZE),
+    target: dv.getUint32(4, true),
+    inviterName: stripTeamMarker(readUtf16(body, 0x0c, INVITE_NAME_BYTES / 2)),
+    teamName: stripTeamMarker(readUtf16(body, 0x3c, TEAM_NAME_UNITS)),
+  };
+}
+
+// The 6xC2 built from a received invite: the body's +4..+0x5B copied, then the word at +8 set.
+function answerFromInvite(invite: Uint8Array, card: number | null, action: number): Uint8Array {
+  const b = new Uint8Array(TEAM_INVITE_SIZE);
+  b[0] = TEAM_INVITE_ANSWER_SUB;
+  b[1] = TEAM_INVITE_SIZE / 4;
+  b.set(invite.subarray(4, TEAM_INVITE_SIZE), 4);
+  const dv = new DataView(b.buffer);
+  if (card !== null) dv.setUint32(4, card >>> 0, true);
+  dv.setUint32(8, action >>> 0, true);
+  return b;
+}
+
+// The receiver's refuse path (0x0078bc44, 0x0078bd31 / 0x0078bd39): +4 = 0, +8 = 4, the name kept.
+export function inviteRefusal(invite: Uint8Array): Uint8Array {
+  return answerFromInvite(invite, 0, TEAM_INVITE_REFUSED);
+}
+
+// The quick menu's busy answer (0x00717754, LAB_007177bd): the kept body, +4 unchanged, +8 = 4.
+export function inviteBusyAnswer(invite: Uint8Array): Uint8Array {
+  return answerFromInvite(invite, null, TEAM_INVITE_REFUSED);
+}
+
+// The receive side of 6xC1 (0x0078bc44) and the quick menu's pending check (0x00717754). `receive`
+// is the 6xC1 arriving; `free` stands for the receiver's gate (0x007917b8 reads the byte 0x009ff3d4;
+// ASSUMED: free when no other menu is open) and the busy checks (0x00689410, the menu's vtable +0x8c,
+// the player's +0x2b8..+0x2c4 state; ASSUMED). A refused invite is answered at once; an accepted one
+// stays pending until the menu can show it (busyTick). `close` ends it (the exe's
+// QuickMenuObject_CloseTeamFlagMenu_007162e4 clears the 0x10 bit).
+export class TeamInviteReceiver {
+  pending: InviteRequest | null = null;
+  // 0x00a9c8c4: the inviter withdrew the invite (the prompt shows the cancelled message).
+  withdrawn = false;
+
+  receive(body: Uint8Array, free: boolean): { answer: Uint8Array; target: number } | null {
+    if (body.length < TEAM_INVITE_SIZE) return null;
+    const action = new DataView(body.buffer, body.byteOffset, body.byteLength).getUint32(8, true);
+    if (action === TEAM_INVITE_WITHDRAW) {
+      this.withdrawn = true;
+      return null;
+    }
+    if (action !== TEAM_INVITE_INVITE) return null;
+    if (!free || this.pending) return { answer: inviteRefusal(body), target: inviteTarget(body) };
+    this.pending = parseInviteRequest(body);
+    this.withdrawn = false; // ASSUMED: a new invite starts clean
+    return null;
+  }
+
+  // Per frame (0x00717754): a pending invite the menus cannot show now is answered busy and dropped.
+  busyTick(canOpen: boolean): { answer: Uint8Array; target: number } | null {
+    if (!this.pending || canOpen) return null;
+    const invite = this.pending;
+    this.close();
+    return { answer: inviteBusyAnswer(invite.body), target: invite.target };
+  }
+
+  close(): void {
+    this.pending = null;
+    this.withdrawn = false;
+  }
+}
+
 // The invitee's prompt as a pure model of the exe's two Yes/No lists (TeamFlagMenu_Update, dump
 // 0x00722428; the first list's No is the default cursor, SetSelection(1), as in the other prompts):
 //   ask      Yes -> notice; No or cancel -> decline (3)
 //   notice   the one-line message (unitxt 11, 0x14b, ASSUMED) closes on a key -> confirm
 //   confirm  Yes -> accept (2); No or cancel -> decline (3)
-// Either Yes/No prompt times out after INVITE_ANSWER_FRAMES frames -> 4. The strings and the window
-// drawing are not ported; the model keeps the answer the exe sends.
+// Either Yes/No prompt times out after INVITE_ANSWER_FRAMES frames -> 4. The window that drives it
+// (classic/teammenu.ts TeamInviteAnswerWindow) adds the intro key and the texts; the answers are the exe's.
 export class InviteAnswerPrompt {
   phase: 'ask' | 'notice' | 'confirm' | 'done' = 'ask';
   action: number | null = null;

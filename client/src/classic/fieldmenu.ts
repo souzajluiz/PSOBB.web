@@ -173,6 +173,8 @@ export class FieldMenu {
     this.home.onAllClosed = () => {
       if (this.menu.open) this.menu.leafOpen = false;
     };
+    // The invitee's prompt is free when the Home menu's list and the trade are closed (ASSUMED: the exe's quick-menu gate is not traced in full).
+    this.home.inviteFreeOwner = () => !(this.menu.open || !!this.trade);
   }
 
   get isOpen(): boolean {
