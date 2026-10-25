@@ -156,15 +156,22 @@ export const TOOK_DAMAGE_MIN = 1;
 
 // Whether a hit counts as a hit for the flags and the flinch: the roll passed and
 // the total reaches TOOK_DAMAGE_MIN. Enemy-to-enemy hits use the same test (ASSUMED).
-export function tookDamage(total: number, landed = true): boolean {
-  return landed && total >= TOOK_DAMAGE_MIN;
+// The threshold of a hit's 0x200 is per source. A melee or weapon hit uses TOOK_DAMAGE_MIN.
+// entity_hit_by_tech's damage groups set 0x200 on any landed hit, 0 damage included
+// (TOOK_DAMAGE_ANY, see techTookDamageMin in combat/techniques.ts); the support groups
+// never set it from that function (TOOK_DAMAGE_NEVER).
+export const TOOK_DAMAGE_ANY = 0;
+export const TOOK_DAMAGE_NEVER = Number.POSITIVE_INFINITY;
+
+export function tookDamage(total: number, landed = true, min = TOOK_DAMAGE_MIN): boolean {
+  return landed && total >= min;
 }
 
 // `landed`: the hit roll passed. A miss is 0x100 only; a landed hit whose total is
 // below TOOK_DAMAGE_MIN is 0x100 too, and deals nothing (see tookDamage). The
 // default is the damage test for the callers with no roll.
-export function applyDamage(defender: DefenderStats, total: number, landed = total >= TOOK_DAMAGE_MIN): number {
-  if (!tookDamage(total, landed)) return FLAG_MISSED;
+export function applyDamage(defender: DefenderStats, total: number, landed = total >= TOOK_DAMAGE_MIN, min = TOOK_DAMAGE_MIN): number {
+  if (!tookDamage(total, landed, min)) return FLAG_MISSED;
   let flags = FLAG_HIT;
   if (total > defender.maxHp * 0.25) flags |= FLAG_BIG_HIT;
   defender.hp = Math.max(0, defender.hp - Math.round(total));

@@ -73,6 +73,7 @@
 // target fire straight ahead (unknown_cast_tech); Rafoie needs a target.
 
 import type { MotionRecord } from '../formats/plymotion.ts';
+import { TOOK_DAMAGE_ANY, TOOK_DAMAGE_NEVER } from './formulas.ts';
 
 export const TECH = {
   foie: 0, gifoie: 1, rafoie: 2, barta: 3, gibarta: 4, rabarta: 5, zonde: 6, gizonde: 7, razonde: 8, grants: 9,
@@ -252,6 +253,21 @@ export interface TechResist {
   eth: number;
   elt: number;
   edk: number;
+}
+
+// The 0x200 (took_damage) threshold of a technique hit on an enemy, by its
+// entity_hit_by_tech group. The damage groups (fixed, Foie, Barta, Gibarta /
+// Rabarta, Zonde, Grants: technique_group 0, 1, 19, 2, 3, 4, and 0x15) set 0x200
+// on any landed hit, 0 damage included (TOOK_DAMAGE_ANY). The rest never set it
+// in that function: Megid sets it only on its kill (0xa00, the caller's roll), the
+// support groups (Resta 6, Anti 7, Reverser 8, Shifta 9, Deband 10, Jellen 11,
+// Zalure 12) have no 0x200 write (TOOK_DAMAGE_NEVER); any tech with no damage
+// group here is NEVER too. Verified in the exe, 0x00773afc..0x00775600 (the
+// 0x200 writes at 0x00773f15, 0x0077407b, 0x007746fa, 0x00774844, 0x00774a42,
+// 0x00774c61, 0x00774d95; no other 0x200 write in that range).
+export function techTookDamageMin(tech: number): number {
+  const el = techElement(tech);
+  return el === 'fire' || el === 'ice' || el === 'lightning' || el === 'light' ? TOOK_DAMAGE_ANY : TOOK_DAMAGE_NEVER;
 }
 
 // entity_hit_by_tech's damage of an attack technique (not Megid) on an
