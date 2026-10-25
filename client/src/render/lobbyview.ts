@@ -33,6 +33,7 @@ import { HAND_BODY_NODE, type WeaponNodeRef } from '../combat/weaponorigin.ts';
 import { PlayerMover, RAND_MAX_C, fromBams, legSpeed, modifyDirection, rampAxis, remoteStep, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 import { HeldWeaponFiles, type HeldWeapon } from './heldweapon.ts';
+import { addBurstSpin, applyWeaponSpin, NO_SPIN_NODE, restPoses, spinNodeOf } from './weaponspin.ts';
 import { buildMagRig, disposeMagRig, magKey, setMagRigVisible, updateMagRig, type MagEquip, type MagRig } from './magmodel.ts';
 import { parseMagMotion, type MagMotionRecord } from '../formats/itemmagmotion.ts';
 import type { MagEdit } from '../formats/itemmagedit.ts';
@@ -159,7 +160,8 @@ function nameSprite(text: string): THREE.Sprite {
 // What the field shows of the held weapon: the equipped weapon's ItemPMT model
 // (type, skin) of a player, and whether weapons show here (not in the hubs).
 export interface HeldWeaponSource {
-  equipped(clientId: number): { type: number; skin: number } | null;
+  // kind / variant: the weapon's data1[1] / data1[2] (the Mechgun's spin, render/weaponspin.ts).
+  equipped(clientId: number): { type: number; skin: number; kind?: number; variant?: number } | null;
   visible(): boolean;
   // The motion class of the player's weapon (0..18, 0 = none), which picks the field
   // motions (formats/plymotion.ts fieldLocomotion). Absent: 0.
@@ -186,6 +188,11 @@ interface Marker {
   body: THREE.Bone[] | null;
   // The held weapon's bones in the exe's walk order (playermodel.ts weaponBones), or null.
   weaponBones: THREE.Bone[] | null;
+  // The held weapon's rest poses (per bone, walk order), the barrel spin's node (NO_SPIN_NODE: none)
+  // and its angle (BAMS, the item's +0x25c; each Mechgun burst adds 0x2000).
+  weaponRest: THREE.Matrix4[] | null;
+  spinNode: number;
+  spin: number;
   // The equipped MAG's rig (null: none) and the key it was built or is being built with.
   mag: MagRig | null;
   magKey: string;
@@ -468,6 +475,9 @@ export class LobbyView {
       animator: null,
       body: null,
       weaponBones: null,
+      weaponRest: null,
+      spinNode: NO_SPIN_NODE,
+      spin: 0,
       mag: null,
       magKey: '',
       charClass: p.charClass,
@@ -527,6 +537,12 @@ export class LobbyView {
       marker.animator = new PlayerAnimator(model.partBones[0], body, motions);
       marker.body = model.partBones[0];
       marker.weaponBones = model.weaponBones;
+      // The item is constructed with +0x25c = 0 (the spin starts over with the model).
+      const e = this.held?.equipped(p.clientId);
+      marker.spinNode = e?.kind !== undefined && e.variant !== undefined ? spinNodeOf(e.kind, e.variant) : NO_SPIN_NODE;
+      marker.spin = 0;
+      marker.weaponRest = model.weaponBones ? restPoses(model.weaponBones) : null;
+      this.applySpin(marker);
       if (marker.model) {
         marker.group.remove(marker.model);
         disposeObject(marker.model, false); // textures are shared
@@ -1153,6 +1169,19 @@ export class LobbyView {
       this.cameraYaw = angle + Math.PI;
       this.lobby.sendStop(x, gy, z, angle, this.stopState({ x, y: gy, z }));
     }
+  }
+
+  // One Mechgun burst of a player: the held weapon's barrel spin turns by 0x2000 (PsoBB.exe
+  // do_mechguns_attack). A weapon that does not spin ignores it.
+  addWeaponSpinBurst(clientId: number, bursts = 1): void {
+    const m = this.markers.get(clientId);
+    if (!m || m.spinNode === NO_SPIN_NODE) return;
+    m.spin = addBurstSpin(m.spin, bursts);
+    this.applySpin(m);
+  }
+
+  private applySpin(m: Marker): void {
+    if (m.weaponBones && m.weaponRest) applyWeaponSpin(m.weaponBones, m.weaponRest, m.spinNode, m.spin);
   }
 
   // The world point of a gun's attach node of a player (combat/weaponorigin.ts): a weapon

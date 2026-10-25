@@ -6812,6 +6812,8 @@ export class CombatView {
   private gunShot(attackType: AttackType, step: number, from: { x: number; y: number; z: number }, hit: StrikeTarget[], range: WeaponRange, kind: number, variant: number): void {
     const me = this.game.self;
     if (!me) return;
+    // Each Mechgun burst turns the held barrel by 0x2000 (do_mechguns_attack; render/weaponspin.ts).
+    if (kind === MECHGUN_KIND) this.view?.addWeaponSpinBurst(me.clientId);
     const visual = shotVisualOf(kind, variant);
     const trails = visual === 'default' ? (this.tracers ??= this.newTracers()) : null;
     // ASSUMED: the shooter bytes +0xf3 / +0xf4 (bulletTextureIndex) are not mapped to the
