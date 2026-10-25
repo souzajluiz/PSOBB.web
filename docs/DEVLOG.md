@@ -1,5 +1,25 @@
 # Devlog
 
+## 2026-10-25: NPC attack AI: the guard stance's walk-only send and the 6x40 flags word
+
+**Question:** the ROADMAP's "NPC players' attack AI" line left open the 6x40 flags word and the 0x100000 gate of the state-1 send. What does the exe do with the NPC's guard stance there?
+
+**Exe evidence** (`SinowberillHead_AIUpdateState_007b2764`, dump `src/Psobb.exe-05112026.c` .c:796961; read with `REFSRC=... tools/refsrc.sh body`):
+- State 1 (.c:797015): when the NPC's `+0x30` (character_flags) has `0x100000` (`in_guard_stance`, enum at dump line 70188), the send is always `SinowberillHead_SendMoveStart_007b298c` (the walk start, .c:797031). The run branch (`SendMove_007b29f0`, 6x42) and its flag 0x8 are not reached on that path. The end of the dispatch only clears flag 0x8 when the state is not 1, so the flag is left as it was.
+- `SendMoveStart_007b298c` (.c:797079): the 6x40's flags word is 8 when the NPC's `+0x30` has `0x100000`, else 0.
+- The distance gate (`<= 1.0`, .c:797012) runs before the guard branch: a target within 1.0 still sends nothing.
+
+**Port:**
+- `client/src/quest/npcai.ts`: `NPC_GUARD_STANCE` (0x100000), `NPC_MOVE_FLAG_GUARD` (8), `npcWalkFlags(guard)`; `NpcMoveSender.tick(dist, leash, guard = false)` returns `'walk'` in the guard stance and leaves the run flag alone.
+- `client/src/net/game.ts`: `buildNpcMove(npcId, run, x, z, flags = 0)` writes the 6x40 flags word (u32 at +12; the 6x42 has none); `sendNpcMove(..., flags = 0)`.
+- `client/src/quest/town.ts` `stepNpcHead`: the send passes `guard` and `npcWalkFlags(guard)`.
+
+**ASSUMED:**
+- The NPC's guard stance is never set: the exe sets `character_flags` 0x100000 from the player's near-enemy rule, which the port does not model for NPC players, so `guard = false` in `stepNpcHead`. The walk-only branch and the flags word are therefore dormant until that source is ported.
+- The walk's speed in the guard stance uses `sender.isRunning` as before (the exe's movement speed is not traced here).
+
+**Tests:** `node tests/npcai.test.ts` ok (new block: the flag values, the 6x40 with flags 8, the 6x42 with no flags word, the guard stance walk-only sequence and the run flag left alone). `npcs`, `questflow`, `quests`, `questmisc`, `questboard` pass with Node 24 (`NEWSERV` set). `cd client && npx tsc --noEmit -p .` exit 0. Not run in Chrome, no Playwright.
+
 ## 2026-10-25: Non-BB download `.qst` writer (DC / PC / GC command structs)
 
 **Question:** the open-file and write-file commands of a DC / PC / GC `.qst`, online (44 / 13) and download (A6 / A7), byte for byte as newserv writes them, and the download writer hooked up where the online `.qst` writer lives (`packQst`).

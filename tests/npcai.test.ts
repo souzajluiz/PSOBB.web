@@ -21,6 +21,8 @@ import {
   followPoint,
   npcAttackRow,
   NpcMoveSender,
+  NPC_GUARD_STANCE,
+  npcWalkFlags,
   NPC_TP_ASSUMED,
   npcCanCastTech,
   pickAttackTarget,
@@ -297,11 +299,23 @@ const cmd = (param1: number, param2: number, command: number, param3 = 0) => ({ 
   check(s.tick(2, 15) === 'walk', 'a tick without a move clears the run flag (the next move walks again)');
   check(hexOf(buildNpcMove(0x1234, false, 1.5, -2)) === '40043412' + '0000c03f' + '000000c0' + '00000000', '6x40 for an NPC: header 40 04, caster id, f32 x, f32 z, u32 flags 0 (16 bytes)');
   check(hexOf(buildNpcMove(0x1234, true, 1.5, -2)) === '42033412' + '0000c03f' + '000000c0', '6x42 for an NPC: header 42 03, caster id, f32 x, f32 z (12 bytes)');
+  // The guard stance (exe SendMoveStart_007b298c .c:797079): the 6x40 flags word is 8 when the NPC's
+  // +0x30 has 0x100000, and the state-1 send is a walk every tick then (.c:797015..797031).
+  check(NPC_GUARD_STANCE === 0x100000 && npcWalkFlags(true) === 8 && npcWalkFlags(false) === 0, 'guard stance bit 0x100000; the walk flags word is 8 in the guard stance, else 0');
+  check(hexOf(buildNpcMove(0x1234, false, 1.5, -2, 8)) === '40043412' + '0000c03f' + '000000c0' + '08000000', '6x40 with the guard flags word: the u32 at +12 is 8');
+  check(hexOf(buildNpcMove(0x1234, true, 1.5, -2, 8)).length === 24, 'a 6x42 has no flags word even when a flags value is passed');
+  {
+    const g = new NpcMoveSender();
+    check(g.tick(20, 13, true) === 'walk' && g.tick(0.5, 13, true) === null, 'guard stance: a far target is a walk, not a run (.c:797030); within 1.0 still nothing');
+    check(g.isRunning === false, 'guard stance: the run flag stays clear');
+    g.tick(20, 13, false);
+    check(g.isRunning === true && g.tick(20, 13, true) === 'walk' && g.isRunning === true, 'guard stance: a walk does not clear a run flag set before (the exe leaves flag 0x8 alone)');
+  }
   const townSrc = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
-  check(/sendNpcMove\(slot, send === 'run', goal\.x, goal\.z\)/.test(townSrc), 'the owner sends the NPC move at the head send target from stepNpcHead (town.ts)');
+  check(/sendNpcMove\(slot, send === 'run', goal\.x, goal\.z, npcWalkFlags\(guard\)\)/.test(townSrc), 'the owner sends the NPC move at the head send target from stepNpcHead (town.ts)');
   check(/if \(st\.owner && row\)/.test(townSrc), 'only the owner sends the NPC move');
   const gameSrc = readFileSync(join(HERE, '../client/src/net/game.ts'), 'utf8');
-  check(gameSrc.includes('this.conn.send(0x60, 0, buildNpcMove(npcId, run, x, z))'), 'game.ts sendNpcMove builds the 6x40 / 6x42 packet');
+  check(gameSrc.includes('this.conn.send(0x60, 0, buildNpcMove(npcId, run, x, z, flags))'), 'game.ts sendNpcMove builds the 6x40 / 6x42 packet');
 }
 
 // --- the follow head (exe: SinowberillHead_AIUpdate_007b1134 .c:796128, CheckSpawnValidity_007b1220
@@ -433,7 +447,7 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
   check(/npcWallHit\(from: \{[^}]*\}, to: \{[^}]*\}, mask: number\)/.test(combatSrc), 'combat view exposes the NPC head wall ray with the mask and the hit normal');
   const townSrc2 = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
   check(townSrc2.includes('this.stepNpcHead(slot, p, leader, row, sender)'), 'the owner follows through the head (town.ts stepNpcHead, the stat row)');
-  check(townSrc2.includes("if (send) this.game.sendNpcMove(slot, send === 'run', goal.x, goal.z);"), 'the 6x40 / 6x42 carry the head send target (goal = head.sendTarget)');
+  check(townSrc2.includes("if (send) this.game.sendNpcMove(slot, send === 'run', goal.x, goal.z, npcWalkFlags(guard));"), 'the 6x40 / 6x42 carry the head send target (goal = head.sendTarget)');
   check(townSrc2.includes('combat.npcWallHit(a, b, mask)'), 'the head wall ray comes from the combat view (with the hit normal)');
 }
 
