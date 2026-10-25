@@ -150,7 +150,7 @@ import { boxTargetable, childBoxTable, enemyBoxTable, slotSetType, slotVariant, 
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
 import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { gunBulletStart, SECOND_START_BODY_NODE, weaponPositionY, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
-import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
+import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, SUPPORT_PARTICLE, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { STATUS_ICON_BLAST_FIRST } from '../classic/hud.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
 import { attackHeading, inUnsafeMap, RAND_MAX_C, slowApplies } from './playermove.ts';
@@ -8543,6 +8543,10 @@ export class CombatView {
       this.opts.log(`${what}E-${e.index.toString(16)} (${e.slot.type}) is invulnerable`);
       return;
     }
+    // The enemy's support hook (combat/buffs.ts SUPPORT_PARTICLE): made before the stat
+    // change, so a refused cast shows it too; one emission at the enemy's feet that
+    // follows it (create_particle_effect_3 / 13, flag 0x10).
+    this.particle({ id: SUPPORT_PARTICLE[group] }, () => (e.dead ? null : e.instance.root.position.clone()), true);
     if (!e.buffs.apply(group, power)) return;
     const attackSlot = group === GROUP.jellen || group === GROUP.shifta;
     const slot = attackSlot ? e.buffs.attack : e.buffs.defense;

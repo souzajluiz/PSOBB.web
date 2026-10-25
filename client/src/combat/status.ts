@@ -91,7 +91,7 @@
 //     flag (SinowberillChallengePlayer_Process_0068be94: item class 3 / 6,
 //     subtype 0 needs flag 1, subtype 1 flag 2).
 
-import { roundHalfEven } from './buffs.ts';
+import { chop, roundHalfEven } from './buffs.ts';
 
 const f32 = Math.fround;
 
@@ -250,9 +250,11 @@ export class PlayerStatus {
   }
 
   // EVP after the slot multipliers (freeze -0.3; the player's paralysis and
-  // shock multipliers are 0): evp + round(mult * evp) per slot.
+  // shock multipliers are 0): evp + trunc(mult * evp) per slot. The freeze
+  // (0x00778cc0) stores its term with the fistp under RC = 11 (objdump
+  // 0x00778dca..0x00778de6): truncation, not round-half-even.
   evp(base: number): number {
-    return base + roundHalfEven(this.slot0.mult * base) + roundHalfEven(this.slot1.mult * base);
+    return base + chop(this.slot0.mult * base) + chop(this.slot1.mult * base);
   }
 
   // The vtable +0xb8 .. +0xcc entry of `type` on the local player. Returns

@@ -67,6 +67,33 @@
 **Port changes.** `client/src/combat/weaponaim.ts`: `MeleeAim`, `inMeleeReach` (the exe's test above, with the BAMS cosines); the header cites 0x007a2b5c. `client/src/render/combat.ts`: `weaponTargets` calls `inMeleeReach` (the box centre, the weapon point, the sort key); the unused `inWeaponCone` import is replaced; the comment at line 660 cites 0x007a2b5c. `docs/ROADMAP.md`: the reticle line and the melee line (the 0x007a2b28 address fixed).
 
 **Tests.** `tests/meleereach.test.ts` (new, 16 checks: reach, the apex shift, the elevation cone with no height window, the radius, the omni cones, the 0x4000 rule, V = 0, the heading). `node tests/meleereach.test.ts` ok. `node tests/combatdepth.test.ts` (836 checks, 0 failures, with `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv`); `node tests/attack46.test.ts` ALL PASS; `NEWSERV=... node tests/combat.test.ts` (5860 checks, 0 failures); `NEWSERV=... node tests/rangedaim.test.ts` all passed (the worktree had no `vendor/`; a symlink to the main checkout's `web/vendor` was used for the run and removed); `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome (no Playwright).
+## 2026-10-25: support techniques: the EVP and hold roundings (truncation), the enemy support particles
+
+**Question.** Which of the port's remaining round-half-even sites in the status code are the exe's fistp under RC = 11 (truncation), and which enemy support hooks create the particles 0x1fd / 0x1fe?
+
+**Answer.** Three EVP / hold sites chop, not round; the exe's enemy hooks make one particle each, and the port now draws them. The mash step is unchanged (it is an exact -15).
+
+**Rounding verdicts (PROVEN from objdump; `fistp` after `fldcw` with `or 0xc00` is RC = 11, the default is round-half-even).**
+- Player freeze EVP, `status.ts` `evp()`: freeze_entity 0x00778cc0 (`fmul [0x0097810c]` = -0.3 at 0x00778dca, the `fnstcw` / `or 0xc00` / `fldcw` / `fistp` at 0x00778dd0..0x00778de6), and the old-term chop at 0x00778c6a..0x00778c80. Verdict: TRUNCATE. The port now uses `chop(mult * base)`.
+- Enemy EVP, `enemystatus.ts` `evp()`: maybe_paralyze_entity 0x007789c8 (mult -0.15 stored at +0x260 = 0xbe19999a, the term at 0x00778a51..0x00778a90, fistp RC = 11 at 0x00778a84); shock_entity 0x00778e40 (new term `fmul [0x00978100]` = -0.15 at 0x00778f8f, fistp at 0x00778fab); freeze_entity 0x00778cc0 (as above). Verdict: TRUNCATE for all three. The product is exact (an f32 constant times an integer base fits in a double), so `chop(mult * base)` matches the x87 result.
+- The 0x4000 hold, `enemystatus.ts` `applyHold()`: Player_ApplyStatusEffect_00779828 (fistp into `[ecx+0x294]` under RC = 11 at 0x00779836..0x00779843). Verdict: TRUNCATE (was round, marked ASSUMED).
+- Freeze mash step, `status.ts` `mashStep = roundHalfEven(-15)`: the exe site is not located; -0.1 * 150 is exactly -15 in both rounding modes, so the value is unaffected. Left as is.
+- Not checked here: `combat/playerstats.ts` `roundF` (ATA and the other rolled stats).
+
+**Enemy support hooks (PROVEN, objdump 0x00779c64..0x00779d50; the dump's names `SetParticleEffectMotionIndex_00779c64`, `SpawnSaintEmilionMissileTrail*` are community names, the calls are what matters).**
+- The hooks are the enemy vtable slots +0x11c (Shifta, 0x00779c64), +0x120 (Jellen, 0x00779c90), +0x124 (Deband, 0x00779cd8), +0x128 (Zalure, 0x00779d04) (base enemy vtable 0x00af3a20; the slot values read with `tools/exedata.py read`).
+- They run in `entity_hit_by_tech` (dump 747782) in each tech's case, before the stat call (vtable +0xd4 / +0xd8), and are skipped while the entity's flag 0x2000000 is set. The invulnerable early return of the port (Jellen / Zalure only) matches the exe's exclusions; Shifta and Deband are not excluded.
+- Shifta and Jellen make particle 0x1fd, Deband and Zalure 0x1fe. Each is one emission at the entity's position (`this + 0x300`) with flags 0x50 (create_particle_effect_3 at 0x0050b7a4, one emission: +0x34 = 1; the follow by the entity id `+0x1c` through ParticleEffectSingleParticle_SetMotionIndex 0x00508f14). Jellen and Zalure call create_particle_effect13 (0x0050bd5c) instead, with the angle vector (0, 0, NaN) at +0x78..+0x80 (the `-NAN` of the dump: 0xffff8000 as a float). The NaN Z is not drawn (ASSUMED: the port draws the particle unrotated).
+- The hook runs whether or not the stat change takes, so a refused (weaker) cast still shows the particle.
+
+**Port.** `combat/buffs.ts` `SUPPORT_PARTICLE` (the ids per group); `render/combat.ts` `buffEnemy` spawns it through the enemy particle path (`fx.spawn`, one emission, the getter follows the enemy's root position while it lives, flag 0x10). The port's invulnerable early return for Jellen / Zalure stays before the spawn; Shifta / Deband on an invulnerable enemy spawn it (as the exe).
+
+**Open.**
+- Player side: the same vtable slots are not checked on a player (the player's own vtable at +0x11c..+0x128 is not read), so the port draws nothing for a player's Shifta / Deband / Jellen / Zalure particle.
+- The NaN angle of 0x00779c90 / 0x00779d04 is not modelled (ASSUMED unrotated).
+- The follow of flag 0x10 for an entity id is taken as the enemy following its position; the motion-index path for an enemy is not read.
+
+**Tests.** `tests/buffs.test.ts` (the support particle ids), `tests/enemystatus.test.ts` (freeze 55 -> 39, paralysis 50 -> 43, `applyHold(2.7)` -> 2), `tests/status.test.ts` (player freeze 55 -> 39), new `tests/supportfx.test.ts` (ids, one emission from ParticleSystem and FxEmitter). Also run and passing: `tests/playerfx.test.ts`, `tests/hitfx.test.ts`, the particle tests, `tests/combatsetatp.test.ts`, `tests/combatdepth.test.ts`, `NEWSERV=... node tests/combat.test.ts` (5860 checks, 0 failures), `cd client && npx tsc --noEmit -p .` (clean, Node 24). Not run in Chrome (no Playwright).
 
 ## 2026-10-25: weapon hit pipeline (box overlap to EntityHitEntity); Vol Opt monitors are struck on any wall
 
