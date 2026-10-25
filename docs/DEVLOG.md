@@ -57,6 +57,26 @@
 - Whether the 6x31 handler on the receiving side restores HP (not traced).
 
 **Checks:** `node tests/scapedoll.test.ts` (28 checks), `node tests/returnprompt.test.ts` (62/62), `node tests/combatdepth.test.ts` (836, 0 failures), `NEWSERV=<main>/vendor/newserv node tests/combat.test.ts` (5859, 0 failures), `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24) clean. Not run in Chrome.
+## 2026-10-25: Live combat reads the set factor: the weapon's range carries the set factor and morning glory (the compare and the hit agree)
+
+**Question:** the compare list scales the weapon range by the set factor (ApplyEquipmentBonuses_005d330c), but the live hit (`weaponAttackRange` / `splitAttack` in `combat/playerstats.ts`, fed by `playerAttacker` / `weaponForCombat` in `combat/formulas.ts`) still used the plain `atp + 2 x grind` range. Combat ATP could differ from the compare when a set matched.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13; dump `Psobb.exe-05112026.c`):**
+- `EntityHitEntity_00773350` (dump 747464) rolls the damage as `(base_atp_with_shifta + atp_variance_with_shifta * rand) * g_DamageBaseFactor` plus `battleparams_attacks->atp_range_min * g_DamageBaseFactor` (dump lines 747538..747545). The equipment term is the battleparams range (+0x31c), not a separate stat.
+- That range is written by `ApplyEquipmentBonuses_005d330c` (dump 426168), weapon branch (dump 426180..426200): `range_min += ROUND((atp_min + 2 x grind) x get_equipment_set_bonus + morning_glory_atp_bonus)`, the max likewise. `get_equipment_set_bonus` (0x005d3584, dump 426246) dispatches the weapon to `get_equipment_set_atp_bonus_weapon` (0x005d3b54, dump 426491).
+
+**Ported:**
+- `playerstats.ts` `weaponRangeContribution(item, w, ctx)`: the weapon's range contribution with the factor, the morning term and the item set range deltas, the same numbers `applyItem` adds. `WeaponRangeInput.range` (optional) makes `weaponAttackRange` use it, so `splitAttack` carries the set.
+- `formulas.ts` `weaponForCombat(data1, pmt, ctx)` sets `WeaponForCombat.range` when a `SetContext` is given; `playerAttacker` passes it on.
+- `render/combat.ts` `attackerStats` builds the local player's `SetContext` from the live worn equipment (`liveSetContext`, same sources as `equippedItem`: the character's inventory, else the selfSnapshot). Remote attackers (`onRemoteStrikeTargets`) keep no set (ASSUMED).
+
+**ASSUMED / not wired:**
+- Beat time (`get_beat_time`, FUN_0077bab4) has no port clock: the default beat 0 is used, as in the compare. At beat 0 the galatine ladder gives 0.33 (weapon 1/8), so a live Galatine hit rolls 0.33 of its range, and morning glory (sub 0x94) gives 0 until the clock exists. This is the largest risk of this change.
+- The option rows (`applyOption` range types) are not in the live range, as before.
+- Nearby players (count_nearby_players) and the colored ring count stay at 0.
+
+**Tests:** `node tests/combatsetatp.test.ts` (10 checks: the matching set 60..70 -> 90..105, the attacker split 95 / spread 20, the applyItem agreement, morning glory at beat 400, galatine at beat 0), `node tests/playerstats.test.ts` (25/25), `NEWSERV=<main>/vendor/newserv node tests/combat.test.ts` (5859, 0 failures), `node tests/combatdepth.test.ts` (836, 0 failures), `node tests/pvp.test.ts` (ALL PASS), `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome.
+
 ## 2026-10-25: Equipment compare: the set bonuses, the colored rings and the item set bonus are ported (the compare applies them; the beat time / party / movement inputs are ASSUMED)
 
 **Question:** the ROADMAP "Equipment stat recalculation" item still listed the weapon / armour set bonuses (`get_equipment_set_*`), the colored rings (`colored_ring_matching_boosts`, dump 427069) and the item set bonus (`handle_item_set_bonus`, dump 427136) as not decoded. The previous compare used set factors of 1.0 and applied no ring or item set.

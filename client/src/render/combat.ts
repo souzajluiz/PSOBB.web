@@ -115,6 +115,8 @@ import {
   type AttackType,
   type DefenderStats,
 } from '../combat/formulas.ts';
+import { defaultSetContext, wornEquipment, type SetContext } from '../combat/playerstats.ts';
+import { readItemData, type ItemData } from '../formats/itemnames.ts';
 import {
   castMotion,
   megidChance,
@@ -6537,6 +6539,23 @@ export class CombatView {
     return this.equippedItem((d1) => d1[0] === 0);
   }
 
+  // The local player's SetContext from the worn equipment (the same sources as equippedItem). Beat
+  // time, the nearby players and the colored ring count stay at their defaults (ASSUMED, see
+  // defaultSetContext).
+  private liveSetContext(): SetContext {
+    const char = this.opts.character?.();
+    if (char) return defaultSetContext(wornEquipment(char.inventory.filter((i) => (i.flags & 8) !== 0).map((i) => i.data)));
+    const inv = this.game.selfSnapshot.inventory;
+    const count = Math.min(30, inv[0]);
+    const worn: ItemData[] = [];
+    for (let i = 0; i < count; i++) {
+      const o = 4 + i * 0x1c;
+      const flags = new DataView(inv.buffer, inv.byteOffset).getUint32(o + 4, true);
+      if (flags & 8) worn.push(readItemData(inv, o + 8));
+    }
+    return defaultSetContext(wornEquipment(worn));
+  }
+
   // The first equipped item whose data1 matches (the equip flag 8 of the same two sources).
   private equippedItem(match: (data1: Uint8Array) => boolean): { data1: Uint8Array } | null {
     const char = this.opts.character?.();
@@ -8406,7 +8425,8 @@ export class CombatView {
     const dv = new DataView(disp.buffer, disp.byteOffset, disp.byteLength);
     const stats = { atp: dv.getUint16(0, true), ata: dv.getUint16(0x0a, true), lck: dv.getUint16(0x0c, true) };
     const w = this.equippedWeapon();
-    const a = playerAttacker(me.charClass, stats, weaponForCombat(w?.data1, this.pmtSync));
+    // The weapon's range carries the live set factor (EntityHitEntity_00773350 reads battleparams_attacks->atp_range_min).
+    const a = playerAttacker(me.charClass, stats, weaponForCombat(w?.data1, this.pmtSync, this.liveSetContext()));
     // Shifta / Jellen move ATP (+0x2cc) and its spread (+0x2ce); the
     // equipment ATP (+0x31c) is not touched.
     return { ...a, atp: this.selfBuffs.atp(a.atp), atpSpread: this.selfBuffs.atpSpread(a.atpSpread) };
