@@ -80,6 +80,8 @@ eq(enemyCombatMotions('TObjEneShark', null as never).damage, { index: 3, speed: 
   const em = mk();
   em.tick([]);
   eq([em.sounds, em.effects.map((f) => f.id)], [[0x124], [0xea, 0xe9]], 'the emerge plays SE 0x124 and particles 0xea / 0xe9');
+  // create_abeast_spawn_particle_effects: 0xe9 raised by g_AbeastParticleYOffset (0x0092746c = 30.0), 0xea at the spot.
+  eq(em.effects.map((f) => f.dy), [0, 30], 'the emerge: 0xea at dy 0, 0xe9 at dy +30 (g_AbeastParticleYOffset)');
   em.sounds.length = 0;
   em.effects.length = 0;
   for (let f = 0; f < 39; f++) em.tick([]);

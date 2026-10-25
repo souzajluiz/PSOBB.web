@@ -29,6 +29,26 @@
 - The hit test itself (which bit the port's hit gate reads for the Dragon body) is taken from the De Rol Le rule; the hit path was not re-traced in this pass.
 - De Rol Le segment radar: the port's `root.visible` gate stays (the segments' parked position before the first draw is 10000; the exe has no visibility gate; not traced how the forced icon is drawn at that position).
 - Mericarol, Gibbon, SlimeControl and the other bosses are not in this pass.
+## 2026-10-25: Dimenian timed spawn gate (+0x398) and the Grass Assassin emerge Y offset
+
+**Outcome.** A fresh Dimenian (and La / So Dimenian) does not take the timed spawn: the port now passes `spawn: false` for them (no sound, no particles, idle on the next tick). The Shark keeps `spawn: true`. The Grass Assassin emerge's 0xe9 particle is raised by 30, not 0.
+
+**Proven (PsoBB.exe, `tools/exedata.py`, `tools/refsrc.sh` on `Psobb.exe-05112026.c`).**
+- The Dimenian's vtable is 0x00b041e0 (deathfx.ts already cites it as VERIFIED). Its slot +0x154 is `DorphonProcessAttackPhase` (0x005ad51c, the sub 0 / 1 / 2 timer code), and its slot +0x178 is `EnableDerolleEntity` (0x005517a0). Its slot +0x0 is `g_pDerolleDtor`, which `dimenian_constructor` sets.
+- `unknown_booma_enemy_ai` dispatches by `unknown_ai_state` through the vtable: case 0 calls +0x154 (spawn), case 9 calls +0x178. So the Dimenian's spawn tick is state 0, and state 9 is `EnableDerolleEntity`.
+- `EnableDerolleEntity` is the only writer of +0x398 = 1 in the Dimenian's reach: it stores 1 at +0x398, then calls the 0x3b0 object's +0x10. `dimenian_constructor` (0x00551d3c) writes no +0x398 in its body; the earlier note's base write of 0 (0x0052b6ec) is taken as given. The superclass ctor `unknown_booma_superclass_constructor` sets `unknown_ai_state` and `state_maybe` to 0. So a fresh Dimenian has +0x398 = 0 and state 0.
+- `UpdateMovementRestriction_00606f10` (the set-file `param2` / `param3` register gate, the NPC's `npcShown`) is NOT a Dimenian writer: it runs only from `EnemyObjectUpdateAnimation_00606e34` (that slot sits only in the 0xb1xxxx vtables, not the Dimenian's) and from the challenge dispatcher. So the set-file register is not the gate, and neither is the wave spawn (the spawn creator `CreateDimenianPlayer_00551c70` calls only the constructor).
+- Consequence: a fresh Dimenian starts in state 0 with +0x398 = 0, so sub 0 takes the else branch (sub 2, no effects), exactly the port's `spawn: false` path. The timer runs only after state 9 has been applied first.
+- Grass Assassin emerge: `DerolleProcessStateWanderer_0052407c` sub 0 calls `abeast_enemy_sfx_and_particle` (0x0052407c's helper), which calls `create_abeast_spawn_particle_effects`: create 0xea at the spot, then `fadd [0x0092746c]` (g_AbeastParticleYOffset) and create 0xe9. Bytes at 0x005789b2 (`d8 05 6c 74 92 00`). `0x0092746c` reads 30.0, the same constant as the Shark's dy 30. The emerge's dy 0 for 0xea and 30 for 0xe9 match the port after this change.
+
+**ASSUMED / open.**
+- What sets state 9 on a Dimenian. `state_maybe` (Enemy__UpdateAiState) and `SetEnemyAiState_0051f62c(…, 9)` are fed by the network enemy-state and quest paths (`ApplyEnemyTargetAndState_00423a78`, `SetEnemyTargetAndState_004b98fc`); not traced to a Dimenian packet. A joined client or a server-driven state 9 would take the timer path; the port has no such trigger.
+- The unnamed function containing 0x005ade89 (the old candidate writer) was not read in this pass.
+- The Grass sound 0x124 goes through `RemapEntityIdForMap_0052d25c` on the per-map table (`null_ARRAY_009273e0`), kept as ASSUMED identity as before.
+
+**Port.** `client/src/render/combat.ts`: `spawn: className !== 'TObjEneDimedian'` (the comment cites the proof). `client/src/combat/enemyfsmcaves.ts`: `emergeFxDy: 30`. `client/src/combat/enemyai.ts`: the +0x398 comment.
+
+**Tests.** `tests/enemyfsm.test.ts`: a fresh Dimenian (`spawn` false) plays nothing on the first tick and is idle on the next. `tests/enemyfsmcaves.test.ts`: the emerge's effect dy is [0, 30]. enemyfsm, enemyfsmcaves, minimap, combat (with NEWSERV) pass; `tsc --noEmit` clean.
 
 ## 2026-10-25: Xbox (XB) .qst: parse and pack, newserv byte cross-check
 
