@@ -54,6 +54,7 @@ import { BELRA, BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi,
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
+import { ZuAi } from '../combat/enemyfsmep4.ts';
 import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MORFOS, MorfosAi, MorfosBolt, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
 import { IllGillAi } from '../combat/enemyfsmillgill.ts';
 import { EpsilonFx } from './epsilonfx.ts';
@@ -484,6 +485,8 @@ const OWN_FSM = new Set([
   'TObjEneMe1Gee',
   'TObjEneMe1GiGue',
   'TObjEneGibbles',
+  // Episode 4 Zu / Pazuzu (combat/enemyfsmep4.ts). Pazuzu shares the set type and so the class.
+  'Zu',
   // Episode 2, part d (combat/enemyfsmep2d.ts).
   'TObjEneMorfos',
   'TObjEneRecobox',
@@ -1508,7 +1511,20 @@ export class CombatView {
             rng: () => this.rng(),
           });
         }
-        else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, barbarous: head.slot.type === 'BARBAROUS_WOLF', rng: () => this.rng() });
+        else if (className === 'Zu') {
+          // Zu / Pazuzu (combat/enemyfsmep4.ts). ASSUMED: the rare flag (+0x504) is the set's p6 bit 0 (the model's
+          // variant bit, formats/enemymodels.ts); the level of the target is its player's level.
+          ai = new ZuAi({
+            ...at,
+            movement,
+            detect: cfg.detect,
+            floor: this.floor,
+            ultimate,
+            wide: (subtype & 1) === 1,
+            levelOf: (id) => this.game.players.get(id)?.level ?? 1,
+            rng: () => this.rng(),
+          });
+        } else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, barbarous: head.slot.type === 'BARBAROUS_WOLF', rng: () => this.rng() });
         else if (className === 'TObjEneBm3Fly') {
           // Mothmant's own FSM (combat/enemyfsm.ts MothmantAi). A Mothmant
           // set on its own (no Monest) counts the other parentless ones.
@@ -2064,6 +2080,8 @@ export class CombatView {
       if (e.dead || e.state === 'death' || !onField || radarConcealed(e) || !splitRadarOk(e)) continue;
       // Garanz draws no radar icon (classic/minimap.ts ENEMY_RADAR_SOURCE 'none').
       if (radarSourceOf(e.slot.type) === 'none') continue;
+      // Zu / Pazuzu: update_zu draws the icon only while +0x390 bit 0x40000 is clear (PROVEN 0x005b28bc).
+      if (e.ai instanceof ZuAi && e.ai.radarHidden) continue;
       // Claw: its icon is off while its hidden flag (+0x390 bit 0x10000000) is set.
       if (e.ai instanceof ClawAi && e.ai.hidden) continue;
       // A timed spawn (Shark, Dimenian) keeps its radar icon: the spec's trace found no change in the spawn.
@@ -9327,6 +9345,7 @@ export class CombatView {
         if (e.ai instanceof SinowAi || e.ai instanceof MorfosAi) e.ai.onDamage(clientId);
         if (e.ai instanceof MericarolAi || e.ai instanceof GibbonAi) e.ai.onDamage(clientId);
         if (e.ai instanceof GeeAi || e.ai instanceof GiGueAi || e.ai instanceof GibblesAi) e.ai.onDamage(clientId);
+        if (e.ai instanceof ZuAi) e.ai.onDamage(clientId);
         if (e.ai instanceof ExeBrain) e.ai.onDamage(clientId); // the enemy base's hit handler (+0x100) runs here too
         if (e.ai?.flinches?.(0, e.stats.maxHp) ?? true) this.playDamage(e);
       }
