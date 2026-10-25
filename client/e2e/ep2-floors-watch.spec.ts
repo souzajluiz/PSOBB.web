@@ -120,6 +120,9 @@ const enemyStates = (page: Page) =>
       ai: e.ai ? String(e.ai.constructor?.name ?? 'anon') : 'none',
       state: e.ai ? String(e.ai.state ?? '-') : '-',
       dead: !!e.dead,
+      // invulnerable: the spawn state (the exe's 0x4040000 flags); vis: the enemy object is shown.
+      inv: !!e.ai?.invulnerable,
+      vis: !!e.instance?.root?.visible,
     }));
   });
 
@@ -215,14 +218,21 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
         }
         await page.waitForTimeout(500);
         const chainKilled: string[] = [];
+        const deadIds = new Set<number>(); // entities seen dead (chain kills, then the watch's samples)
         if (target?.by === 'chained') {
+          // In chain order: the link's wave must be built and out of its spawn state before the kill;
+          // the kill starts the next link's trigger_event, and the next iteration waits for that wave.
+          // A link that does not get ready, or is left alive after the kill, stops the chain.
           for (const link of g.chain.slice(startAt)) {
-            if (!(await waitBuilt(page, link.room, link.wave, 10_000))) {
-              chainKilled.push(`event ${link.id} (room ${link.room} wave ${link.wave}): no enemy built within 10 s`);
-              continue;
+            const ready = await waitReady(page, link.room, link.wave, READY_MS);
+            if (!ready.ok) {
+              chainKilled.push(`event ${link.id} (room ${link.room} wave ${link.wave}): not ready within ${READY_MS / 1000} s (${ready.why})`);
+              break;
             }
             const k = await killWave(page, link.room, link.wave);
-            chainKilled.push(`event ${link.id} (room ${link.room} wave ${link.wave}): hit ${k.hit}, alive after ${k.alive}`);
+            for (const id of k.ids) deadIds.add(id);
+            chainKilled.push(`event ${link.id} (room ${link.room} wave ${link.wave}): ready after ${ready.secs} s, hit ${k.hit}, dead ${k.ids.length}, alive after ${k.alive}`);
+            if (k.alive > 0) break;
             await page.waitForTimeout(1000); // the next link's trigger_event and its delay
           }
         }
@@ -233,7 +243,6 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
         const types: Record<string, TypeStat> = {};
         let stateChanges = 0;
         let maxBuilt = 0;
-        let dead = 0;
         let waveSpawned = false;
         const ticks = Math.ceil(WATCH_MS / POLL_MS);
         for (let i = 0; i < ticks; i++) {
@@ -242,6 +251,7 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
           if (list.length) waveSpawned = true;
           maxBuilt = Math.max(maxBuilt, list.length);
           for (const e of list) {
+            if (e.dead) deadIds.add(e.entity); // counted before the final list drops the dead entries
             const sig = `${e.ai}:${e.state}:${e.dead ? 'dead' : 'live'}`;
             const st = (types[e.type] ??= { built: 0, states: [], changes: 0, dead: 0, live: 0, ais: [] });
             if (!st.ais.includes(e.ai)) st.ais.push(e.ai);
@@ -259,11 +269,10 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
         for (const e of finalList) {
           const st = (types[e.type] ??= { built: 0, states: [], changes: 0, dead: 0, live: 0, ais: [] });
           st.built++;
-          if (e.dead) {
-            st.dead++;
-            dead++;
-          } else st.live++;
+          if (e.dead) st.dead++;
+          else st.live++;
         }
+        const dead = deadIds.size;
         const after = await floorData(page);
         const eventFlagsAfter = after.flags.filter((_, i) => g.eventIds.includes(after.events[i]?.id));
 
@@ -357,29 +366,59 @@ function chainOf(d: Awaited<ReturnType<typeof floorData>>, eventIds: number[]): 
   return links;
 }
 
-// Waits until (room, wave) has a built, living enemy (a chain link's trigger_event ran), or the timeout.
-async function waitBuilt(page: Page, room: number, wave: number, timeoutMs: number): Promise<boolean> {
-  const until = Date.now() + timeoutMs;
-  while (Date.now() < until) {
-    if ((await enemyStates(page)).some((e) => e.room === room && e.wave === wave && !e.dead)) return true;
+// Waits until the chain link's wave has started: at least one living enemy of (room, wave) is built
+// (visible), and every living one has left its spawn state (not invulnerable; the exe's spawn-state
+// enemies take no hit, and a wave that has not started has no enemy object yet). Times out with why.
+const READY_MS = Number(process.env.EP2_READY_S ?? 30) * 1000;
+async function waitReady(
+  page: Page,
+  room: number,
+  wave: number,
+  timeoutMs: number,
+): Promise<{ ok: boolean; secs: number; why: string }> {
+  const t0 = Date.now();
+  let why = 'no enemy built';
+  for (;;) {
+    const list = (await enemyStates(page)).filter((e) => e.room === room && e.wave === wave && !e.dead);
+    if (list.length && list.every((e) => e.vis && !e.inv)) return { ok: true, secs: (Date.now() - t0) / 1000, why: '' };
+    if (list.length) why = `${list.filter((e) => e.inv).length} of ${list.length} still in spawn`;
+    if (Date.now() - t0 >= timeoutMs) return { ok: false, secs: (Date.now() - t0) / 1000, why };
     await page.waitForTimeout(POLL_MS);
   }
-  return false;
 }
 
-// Kills the living enemies of (room, wave) through the combat's hit path (applyEnemyHit, the call
-// ep4-battle-smoke.spec.ts makes): 9999 damage, so the kill flow runs (6x76, the wave's enemies-dead flag).
-function killWave(page: Page, room: number, wave: number): Promise<{ hit: number; alive: number }> {
-  return page.evaluate(
-    ([r, w]) => {
-      const c = (window as any).classicGame.view.combat;
-      const living = () => [...c.enemies.values()].filter((e: any) => e.slot?.set?.section === r && e.slot?.set?.wave === w && !e.dead);
-      const live = living();
-      for (const e of live) c.applyEnemyHit(e, 0x20000000 | 0x00800000 | 0x00100000, 9999, false, 'e2e chain kill: ', true, {});
-      return { hit: live.length, alive: living().length };
-    },
-    [room, wave] as [number, number],
-  );
+// Kills the living, non-invulnerable enemies of (room, wave) through the combat's hit path
+// (applyEnemyHit, the call ep4-battle-smoke.spec.ts makes): 9999 damage, so the kill flow runs
+// (6x76, the wave's enemies-dead flag). Repeats a few times for enemies that were not yet hittable.
+// Returns the hits of the first pass, the entity ids that died, and the enemies still alive.
+async function killWave(page: Page, room: number, wave: number): Promise<{ hit: number; ids: number[]; alive: number }> {
+  let hit = 0;
+  const ids = new Set<number>();
+  let alive = 0;
+  for (let pass = 0; pass < 8; pass++) {
+    const r = await page.evaluate(
+      ([rm, w]) => {
+        const c = (window as any).classicGame.view.combat;
+        const living = () => [...c.enemies.values()].filter((e: any) => e.slot?.set?.section === rm && e.slot?.set?.wave === w && !e.dead);
+        const live = living();
+        const hittable = live.filter((e: any) => !e.ai?.invulnerable);
+        for (const e of hittable) c.applyEnemyHit(e, 0x20000000 | 0x00800000 | 0x00100000, 9999, false, 'e2e chain kill: ', true, {});
+        const after = living();
+        return {
+          hit: hittable.length,
+          died: hittable.filter((e: any) => e.dead || !after.includes(e)).map((e: any) => e.index as number),
+          alive: after.length,
+        };
+      },
+      [room, wave] as [number, number],
+    );
+    if (pass === 0) hit = r.hit;
+    for (const id of r.died) ids.add(id);
+    alive = r.alive;
+    if (alive === 0) break;
+    await page.waitForTimeout(POLL_MS);
+  }
+  return { hit, ids: [...ids], alive };
 }
 
 // Object sets the data folder does not have (see ep2-floors-smoke.spec.ts).
