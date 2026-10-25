@@ -289,8 +289,10 @@ export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
   // above shares 0x00b04cc0, ASSUMED, the dump's label is not trusted). Sinow Zoa / Zele:
   // vtable 0x00b08f00, update 0x0059173c, call 0x005917c3. Morfos: vtable 0x00b070c0, update
   // 0x0057a2a0, call 0x0057a36a. Recobox: vtable 0x00b07e80, update 0x00589444, call 0x0058949f.
-  // Dorphon / Dorphon Eclair (one ctor, the flag at +0x4d8): vtable 0x00b0aca0, update
-  // 0x005abf34, call 0x005abfa1.
+  // Dorphon / Dorphon Eclair (one ctor, the flag at +0x4d8): vtable 0x00b0a9c0 (set type 0x116,
+  // factory 0x005a673c, its ctor writes 0x005a67fa; slot +0x198 0x00520618), update 0x005a69d8,
+  // slot call 0x005a6a36. The earlier note named 0x00b0aca0, which is Girtablulu's vtable
+  // (see the Episode 4 rows); the verdict 'slot' is the same for both.
   MERICAROL: 'slot', UL_GIBBON: 'slot', ZOL_GIBBON: 'slot', GEE: 'slot', DELBITER: 'slot',
   EPSILON: 'slot', SINOW_ZOA: 'slot', SINOW_ZELE: 'slot', MORFOS: 'slot', RECOBOX: 'slot',
   DORPHON: 'slot', DORPHON_ECLAIR: 'slot',
@@ -300,11 +302,45 @@ export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
   // 0x005696df, +0x198 is 0); Gibbles (vtable 0x00b054e0, dispatcher 0x0056021c, icon at
   // 0x005603fb in GibblesUpdateLoop 0x00560338, state gates in the port); Merillia (vtable
   // 0x00b066e0, update 0x005755cc, +0x198 0x0057543c, icons at 0x00574792 .. 0x00575a67, the
-  // state gates not traced); Goran (vtable 0x00b0af40, +0x198 0x005ad6fc, icon 0x00805608
-  // at 0x005b28dd in its state-4 init). Merillia's 'Meriltas' and Goran's two forms share
-  // these vtables (ASSUMED, the factory's subtype flag is not traced here).
+  // state gates not traced). Merillia's 'Meriltas' shares these vtables (ASSUMED, the factory's
+  // subtype flag is not traced here). Goran: no row (2026-10-25 correction: the icon cited for it,
+  // 0x005b28dd, is inside Zu's update 0x005b27e8; Goran's vtable 0x00b0af40 has its update at
+  // 0x0052b78c (no icon) and +0x198 0x005ad6fc (no direct icon call); no icon proven).
   DELDEPTH: 'own', GI_GUE: 'own', GIBBLES: 'own', MERILLIA: 'own', MERILTAS: 'own',
-  GORAN: 'own', GORAN_DETONATOR: 'own', PYRO_GORAN: 'own',
+  // Sinow Berill (2026-10-25 Episode 4 pass, ex-'forced' row): vtable 0x00b0a120 (ctor 0x0059e01c
+  // writes it at 0x0059e0eb; +0x198 0x00520618), its dispatcher SinowberillProcessState_0059eb08
+  // (vtable +0x164) ends with the slot call 0x0059ec5a, unless the state field +0x3c8 is 1 with
+  // the argument 1 or 2. The update 0x0059e288 has no icon of its own, so the plain icon is the
+  // slot's. Sinow Spigell (set 0xd4, p6 > 0) is the same ctor (DEVLOG 2026-10-25, ASSUMED).
+  // Recon (child of the Recobox): vtable 0x00b08100 (ctor 0x0058a200 writes it at 0x0058a2e9),
+  // update 0x0058a3d4, slot call 0x0058a54a inside that update's body (PROVEN).
+  // Girtablulu: factory 0x005ab9ac (set 0x113) -> ctor 0x005aba28 writes vtable 0x00b0aca0
+  // (0x005aba74), update 0x005abf34, slot call 0x005abfa1. Satellite Lizard and Yowie (set 0x111,
+  // the p2 flag): factory 0x005ae7cc writes vtable 0x00b0b1c0 (0x005ae88a), update 0x005b160c,
+  // slot call 0x005b171b.
+  SINOW_BERILL: 'slot', SINOW_SPIGELL: 'slot', RECON: 'slot', GIRTABLULU: 'slot',
+  SATELLITE_LIZARD_CRATER: 'slot', SATELLITE_LIZARD_DESERT: 'slot', YOWIE_CRATER: 'slot', YOWIE_DESERT: 'slot',
+  // Episode 4 'own' rows (their own icon call, no slot; an exe gate the port does not apply is named per row):
+  // Astark (factory 0x005a3d60 writes vtable 0x00b0a420 at 0x005a3e78; update 0x005a1e84, icon
+  // 0x005a1f82 unconditional on the alive path, plain scale 1). Sand / Del Rappy (set 0x41, factory
+  // 0x00526cc4 -> ctor 0x00526d90 writes vtable 0x00b00da0 at 0x00526dd5; update 0x005258e0, icon
+  // 0x005259dd on the common path, after the state cases; ASSUMED the state cases that jump past it
+  // add none). Merissa A / AA (set 0x112, factory 0x005b6b24 writes vtable 0x00b0b6a0 at 0x005b6c32;
+  // update 0x005b66ec, icon 0x005b67d3, skipped while +0x37c bit 0x8 is set: not ported, no brain).
+  // Zu and Pazuzu (set 0x114, factory 0x005b47b8 -> ctor 0x005b4884 writes vtable 0x00b0b480 at
+  // 0x005b48c6; update 0x005b27e8, icon 0x005b28dd, skipped while +0x390 bit 0x40000 is set: not
+  // ported; ASSUMED Pazuzu shares the Zu vtable, the set type is one for both). Pig Ray (the Barba
+  // Ray's minion, ctor 0x004ad95c writes vtable 0x00afa7c0 at 0x004ad9a6; update 0x004addc0) has a
+  // forced icon, see FORCED_ICON_RULES.
+  ASTARK: 'own', SAND_RAPPY_CRATER: 'own', SAND_RAPPY_DESERT: 'own', DEL_RAPPY_CRATER: 'own',
+  DEL_RAPPY_DESERT: 'own', MERISSA_A: 'own', MERISSA_AA: 'own', ZU_CRATER: 'own', ZU_DESERT: 'own',
+  PAZUZU_CRATER: 'own', PAZUZU_DESERT: 'own', PIG_RAY: 'own',
+  // Ill Gill (factory 0x0052e380 -> ctor 0x0052e44c writes vtable 0x00b01760 at 0x0052e490; update
+  // 0x0052e7c0 switches on unknown_ai_state; plain icons (scale 1, colour 0xffffa24c) in states
+  // 0 (0x00530695), 1 (0x0053054a), 2 (0x0053042b), 3 (0x0053006b), 4 (0x0052f9aa), 5 (0x0052efe4)
+  // and 6 (0x0052eb31, 0x0052eb8d; the second only while the counter +0x3a4 is not below 0); none
+  // in 7 (death) and 8 (dying). Not ported: the port's Ill Gill has no state-gated icon yet.
+  ILL_GILL: 'own',
 };
 export function radarSourceOf(type: string): RadarSource | null {
   return ENEMY_RADAR_SOURCE[type] ?? null;
@@ -321,12 +357,11 @@ export function radarSourceOf(type: string): RadarSource | null {
 // (the body and mine types are other updates).
 // GAL_GRYPHON (update_gal_gryphon, dump 226140): icon3 at &x2 with scale 2.0,
 // flags 1 (dump 226217), unconditional after enable_reticle.
-// SINOW_BERILL (UpdateSinowberillEntity_004addc0, dump 231611): icon3 at &x2
-// with scale 0x40000000 (2.0), flags 1 (dump 231675), unconditional after
-// enable_reticle (exe 0x004addc0 onwards). ASSUMED: this update is the Sinow
-// Berill's: the dump's enemy id 212 (0xd4) is the setdata row that gives
-// SINOW_BERILL (formats/setdata.ts, p6 == 0), and the state set (lock-on attack,
-// death) matches it. Sinow Berill is an enemy, not a boss.
+// PIG_RAY (UpdateSinowberillEntity_004addc0 in the dump, the Barba Ray's minion
+// update; PROVEN 2026-10-25: vtable 0x00afa7c0 +4, ctor 0x004ad95c writes it, and
+// the call at 0x004adeea is icon3 (0x0080575c) with 0xffffa24c, scale 0x40000000
+// (2.0), flags 1 (pushes at 0x004adedf..0x004adee9), after enable_reticle, on the
+// alive path). The Sinow Berill is NOT this class: its radar is the slot (row above).
 // DRAGON (the Episode 1 Caves boss, OlgaUpdateMainLoop_00423b7c = the Dragon's
 // per-frame update, dump 165532, the name is a community mislabel, see
 // combat/dragon.ts): icon3 at &x with scale 0x40000000 (2.0), colour 0xffffa24c,
@@ -354,7 +389,7 @@ export const FORCED_ICON_RULES: Readonly<Record<string, EnemyIconRule>> = {
   DE_ROL_LE: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
   DE_ROL_LE_BODY: { scale: 1.2, color: ENEMY_ICON_COLOR, forced: true },
   GAL_GRYPHON: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
-  SINOW_BERILL: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
+  PIG_RAY: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
   DRAGON: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
 };
 export function enemyIconRule(type: string): EnemyIconRule {

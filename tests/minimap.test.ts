@@ -369,7 +369,8 @@ eq(enemyIconRule('HILDEBLUE'), { scale: 1, color: 0xffffa24c, forced: false }, '
 eq(enemyIconRule('OLGA_FLOW_2'), { scale: 4, color: 0xffffa24c, forced: true }, 'boss icon: Olga Flow phase 2 is forced at scale 4.0 (unknown_olga_related)');
 eq(enemyIconRule('DE_ROL_LE'), { scale: 2, color: 0xffffa24c, forced: true }, 'boss icon: De Rol Le is forced at scale 2.0 (UpdateDerolle)');
 eq(enemyIconRule('GAL_GRYPHON'), { scale: 2, color: 0xffffa24c, forced: true }, 'boss icon: Gal Gryphon is forced at scale 2.0 (update_gal_gryphon)');
-eq(enemyIconRule('SINOW_BERILL'), { scale: 2, color: 0xffffa24c, forced: true }, 'enemy icon: Sinow Berill is forced at scale 2.0 (UpdateSinowberillEntity_004addc0)');
+eq(enemyIconRule('SINOW_BERILL'), { scale: 1, color: 0xffffa24c, forced: false }, 'enemy icon: Sinow Berill has no forced icon (its radar is the slot 0x00520618 via the dispatcher 0x0059eb08)');
+eq(enemyIconRule('PIG_RAY'), { scale: 2, color: 0xffffa24c, forced: true }, 'enemy icon: the Pig Ray is forced at scale 2.0 (update 0x004addc0, icon3 at 0x004adeea)');
 eq(enemyIconRule('SINOW_GOLD'), { scale: 1, color: 0xffffa24c, forced: false }, 'enemy icon: Sinow Gold keeps the plain icon');
 eq(enemyIconRule('DRAGON'), { scale: 2, color: 0xffffa24c, forced: true }, 'boss icon: the Dragon is forced at scale 2.0 (OlgaUpdateMainLoop_00423b7c, dump 165532)');
 eq(enemyIconRule('DE_ROL_LE_BODY'), { scale: 1.2, color: 0xffffa24c, forced: true }, 'boss icon: a De Rol Le shell segment is forced at scale 1.2 (exe 0x00435294 = handle_derolle_shell_behavior, dump 176968)');
@@ -616,11 +617,23 @@ eq(radarSourceOf('SINOW_GOLD'), 'own', 'Sinow Gold: the Sinow Beat constructor w
 for (const t of ['MERICAROL', 'UL_GIBBON', 'ZOL_GIBBON', 'GEE', 'DELBITER', 'EPSILON', 'SINOW_ZOA', 'SINOW_ZELE', 'MORFOS', 'RECOBOX', 'DORPHON', 'DORPHON_ECLAIR']) {
   eq(radarSourceOf(t), 'slot', `${t}: vtable +0x198 is the enemy-base slot, called by its update`);
 }
-for (const t of ['DELDEPTH', 'GI_GUE', 'GIBBLES', 'MERILLIA', 'MERILTAS', 'GORAN', 'GORAN_DETONATOR', 'PYRO_GORAN']) {
+for (const t of ['DELDEPTH', 'GI_GUE', 'GIBBLES', 'MERILLIA', 'MERILTAS']) {
   eq(radarSourceOf(t), 'own', `${t}: its own icon call, no 0x40800 test (default kept)`);
 }
+// Episode 4 survey (2026-10-25): Sinow Berill (vtable 0x00b0a120, dispatcher slot), Recon (0x00b08100, update slot),
+// Girtablulu (0x00b0aca0), Satellite Lizard / Yowie (0x00b0b1c0): the enemy-base slot; Dorphon's vtable is 0x00b0a9c0.
+for (const t of ['SINOW_BERILL', 'SINOW_SPIGELL', 'RECON', 'GIRTABLULU', 'SATELLITE_LIZARD_CRATER', 'SATELLITE_LIZARD_DESERT', 'YOWIE_CRATER', 'YOWIE_DESERT']) {
+  eq(radarSourceOf(t), 'slot', `${t}: vtable +0x198 is the enemy-base slot 0x00520618, called in its update / dispatcher`);
+}
+// Own icon calls: Astark (0x00b0a420), Sand and Del Rappy (0x00b00da0), Merissa A / AA (0x00b0b6a0), Zu and Pazuzu (0x00b0b480), Pig Ray, Ill Gill (0x00b01760).
+for (const t of ['ASTARK', 'SAND_RAPPY_CRATER', 'SAND_RAPPY_DESERT', 'DEL_RAPPY_CRATER', 'DEL_RAPPY_DESERT', 'MERISSA_A', 'MERISSA_AA', 'ZU_CRATER', 'ZU_DESERT', 'PAZUZU_CRATER', 'PAZUZU_DESERT', 'PIG_RAY', 'ILL_GILL']) {
+  eq(radarSourceOf(t), 'own', `${t}: its own icon call in its update or handler (no slot)`);
+}
+// Boota (vtable 0x00b0a680): +0x198 is the placeholder 0x0061cdb0, and no icon in its update or handlers: no row yet.
+eq(radarSourceOf('BOOTA'), null, 'Boota: no row (the icon path of its vtable 0x00b0a680 is not traced)');
 eq(radarSourceOf('CANADINE_NOT_A_TYPE'), null, 'an unknown type has no radar source');
-eq(Object.keys(ENEMY_RADAR_SOURCE).length, 9 + 8 + 1 + 8 + 1 + 1 + 2 + 12 + 8, 'the survey table has 50 enemy rows');
+eq(radarSourceOf('GORAN'), null, 'Goran: no row (the icon cited for it, 0x005b28dd, is in the Zu update; none proven)');
+eq(Object.keys(ENEMY_RADAR_SOURCE).length, 9 + 8 + 1 + 8 + 1 + 1 + 2 + 12 + 5 + 8 + 13, 'the survey table has 68 enemy rows');
 
 if (failures) {
   console.log(`${failures} failure(s)`);
