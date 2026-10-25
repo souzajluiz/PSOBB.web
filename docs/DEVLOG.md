@@ -1,5 +1,23 @@
 # Devlog
 
+## 2026-10-25: collision links review (cd587da changed types): 0x116 resolved, the child init sites excluded
+
+**What changed:** `tools/gen-collision-boxes.py` skips the init sites that box a child object the constructor allocates (`CHILD_OBJECT_SITES`: 0x005a9f65 for 0x116, 0x00586d40 for 0x65) in the enemy link pick. 0x116's link is now table 0x009c07c0 (via 0x0051ff3c, depth 2, not ambiguous). Nothing else in the generated file moved. Tests: `tests/objectcollision.test.ts` checks each changed type.
+
+**Proven (exe, objdump):**
+- 0x45: factory 0x0060c518 (set type 0x45 row in areas 1, 2, 23-27, 34, ...) calls ctor 0x0060c5e4 at 0x0060c5ba. The ctor's init at 0x0060c709 pushes count 1 and table 0x009c4344. Old func 0x0060c6ba is mid-ctor, so the old site func was wrong. Right.
+- 0x65: factory 0x00582e44 (areas 3, 5, 21, 22) calls ctor 0x00582ef4 at 0x00582ecf. Its init at 0x00582fde pushes count 1 (0x582fb6) and table 0x009bf3e4. Table 0x009bf60c is the 0x478 child built by 0x00586b44 (called at 0x005832c0) and constructed by 0x00586bf8 (`call` at 0x00586bd2): a child box, not the enemy's. Right at depth 1.
+- 0x116: factory 0x005a673c (areas 36-40, 46) -> ctor 0x005a67b8 (0x005a6796) -> 0x005a9c58 (0x005a6907). The ctor's first init is on `this` at 0x005a9cb9 (`ecx` reloaded from -0x14), via helper 0x0051ff3c, table 0x009c07c0. The init at 0x005a9f65 (table 0x009c0844) runs on the 0xac object the ctor allocates and stores at this+0x4a4. Ambiguity resolved: own = 0x009c07c0; 0x009c0844 is the child's box (ASSUMED the child box is not the parent's collision).
+- 0xcb: the old 0x009ac120 link was the edge 0x004acc98 -> 0x004cb480 via the E8 at 0x004accd0, mid-instruction (inside `movl %edx, -0x18(%ebp)`). Table 0x009ac120 is Dragon's box (0xcc). 0xcb's factory 0x004af5b8 (area 32) reaches no init site within depth 5 over aligned, vtable and global-pointer edges. Right: no box.
+- Lost TYPE entries: every removed edge is mid-instruction (checked at 0x00509874, 0x0065bc1b, 0x0054dc7d, 0x0065cb0e, 0x00613fb9, 0x006556c3, 0x0065be4b, 0x0065ce66, 0x0064d11f). Types 0x13, 0x8b, 0x8f, 0xdc, 0x1a9, 0x2b1, 0x2b3, 0x390 keep their own tables. Types 0x170 and 0x183 lose all of theirs.
+
+**ASSUMED:**
+- 0x170 and 0x183 have no box: no aligned path within depth 5 reaches another init site; not walked per instruction.
+- 0x116's child box (0x009c0844) is not used for the parent's collision.
+- 0xcb has no box (no full walk of the barbaray ctor 0x004af634).
+
+**Checks:** `node tests/objectcollision.test.ts`, `collision`, `townfield`, `combatdepth` pass under Node 24 (combatdepth 836 checks). `client/node_modules/typescript/bin/tsc --noEmit -p client` clean. Not run in Chrome or Playwright.
+
 ## 2026-10-25: Gibbon and Mericarol: radar, lock-on and hit from the exe's entity flags (the generic icon is status-gated)
 
 **Outcome.** The Gibbon and the Mericarol leave `concealed()`; their radar, lock-on and hit go through `splitRadarOk` / `splitLockOk` / `splitStruckOk` in `render/combat.ts`, with the rule the exe sets with `+0x184`. Gibbles stays on `concealed()` (not traced here). The Mericarol and Gibbon body radar is still not proven: the exe code of both families has no radar call of its own that I could find (below), so the baseline icon stays ASSUMED.

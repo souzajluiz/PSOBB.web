@@ -755,6 +755,21 @@ CHILD_CONST_CALLERS = {
 }
 
 
+# Init sites that box a CHILD object the constructor allocates, not the enemy itself. The enemy link
+# (ENEMY_COLLISION_LINKS) skips them; TYPE_COLLISION_TABLES still lists them (reach only). Each is a
+# hand-read exe fact (DEVLOG 2026-10-25, Plot Falz row / 0x116 + 0x65 check):
+#   0x005a9f65: the 0x116 ctor 0x005a9c58 allocates 0xac (0x005a9f16) and stores it at this+0x4a4; the
+#     init at 0x005a9f65 runs with ecx = the child (`mov %eax, %ecx` at 0x005a9f5c), table 0x009c0844.
+#     The own box is the init at 0x005a9cb9 (ecx = this, via 0x0051ff3c, table 0x009c07c0).
+#   0x00586d40: the 0x65 sub-factory 0x00586b44 (called by the 0x65 ctor 0x00582ef4 at 0x005832c0)
+#     allocates a 0x478 object and constructs it with 0x00586bf8 (`call` at 0x00586bd2, ecx = the
+#     object); its init at 0x00586d40 boxes the child with table 0x009bf60c. The own box is 0x00582fde.
+CHILD_OBJECT_SITES = {
+    0x005A9F65: "0x116 child (0xac, this+0x4a4) in the ctor 0x005a9c58",
+    0x00586D40: "0x65 child (0x478) built by 0x586b44 in the ctor 0x582ef4",
+}
+
+
 def row_is_set(r):
     """A plausible box row: finite, bounded numbers, shape 0 or 1, and a flag or a radius set."""
     nums = [*r["offset"], r["radius"], r["halfX"]]
@@ -941,6 +956,10 @@ def main(argv):
         child_links[spec["set"]] = {"callee": callee, "count": spec["count"], "mask": 0,
                                     "variants": {0: spec["table"]}}
 
+    for child_site in CHILD_OBJECT_SITES:
+        if child_site not in {s["site"] for s in sites}:
+            raise SystemExit(f"CHILD_OBJECT_SITES: {child_site:#x} is not a decoded init site")
+
     # Enemy set type -> factory (per area) -> the box table its constructor sets.
     trees = {}
     fan_in = collections.Counter()  # function -> number of set types whose factories reach it
@@ -957,7 +976,8 @@ def main(argv):
         cands = []
         for g, d in depth_of.items():
             for s in site_by_func.get(g, []):
-                cands.append((d, s))
+                if s["site"] not in CHILD_OBJECT_SITES:  # a child's box, not the enemy's own
+                    cands.append((d, s))
         # A function that several set types reach is a shared helper: the constructor that sets
         # this type's table is one that only this type reaches (ASSUMED: a shared helper is used
         # only when nothing else is found).
