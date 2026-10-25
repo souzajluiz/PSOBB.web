@@ -43,8 +43,9 @@ function swing(state: AttackState, step: number, bursts: number, speed: number, 
 }
 
 // The count is the item's attacks_per_step (see burstCount for the exe writers).
-// Regular Mechgun (kind 0x08) and the other unlisted kinds: 1.
-check(burstCount(0x08, 0) === 1 && burstCount(0x77, 0) === 1 && burstCount(0x84, 3) === 1, 'a regular Mechgun (kind 8, 0x77, 0x84) is one burst');
+// Mechgun (kind 0x08): mechguns_constructor writes 3 (objdump 0x005f4767). Unlisted kinds: 1.
+check(burstCount(0x08, 0) === 3, 'a Mechgun (kind 8) is three bursts (mechguns_constructor, 0x005f4767)');
+check(burstCount(0x77, 0) === 1 && burstCount(0x84, 3) === 1, 'the unlisted kinds 0x77 and 0x84 are one burst');
 // Samba Maracas (kind 0x48), Psychogun (kind 0x83), Mille Marteaux (kind 0xb0): 3.
 check(burstCount(0x48, 0) === 3 && burstCount(0x83, 0) === 3 && burstCount(0x83, 16) === 3, 'Samba Maracas and Psychogun are three bursts');
 check(burstCount(0xb0, 0) === 3, 'Mille Marteaux is three bursts (run-time write, ASSUMED ordering)');
@@ -62,11 +63,11 @@ check(hitFrame(MECHGUN_CLASS, 0, 1) === 0, 'the table holds one hit frame per st
   check(r.next === null, 'no chain without a press');
 }
 
-// A regular Mechgun: one burst per swing, at the first crossing of the hit frame.
+// A regular Mechgun: three bursts per swing, one at each crossing of the hit frame.
 {
   const s = new AttackState(0, MECHGUN_CLASS, { start: () => {}, hit: () => {}, end: () => {} });
   const r = swing(s, 0, burstCount(0x08, 0), 1, 10);
-  check(r.bursts.length === 1 && r.bursts[0] === 2, `regular Mechgun: one burst at tick 2 (${r.bursts.join(',')})`);
+  check(r.bursts.join(',') === '2,12,22', `regular Mechgun: three bursts at 2,12,22 (${r.bursts.join(',')})`);
 }
 
 // A real loop length: 24 frames at speed 0.9 spaces the bursts 24 / 0.9 ticks apart.
@@ -80,16 +81,17 @@ check(hitFrame(MECHGUN_CLASS, 0, 1) === 0, 'the table holds one hit frame per st
 }
 
 // A regular Mechgun chains through all three swings (the live report: the 3rd swing hit nothing).
+// The press comes after the last burst (the window opens only then, tick ~56 at 24 / 0.9).
 {
   const s = new AttackState(0, MECHGUN_CLASS, { start: () => {}, hit: () => {}, end: () => {} });
-  const first = swing(s, 0, burstCount(0x08, 0), 0.9, 24, { pressAt: 6 });
-  check(first.bursts.length === 1, `regular Mechgun swing 1 fires once (${first.bursts.length})`);
+  const first = swing(s, 0, burstCount(0x08, 0), 0.9, 24, { pressAt: 60 });
+  check(first.bursts.length === 3, `regular Mechgun swing 1 fires three bursts (${first.bursts.length})`);
   check(first.next?.step === 1, `a press in the window queues step 1 (${JSON.stringify(first.next)})`);
-  const second = swing(s, 1, burstCount(0x08, 0), 1.0, 24, { pressAt: 6 });
-  check(second.bursts.length === 1, `the second swing fires once (${second.bursts.length})`);
+  const second = swing(s, 1, burstCount(0x08, 0), 1.0, 24, { pressAt: 60 });
+  check(second.bursts.length === 3, `the second swing fires three bursts (${second.bursts.length})`);
   check(second.next?.step === 2, `the second swing queues step 2 (${JSON.stringify(second.next)})`);
   const third = swing(s, 2, burstCount(0x08, 0), 1.1, 24);
-  check(third.bursts.length === 1, `the third swing fires (${third.bursts.length} bursts)`);
+  check(third.bursts.length === 3, `the third swing fires (${third.bursts.length} bursts)`);
   check(third.next === null && third.ended > 0, 'the third swing ends the combo');
 }
 

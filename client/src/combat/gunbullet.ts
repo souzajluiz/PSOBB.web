@@ -52,7 +52,8 @@
 //    same single pellet, so 0x42 is a gun in every variant).
 //  - the own-hook guns (2 flags 0x203 or 0x22 in the ctor): Samba 0x48 (0x005fc348 calls +0xc8 itself);
 //    Mechgun 8 (factory 0x005f46a8, inner 0x005f473c, flags 0x203, hook 0x005f4620 calls +0xc8 twice:
-//    the vectors at +0x240 and +0x24c, positions not decoded); 0x45 (factory 0x005f211c, inner 0x005f21b0,
+//    the vectors at +0x240 and +0x24c; the second is a bullet only when the first made none; the
+//    +0x24c start is ASSUMED the node point, see DEVLOG 2026-10-25); 0x45 (factory 0x005f211c, inner 0x005f21b0,
 //    flags 0x22, hook 0x005f205c: when the player's state at +0x8a4 is 2 and its vtable +0x84 is 1 it fires
 //    the projectile 0x005e6df8 (ASSUMED state meaning, 0x005e90b0), else for group_idx != 1 it calls +0xc8
 //    once; group_idx 1 is the projectile).
@@ -130,14 +131,35 @@ export const firesGunBullet = (kind: number, variant = -1): boolean => {
 };
 // The Shot (kind 9) makes six begin calls per trigger: the hook 0x005fe004's five pellets (angles
 // SHOT_ANGLES_BAMS, targets 0..4), then the regular shot (0x005e8cc9) at angle 0 with target 0.
-// The others make one (Mechgun's two are not modelled, see the header).
+// The Mechgun makes two (the second is visual-only when the first made a bullet); the others make one.
 export const SHOT_KIND = 9;
-export const pelletCount = (kind: number): number => (kind === SHOT_KIND ? SHOT_ANGLES_BAMS.length + 1 : 1);
+// The Mechgun (kind 8) makes two begin_gun_bullet_attack calls per do_attack (do_mechguns_attack
+// 0x005f4620, dump line 452534): the first at the weapon point +0x240, the second at +0x24c with
+// is_allowed_to_hit = (the first made no bullet). Both aim at listed target 0 (the 0,0,1 call).
+export const MECHGUN_KIND = 8;
+export const pelletCount = (kind: number): number => {
+  if (kind === SHOT_KIND) return SHOT_ANGLES_BAMS.length + 1;
+  if (kind === MECHGUN_KIND) return 2;
+  return 1;
+};
 // The pellet's angle (BAMS) and its listed target index (pellet 5 of the Shot is the regular shot).
-export const pelletAngleBams = (kind: number, i: number): number =>
-  kind === SHOT_KIND && i === SHOT_ANGLES_BAMS.length ? 0 : (SHOT_ANGLES_BAMS[i] ?? 0);
-export const pelletTargetIndex = (kind: number, i: number): number =>
-  kind === SHOT_KIND && i === SHOT_ANGLES_BAMS.length ? 0 : i;
+export const pelletAngleBams = (kind: number, i: number): number => {
+  if (kind === MECHGUN_KIND) return 0; // (vec, 0, 0, 1): both calls at angle 0
+  return kind === SHOT_KIND && i === SHOT_ANGLES_BAMS.length ? 0 : (SHOT_ANGLES_BAMS[i] ?? 0);
+};
+export const pelletTargetIndex = (kind: number, i: number): number => {
+  if (kind === MECHGUN_KIND) return 0;
+  return kind === SHOT_KIND && i === SHOT_ANGLES_BAMS.length ? 0 : i;
+};
+// Whether pellet i may make a bullet (begin's is_allowed_to_hit): the Mechgun's second call is
+// allowed only when the first made none (do_mechguns_attack: iVar1 == 0). Every other pellet is allowed.
+export const pelletAllowed = (kind: number, i: number, bulletMadeSoFar: boolean): boolean =>
+  !(kind === MECHGUN_KIND && i === 1 && bulletMadeSoFar);
+// The Rifle (kind 7, group_idx 8..13) hook ExecutePartisanWeaponAttack (0x005fb310) puts a muzzle
+// particle 9 at the hand before the regular shot (for group_idx 12 that is the second muzzle, the
+// default callback's is the other). Returns true for those variants.
+export const RIFLE_KIND = 7;
+export const rifleHookMuzzle = (kind: number, variant: number): boolean => kind === RIFLE_KIND && variant >= 8 && variant <= 13;
 
 const TAU = Math.PI * 2;
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -187,6 +209,7 @@ export function planGunShot(
   target: { centre: Vec3; radius: number } | null,
   wallBlocks: (from: Vec3, to: Vec3) => boolean,
   speed = GUN_BULLET_SPEED_DEFAULT,
+  allowed = true,
 ): GunShot {
   const end = target ? targetAimPoint(start, target.centre, target.radius) : openAimPoint(start, aim.heading, aim.angleBams, aim.horizontalDistance);
   // The wall branch: the effect only (the ground object's distance; ASSUMED the hit point).
@@ -197,7 +220,8 @@ export function planGunShot(
     end,
     frames: bulletFrames(d, speed),
     wall,
-    bullet: !!target && !wall,
+    // begin_gun_bullet_attack creates the bullet only in the no-wall target branch with is_allowed_to_hit != 0.
+    bullet: !!target && !wall && allowed,
     dir: { x: from.x - start.x, y: from.y - start.y, z: from.z - start.z },
     flight: d / speed,
   };

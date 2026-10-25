@@ -1,5 +1,20 @@
 # Handoff: where to resume
 
+## 2026-10-25: Mechgun and Rifle traced (DEVLOG 2026-10-25)
+
+- Done: the Mechgun (kind 8) makes three bursts per swing (`mechguns_constructor` writes
+  attacks_per_step 3, objdump 0x005f4767; it was 1 before). Each burst is two
+  `begin_gun_bullet_attack` calls (`do_mechguns_attack` 0x005f4620): the second is a bullet
+  only when the first made none (`pelletAllowed`). The Rifle's group_idx 12 gets the hook's
+  second muzzle. The 2026-10-22 "Mechgun / Rifle not traced" item is closed for those two.
+- Open: the Mechgun's second start (+0x24c at height 35): the port uses the same node point
+  (ASSUMED; the damage is unchanged, the second trail is at the same point); the Mechgun's
+  +0x25c spin and +0x258 are not read; the Rifle's `ConstructWeaponGroup32` side object
+  (group_idx 8..11 and 13) is not drawn. The class 6..9 kinds not traced (0x42 / 0x45 / 0x65 /
+  0x6d and the rest of the class-3 list) are unchanged from 2026-10-23.
+- Not run: `client/e2e/guns.spec.ts` (Mechgun now 3 bursts, 2 pellets), Chrome. Two unit tests
+  (`combat.test.ts`, `weaponorigin.test.ts`) need `vendor/newserv`, which this worktree lacks.
+
 ## 2026-10-23: open after the day's merges
 
 - `goldragon-smoke.spec.ts` fails at "a key attack hits the Gol Dragon" (0 hits). It
@@ -20,7 +35,7 @@
   (movement miss, wall block); per-weapon speed (19 / Handgun 11 for group_idx 8 / Shot 15 /
   Samba 11 / 0x1c 11); Mechgun bursts = attacks_per_step (1, or 3 for Samba / Psychogun /
   Guld Milla / Mille Marteaux); guns e2e. Which kinds shoot: the exe's gate (PerformItemAttack
-  flags, see DEVLOG 2026-10-23); 0x8b is not a bullet. Open: Mechgun (8), Rifle (7) and the
+  flags, see DEVLOG 2026-10-23); 0x8b is not a bullet. Open (Mechgun and Rifle: DEVLOG 2026-10-25): the
   class 6..9 kinds with no gun callback are not traced; side-on bullet check.
 - Remote players: one 6x40 / 6x42 per leg + dead reckoning (stutter on phones). Not
   measured on a real phone.

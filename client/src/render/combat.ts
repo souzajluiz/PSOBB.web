@@ -135,7 +135,7 @@ import {
   type TechniqueData,
   type TechResist,
 } from '../combat/techniques.ts';
-import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICLE, movedTowards, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
+import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICLE, movedTowards, pelletAllowed, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, rifleHookMuzzle, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, slotSetType, slotVariant, VOLOPT_SET_TYPE } from '../formats/enemyboxes.ts';
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
 import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, type Candidate, type TechTarget } from '../combat/techfire.ts';
@@ -6733,6 +6733,10 @@ export class CombatView {
     // weapon_position x / z (+0x300 / +0x308), not the start's; the start's x / z are taken from
     // the node here (ASSUMED).
     const start = gunBulletStart(this.weaponAttach(), from, this.opts.weaponOrigin ?? this.weaponOriginOfSelf(me.clientId), { x: 0, y: 0, z: 0 });
+    // The Rifle's hook muzzle (ExecutePartisanWeaponAttack 0x005fb310) comes before the shot. For
+    // group_idx 8..11 and 13 the callback is 0 and the 'none' branch below gives the one muzzle.
+    if (rifleHookMuzzle(kind, variant) && visual === 'default') this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
+    let madeBullet = false;
     for (let i = 0; i < pelletCount(kind); i++) {
       const t = hit[pelletTargetIndex(kind, i)];
       let target: { centre: { x: number; y: number; z: number }; radius: number } | null = null;
@@ -6751,7 +6755,9 @@ export class CombatView {
         target,
         (a, b) => (this.opts.wallBlocks ? this.opts.wallBlocks(a, b) : false),
         bulletSpeed(kind, variant),
+        pelletAllowed(kind, i, madeBullet),
       );
+      if (shot.bullet) madeBullet = true;
       if (visual === 'none') {
         // No callback (0x238 = 0): no trail. The muzzle particle comes from the item's hook, once per trigger (ASSUMED for the Rifle and 0x65 hooks).
         if (i === 0) this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));

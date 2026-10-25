@@ -13,10 +13,12 @@ import {
   isGunKind,
   movedTowards,
   openAimPoint,
+  pelletAllowed,
   pelletAngleBams,
   pelletCount,
   pelletTargetIndex,
   planGunShot,
+  rifleHookMuzzle,
   SHOT_ANGLES_BAMS,
   ShotEffect,
   shotVisualOf,
@@ -96,6 +98,18 @@ check(SHOT_ANGLES_BAMS.length === 5 && SHOT_ANGLES_BAMS[0] === 0 && SHOT_ANGLES_
 check(pelletCount(9) === 6 && pelletCount(6) === 1 && pelletCount(7) === 1 && pelletCount(0x65) === 1, 'the Shot makes six begin calls, the other guns one');
 check(pelletAngleBams(9, 0) === 0 && pelletAngleBams(9, 1) === 2184 && pelletAngleBams(9, 4) === -4551 && pelletAngleBams(9, 5) === 0, 'Shot pellet angles: the five, then 0 for the regular shot');
 check(pelletTargetIndex(9, 3) === 3 && pelletTargetIndex(9, 5) === 0 && pelletTargetIndex(6, 0) === 0, 'Shot pellet targets: 0..4, then target 0');
+// The Mechgun (kind 8): do_mechguns_attack (0x005f4620) makes two begin calls, both at target 0. The
+// second is allowed to hit only when the first made no bullet (iVar1 == 0).
+check(pelletCount(8) === 2 && pelletTargetIndex(8, 0) === 0 && pelletTargetIndex(8, 1) === 0 && pelletAngleBams(8, 1) === 0, 'the Mechgun makes two calls at target 0, angle 0');
+check(pelletAllowed(8, 0, false) && pelletAllowed(8, 0, true) && pelletAllowed(8, 1, false) && !pelletAllowed(8, 1, true), 'Mechgun: the second call is allowed only when the first made no bullet');
+check(pelletAllowed(9, 3, true) && pelletAllowed(6, 0, true), 'other guns: every pellet is allowed');
+// The Rifle's hook muzzle (0x005fb310): group_idx 8..13 only.
+check(rifleHookMuzzle(7, 8) && rifleHookMuzzle(7, 12) && rifleHookMuzzle(7, 13) && !rifleHookMuzzle(7, 7) && !rifleHookMuzzle(7, 14) && !rifleHookMuzzle(6, 8), 'the Rifle hook muzzle is for Rifle group_idx 8..13');
+// planGunShot with allowed = false: the target is aimed at, but no bullet is made (the visual only).
+{
+  const sh = planGunShot(O, { heading: 0, angleBams: 0, horizontalDistance: 170 }, { centre: { x: 0, y: 0, z: 60 }, radius: 10 }, noWall, 19, false);
+  check(sh.bullet === false && sh.wall === false && sh.frames === bulletFrames(50, 19), `allowed false: no bullet, the flight is kept (${sh.frames})`);
+}
 check(isGunKind(6) && isGunKind(7) && isGunKind(8) && isGunKind(9) && isGunKind(0x48), 'Handgun, Rifle, Mechgun, Shot, Samba Maracas are guns');
 // 0x42 and 0x45 (0x005ea204, 0x005f205c) and 0x65 (inner 0x00601d20, regular shot) fire.
 check([0x42, 0x45, 0x65].every(isGunKind), 'kinds 0x42, 0x45, 0x65 are guns');

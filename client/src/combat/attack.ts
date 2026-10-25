@@ -232,10 +232,13 @@ export const MECHGUN_CLASS = 8;
 //     init_item_weapon_59 (0x005ec354, calls the ctor at 0x005ec3e8), only when group_idx < 2.
 //   kind 0xb0 Mille Marteaux: MilleMarteauxExecuteAttack_005f527c (0x005f527c) writes 3 at run
 //     time (the item's constructor leaves 1). ASSUMED: the 3 is in place when the swing ends.
+//   kind 0x08 Mechgun: mechguns_constructor (inner ctor 0x005f473c, objdump `movb $0x3,0x1f4(%edi)`
+//     at 0x005f4767, after the generic ctor). Proven 2026-10-25; it was 1 before (the mechgun
+//     test had it as 1 from the generic default alone).
 // Every other weapon, and any variant not listed, is 1 (ASSUMED for the kinds not traced).
 export function burstCount(kind: number, variant: number): number {
   if (kind === 0x4b) return variant < 2 ? 3 : 1;
-  return kind === 0x48 || kind === 0x83 || kind === 0xb0 ? 3 : 1;
+  return kind === 0x08 || kind === 0x48 || kind === 0x83 || kind === 0xb0 ? 3 : 1;
 }
 
 export const HEAVY_SPEED_FACTOR = 1.25; // DAT_0093db24

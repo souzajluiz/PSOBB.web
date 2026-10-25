@@ -49,7 +49,9 @@ const WEAPONS = [
   // The Shot's ctor writes 0 to the shot callback +0x238 (0x005fe19c) and begin_gun_bullet_attack
   // skips a null callback (0x005e695d), so its six pellets draw no trail: 0 visible pellets.
   { name: 'Shot', kind: 9, bursts: 1, pellets: 0 },
-  { name: 'Mechgun', kind: 8, bursts: 1, pellets: 1 },
+  // The Mechgun's ctor writes attacks_per_step 3 (0x005f4767): three bursts. Each burst is two
+  // begin calls (do_mechguns_attack 0x005f4620), both with the default trail: two pellets (2026-10-25).
+  { name: 'Mechgun', kind: 8, bursts: 3, pellets: 2 },
   { name: 'Samba Maracas', kind: 0x48, bursts: 3, pellets: 1 },
 ] as const;
 const GUN_KINDS = new Set([6, 7, 8, 9, 0x1c, 0x42, 0x44, 0x45, 0x48, 0x65, 0xaf, 0xe8]); // combat/gunbullet.ts GUN_KINDS
