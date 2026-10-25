@@ -8,7 +8,7 @@
 // down the call graph (depth 4; virtual calls resolved through the stored vtable) in a function
 // that only this type reaches, or that exactly two types reach with a constant helper argument
 // (ASSUMED; shared: only helpers reached by three or more types), the last call when ambiguous.
-// 27 init sites are not decoded: their table or count is computed at run time.
+// 15 init sites are not decoded: their table or count is computed at run time.
 // Indexed sites (table = base + stride * [field], e.g. Booma 0x44) have one row set per variant.
 
 export interface CollisionBoxRow {
@@ -58,6 +58,15 @@ export interface EnemyCollisionLink {
 
 // Box tables keyed by their exe address (InitEnemyCollisionBoxes table argument).
 export const COLLISION_TABLES: Readonly<Record<number, readonly CollisionBoxRow[]>> = {
+  0x00647b4b: [{ offset: [0, 0, 0], radius: 13, halfX: 0, shape: 0, flags: 0x10003 }],
+  0x00647e23: [{ offset: [0, 0, 0], radius: 13, halfX: 0, shape: 0, flags: 0x10003 }],
+  0x00648117: [{ offset: [0, 0, 0], radius: 22.5, halfX: 0, shape: 0, flags: 0x10003 }],
+  0x006486cf: [{ offset: [0, 0, 0], radius: 23, halfX: 0, shape: 0, flags: 0x10003 }],
+  0x006489ec: [{ offset: [0, 0, 0], radius: 3, halfX: 0, shape: 0, flags: 0x10003 }],
+  0x007ae641: [{ offset: [0, 0, 5], radius: 19, halfX: 5, shape: 0, flags: 0x1103 }],
+  0x007ae80f: [{ offset: [0, 0, 5], radius: 19, halfX: 5, shape: 0, flags: 0x1103 }],
+  0x007aeceb: [{ offset: [0, 0, 5], radius: 19, halfX: 5, shape: 0, flags: 0x1103 }],
+  0x007aeeb9: [{ offset: [0, 0, 5], radius: 19, halfX: 5, shape: 0, flags: 0x1103 }],
   0x0093902c: [{ offset: [0, 0, 0], radius: 5, halfX: 0, shape: 0, flags: 0x30003 }],
   0x009a39a0: [{ offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x8003 }],
   0x009a4520: [{ offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x8003 }],
@@ -95,6 +104,7 @@ export const COLLISION_TABLES: Readonly<Record<number, readonly CollisionBoxRow[
   0x009bb7c0: [{ offset: [0, 0, 0], radius: 6, halfX: 0, shape: 0, flags: 0x8003 }],
   0x009bb7ec: [{ offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x9d03 }],
   0x009bba60: [{ offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x9d03 }],
+  0x009bbb80: [{ offset: [0, 15, 0], radius: 10, halfX: 0, shape: 0, flags: 0x8003 }],
   0x009bc17c: [{ offset: [0, 7.5, 0], radius: 7, halfX: 0, shape: 0, flags: 0x8003 }],
   0x009bc1c0: [{ offset: [0, 0, 0], radius: 5, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [0, 0, 0], radius: 5, halfX: 0, shape: 0, flags: 0x8003 }],
   0x009bc220: [{ offset: [0, 0, 0], radius: 10, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [0, 0, 0], radius: 20, halfX: 0, shape: 0, flags: 0x8003 }],
@@ -267,6 +277,13 @@ export const COLLISION_TABLES: Readonly<Record<number, readonly CollisionBoxRow[
   0x009c823c: [{ offset: [0, 20, 0], radius: 10, halfX: 40, shape: 1, flags: 0x10003 }],
   0x009c86fc: [{ offset: [0, 10, 0], radius: 7, halfX: 12, shape: 1, flags: 0x30003 }],
   0x009c8808: [{ offset: [0, 5, 0], radius: 24, halfX: 7, shape: 1, flags: 0x30003 }],
+  0x009c8ae0: [{ offset: [0, 0, 0], radius: 10, halfX: 10, shape: 1, flags: 0x10003 }],
+  0x009c8b0c: [{ offset: [0, 0, 0], radius: 20, halfX: 10, shape: 1, flags: 0x10003 }],
+  0x009c8b38: [{ offset: [0, 0, 0], radius: 1, halfX: 20, shape: 1, flags: 0x10003 }],
+  0x009c8b64: [{ offset: [0, 0, 0], radius: 18, halfX: 18, shape: 1, flags: 0x10003 }],
+  0x009c8f00: [{ offset: [0, 0, 0], radius: 10, halfX: 20, shape: 1, flags: 0x10003 }],
+  0x009c8f2c: [{ offset: [0, 0, 0], radius: 10, halfX: 10, shape: 1, flags: 0x10003 }],
+  0x009c8f58: [{ offset: [0, 0, 0], radius: 5, halfX: 12, shape: 1, flags: 0x10003 }],
   0x009c93c8: [{ offset: [0, 0, 0], radius: 20, halfX: 10, shape: 0, flags: 0x10003 }],
   0x009c9430: [{ offset: [0, 0, 0], radius: 6, halfX: 16, shape: 1, flags: 0x10003 }],
   0x009c945c: [{ offset: [0, 0, 0], radius: 6, halfX: 16, shape: 1, flags: 0x10003 }],
@@ -306,7 +323,7 @@ export const COLLISION_TABLES: Readonly<Record<number, readonly CollisionBoxRow[
   0x009f7740: [{ offset: [0, 12.5, 0], radius: 7.5, halfX: 0, shape: 0, flags: 0x8003 }],
 };
 
-// Every decoded call site (247; the unresolved ones are not listed).
+// Every decoded call site (259; the unresolved ones are not listed).
 export const COLLISION_SITES: readonly CollisionBoxSite[] = [
   { site: 0x00440488, func: 0x00440458, table: 0x009a4eb0, via: null, variants: null },
   { site: 0x004413f5, func: 0x004413a4, table: 0x009a4f70, via: null, variants: null },
@@ -331,6 +348,7 @@ export const COLLISION_SITES: readonly CollisionBoxSite[] = [
   { site: 0x0051561b, func: 0x00515454, table: 0x009bb58c, via: null, variants: null },
   { site: 0x0051b53a, func: 0x0051b2e8, table: 0x009bb7ec, via: null, variants: null },
   { site: 0x00521c0b, func: 0x00521bbc, table: 0x009bba60, via: null, variants: null },
+  { site: 0x00524b90, func: 0x005249c8, table: 0x009bbb80, via: null, variants: null },
   { site: 0x00526f7d, func: 0x00526d90, table: 0x009bc17c, via: null, variants: null },
   { site: 0x0052e5d2, func: 0x0052e44c, table: 0x009bc4e8, via: null, variants: null },
   { site: 0x005340b2, func: 0x00533f90, table: 0x009bc77c, via: null, variants: null },
@@ -462,6 +480,11 @@ export const COLLISION_SITES: readonly CollisionBoxSite[] = [
   { site: 0x00642128, func: 0x006420a0, table: 0x009c6e44, via: null, variants: null },
   { site: 0x0064239b, func: 0x00642338, table: 0x009c6dc0, via: null, variants: null },
   { site: 0x0064250b, func: 0x006424a8, table: 0x009c6e18, via: null, variants: null },
+  { site: 0x00647b4b, func: 0x00647a84, table: 0x00647b4b, via: null, variants: null },
+  { site: 0x00647e23, func: 0x00647d5c, table: 0x00647e23, via: null, variants: null },
+  { site: 0x00648117, func: 0x00648050, table: 0x00648117, via: null, variants: null },
+  { site: 0x006486cf, func: 0x00648608, table: 0x006486cf, via: null, variants: null },
+  { site: 0x006489ec, func: 0x00648928, table: 0x006489ec, via: null, variants: null },
   { site: 0x0064d1ad, func: 0x0064d0fc, table: 0x009c735c, via: null, variants: null },
   { site: 0x0064df1b, func: 0x0064deb4, table: 0x009c77ac, via: null, variants: null },
   { site: 0x0064e54b, func: 0x0064e4e4, table: 0x009c77ac, via: null, variants: null },
@@ -494,6 +517,8 @@ export const COLLISION_SITES: readonly CollisionBoxSite[] = [
   { site: 0x006605c2, func: 0x00660538, table: 0x009c8808, via: null, variants: null },
   { site: 0x0066229c, func: 0x00662248, table: 0x0093902c, via: null, variants: null },
   { site: 0x00662d10, func: 0x00662cbc, table: 0x0093902c, via: null, variants: null },
+  { site: 0x00664461, func: 0x006643a4, table: null, via: null, variants: { 0: 0x009c8ae0, 1: 0x009c8b0c, 2: 0x009c8b38, 3: 0x009c8b64 } },
+  { site: 0x00664647, func: 0x00664564, table: null, via: null, variants: { 0: 0x009c8f00, 1: 0x009c8f2c, 2: 0x009c8f58 } },
   { site: 0x0066796d, func: 0x006678dc, table: 0x009c93c8, via: null, variants: null },
   { site: 0x00667fbc, func: 0x00667f44, table: 0x009c9430, via: null, variants: null },
   { site: 0x00668288, func: 0x00668210, table: 0x009c945c, via: null, variants: null },
@@ -523,6 +548,10 @@ export const COLLISION_SITES: readonly CollisionBoxSite[] = [
   { site: 0x007662f8, func: 0x0076619c, table: 0x009f5ae8, via: null, variants: null },
   { site: 0x0076c706, func: 0x0076c644, table: 0x009f76bc, via: null, variants: null },
   { site: 0x0076e0a7, func: 0x0076dfec, table: 0x009f7740, via: null, variants: null },
+  { site: 0x007ae641, func: 0x007ae360, table: 0x007ae641, via: null, variants: null },
+  { site: 0x007ae80f, func: 0x007ae360, table: 0x007ae80f, via: null, variants: null },
+  { site: 0x007aeceb, func: 0x007aea10, table: 0x007aeceb, via: null, variants: null },
+  { site: 0x007aeeb9, func: 0x007aea10, table: 0x007aeeb9, via: null, variants: null },
   { site: 0x00419363, func: 0x00419214, table: 0x009a39a0, via: 0x0051ff3c, variants: null },
   { site: 0x0042ae6a, func: 0x0042ad4c, table: 0x009a4520, via: 0x0051ff3c, variants: null },
   { site: 0x00435689, func: 0x0043566c, table: 0x009a47e4, via: 0x0051ff3c, variants: null },
@@ -603,7 +632,7 @@ export const ENEMY_COLLISION_LINKS: Readonly<Record<number, readonly EnemyCollis
   0x0044: [{ factory: 0x00535e50, areas: [1, 2], table: null, func: 0x00535f1c, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, mask: null, base: 0x009bc8e0, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009bc8e0, 1: 0x009bc90c, 2: 0x009bc938 } }],
   0x0045: [{ factory: 0x0060c518, areas: [1, 2, 23, 24, 25, 26, 27, 34, 36, 37, 38, 39, 40, 41, 42, 43], table: 0x009c4344, func: 0x0060c5e4, depth: 1, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x0046: [{ factory: 0x0060de48, areas: [2], table: 0x009c444c, func: 0x0060df14, depth: 1, via: null, shared: false, ambiguous: false, index: null, variants: null }],
-  0x0060: [{ factory: 0x005248fc, areas: [3, 4, 16, 17, 19, 20], table: null, func: null, depth: null, via: null, shared: false, ambiguous: false, index: null, variants: null }],
+  0x0060: [{ factory: 0x005248fc, areas: [3, 4, 16, 17, 19, 20], table: 0x009bbb80, func: 0x005249c8, depth: 1, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x0061: [{ factory: 0x00529330, areas: [3, 4, 5, 19, 20, 35], table: 0x009bc1c0, func: 0x005293ac, depth: 1, via: 0x0051ff3c, shared: false, ambiguous: true, index: null, variants: null }],
   0x0062: [{ factory: 0x0057f5e4, areas: [3, 4, 5], table: 0x009bef60, func: 0x0057f6b0, depth: 1, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x0063: [{ factory: 0x00512b04, areas: [3, 4, 5, 16, 17], table: null, func: 0x00512bd0, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, mask: null, base: 0x009bb260, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009bb260, 1: 0x009bb28c, 2: 0x009bb2b8 } }],
@@ -717,7 +746,7 @@ export const TYPE_COLLISION_TABLES: Readonly<Record<number, readonly CollisionTa
   0x0013: [{ table: 0x009c5cc0, depth: 0 }],
   0x0019: [{ table: 0x009c3ecc, depth: 2 }, { table: 0x009cf95c, depth: 3 }],
   0x001a: [{ table: 0x009c3ecc, depth: 2 }],
-  0x001b: [{ table: 0x009c3ecc, depth: 2 }],
+  0x001b: [{ table: 0x009c3ecc, depth: 2 }, { table: 0x007ae641, depth: 3 }, { table: 0x007ae80f, depth: 3 }, { table: 0x007aeceb, depth: 3 }, { table: 0x007aeeb9, depth: 3 }],
   0x001c: [{ table: 0x009c3ecc, depth: 2 }],
   0x001d: [{ table: 0x009c3ecc, depth: 2 }],
   0x001e: [{ table: 0x009c3ecc, depth: 2 }],
@@ -745,7 +774,13 @@ export const TYPE_COLLISION_TABLES: Readonly<Record<number, readonly CollisionTa
   0x0044: [{ table: 0x009bc8e0, depth: 1 }, { table: 0x009bc90c, depth: 1 }, { table: 0x009bc938, depth: 1 }],
   0x0045: [{ table: 0x009c4344, depth: 1 }],
   0x0046: [{ table: 0x009c444c, depth: 1 }],
+  0x004b: [{ table: 0x00647b4b, depth: 1 }],
+  0x004c: [{ table: 0x00647e23, depth: 1 }],
+  0x004d: [{ table: 0x00648117, depth: 1 }],
+  0x0050: [{ table: 0x006486cf, depth: 1 }],
+  0x0051: [{ table: 0x006489ec, depth: 1 }],
   0x0056: [{ table: 0x009c551c, depth: 1 }],
+  0x0060: [{ table: 0x009bbb80, depth: 1 }],
   0x0061: [{ table: 0x009bc1c0, depth: 1 }, { table: 0x009bc220, depth: 1 }],
   0x0062: [{ table: 0x009bef60, depth: 1 }],
   0x0063: [{ table: 0x009bb260, depth: 1 }, { table: 0x009bb28c, depth: 1 }, { table: 0x009bb2b8, depth: 1 }],
@@ -896,6 +931,8 @@ export const TYPE_COLLISION_TABLES: Readonly<Record<number, readonly CollisionTa
   0x0213: [{ table: 0x009c5d00, depth: 1 }, { table: 0x009c5d2c, depth: 1 }, { table: 0x009c5d58, depth: 1 }],
   0x0221: [{ table: 0x009c551c, depth: 1 }],
   0x0222: [{ table: 0x009c551c, depth: 1 }],
+  0x0223: [{ table: 0x009c8ae0, depth: 1 }, { table: 0x009c8b0c, depth: 1 }, { table: 0x009c8b38, depth: 1 }, { table: 0x009c8b64, depth: 1 }],
+  0x0224: [{ table: 0x009c8f00, depth: 1 }, { table: 0x009c8f2c, depth: 1 }, { table: 0x009c8f58, depth: 1 }],
   0x0228: [{ table: 0x009c6b04, depth: 1 }],
   0x0229: [{ table: 0x009c4a14, depth: 1 }],
   0x02b0: [{ table: 0x009c7868, depth: 1 }],

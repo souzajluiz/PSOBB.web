@@ -488,6 +488,49 @@ check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag
   check(TYPE_COLLISION_TABLES[0x183] === undefined, '0x183 has no box table (its misread edges 0x006556c3 were mid-instruction; ASSUMED none)');
 }
 
+// 7. The 2026-10-25 site resolutions (SITE_OVERRIDES in tools/gen-collision-boxes.py; DEVLOG 2026-10-25). Each
+// check is a type's box as the exe's constructor sets it: the static row (or the runtime index set), read from the table.
+{
+  const rowOf = (table: number) => COLLISION_TABLES[table]?.[0];
+  const reaches = (t: number, table: number, depth: number) =>
+    !!TYPE_COLLISION_TABLES[t]?.some((l) => l.table === table && l.depth === depth);
+  const site = (va: number) => COLLISION_SITES.find((s) => s.site === va);
+  // 0x60 (ctor 0x005249c8): table 0x009bbb80 (index 0), count 1; a sphere centred 15 up, radius 10, flags 0x8003 (bit 0 set).
+  check(reaches(0x60, 0x009bbb80, 1) && site(0x00524b90)?.table === 0x009bbb80, 'type 0x60 reaches its box table 0x009bbb80 at depth 1 (site 0x00524b90)');
+  check(rowOf(0x009bbb80)?.shape === 0 && rowOf(0x009bbb80)?.radius === 10 && rowOf(0x009bbb80)?.offset[1] === 15 && (rowOf(0x009bbb80)!.flags & 1) === 1, '0x009bbb80 is a sphere, radius 10, 15 up, flags 0x8003 (enabled)');
+  check(ENEMY_COLLISION_LINKS[0x60]?.[0]?.table === 0x009bbb80, 'the 0x60 enemy link is the same table 0x009bbb80');
+  // The sphere rows built on the caller's stack, one per type (count 1). Radii from the stores (0x41500000 = 13, ...).
+  const stackRows: [number, number, number, number][] = [
+    [0x4b, 0x00647b4b, 13, 0x00647a84], [0x4c, 0x00647e23, 13, 0x00647d5c], [0x4d, 0x00648117, 22.5, 0x00648050],
+    [0x50, 0x006486cf, 23, 0x00648608], [0x51, 0x006489ec, 3, 0x00648928],
+  ];
+  for (const [t, va, radius, func] of stackRows) {
+    const r = rowOf(va);
+    check(reaches(t, va, 1) && site(va)?.func === func && site(va)?.table === va, `type ${t.toString(16)} builds its sphere (site ${va.toString(16)}, ctor ${func.toString(16)}, depth 1)`);
+    check(!!r && r.shape === 0 && r.radius === radius && r.halfX === 0 && r.offset.every((v) => v === 0) && (r.flags & 0x10003) === 0x10003, `type ${t.toString(16)} row: sphere radius ${radius} at the origin, flags 0x10003`);
+  }
+  // The indexed sets: 0x223 (ctor 0x006643a4, idx min(|f|, 3)) and 0x224 (ctor 0x00664564, idx min(|f|, 2)), 44-byte stride.
+  const v223 = site(0x00664461)?.variants;
+  check(!!v223 && [0, 1, 2, 3].every((k) => v223[k] === 0x009c8ae0 + 0x2c * k), 'site 0x00664461 (type 0x223) takes 0x009c8ae0 + 44 * idx for idx 0..3');
+  check([0, 1, 2, 3].every((k) => reaches(0x223, 0x009c8ae0 + 0x2c * k, 1)), 'type 0x223 reaches all four variant rows at depth 1');
+  check([0, 1, 2, 3].every((k) => rowOf(0x009c8ae0 + 0x2c * k)?.shape === 1 && (rowOf(0x009c8ae0 + 0x2c * k)!.flags & 1) === 1), 'the 0x223 rows are boxes with bit 0 set');
+  const v224 = site(0x00664647)?.variants;
+  check(!!v224 && [0, 1, 2].every((k) => v224[k] === 0x009c8f00 + 0x2c * k), 'site 0x00664647 (type 0x224) takes 0x009c8f00 + 44 * idx for idx 0..2');
+  check([0, 1, 2].every((k) => reaches(0x224, 0x009c8f00 + 0x2c * k, 1)), 'type 0x224 reaches its three variant rows at depth 1');
+  // 0x1b and 0x141 (the object children at this+0x74 / +0x78 of ctors 0x007ae360 / 0x007aea10): child boxes, sphere r19 at z 5,
+  // flags 0x1103. They stay out of the enemy links (CHILD_OBJECT_SITES); the type-level reach lists them as children.
+  for (const va of [0x007ae641, 0x007ae80f, 0x007aeceb, 0x007aeeb9]) {
+    const r = rowOf(va);
+    check(!!r && r.shape === 0 && r.radius === 19 && r.halfX === 5 && r.offset[2] === 5 && r.flags === 0x1103, `child box at site ${va.toString(16)} is a sphere r19 at z 5 (flags 0x1103)`);
+  }
+  check(reaches(0x1b, 0x007ae641, 3) && reaches(0x1b, 0x007aeeb9, 3), 'type 0x1b reaches the two child boxes of the 0x7ae360 / 0x7aea10 ctors (depth 3, child)');
+  // The sites still unresolved (no table, no variant set): the heap block of 0x388/0x389/0x38a (0x00619759, 0x00635e71,
+  // 0x00638261) and the caller-supplied tables (0x00521cb8), stay out of COLLISION_SITES by design.
+  check(!site(0x00619759) && !site(0x00521cb8), 'the still-unresolved heap-block and caller-table sites are not in COLLISION_SITES');
+  // 0x170 and 0x183: no box. The reverse closure of InitEnemyCollisionBoxes (E8, depth 10) holds neither creator (DEVLOG 2026-10-25).
+  check(TYPE_COLLISION_TABLES[0x170] === undefined && TYPE_COLLISION_TABLES[0x183] === undefined, '0x170 (TOBoss4Bird) and 0x183 (__LOBBY_PIGEON__) have no box: no init call in their constructors or in the reverse closure');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exitCode = 1;

@@ -49,6 +49,33 @@
 - Not surveyed: Canadine, Sinow Beat / Gold, Poison Lily, Del Lily, Gillchic (vtable not isolated), the Dubchic / Gillchic shell pieces.
 
 **Tests.** `tests/minimap.test.ts`: the Booma brain mapping (spawn hidden, idle to recover shown, dead hidden) and one row per enemy in `ENEMY_RADAR_SOURCE`.
+## 2026-10-25: collision sites: 0x170 and 0x183 have no box; 12 of the 27 unresolved init sites resolved
+
+**What changed:** `tools/gen-collision-boxes.py` has `SITE_OVERRIDES` (hand-read sites: a static table, a runtime-indexed variant set, or rows built on the caller's stack, `INLINE_ROWS`) and `CHILD_OBJECT_SITES` gets the four child boxes of 0x007ae360 / 0x007aea10. The regenerated `client/src/formats/collisionboxes.gen.ts`: 259 sites, 15 unresolved (was 27). `tests/objectcollision.test.ts` section 7 checks each resolved type.
+
+**0x170 (TOBoss4Bird, creator 0x613f90) and 0x183 (__LOBBY_PIGEON__, creator 0x655624): no box, proven by the reverse closure.** The E8 closure of InitEnemyCollisionBoxes_007b9a88 (depth 10) holds neither creator; neither constructor (0x613f90 / 0x655624) has an E8 to 0x7b9a88 or 0x51ff3c (objdump). Their vtable slots (0xb2530c, 0xb32094) reach no init. ASSUMED: the indirect targets beyond the listed slots (0x7ba468 calls 0x835c3c) are not walked deeper. Names: the port's (TOBoss4Bird; the refsrc hint names the same 0x613f90 creator as Hildebear, `bm_o_boss4.bml`, so the name is not settled).
+
+**Resolved (exe, objdump; the rows read from the exe):**
+- 0x00524b90 (type 0x60, ctor 0x005249c8): table 0x009bbb80 + 92 * [this+0x370]; the ctor stores 0 there before the call (0x524ac5). Row: sphere, centre y 15, radius 10, flags 0x8003. The agent's report had y 14.5; the exe reads 15.0.
+- 0x00647b4b (0x4b), 0x00647e23 (0x4c), 0x00648117 (0x4d), 0x006486cf (0x50), 0x006489ec (0x51): one sphere row on the caller's stack, count 1, at the origin; radius 13 / 13 / 22.5 / 23 / 3, flags 0x10003. ASSUMED: the BSS gate in front of each init (0xa8f4b4 / 0xa8f4b8 / 0xa8f4bc / 0xa8f4c4 / 0xa8f4c8) is taken as set.
+- 0x00664461 (type 0x223, ctor 0x006643a4): table 0x009c8ae0 + 44 * min(trunc(|[this+0x84]|), 3), count 1; four box rows read from the exe.
+- 0x00664647 (type 0x224, ctor 0x00664564): table 0x009c8f00 + 44 * min(trunc(|[this+0x88]|), 2), count 1; three box rows.
+- 0x007ae641, 0x007ae80f (ctor 0x007ae360) and 0x007aeceb, 0x007aeeb9 (ctor 0x007aea10): the children at this+0x74 / +0x78 (0x108 bytes), each with a sphere at +0xac: centre z 5, radius 19, halfX 5, flags 0x1103. Child boxes (the same convention as 0x116 / 0x65): they stay out of enemy links; type 0x1b reaches them at depth 3 (the 0x141 creator reaches them at depth 4, outside the depth-3 type map).
+
+**Resolved, not emitted (the index is signed):**
+- 0x0065dcd9 (type 0x82, ctor 0x0065db10) and 0x0065e0dd (type 0x96, ctor 0x0065deb8: the generator's func 0x0065de80 is a wrong boundary, and no E8 reaches 0x65deb8: ASSUMED reached through a pointer) and 0x0065e7af (type 0x83, ctor 0x0065e5bc): table = base + stride * idx with idx = sign(v) * (|v| & 1), v = [this+0x8c], so idx is -1, 0 or 1 (0x9c8340 + 132 * idx for 0x82 / 0x96, 0x9c84e0 + 220 * idx for 0x83, count 3 / 3 / 5). The negative keys do not fit `Record<number, number>` yet: not emitted. ASSUMED: the source of v (a vtable slot reading the runtime record) is not traced.
+
+**Still unresolved (12):**
+- 0x00521cb8 (func 0x00521c5c): the table and count are the caller's (8 callers with table 0x9a3fc0 x17 (type 0xc0), 0x9ac580 x17, 0x9bcbc0 x2 (0xa5), 0x9bcc4c x2, 0x9bd3cc / 0x9bd3f8 x1 (0xdc, branch unchecked), 0x9c07ec / 0x9c0818 x1 (0x116)). The helper's four-argument shape defeats the wrapper rule (stack_args reads the last two pushes). ASSUMED the 0x9c07ec / 0x9c0818 pair are rows of the 0x116 ctor's own box array (0x9c07c0 + 0x2c): not checked against the box.
+- 0x00619759 (0x38a), 0x00635e71 (0x388), 0x00638261 (0x389): the init table is a fresh 0x2c block from operator new (0x619740), count 1; the ctor writes the live box into it after the init (0x619a84: radius from +0x70, halfX from +0x68, shape 1). No static table: the box is the runtime one. ASSUMED that is what the game uses.
+- 0x006461cf (0x46..0x49): a stack row copied from 0x00935a94 with radius and halfX from the arg2 record (runtime). Not closed.
+- 0x0077c197 (type 0x9): table this+0xac, the row from the record A (radius, halfX, shape by sign, flags 0x10001 / 0x100); A's caller is unknown (dispatch through a pointer table).
+- 0x006f010b and 0x006f0435 (types 0x43, 0xd7, 0xe0, 0x111; 0xd7 for the second): table this+0xfc, row by w (0x1c of arg1) and d (0x8fc of arg1); the top arg1 is unknown.
+- 0x006de7d0, 0x006de9d7, 0x006ebef1, 0x007acd78: table and count resolved (this+0xbc / +0xbc / +0xb0 / +0x3c, count 1) but the type is not: the constructor's callers reach the type factories only through dispatch (vtable slots 0xb3cec8 / 0xb3de00 / 0xb46420 and the stored vtables of several factories). ASSUMED: 0x006de7d0 is one of 0xd4 (TObjEneMe3StelthReal), 0xa1 (TObjEneRe4Sorcerer) or 0xe0 (TObjEneMe3SinowZoaReal); 0x006ebef1 one of 0xa1, 0xd4, 0xe0, 0x82; 0x007acd78 one of 0xd9 / 0x43 / 0xd7 / 0x111 / 0xda (vtables 0xb051c0, 0xb05a20). The in-object rows were not read.
+
+**ASSUMED / open:** the BSS gates of the inline rows; the heap block's post-init write; the signed index of 0x82 / 0x83 / 0x96; the in-object row values of the four dispatch sites.
+
+**Checks:** `node tests/objectcollision.test.ts` (all pass, section 7 added); `collision`, `townfield`, `combatdepth` (836 checks, 0 failures) pass under Node 24; `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` clean. Not run: Playwright, Chrome.
 
 ## 2026-10-25: Ordinary enemies' radar baseline: the enemy-base slot 0x00520618 (Mericarol and Gibbon proven), Booma icons per state
 

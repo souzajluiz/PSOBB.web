@@ -767,6 +767,52 @@ CHILD_CONST_CALLERS = {
 CHILD_OBJECT_SITES = {
     0x005A9F65: "0x116 child (0xac, this+0x4a4) in the ctor 0x005a9c58",
     0x00586D40: "0x65 child (0x478) built by 0x586b44 in the ctor 0x582ef4",
+    # The two 0x108-byte children of ctor 0x007ae360 (this+0x74 / +0x78; their box is at +0xac) and of 0x007aea10
+    # (the same two slots): the box is the child's, not the parent's (ASSUMED, DEVLOG 2026-10-25 SITE_OVERRIDES).
+    0x007AE641: "child 0x108 at this+0x74 of ctor 0x7ae360 (type 0x1b reaches it)",
+    0x007AE80F: "child 0x108 at this+0x78 of ctor 0x7ae360",
+    0x007AECEB: "child 0x108 at this+0x74 of ctor 0x7aea10",
+    0x007AEEB9: "child 0x108 at this+0x78 of ctor 0x7aea10",
+}
+
+
+# Init sites whose table or count the decoder cannot read (dynamic), resolved by hand from the exe
+# (DEVLOG 2026-10-25, the 27 unresolved sites). Each entry gives one of:
+#   "table": a static table VA read from the exe (its rows are decoded like any other table);
+#   "variants": {index: table VA}, the table chosen by a runtime index (the rows are read and checked);
+#   "rows": the box row built on the caller's stack (no exe VA; the key is the site VA itself). The rows are the constructor's stores, read from the objdump (ASSUMED: the
+#     gate in front of the init, a BSS flag, is taken as set).
+# "count" is the init's count argument. Sites not listed stay unresolved.
+INLINE_ROWS = {
+    # Dark Falz / Vol Opt style sphere rows built per type on the stack (count 1, flags 0x10003):
+    "sphere13": {"offset": [0.0, 0.0, 0.0], "radius": 13.0, "halfX": 0.0, "shape": 0, "flags": 0x10003},
+    "sphere22_5": {"offset": [0.0, 0.0, 0.0], "radius": 22.5, "halfX": 0.0, "shape": 0, "flags": 0x10003},
+    "sphere23": {"offset": [0.0, 0.0, 0.0], "radius": 23.0, "halfX": 0.0, "shape": 0, "flags": 0x10003},
+    "sphere3": {"offset": [0.0, 0.0, 0.0], "radius": 3.0, "halfX": 0.0, "shape": 0, "flags": 0x10003},
+    # Object-embedded record (this+0xac of the 0x108-byte child at this+0x74 / +0x78): sphere r19 at z 5.
+    "child19": {"offset": [0.0, 0.0, 5.0], "radius": 19.0, "halfX": 5.0, "shape": 0, "flags": 0x1103},
+}
+
+SITE_OVERRIDES = {
+    # 0x00524b90 (type 0x60, ctor 0x005249c8): table = 0x009bbb80 + 92 * [this+0x370]; the ctor stores 0 there
+    # at 0x00524ac5 before the call, so the index is 0. (Exe row: centre y 15, radius 10, sphere, flags 0x8003.)
+    0x00524B90: {"table": 0x009BBB80, "count": 1},
+    # 0x00664461 (type 0x223, ctor 0x006643a4): table = 0x009c8ae0 + 44 * idx, idx = min(trunc(|[this+0x84]|), 3).
+    0x00664461: {"variants": {0: 0x009C8AE0, 1: 0x009C8B0C, 2: 0x009C8B38, 3: 0x009C8B64}, "count": 1},
+    # 0x00664647 (type 0x224, ctor 0x00664564): table = 0x009c8f00 + 44 * idx, idx = min(trunc(|[this+0x88]|), 2).
+    0x00664647: {"variants": {0: 0x009C8F00, 1: 0x009C8F2C, 2: 0x009C8F58}, "count": 1},
+    # The sphere rows on the caller's stack (count 1): 0x4b r13, 0x4c r13, 0x4d r22.5, 0x50 r23, 0x51 r3.
+    0x00647B4B: {"rows": "sphere13", "count": 1},  # type 0x4b (ctor 0x00647a84)
+    0x00647E23: {"rows": "sphere13", "count": 1},  # type 0x4c (ctor 0x00647d5c)
+    0x00648117: {"rows": "sphere22_5", "count": 1},  # type 0x4d (ctor 0x00648050)
+    0x006486CF: {"rows": "sphere23", "count": 1},  # type 0x50 (ctor 0x00648608)
+    0x006489EC: {"rows": "sphere3", "count": 1},  # type 0x51 (ctor 0x00648928)
+    # The loop-free object children of the ctor 0x007ae360 (sites 0x007ae641, 0x007ae80f) and 0x007aea10 (0x007aeceb,
+    # 0x007aeeb9): each child's record at +0xac, one row, count 1 (types 0x1b and 0x141).
+    0x007AE641: {"rows": "child19", "count": 1},
+    0x007AE80F: {"rows": "child19", "count": 1},
+    0x007AECEB: {"rows": "child19", "count": 1},
+    0x007AEEB9: {"rows": "child19", "count": 1},
 }
 
 
@@ -793,11 +839,13 @@ def variants_text(v):
 
 def index_mask(idx):
     """The mask the index is ANDed with (2^k - 1), or None."""
+    if idx.get("index") is None:  # a SITE_OVERRIDES variant set has no decoded index
+        return None
     return idx["index"][2] if idx["index"][0] == "and" else None
 
 
 def index_text(idx):
-    if idx is None:
+    if idx is None or idx.get("index") is None:
         return "null"
     leaf = idx["index"]
     if leaf[0] == "and":  # ("and", ("arg", k), mask): a masked stack argument (Vol Opt monitors, 0x0044161c)
@@ -829,6 +877,16 @@ def wrapper_sites(init_sites, func_of, calls, dynamic_funcs):
                 continue
             out.append({"site": c, "func": func_of(c), "table": args[0], "count": args[1], "via": w})
     return out
+
+
+def override_site(s, f, ov):
+    """A site entry from SITE_OVERRIDES (see there): a static table, a runtime-indexed set, or inline rows."""
+    if "rows" in ov:
+        return {"site": s, "func": f, "table": s, "count": ov["count"], "via": None, "inline": [INLINE_ROWS[ov["rows"]]]}
+    if "table" in ov:
+        return {"site": s, "func": f, "table": ov["table"], "count": ov["count"], "via": None}
+    idx = {"variants": dict(ov["variants"]), "index": None, "base": 0, "stride": 0, "override": True}
+    return {"site": s, "func": f, "table": None, "count": ov["count"], "via": None, "indexed": idx}
 
 
 def main(argv):
@@ -887,8 +945,11 @@ def main(argv):
     sites = []  # direct: the init call has constant arguments
     dynamic = []
     for s in init_sites:
-        args = stack_args(s)
         f = func_of(s)
+        if s in SITE_OVERRIDES:  # resolved by hand (SITE_OVERRIDES); not a dynamic site any more
+            sites.append(override_site(s, f, SITE_OVERRIDES[s]))
+            continue
+        args = stack_args(s)
         if args is None:
             idx = indexed_site(s, f, info, text_fn) if f is not None else None
             if idx is not None:  # table = base + stride * [field]: one row set per variant
@@ -905,10 +966,20 @@ def main(argv):
 
     tables = {}
     for s in sites:
+        if "inline" in s:  # the rows are the caller's stack stores (no exe table): keyed by the site VA
+            tables[s["table"]] = s["inline"]
+            continue
         if s["table"] is None:
+            idx = s["indexed"]
+            if idx.get("override"):  # SITE_OVERRIDES variants: each table is read and must hold a box
+                for v, t in sorted(idx["variants"].items()):
+                    rows = box_rows(t, s["count"])
+                    if not any(row_is_set(r) for r in rows):
+                        raise SystemExit(f"SITE_OVERRIDES {s['site']:#x}: table {t:#x} (variant {v}) holds no box")
+                    tables[t] = rows
+                continue
             # Indexed: the variants are the rows base + stride * v, v = 0 up to the first row that holds
             # no box (ASSUMED: an index past the array's boxes reads no box).
-            idx = s["indexed"]
             idx["variants"] = {}
             # A masked index (`and $m`) has m + 1 variants at most (the mask is read from the exe).
             limit = min(MAX_VARIANTS, index_mask(idx) + 1) if index_mask(idx) is not None else MAX_VARIANTS
