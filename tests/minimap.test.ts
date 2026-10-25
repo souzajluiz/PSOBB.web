@@ -595,8 +595,15 @@ eq(radarSourceOf('GARANZ'), 'none', 'Garanz: no radar icon (no slot, no icon cal
 // Claw: its own icon, off while +0x390 bit 0x10000000 (hidden) is set.
 eq(radarSourceOf('CLAW'), 'gated', 'Claw: own icon gated by +0x390 bit 0x10000000');
 for (const t of ['GILLCHIC', 'SINOW_GOLD']) eq(radarSourceOf(t), 'unsurveyed', `${t}: not resolved (default kept)`);
+// Episode 2 (2026-10-25): the enemy-base slot families and the own-icon families.
+for (const t of ['MERICAROL', 'UL_GIBBON', 'ZOL_GIBBON', 'GEE', 'DELBITER', 'EPSILON', 'SINOW_ZOA', 'SINOW_ZELE', 'MORFOS', 'RECOBOX', 'DORPHON', 'DORPHON_ECLAIR']) {
+  eq(radarSourceOf(t), 'slot', `${t}: vtable +0x198 is the enemy-base slot, called by its update`);
+}
+for (const t of ['DELDEPTH', 'GI_GUE', 'GIBBLES', 'MERILLIA', 'MERILTAS', 'GORAN', 'GORAN_DETONATOR', 'PYRO_GORAN']) {
+  eq(radarSourceOf(t), 'own', `${t}: its own icon call, no 0x40800 test (default kept)`);
+}
 eq(radarSourceOf('CANADINE_NOT_A_TYPE'), null, 'an unknown type has no radar source');
-eq(Object.keys(ENEMY_RADAR_SOURCE).length, 9 + 8 + 1 + 8 + 1 + 1 + 2, 'the survey table has 30 enemy rows');
+eq(Object.keys(ENEMY_RADAR_SOURCE).length, 9 + 8 + 1 + 8 + 1 + 1 + 2 + 12 + 8, 'the survey table has 50 enemy rows');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

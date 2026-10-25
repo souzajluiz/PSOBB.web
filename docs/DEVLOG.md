@@ -1,5 +1,35 @@
 # Devlog
 
+## 2026-10-25: Episode 2 and 4 radar survey: 12 families on the enemy-base slot, 8 with their own icon
+
+**Outcome.** `client/src/classic/minimap.ts` ENEMY_RADAR_SOURCE has 50 rows (was 30). New 'slot' rows: Mericarol, Ul / Zol Gibbon, Gee, Delbiter, Epsilon, Sinow Zoa / Zele, Morfos, Recobox, Dorphon / Dorphon Eclair. New 'own' rows: Deldepth, Gi Gue, Gibbles, Merillia / Meriltas, Goran (and its Detonator / Pyro forms). No gate ported: the port's behaviour is unchanged (the table is the survey; `minimapEnemies` does not read 'slot' or 'own'). Correction: the Gibbon's slot is vtable 0x00b05740 +0x198 (the ctor writes it), not 0x00b05750 +0x188 (the same word, one base higher).
+
+**Method (PsoBB.exe, `tools/exedata.py read`, `objdump -d`, dump `Psobb.exe-05112026.c` for names only).**
+- Vtable slot: `read <vt+0x198> p 1` = 0x00520618 is the enemy-base slot. A scan of the data sections for 0x00520618 gives every vtable that holds it (base +0x198).
+- Update: the function a vtable keeps at +4 (`read <vt+4>`). The dump's update names match these addresses.
+- Slot call: `call *0x198(%reg)` sites in `.text` (objdump, 28 in the exe) with their containing function. A slot row needs its update to contain one.
+- Own icon: `E8` call sites to 0x00805608 (icon) and 0x0080575c (icon3), with the containing dump function.
+
+**Per family (vtable, update, proof).**
+- Mericarol: vt 0x00b06320 (its factory 0x00572b84 writes it at 0x00572c4c), +0x198 0x00520618, update 0x00573050 calls the slot at 0x005730eb. Slot.
+- Ul / Zol Gibbon: vt 0x00b05740 (ctor 0x00564aa6 writes it), +0x198 0x00520618, update 0x005687bc calls the slot at 0x00568847. Slot.
+- Gee: vt 0x00b051c0, update 0x0055cb64, slot call 0x0055cbad. Slot.
+- Delbiter: vt 0x00b03be0, update 0x0054a864, slot call 0x0054a8e8. Slot.
+- Epsilon: vt 0x00b04cc0, update 0x0055a2d0, slot call 0x0055a354. Slot. CONFLICT: the same vtable is the dump's `DubchichDestructor_00558334` (its dtor label). The Dubchic row (vt 0x00b04a40 / 0x00b04cc0) is therefore ASSUMED to share it; the Dubchic row's update at 0x00b04a40 is the placeholder 0x0061cdb0, so its real update is not this vtable's.
+- Sinow Zoa / Zele: vt 0x00b08f00, update 0x0059173c, slot call 0x005917c3. Slot. (The Pofuilly Slime's update 0x00596104 is another vtable, 0x00b094e0, with its own icon call at 0x005961c7: the slime's row is not this one.)
+- Morfos: vt 0x00b070c0, update 0x0057a2a0, slot call 0x0057a36a. Slot. (DEVLOG 2026-10-25 earlier: `EnemyAiupdate_0057d578` has vt 0x00b074e0; not the Morfos update.)
+- Recobox: vt 0x00b07e80, update 0x00589444, slot call 0x0058949f. Slot.
+- Dorphon / Dorphon Eclair: vt 0x00b0aca0, update 0x005abf34, slot call 0x005abfa1; the flag at +0x4d8 picks the form (exe 0x005a9c58 gives type id 99 or 100 from it; the port's `DORPHON_ECLAIR`). Slot.
+- Deldepth: vt 0x00b037a0, update 0x00547670, icon 0x00805608 at 0x005476eb; +0x198 is 0x00770d1c (not the slot). Own, gate not traced.
+- Gi Gue: vt 0x00b05a20, update 0x005695ec, icon 0x00805608 at 0x005696df; +0x198 is 0. Own, gate not traced. The generic controller 0x007879e0 also calls the icon in its dead branch (0x00787b37) for every enemy that reaches it.
+- Gibbles: vt 0x00b054e0, dispatcher 0x0056021c, icon at 0x005603fb in GibblesUpdateLoop 0x00560338 (state gates ported already: `GibblesAi.setGate`). Own.
+- Merillia / Meriltas: vt 0x00b066e0 (ctor 0x00575e70), update 0x005755cc, +0x198 0x0057543c (its own function, not the slot). Icons at 0x00574792, 0x00574ccc, 0x00575131, 0x0057535e, 0x005758d0, 0x00575a67 in its state handlers; the gates were not traced. Own.
+- Goran: vt 0x00b0af40, +0x198 0x005ad6fc (own), icon 0x00805608 at 0x005b28dd in its state-4 init (0x005b2588). Own, gate not traced. The vtable 0x00b0b1c0 with the slot and update 0x005b160c is not traced to a name.
+
+**Not surveyed in this pass (no row, default kept).** Ill Gill (no vtable found from its factory 0x0052e380; own icon calls in its handlers 0x0052ea00, 0x0052eb3c, 0x0052ebc0, 0x0052f18c, 0x0052fb78). Recon (vtable 0x00b08100, +0x198 slot, update 0x0058a3d4; its slot call is in `SinowberillResetGlobalState_0058a1dc`, not in the update, so no row). Sinow Berill / Spigell: vtable 0x00b0a120 (DEVLOG 2026-10-25 earlier, ctor 0x0059e0a4), +0x198 slot, the slot call 0x0059ec5a in the dispatcher 0x0059eb08. ASSUMED. The port's FORCED_ICON_RULES SINOW_BERILL (2.0, from update 0x004addc0) belongs to vtable 0x00afa7c0, whose +0x198 is not the slot: that forced rule's family attribution is ASSUMED wrong. Not changed here (a forced icon is a per-type rule). Ep4: Astark, Satellite Lizard, Yowie, Merissa A / AA, Girtablulu, Zu, Pazuzu, Boota (vtable 0x00b0a680, +0x198 0x0061cdb0 = placeholder), Sand and Del Rappy. No vtable pass done for these.
+
+**Tests.** `tests/minimap.test.ts`: 12 'slot' and 8 'own' checks, the table length 50. `minimap`, `enemysplits`, `combat` (NEWSERV) and `tsc --noEmit` pass.
+
 ## 2026-10-25: Episode 1 bosses: the Dragon's lock and hit are the entrance's box bit 0; De Rol Le's shell segments are on the radar with their box off
 
 **Outcome.** Dragon lock and hit: `concealed()` (`untargetable` = the entrance, sid 0x1d) is now PROVEN, not ASSUMED. Nothing changed in the code path, only the comments and a test. The earlier note that the update clears box bit 0 when the cursor is below 0x32 was wrong: that clear is bit 26 (see below). De Rol Le: the shell segments' forced radar icon has no box gate, so the port now shows a segment on the radar with its box off (`radarConcealed`). The body was already right (its icon is unconditional). Port change: `client/src/render/combat.ts` `radarConcealed` drops `DrlSegmentAi`.

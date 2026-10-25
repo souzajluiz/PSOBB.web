@@ -131,7 +131,8 @@ export const ENEMY_ICON_RULE: EnemyIconRule = { scale: 1, color: ENEMY_ICON_COLO
 // checked. Bit 0x800 is "dead" (headers/battle.h), 0x40000 is the radar / lock-on
 // bit (DEVLOG 2026-10-25, Gibbon and Mericarol). The slot is the family's +0x198
 // (Mericarol, vtable 0x00b06320, called unconditionally by its update 0x00573050
-// at 0x005730eb) or +0x188 (Gibbon, vtable 0x00b05750). The Booma family does not
+// at 0x005730eb) or +0x188 (the older note for Gibbon, vtable 0x00b05750; the ctor writes
+// 0x00b05740, whose +0x198 is the same word, called by its update at 0x00568847). The Booma family does not
 // use it (its states add their own icons, see BOOMA_ICON_STATES).
 export const BASE_ICON_HIDDEN_FLAGS = 0x40800;
 export function baseIconShown(flags: number): boolean {
@@ -220,6 +221,34 @@ export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
   GARANZ: 'none',
   // Claw: +0x390 bit 0x10000000 hides the icon (ASSUMED the port's ClawAi.hidden is that bit).
   CLAW: 'gated',
+  // Episode 2 (2026-10-25 survey). Each 'slot' row: the family's vtable +0x198 is 0x00520618
+  // (`tools/exedata.py read`) and its update calls that slot through `call *0x198(%reg)`
+  // (objdump, PsoBB.exe). Mericarol: vtable 0x00b06320, update 0x00573050, call 0x005730eb.
+  // Ul / Zol Gibbon: vtable 0x00b05740 (the ctor 0x00564aa6 writes it), +0x198 slot, update
+  // 0x005687bc, call 0x00568847. (The same slot word is 0x00b05750 +0x188: the older note
+  // named that base; the ctor's write is 0x00b05740.)
+  // Gee: vtable 0x00b051c0, update 0x0055cb64, call 0x0055cbad. Delbiter: vtable 0x00b03be0,
+  // update 0x0054a864, call 0x0054a8e8. Epsilon: vtable 0x00b04cc0, update 0x0055a2d0, call
+  // 0x0055a354 (the same vtable's dump label is Dubchic's dtor 0x00558334: the Dubchic row
+  // above shares 0x00b04cc0, ASSUMED, the dump's label is not trusted). Sinow Zoa / Zele:
+  // vtable 0x00b08f00, update 0x0059173c, call 0x005917c3. Morfos: vtable 0x00b070c0, update
+  // 0x0057a2a0, call 0x0057a36a. Recobox: vtable 0x00b07e80, update 0x00589444, call 0x0058949f.
+  // Dorphon / Dorphon Eclair (one ctor, the flag at +0x4d8): vtable 0x00b0aca0, update
+  // 0x005abf34, call 0x005abfa1.
+  MERICAROL: 'slot', UL_GIBBON: 'slot', ZOL_GIBBON: 'slot', GEE: 'slot', DELBITER: 'slot',
+  EPSILON: 'slot', SINOW_ZOA: 'slot', SINOW_ZELE: 'slot', MORFOS: 'slot', RECOBOX: 'slot',
+  DORPHON: 'slot', DORPHON_ECLAIR: 'slot',
+  // Episode 2 'own' rows (their icon call is in the family's own code, no 0x40800 test
+  // proven): Deldepth (vtable 0x00b037a0, update 0x00547670, icon 0x00805608 at 0x005476eb,
+  // +0x198 is not the slot); Gi Gue (vtable 0x00b05a20, update 0x005695ec, icon at
+  // 0x005696df, +0x198 is 0); Gibbles (vtable 0x00b054e0, dispatcher 0x0056021c, icon at
+  // 0x005603fb in GibblesUpdateLoop 0x00560338, state gates in the port); Merillia (vtable
+  // 0x00b066e0, update 0x005755cc, +0x198 0x0057543c, icons at 0x00574792 .. 0x00575a67, the
+  // state gates not traced); Goran (vtable 0x00b0af40, +0x198 0x005ad6fc, icon 0x00805608
+  // at 0x005b28dd in its state-4 init). Merillia's 'Meriltas' and Goran's two forms share
+  // these vtables (ASSUMED, the factory's subtype flag is not traced here).
+  DELDEPTH: 'own', GI_GUE: 'own', GIBBLES: 'own', MERILLIA: 'own', MERILTAS: 'own',
+  GORAN: 'own', GORAN_DETONATOR: 'own', PYRO_GORAN: 'own',
   // Gillchic (vtable not found) and Sinow Gold (no ctor in the type table): default kept.
   GILLCHIC: 'unsurveyed', SINOW_GOLD: 'unsurveyed',
 };
