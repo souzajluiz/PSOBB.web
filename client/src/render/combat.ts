@@ -573,8 +573,42 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
 // clears its body boxes' bit 0 (ProcessEnemySinowbeatDragonPhase phase 4 of 0x1d calls
 // SaintEmilionPart_DisableAll 0x007ba03c, dump 159373; phase 5 calls EnableAllEntityHitboxes
 // 0x007b9fbc, dump 159657). See combat/dragon.ts untargetable.
-export const radarConcealed = (e: { ai: EnemyBrain | null }): boolean =>
-  concealed(e) && !(e.ai instanceof DragonAi) && !(e.ai instanceof DrlSegmentAi);
+// Vol Opt is decided per entity first (voloptRadar).
+export const radarConcealed = (e: { ai: EnemyBrain | null }): boolean => {
+  const vr = voloptRadar(e.ai);
+  if (vr === 'never') return true;
+  if (vr === 'always') return false;
+  return concealed(e) && !(e.ai instanceof DragonAi) && !(e.ai instanceof DrlSegmentAi);
+};
+
+// Vol Opt's radar (PsoBB.exe; each entity's update is vtable +0x04, the minimap icon is
+// unknown_add_minimap_icon at 0x00805608, the call sites are read with objdump and Ghidra):
+//   - the control (vtable 0x00af5540, update 0x0043c5d4, states 0x0043c680): no icon call in
+//     its code, never on the radar;
+//   - the prison (vtable 0x00af6560, update 0x00449e3c): no icon call in its code, never;
+//   - the rod (vtable 0x00af5a60, update 0x00440d58): the icon at 0x00440e55 (the update's
+//     tail, pos +0x38) has no state gate, only the paused / cut-scene test, so it is on the
+//     radar every frame; its death is not in the exe's update (ASSUMED: a dead rod stays
+//     hidden, as before);
+//   - the body (vtable 0x00af6220, update 0x004442e0): the icon at 0x00444692 is ungated
+//     after the dying test (flag 0x4000 of +0x30), so the body is on the radar from the
+//     moment its root shows (the port shows it once the control stood it up);
+//   - the monitors (update 0x004419d4: icon while flag 0x800 of +0x30 is clear), the pillars
+//     (dispatch 0x00442730: states 2, 4 and 9 add the icon, 0 and 5 do not) and the core
+//     (dispatch 0x0043f17c; state 2 unconditional, states 1, 9 and 10 gated by
+//     DAT_00a447ac >= 0): the state gates are read, the port's own state mapping is not, so
+//     they stay on concealed() (ASSUMED).
+export type VoloptRadar = 'always' | 'never' | 'concealed';
+export const voloptRadar = (ai: EnemyBrain | null): VoloptRadar | null => {
+  if (ai instanceof VoloptAi) return 'never';
+  if (ai instanceof VoloptForm2Ai) return 'always';
+  if (ai instanceof VoloptPartAi) {
+    if (ai.part.kind === 'prison') return 'never';
+    if (ai.part.kind === 'rod') return ai.part.dead ? 'concealed' : 'always';
+    return 'concealed';
+  }
+  return null;
+};
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -1908,7 +1942,9 @@ export class CombatView {
   minimapEnemies(): { x: number; z: number; type: string }[] {
     const out: { x: number; z: number; type: string }[] = [];
     for (const e of this.enemies.values()) {
-      if (e.dead || e.state === 'death' || !e.instance.root.visible || radarConcealed(e) || !splitRadarOk(e)) continue;
+      // A Vol Opt rod's icon is not tied to its model: it shows while the control (its parent) does.
+      const onField = e.instance.root.visible || (e.ai instanceof VoloptPartAi && voloptRadar(e.ai) === 'always' && !!e.parent?.instance.root.visible);
+      if (e.dead || e.state === 'death' || !onField || radarConcealed(e) || !splitRadarOk(e)) continue;
       // Garanz draws no radar icon (classic/minimap.ts ENEMY_RADAR_SOURCE 'none').
       if (radarSourceOf(e.slot.type) === 'none') continue;
       // Claw: its icon is off while its hidden flag (+0x390 bit 0x10000000) is set.

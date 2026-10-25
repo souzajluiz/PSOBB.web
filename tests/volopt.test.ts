@@ -39,6 +39,8 @@ import {
   barStartHeight,
   type Form2Options,
 } from '../client/src/combat/volopt2.ts';
+import { VoloptPart } from '../client/src/combat/volopt.ts';
+import { radarConcealed, voloptRadar } from '../client/src/render/combat.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 import { bossPhaseOf } from '../client/src/audio/bossbgm.ts';
@@ -1127,6 +1129,37 @@ function toPhase2(over: Parameters<typeof fight>[0] = {}): Fight {
   }
   check(Math.abs(lid.a) < 1e-4 && Math.abs(lid.b) < 1e-4, 'closed: both nodes back at their bind heights');
   eq(steps, 21, 'closing takes 21 ticks (10 on b, then 11 on a: the tick that ends b starts a)');
+}
+
+{
+  // Radar (render/combat.ts voloptRadar, PsoBB.exe icon call sites per entity update, see the
+  // comment there). The lock and the hit are not changed by this rule.
+  const f = fight();
+  eq(voloptRadar(f.c), 'never', 'the control is never on the radar (no icon call in its code)');
+  check(radarConcealed({ ai: f.c }), 'the control stays off the radar');
+  const part = (kind: 'rod' | 'prison' | 'monitor' | 'pillar' | 'core', targetable: boolean, dead = false) => {
+    const p = new VoloptPart(kind, 0, VO_ID[kind], 1);
+    p.targetable = targetable;
+    p.dead = dead;
+    return new VoloptPartAi(p, f.c);
+  };
+  const rod = part('rod', false);
+  eq(voloptRadar(rod), 'always', 'the rod has an icon every frame (0x00440e55, no state gate)');
+  check(!radarConcealed({ ai: rod }), 'an untargetable rod is still on the radar');
+  check(rod.untargetable, 'the rod is still not lockable while untargetable (lock and hit unchanged)');
+  check(radarConcealed({ ai: part('rod', false, true) }), 'a dead rod is off the radar (ASSUMED)');
+  const prison = part('prison', true);
+  eq(voloptRadar(prison), 'never', 'the prison has no icon call (0x00449e3c)');
+  check(radarConcealed({ ai: prison }), 'the prison stays off the radar even while targetable');
+  const mon = part('monitor', true);
+  eq(voloptRadar(mon), 'concealed', 'a monitor keeps the targetable gate (state gate ASSUMED)');
+  check(!radarConcealed({ ai: mon }), 'a targetable monitor is on the radar');
+  check(radarConcealed({ ai: part('monitor', false) }), 'an untargetable monitor is off the radar (ASSUMED)');
+  check(radarConcealed({ ai: part('pillar', false) }), 'an untargetable pillar is off the radar (ASSUMED)');
+  check(radarConcealed({ ai: part('core', false) }), 'an untargetable core is off the radar (ASSUMED)');
+  eq(voloptRadar(f.f2), 'always', 'the body has an icon every live frame (0x00444692, flag 0x4000 only)');
+  check(f.f2.untargetable && !f.f2.ready, 'the body is not ready yet and not lockable');
+  check(!radarConcealed({ ai: f.f2 }), 'a body that is not ready is on the radar (its root shows once awake)');
 }
 
 {

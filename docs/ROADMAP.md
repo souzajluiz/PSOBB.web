@@ -28,7 +28,10 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    Gibarta objects of Ultimate, the camera, the ending's warp objects). Vol
    Opt has no form 7, minions or hazards: the dump's "VoloptForm7*" and
    "VoloptForm2MinionMapObject" names, and the JP files of the same names, are
-   Dark Falz's. The Dragon, Sinow Beat's mirage and Dark Falz are done
+   Dark Falz's. Vol Opt's radar per entity is read from the exe (2026-10-25
+   DEVLOG): the control and the prison never, the rod and the body always;
+   the monitors, pillars and core still `concealed()`, and Vol Opt's lock and
+   hit gates are ASSUMED (not traced per class). The Dragon, Sinow Beat's mirage and Dark Falz are done
    (2026-10-19; `combat/dragon.ts`, `combat/enemyfsmmines.ts` SinowAi,
    `combat/darkfalz*.ts`; the dump's and the JP tree's "Sinowbeat*" / "Dragon*"
    names around 0x00419214..0x004258ac are all the Dragon, see the DEVLOG).
