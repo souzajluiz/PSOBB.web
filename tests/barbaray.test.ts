@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import {
   BARBA_ANCHORS,
   BARBA_CAPTURE_COUNT,
+  BARBA_DROP,
   BARBA_DWELL,
   BARBA_CAPTURE_OFFSETS,
   BARBA_HP,
@@ -839,12 +840,43 @@ const runTicks = (b: BarbaRayAi, n: number) => {
   void done;
 }
 {
-  // The speed clamp: the fall never goes below -7 (the 906e74 clamp).
+  // The fall's speed clamp (906e74 = -7) is never reached in the fall: 21 ticks at -0.2 give -4.2.
   const b = brain({ leader: false });
   b.applyPhase(BARBA_PHASE.drop, null);
-  for (let k = 0; k < 21; k++) b.tick([]);
-  for (let k = 0; k < 40; k++) b.tick([]);
-  check(b.f754 >= -7 - 1e-9, `drop: speed clamped at -7 (got ${b.f754})`);
+  let minV = 0;
+  for (let k = 0; k < 21; k++) {
+    b.tick([]);
+    minV = Math.min(minV, b.f754);
+  }
+  check(minV >= -7 - 1e-9 && minV > -4.3, `drop: the fall speed stays above -4.2 (min ${minV})`);
+  // The rise speed (sub 0 -> 1, asm 0x004b7040): ((A + B) * -vy + (300 - z)) / ((0.5 A + B) A) with
+  // A = 18.333 (a47a9c), B = 30.769 (a47a98), vy = -4.2 and z = -296.2: 802.43 / 732.2 = 1.0959.
+  b.tick([]); // the 22nd tick: moveSub 1 -> 2
+  b.tick([]); // the 23rd: the sub 0 -> 1 transition (dropTimers, timer 23 >= 10.5)
+  check(Math.abs(b.f758 - 802.43 / 732.2) < 1e-3, `drop sub 0 -> 1: rise speed with the static-init A and B (got ${b.f758})`);
+}
+{
+  // The static init (0x004b99a0, PROVEN): a47aa0 = 0.195, a47a98 = 6 / 0.195, a47a9c = 18.333.
+  near(BARBA_DROP.liftZero, 0.195, 'drop constants: a47aa0 = 0.195');
+  near(BARBA_DROP.attackB, 6 / 0.195, 'drop constants: a47a98 = 6.0 / a47aa0');
+  check(Math.abs(BARBA_DROP.attackA - 18.333332) < 1e-6, `drop constants: a47a9c = 18.333 (got ${BARBA_DROP.attackA})`);
+  // The sub 2 timer step is 1 - (0.3 - 0.195) = 0.895 a tick (the clock +1, then the lift's -0.105);
+  // the other sub-states of 0x0d keep the clock at +1. The sub 2 span is timer 16..22.
+  const b = brain({ leader: false });
+  b.applyPhase(BARBA_PHASE.drop, null);
+  for (let k = 0; k < 400 && b.moveSub !== 2; k++) b.tick([]); // the fall, then sub 2 (moveSub 2)
+  let steps = 0;
+  let other = 0;
+  for (let k = 0; k < 400 && b.moveSub === 2; k++) {
+    const t0 = b.timer;
+    b.tick([]);
+    const d = b.timer - t0;
+    if (Math.abs(d - 0.895) < 1e-9) steps++;
+    else if (Math.abs(d - 1) < 1e-9) other++;
+  }
+  // The timer is already past 22 when sub 2 starts (23), so sub 2 lasts one tick (sub 3 at 22 passes).
+  check(steps === 1, `drop sub 2: the clock steps 0.895 a tick (lift zero 0.195; got ${steps} such ticks)`);
+  check(other >= 1, `drop: the other sub-states step the clock by 1 (got ${other})`);
 }
 {
   // Leader with the gate open: the table steps once the drop is done (event 9), not on the pace.

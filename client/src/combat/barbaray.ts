@@ -329,9 +329,17 @@ export const BARBA_TRANSITION = {
 // z easing (ez, 7 / 0.2 / 0.05). The exe's floats (exedata): 906d28 0.5, 906d1c 2.0, 906e74 7.0
 // (the fall's speed clamp), 906cec 300, 906cf0 10.5, 906cf4 40, 906cf8 16, 906cfc 22, 906d00 29,
 // 906d20 4.0, 906cd8 13.5, 906cd0 180, 906cd4 50, 906cdc -20, 906ce0 50, 906ce4 26, 906ce8 21,
-// 906ccc 500, 906cc8 0.3, 906d24 0.0, 906f64 0.2. ASSUMED: a47a9c (A) 1.0, a47a98 (B) 30.0 and
-// a47aa0 0.0 are .bss (dynamic, written at run time, no value in the image). B is a divisor
-// (it must not be 0); 30 is the ticks a second the port uses elsewhere (BARBA_PACE).
+// 906ccc 500, 906cc8 0.3, 906d24 0.0, 906f64 0.2.
+// PROVEN: a47a9c (A), a47a98 (B) and a47aa0 are .bss words written once by the static init
+// fn 0x004b99a0 (objdump 0x004b9b28..0x004b9bba; the only other refs are reads in 0x004b7040 and
+// 0x004b6ac0). The init does fld 906c1c (6.0) and fld 906c30 (17.0) first, then:
+//   a47aa0 = 0.195 (movl 0x3e47ae15, 0x004b9b68)
+//   a47a98 = 6.0 / a47aa0 = 30.769 (fdiv at 0x004b9b72, fstp at 0x004b9b78)
+//   a47a9c = 18.333 (movl 0x4192aaaa, 0x004b9b7e)
+//   (17.0 / 0.3 = 56.67 goes to a47a70, the 0x906fe4 multiplier, not this drop's.)
+// The Ghidra body of 0x004b7040 (refsrc Psobb.exe-05112026.c) uses A = a47a9c and B = a47a98 in
+// the rise speed formula and B as the divisor of the sub 1 / sub 2 values. Ghidra's sub 2 lift
+// (fsub a47aa0 at 0x004b73f2) confirms liftZero: timer -= 0.3 - 0.195.
 export const BARBA_DROP = {
   fallWait: 20, // sub 0 ends when the counter passes 20
   vyStep: 0.2,
@@ -342,9 +350,9 @@ export const BARBA_DROP = {
   wait3: 29,
   attackLo: 21, // the attack object's timer band (ASSUMED path, not spawned)
   attackHi: 26,
-  attackA: 1.0, // ASSUMED a47a9c
-  attackB: 30.0, // ASSUMED a47a98
-  liftZero: 0.0, // ASSUMED a47aa0
+  attackA: 18.333332, // a47a9c = 0x4192aaaa (PROVEN, static init 0x004b9b7e)
+  attackB: 6 / 0.195, // a47a98 = 6.0 / a47aa0 (PROVEN, static init 0x004b9b72; float32 30.769229)
+  liftZero: 0.195, // a47aa0 = 0x3e47ae15 (PROVEN, static init 0x004b9b68)
   z0: 300,
   zTarget: 500,
   zMaxRise: 7,
