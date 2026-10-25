@@ -128,9 +128,12 @@ export const CHARGE_SE_PADDING = 0x32;
 
 /**
  * The cast light (TechniqueEffectObject_Constructor_006eb618): the caster's
- * light definition is moved toward {r, g, b, a} and back over the object's life
+ * light definition is moved toward {a, r, g, b} and back over the object's life
  * (UpdateLightDefinition_00794984 on the caster, 0x00a9d460 the base light).
- * Not drawn here: the web client has no per-entity light (left).
+ * The order is the exe's colour array (set_light_definition_for_entity reads
+ * color[0] as diffuse_a, color[1..3] as r, g, b); castLightColor gives rgb.
+ * Drawn by render/levelupfx.ts LevelUpEffects.castLight (the player's lit
+ * materials, the same stand-in as the level-up light).
  */
 export const CAST_LIGHT: ReadonlyArray<readonly [number, number, number, number]> = [
   [1, 1, 0.5, 0], [1, 1, 0.5, 0], [1, 1, 0.5, 0], // Foie, Gifoie, Rafoie
@@ -143,6 +146,21 @@ export const CAST_LIGHT: ReadonlyArray<readonly [number, number, number, number]
   [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1], // Resta, Anti, Reverser
   [1, 0.6, 0.2, 0.7], // Megid
 ];
+
+/** The cast light's rgb (the colour's a is the light's alpha, not used by the renderer). */
+export function castLightColor(tech: number): [number, number, number] {
+  const c = CAST_LIGHT[tech];
+  if (!c) return [1, 1, 1];
+  return [c[1], c[2], c[3]];
+}
+
+/** The cast light's ambient target (the constructor's +0x58, 0x3eb33333). */
+export const CAST_LIGHT_AMBIENT = 0.35;
+
+/** The cast light's frames: charge + 0x32 + cast (the charge sound's length too). */
+export function castLightFrames(charge: number, cast: number): number {
+  return charge + CHARGE_SE_PADDING + cast;
+}
 
 // --- the bolt ---------------------------------------------------------------------
 

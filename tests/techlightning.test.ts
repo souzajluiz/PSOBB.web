@@ -76,6 +76,7 @@ eq(CHARGE_SE.length, 19, 'a charge sound per technique');
 eq([TECH.foie, TECH.zonde, TECH.grants, TECH.deband, TECH.shifta, TECH.megid, TECH.resta, TECH.barta].map((t) => CHARGE_SE[t]), [0xa3, 0xa5, 0xa7, 0xa2, 0xa2, 0xa6, 0xa7, 0xa4], 'charge sound per family');
 eq(CAST_LIGHT.length, 19, 'a cast light per technique');
 eq(CAST_LIGHT[TECH.zonde], [1, 1, 1, 0.3], 'the Zonde cast light');
+eq(CAST_LIGHT[TECH.foie], [1, 1, 0.5, 0], 'Foie cast light: a 1, r 1, g 0.5, b 0 (exe colour array order)');
 
 // 3. get_dominant_axis and the jitter.
 eq([[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [1, 1, 1], [2, 1, 0], [0, 1, 1], [1, 2, 3]].map(([x, y, z]) => dominantAxis(x, y, z)), [0, 1, 2, 1, 2, 0, 2, 2], 'dominant axis');
