@@ -308,13 +308,18 @@ export class FloorItemLayer {
     const p = me.position;
     let best: Shown | null = null;
     let bestD = PICKUP_RADIUS;
+    let tooFar: { s: Shown; dy: number } | null = null;
     for (const s of this.shown.values()) {
       const d = Math.hypot(s.item.x - p.x, s.item.z - p.z);
-      if (d <= bestD && Math.abs(s.node.position.y - p.y) < HEIGHT_WINDOW) {
+      if (d > bestD) continue;
+      const dy = s.node.position.y - p.y;
+      if (Math.abs(dy) < HEIGHT_WINDOW) {
         best = s;
         bestD = d;
-      }
+      } else tooFar = { s, dy };
     }
+    // An item in reach but outside the height window: say so (the pick-up silently did nothing).
+    if (!best && tooFar) this.opts.log?.(`pick up: ${this.opts.describe?.(tooFar.s.item) ?? tooFar.s.item.id.toString(16)} out of the height window (dy ${tooFar.dy.toFixed(1)})`);
     if (best) {
       this.opts.log?.(`pick up ${this.opts.describe?.(best.item) ?? best.item.id.toString(16)}`);
       this.items.pickUp(best.item);
