@@ -1,5 +1,31 @@
 # Devlog
 
+## 2026-10-25: Quick menu tools tab: the mag cell rule (can_use_030C_mag_cell)
+
+**Question.** The quick menu's tools tab (the two-handed list, `ListWindowObject_PopulateTwoHandedWeapons_0074b620`) lists a tool when its checker bit 2 is set and bit 1 is clear. The mag cell (class 0x0c) bit 1 was left off: which rule blocks a mag cell, and what does the port's mag need to answer it?
+
+**Answer.** `classic/quickmenu.ts` `magCellUsable` (new, pure) and its use in `toolCheckerBits`; `render/fieldhud.ts` `toolChecks` passes each equipped item's `data2` (the mag's synchro and IQ). `tests/quickmenu.test.ts` has 17 new checks (mag cell variants 0..6 and the tab rows; the two stage checks now carry a mag). `node tests/quickmenu.test.ts`: 180 ok, ALL PASS. `cd client && npx tsc --noEmit -p .`: exit 0. `NEWSERV=... node tests/combat.test.ts`: 5860 checks, 0 failures.
+
+**PROVEN (dump `src/Psobb.exe-05112026.c` for names, objdump on `PsoBB.exe` for every constant).**
+- The tool branch of `CheckItemEquipConditions_005d5f40` (dump 427680): `cmp edx, 0xc` at 0x5d609e; the mag cell calls `can_use_030C_mag_cell` at **0x005db470** with `push edx` = the tool's data1[2] (the variant) and `push ebp` = the player (`+0xdf8` is the equipment block). Result `test eax,eax; jne` skips; otherwise `or edi, 1` (bit 1, blocked). The dump line 427812 is the same call.
+- `can_use_030C_mag_cell` (0x005db470, asm read range 0x5db470..0x5db65e): the mag is `get_equipment_slot(equipment, mag)` (0x0069792c, slot 1); no mag -> 0.
+  - variant 0, 1: `movzx [esi+0xf4]` (group_idx = data1[2], the mag level) `>= 0x64` (100).
+  - variant 3: the same level test (0x5db585, `>= 0x64`).
+  - variant 2 (0x5db596): def / pow / dex / mind at `movsx [esi+0x1c0/0x1c2/0x1c4/0x1c6]`, each `/100` (magic 0x51eb851f, `sar 5`, sign fix) and compared `>= 0x46` (70, i.e. level > 69); the count must reach 2.
+  - variant 4 (0x5db4bc): level `>= 0x78` (120), IQ `movsx [esi+0x1bc]` `>= 0xb4` (180), synchro `movsx [esi+0x1be]` `>= 0x6e` (110). The dump's `mag_iq` (+0x1bc) and `mag_synchro` (+0x1be) match.
+  - variant 5 (0x5db505): the four stats `/100` `>= 0x23` (35, i.e. > 34).
+  - any other variant: falls to `xor eax,eax` (0).
+- The port's mag layout agrees: data1 is `02 ZZ LL WW HHHH IIII JJJJ KKKK` (level LL = data1[2], def..mind = words 2..5); data2 is `YY QQ PP VV` (synchro = data2[0], IQ = data2[1]), the table in `vendor/newserv/src/ItemData.hh` (QUICK ITEM FORMAT REFERENCE, Y = synchro, Q = IQ). `formats/itemnames.ts` `magStats` uses the same bytes.
+
+**ASSUMED.**
+- The exe's stats are signed shorts (`movsx`) and the port reads them as unsigned words. Mag stats stay far below 0x8000, so the two agree in every reachable state (not checked against a save with a corrupt stat).
+- The port's mag is the equipped item with data1[0] == 2 (the first one). The exe's mag slot is the equipment's `mag` entry, which holds one mag.
+- The tab's mag cell CanEquip path keeps the stage-0 ASSUMED from the 2026-10-23 entry (`magStage: hasMag ? 0 : null`). The new rule is independent of the stage.
+
+**Behaviour change.** A mag cell now shows on the tools tab only when the equipped mag meets its variant's rule. Before, any mag cell with a mag at evolution stage < 4 (stage 0 assumed) was listed. A mag cell with no mag, or a mag below the rule, is hidden (the exe blocks it, bit 1).
+
+**Left (unchanged, ASSUMED off in `toolCheckerBits`):** the challenge object (flag 0x40 with `g_ChallengeObject`), `class_check(0xd7)` (flag 0x8), the technique scroll (class 2), class 6 (player field 0x25c), the telepipe (class 7), the grinder's grind test (class 0x0a, an uninitialised byte), the materials (class 0x0b, `can_use_material`) and the armour rule (class 0x0f, the item's vtable +0x94).
+
 ## 2026-10-25: Player elemental resists (EFR / EIC / ETH / ELT / EDK)
 
 **Question.** The Ill Gill specials on the local player assumed EIC / ETH / EDK = 0. Where does the exe keep the player's elemental resists, what fills them, and what reads them?

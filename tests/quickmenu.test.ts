@@ -22,6 +22,7 @@ import type { ItemData } from '../client/src/formats/itemnames.ts';
 import { techMenuOrder, techMenuPayload, writeTechMenuOrder } from '../client/src/net/charfile.ts';
 import { compareColor, equipStatRows, VALUE_COLOR, EQUIP_STAT_ROWS } from '../client/src/classic/itemdetail.ts';
 import {
+  magCellUsable,
   toolCheckerBits,
   toolCombinationPasses,
   type ToolCheckContext,
@@ -417,8 +418,38 @@ check('tools bits: the row class must be the character class', !toolCombinationP
 check('tools bits: the row level above the character level fails', !toolCombinationPasses(new Uint8Array([13, 0, 0]), toolFixture({ pmt: fakePmt(TOOL_13, [{ ...ROW_ANY_ITEM, level: 20 }]), equipped: [weaponEq] })));
 // A mag cell (class 0x0c, flag bit 0 set) needs a mag below stage 4.
 check('tools bits: a mag cell with no mag is out', !tools([3, 12, 0], toolFixture()));
-check('tools bits: a mag cell with a mag below stage 4 is in', tools([3, 12, 0], toolFixture({ magStage: 2 })));
-check('tools bits: a mag cell with a mag at stage 4 is out', !tools([3, 12, 0], toolFixture({ magStage: 4 })));
+// A mag for the cell rule: data1 [2, type, level, 0, def, pow, dex, mind] (words at +4..+11),
+// data2 [synchro, IQ, flags, color]. Stats are raw (value / 100 is the level).
+const magEq = (level: number, stats: [number, number, number, number] = [0, 0, 0, 0], iq = 0, sync = 0) => {
+  const d1 = new Uint8Array(12);
+  d1[0] = 2;
+  d1[2] = level;
+  stats.forEach((v, i) => {
+    d1[4 + i * 2] = v & 0xff;
+    d1[5 + i * 2] = (v >> 8) & 0xff;
+  });
+  return { data1: d1, data2: new Uint8Array([sync, iq, 0, 0]), magLevel: level };
+};
+check('tools bits: a mag cell with a mag below stage 4 is in', tools([3, 12, 0], toolFixture({ magStage: 2, equipped: [magEq(100)] })));
+check('tools bits: a mag cell with a mag at stage 4 is out', !tools([3, 12, 0], toolFixture({ magStage: 4, equipped: [magEq(100)] })));
+// can_use_030C_mag_cell (dump 432721), by the cell's variant (data1[2]).
+check('mag cell 0: a mag of level 100 is usable', magCellUsable(0, magEq(100)));
+check('mag cell 0: a mag of level 99 is not', !magCellUsable(0, magEq(99)));
+check('mag cell 1 and 3 use the level rule too', magCellUsable(1, magEq(100)) && magCellUsable(3, magEq(100)) && !magCellUsable(3, magEq(99)));
+check('mag cell 2: two stats above 69 whole levels', magCellUsable(2, magEq(1, [7000, 7000, 0, 0])));
+check('mag cell 2: one stat above 69 is not enough', !magCellUsable(2, magEq(1, [7000, 6900, 6900, 6900])));
+check('mag cell 4: level 120, IQ 180 and synchro 110', magCellUsable(4, magEq(120, [0, 0, 0, 0], 180, 110)));
+check('mag cell 4: synchro 109 fails', !magCellUsable(4, magEq(120, [0, 0, 0, 0], 180, 109)));
+check('mag cell 4: IQ 179 fails', !magCellUsable(4, magEq(120, [0, 0, 0, 0], 179, 110)));
+check('mag cell 4: level 119 fails', !magCellUsable(4, magEq(119, [0, 0, 0, 0], 180, 110)));
+check('mag cell 5: all four stats above 34', magCellUsable(5, magEq(1, [3500, 3500, 3500, 3500])));
+check('mag cell 5: one stat at 34 fails', !magCellUsable(5, magEq(1, [3500, 3500, 3400, 3500])));
+check('mag cell: no mag is not usable', !magCellUsable(0, null));
+check('mag cell: variant 6 and up are not usable', !magCellUsable(6, magEq(200, [9999, 9999, 9999, 9999], 200, 120)));
+check('tools bits: a mag cell variant 0 with no mag is blocked', !tools([3, 12, 0], toolFixture({ equipped: [] })));
+check('tools bits: a mag cell variant 0 with a level 50 mag is blocked', !tools([3, 12, 0], toolFixture({ equipped: [magEq(50)] })));
+check('tools bits: a mag cell variant 0 with a level 100 mag is in', tools([3, 12, 0], toolFixture({ magStage: 0, equipped: [magEq(100)] })));
+check('tools bits: a mag cell variant 6 is blocked even with a strong mag', !tools([3, 12, 6], toolFixture({ pmt: fakePmt({ '12.6': 0x7f }), magStage: 0, equipped: [magEq(200)] })));
 // The populate's stat rows (equipStatRows, the same as the equipment panel): six rows in label order.
 {
   const cur = { atp: 100, dfp: 10, mst: 5, ata: 20, evp: 8, lck: 3 };

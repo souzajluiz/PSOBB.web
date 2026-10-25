@@ -466,6 +466,7 @@ export function techniqueRows(order: readonly number[]): TechniqueRow[] {
 export interface ToolCheckEquipped {
   data1: Uint8Array; // the equipped item's ItemData bytes (its equipment slot)
   magLevel: number; // the mag's level when it is a mag (group 2), else 0
+  data2?: Uint8Array; // the item's data2: a mag's synchro at [0], IQ at [1] (zeros when absent)
 }
 export interface ToolCheckContext {
   pmt: ItemPMT;
@@ -524,11 +525,42 @@ export function toolCanEquip(data1: Uint8Array, flags: number, ctx: ToolCheckCon
   return true;
 }
 
+// can_use_030C_mag_cell (dump 432721) for a mag cell (class 0x0c) whose variant is its data1[2]:
+// the equipped mag must meet the variant's rule (the mag's level is data1[2]; def / pow / dex /
+// mind are the words at data1 +4..+11, read in whole levels, value / 100; synchro is data2[0] and
+// IQ is data2[1], the ItemData layout of newserv's ItemData.hh). Variant 0, 1, 3: level > 99.
+// Variant 2: at least two of def / pow / dex / mind above 69. Variant 4: level > 119, IQ > 179 and
+// synchro > 109. Variant 5: all four above 34. Any other variant, or no mag: false.
+export function magCellUsable(variant: number, mag: ToolCheckEquipped | null): boolean {
+  if (mag === null) return false;
+  const d = mag.data1;
+  const word = (i: number): number => (d[i * 2] ?? 0) | ((d[i * 2 + 1] ?? 0) << 8);
+  const level = d[2] ?? 0;
+  const stats = [word(2), word(3), word(4), word(5)].map((v) => Math.trunc(v / 100));
+  switch (variant) {
+    case 0:
+    case 1:
+    case 3:
+      return level > 99;
+    case 2:
+      return stats.filter((v) => v > 69).length >= 2;
+    case 4:
+      return level > 0x77 && (mag.data2?.[1] ?? 0) > 0xb3 && (mag.data2?.[0] ?? 0) > 0x6d;
+    case 5:
+      return stats.every((v) => v > 0x22);
+    default:
+      return false;
+  }
+}
+
 // The checker bits of CheckItemEquipConditions_005d5f40 for a tool (group 3), as the populate
 // (ListWindowObject_PopulateTwoHandedWeapons, dump 719618) reads them through
 // GetItemAttackData_005c50b4: bit 2 = CanEquipItem, bit 1 = blocked here and now, plus the
 // flag-word bits 0x4 / 0x10. Only the parts the port can read are decoded (see the ASSUMED list).
 // Non-tools return 0 (the tab does not list them). Flags are the tool's PMT itemFlags (+0x14).
+//
+// The mag cell (class 0x0c) is blocked when magCellUsable is false for its variant (data1[2]), so
+// with no mag equipped every mag cell is blocked (2026-10-25).
 //
 // ASSUMED off (not decoded or not in the port): the challenge object (g_ChallengeObject, bit
 // 0x40 of the flags); class_check(0xd7) (flags bit 8); the technique scroll (class 2: the
@@ -548,6 +580,10 @@ export function toolCheckerBits(data1: Uint8Array, ctx: ToolCheckContext): numbe
   if ((flags & 0x10) === 0 && !ctx.safeMap) bits |= ATTACK_BIT_BLOCKED;
   if ((flags & 0x20) === 0 && ctx.bossMap) bits |= ATTACK_BIT_BLOCKED;
   if (data1[1] === 0x0a && !ctx.equipped.some((e) => e.data1[0] === 0)) bits |= ATTACK_BIT_BLOCKED;
+  if (data1[1] === 0x0c) {
+    const mag = ctx.equipped.find((e) => e.data1[0] === 2) ?? null;
+    if (!magCellUsable(data1[2] ?? 0, mag)) bits |= ATTACK_BIT_BLOCKED;
+  }
   return bits;
 }
 
