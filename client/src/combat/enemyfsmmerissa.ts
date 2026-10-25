@@ -114,3 +114,102 @@ export function merissaVanishStep(countdown: number): { countdown: number; remov
   const next = Math.fround(Math.fround(countdown) - MERISSA_VANISH_STEP);
   return { countdown: next, removed: next < MERISSA_VANISH_LIMIT };
 }
+
+// --- Attack records (part 2) ----------------------------------------------------------------
+// PROVEN layout: the 40-byte records at 0x009c1ac0 + 40 * id, read by the transition
+// 0x005b5768 (`leal 0x9c1ac0(%edi,%edi)` after the id * 20 steps at 0x005b59a8 / 0x005b5a64 /
+// 0x005b5ae1). Their float words are NOT in the file: the initializer 0x005b6f2c writes them at
+// run time (movl $imm at 0x005b6f4a..0x005b70a8; objdump, the values below are the immediates
+// converted from their IEEE bit patterns). Fields the initializer does not write (+0x4 angle,
+// +0xc kind, +0x10 scale, +0x24 callback) are the file's own words (tools/exedata.py read).
+//   +0x00 float: squared XZ range; the transition enters the attack when dist^2 < this
+//         (fcomps at 0x005b59af, jae skip). The initializer's globals: 0x00a749f4 = 1600 (40),
+//         0x00a74a04 = 3600 (60), 0x00a74a08 = 10000 (100).
+//   +0x04 int: angle limit in BAMS (65536 = 360 degrees); the entry needs the angle below it
+//         (cmpl at 0x005b59ba). 1820 = 10 degrees, 8192 = 45, 10922 = 60. ASSUMED that the value
+//         the angle is compared with is the angle between the enemy and the target (the
+//         0x007a9018 call's result, not traced).
+//   +0x0c int: the kind (3, 4 or 5 in these rows); ASSUMED to be the sound / effect index.
+//   +0x10 float: 1.0 for 0..5, 1.5 for the freeze record 6 (file words).
+//   +0x14 float: start time (10.0): the handler's window begins at this elapsed time.
+//   +0x18 / +0x1c floats: window start and end (the handler 0x005b61a0 tests elapsed against
+//         them, equal values mean a single frame).
+//   +0x24 int: the window callback VA, called with ecx = this (0x005b61a0 at 0x005b6219..).
+export interface MerissaAttackRecord {
+  id: number;
+  rangeSq: number;
+  angle: number;
+  kind: number;
+  scale: number;
+  start: number;
+  windowStart: number;
+  windowEnd: number;
+  callback: number;
+  callbackName: string;
+}
+
+export const MERISSA_ATTACK_RECORD_BASE = 0x009c1ac0;
+export const MERISSA_ATTACK_RECORD_BYTES = 40;
+
+// Records 0 and 1 (the A stab of variants A and AA), 2 and 3 (B), 4 and 5 (C), 6 (the freeze stab).
+// The callback names are ASSUMED: 0x005b6384 (a hit that spawns the sfx from 0x009c1c88 and
+// sets flag 0x400 on the target; ASSUMED name merissa_stab_attack), 0x005b64fc (the dump's
+// EnemyProcessAttackWindow_005b64fc), 0x005b667c (not named in the dump), 0x005b63e4 (the freeze
+// hit, which checks the enemy's own +0x37c bit 0x20; ASSUMED name unknown_merissa_freeze_stab_attack).
+export const MERISSA_ATTACK_RECORDS: readonly MerissaAttackRecord[] = [
+  { id: 0, rangeSq: 1600, angle: 1820, kind: 3, scale: 1, start: 10, windowStart: 28, windowEnd: 28, callback: 0x005b6384, callbackName: 'merissa_stab_attack (ASSUMED)' },
+  { id: 1, rangeSq: 1600, angle: 1820, kind: 3, scale: 1, start: 10, windowStart: 28, windowEnd: 28, callback: 0x005b6384, callbackName: 'merissa_stab_attack (ASSUMED)' },
+  { id: 2, rangeSq: 3600, angle: 8192, kind: 4, scale: 1, start: 10, windowStart: 6, windowEnd: 15, callback: 0x005b64fc, callbackName: 'EnemyProcessAttackWindow_005b64fc' },
+  { id: 3, rangeSq: 3600, angle: 8192, kind: 4, scale: 1, start: 10, windowStart: 6, windowEnd: 15, callback: 0x005b64fc, callbackName: 'EnemyProcessAttackWindow_005b64fc' },
+  { id: 4, rangeSq: 10000, angle: 10922, kind: 5, scale: 1, start: 10, windowStart: 16, windowEnd: 16, callback: 0x005b667c, callbackName: '(not named in the dump)' },
+  { id: 5, rangeSq: 10000, angle: 10922, kind: 5, scale: 1, start: 10, windowStart: 16, windowEnd: 16, callback: 0x005b667c, callbackName: '(not named in the dump)' },
+  { id: 6, rangeSq: 1600, angle: 1820, kind: 3, scale: 1.5, start: 10, windowStart: 28, windowEnd: 90, callback: 0x005b63e4, callbackName: 'unknown_merissa_freeze_stab_attack (ASSUMED)' },
+];
+
+// PROVEN: the record ids per variant from the table 0x009c1dbc + 20 * variant (the transition's
+// `movl 0x9c1dbc(,%ebp,4)` with ebp = variant * 5): word 0 (A, the near stab, 0x005b599a),
+// word 1 (B, 0x005b5a52), word 2 (C, 0x005b5acf). Words 3 and 4 (0x009c1dc8, 0x009c1dcc, values
+// 92 and 26 for variant 0) are not record ids and are not traced here.
+export const MERISSA_ATTACK_SELECT: readonly { near: number; mid: number; far: number }[] = [
+  { near: 0, mid: 2, far: 4 }, // variant 0 (A)
+  { near: 1, mid: 3, far: 5 }, // variant 1 (AA)
+];
+export const MERISSA_FREEZE_RECORD = 6; // 0x009c1bb0, the record the A branch takes on a freeze roll
+export const MERISSA_FREEZE_MASK = 0x10; // OR-ed into +0x37c on the freeze roll (0x005b5a34..0x005b5a3f)
+
+export function merissaAttackRecord(id: number): MerissaAttackRecord | null {
+  return MERISSA_ATTACK_RECORDS.find((r) => r.id === id) ?? null;
+}
+
+// PROVEN gate of one attack record: dist^2 below the record's range AND the angle below its
+// limit (0x005b59af fcomps then 0x005b59ba cmpl; the same shape for B and C).
+export function merissaInAttackRange(rec: MerissaAttackRecord, distSq: number, angle: number): boolean {
+  return Math.fround(distSq) < rec.rangeSq && angle < rec.angle;
+}
+
+// PROVEN arithmetic of the rolls (0x005b5ae1..0x005b5b50, 0x005b59e1..0x005b5a32): the RNG value
+// is read as unsigned (the sign fix adds 2^32 at 0x005b59e5..0x005b59ec), then floor(n * u / 2^32)
+// with n = 3 (A) or 10 (C), truncated (fistpll with the chop control word 0xc00). ASSUMED: the
+// RNG is 0x00763498 on the enemy's +0x168 object (its result is not traced).
+export function merissaRngBucket(u32: number, n: number): number {
+  return Math.floor(((u32 >>> 0) * n) / 4294967296);
+}
+
+// The A (near) branch once the record gate passed: a target with flag 0x20 (its +0x30 word, the
+// `andl $0x20` at 0x005b5974) takes the stab without a roll; otherwise a roll of 3 picks the
+// freeze record 6 when it is 0 (1 in 3, with +0x37c |= 0x10), and the stab record otherwise.
+export function merissaPickNearAttack(variant: number, u32: number, targetFlag20: boolean): { record: number; freeze: boolean } {
+  const sel = MERISSA_ATTACK_SELECT[variant & 1];
+  if (targetFlag20) return { record: sel.near, freeze: false };
+  if (merissaRngBucket(u32, 3) === 0) return { record: MERISSA_FREEZE_RECORD, freeze: true };
+  return { record: sel.near, freeze: false };
+}
+
+// The C (far) branch: a roll of 10, the record C only when it is 0 (1 in 10). ASSUMED: the
+// branch is taken only after the gate on dist^2 below the C range and the angle below 60 degrees
+// (both PROVEN as the record gate); the B branch (record 2 / 3) is only partly traced and is not
+// modelled here.
+export function merissaPickFarAttack(variant: number, u32: number): number | null {
+  const sel = MERISSA_ATTACK_SELECT[variant & 1];
+  return merissaRngBucket(u32, 10) === 0 ? sel.far : null;
+}
