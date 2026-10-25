@@ -356,7 +356,7 @@ export class FieldHud {
       trade: () => this.tradeEnv(),
       home: () => {
         const s = this.opts.home?.() ?? null;
-        return s ? { ...s, text: (g, i) => this.text(g, i) } : null;
+        return s ? { ...s, text: (g, i) => this.text(g, i), teamChat: () => this.opts.teamChat ?? null } : null;
       },
       questBoard: {
         vm: () => this.opts.quest?.()?.vm ?? null,

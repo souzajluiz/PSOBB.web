@@ -223,6 +223,7 @@ export class LobbyScreen implements Screen {
       team: () => hud.team ?? null,
       meetUser: (reply) => hud.meetUser?.(reply),
       sendShortcuts: () => hud.sendShortcuts?.(),
+      teamChat: () => hud.teamChat ?? null,
     }));
     this.home.onAllClosed = () => {
       this.menu.leafOpen = false;

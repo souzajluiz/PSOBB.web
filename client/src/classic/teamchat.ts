@@ -79,6 +79,13 @@ export class TeamChat {
     this.locked = true;
   }
 
+  // The Home menu's Team Log rows (0x158 shows, 0x159 hides): the exe's UIElement_SetLockAndVisibilityState
+  // (0x180: shown and locked) and UIElement_Update (clears 0x180). Both bits move together.
+  setWindow(on: boolean): void {
+    this.open = on;
+    this.locked = on;
+  }
+
   // F10: only while the window is open.
   toggleLock(): void {
     if (this.open) this.locked = !this.locked;

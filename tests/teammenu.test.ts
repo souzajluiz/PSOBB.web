@@ -21,8 +21,11 @@ import {
   T11_TEAM_INFO,
   T11_TEAM_LOG,
   T15_TEAM,
+  TEAM_LOG_POS,
+  TeamLogWindow,
   type TeamHost,
 } from '../client/src/classic/teammenu.ts';
+import { TeamChat } from '../client/src/classic/teamchat.ts';
 import { yesNoRect } from '../client/src/classic/titleflow.ts';
 import { MailCompose } from '../client/src/classic/simplemail.ts';
 import { NO_TEAM, PRIVILEGE, type TeamMember, type TeamMembership } from '../client/src/net/team.ts';
@@ -740,7 +743,7 @@ async function openMaster(h: TeamHost) {
   eq(TEAM_INFO_POINTS_POS, { x: 299, y: 256 }, 'the points window at get_gui_position(0x1a)');
   eq(TEAM_INFO_REWARDS_POS, { x: 13, y: 296, w: 400, h: 140 }, 'the reward list at (3) + (0, 40), 400 x 140');
   eq([T11_TEAM_INFO.pointInfo, T11_TEAM_INFO.earnedPrivileges, T11_TEAM_INFO.none], [0x170, 0x171, 0xee], 'row and empty strings (group 11)');
-  eq(T11_TEAM_LOG, { title: 0x157, rows: [0x158, 0x159] }, 'Team Log labels (group 11, not ported)');
+  eq(T11_TEAM_LOG, { title: 0x157, rows: [0x158, 0x159] }, 'Team Log labels (group 11)');
 
   const calls = { intra: 0, rewards: [] as boolean[] };
   const ranking = {
@@ -827,6 +830,56 @@ async function openMaster(h: TeamHost) {
   late.close();
   await tick();
   eq([late.state, late.subRows], ['list', null], 'answer after close is dropped');
+}
+
+// --- Home menu > Team > Team Log (0x27): the team chat window's show / hide rows -------------
+{
+  eq(TEAM_LOG_POS, { x: 13, y: 256 }, 'the Team Log list at get_gui_position(0x16) (static)');
+  const sent: string[] = [];
+  const chat = new TeamChat((sender, text) => sent.push(`${sender}:${text}`));
+  const log = new TeamLogWindow({ shown: () => chat.open, window: (on) => chat.setWindow(on) }, t11);
+  eq([log.open, log.cursor], [false, 0], 'closed before show');
+  eq(chat.open, false, 'the team chat window starts hidden');
+
+  // Opened hidden: the cursor starts on row 1 (hide); no change to the window.
+  log.show();
+  eq([log.open, log.cursor, chat.open, chat.locked], [true, 1, false, false], 'hidden window: cursor on hide, nothing changed');
+
+  // Up highlights row 0 (show): the window opens and is locked (0x180).
+  log.key(k('ArrowUp'));
+  eq([log.cursor, chat.open, chat.locked, chat.routes()], [0, true, true, true], 'row 0 previews show (open + lock)');
+
+  // Enter on show: the list closes and the window stays shown.
+  const kept = log.key(k('Enter'));
+  eq([kept, log.open, chat.open, chat.locked], [false, false, true, true], 'decide on show closes the list, window stays shown');
+
+  // Reopened shown: the cursor starts on row 0; Down previews hide and clears the lock.
+  log.show();
+  eq([log.cursor, chat.open], [0, true], 'shown window: cursor on show');
+  log.key(k('ArrowDown'));
+  eq([log.cursor, chat.open, chat.locked], [1, false, false], 'row 1 previews hide (0x180 cleared)');
+  log.key(k('Enter'));
+  eq([log.open, chat.open], [false, false], 'decide on hide closes the list, window hidden');
+
+  // Cancel closes and keeps the window as the cursor row left it.
+  log.show();
+  log.key(k('ArrowUp'));
+  eq(chat.open, true, 'preview shows the window');
+  const cancelled = log.key(k('Escape'));
+  eq([cancelled, log.open, chat.open], [false, false, true], 'Escape closes the list; window as last previewed');
+
+  // The F9 toggle still works after the Team Log (the same two bits).
+  chat.toggle();
+  eq([chat.open, chat.locked], [false, false], 'F9 hides the shown window (both bits clear)');
+  eq(sent, [], 'the Team Log sends nothing');
+
+  // Draw smoke test: the list draws with the stub canvas.
+  const skin = { frame: {} as CanvasImageSource, bars: {} as CanvasImageSource };
+  log.show();
+  log.draw(ctx, skin, 0);
+  log.close();
+  log.draw(ctx, skin, 0);
+  check(true, 'draw smoke');
 }
 
 console.log(failures ? `${failures} of ${checks} FAILED` : `ALL PASS (${checks} checks)`);

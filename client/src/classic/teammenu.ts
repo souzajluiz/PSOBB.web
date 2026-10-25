@@ -1193,9 +1193,87 @@ export const TEAM_INFO_POINTS_POS = { x: 299, y: 256 } as const; // get_gui_posi
 export const TEAM_INFO_REWARDS_POS = { x: 13, y: 296, w: 400, h: 140 } as const; // (3) + (0, 40), 400 x 140
 export const TEAM_INFO_DESC_POS = { x: 419, y: 256, w: 260 } as const; // ASSUMED (get_gui_position(0x8a))
 export const T11_TEAM_INFO = { pointInfo: 0x170, earnedPrivileges: 0x171, none: 0xee } as const;
-// Team Log (0x27, not ported): FUN_0074d618 titles its list with unitxt (11, 0x157) at
+// Team Log (0x27): FUN_0074d618 titles its list with unitxt (11, 0x157) at
 // get_gui_position(0x16) = (13, 256) static, and its rows are (11, 0x158) and (11, 0x159).
 export const T11_TEAM_LOG = { title: 0x157, rows: [0x158, 0x159] } as const;
+export const TEAM_LOG_POS = { x: 13, y: 256 } as const; // get_gui_position(0x16), static 0x00971ff0
+export const TEAM_LOG_MIN_WIDTH = 302; // ASSUMED: the size pair 302.0 / 148.0 passed to FUN_00714ac8 (not checked)
+
+// The Team Log host: the team chat window (classic/teamchat.ts). `shown` is its open bit (0x100 on
+// the slot's element, FUN_00716078); `window(on)` sets or clears the window (0x180, FUN_00716188 /
+// FUN_00716198).
+export interface TeamLogHost {
+  shown(): boolean;
+  window(on: boolean): void;
+}
+
+// Home menu > Team > Team Log (0x27). The exe's state 0 opens the list with the cursor on row 0
+// (show) when the window is shown and on row 1 (hide) when it is not (FUN_00714e5c(!shown)). State
+// 2 runs every frame: the cursor row decides the window (row 0 sets 0x180, row 1 clears it), so
+// moving the cursor previews the window. A decided row closes the list (the exe's state 3; the
+// owner's callback is not traced, ASSUMED: the leaf is the end of the menu). Cancel closes it with
+// the window as the last cursor row left it (ASSUMED: the cancel branch of state 2 is not traced).
+export class TeamLogWindow {
+  private visible = false;
+  private readonly list: PickList;
+  private readonly host: TeamLogHost;
+  private readonly text: Text;
+
+  constructor(host: TeamLogHost, text: Text) {
+    this.host = host;
+    this.text = text;
+    this.list = new PickList([
+      { label: text(T11_TEAM_LOG.rows[0]), value: 0, enabled: true },
+      { label: text(T11_TEAM_LOG.rows[1]), value: 1, enabled: true },
+    ]);
+  }
+
+  get open(): boolean {
+    return this.visible;
+  }
+
+  get cursor(): number {
+    return this.list.cursor;
+  }
+
+  show(): void {
+    this.visible = true;
+    this.list.cursor = this.host.shown() ? 0 : 1;
+    this.list.top = 0;
+    this.list.result = null;
+  }
+
+  close(): void {
+    this.visible = false;
+  }
+
+  // Returns whether the window is still open.
+  key(e: MenuKey): boolean {
+    if (!this.visible) return false;
+    if (menuKeyOf(e) === 'cancel') {
+      this.close();
+      return false;
+    }
+    this.list.key(e);
+    const r = this.list.result;
+    this.list.result = null;
+    const row = this.list.selected;
+    if (row) this.host.window(row.value === 0);
+    if (r === 'decide') {
+      this.close();
+      return false;
+    }
+    return true;
+  }
+
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
+    if (!this.visible) return;
+    ctx.save();
+    ctx.translate(extra / 2, 0); // menus follow the counter's centring
+    this.list.draw(ctx, skin, TEAM_LOG_POS.x, TEAM_LOG_POS.y, this.text(T11_TEAM_LOG.title), TEAM_LOG_MIN_WIDTH);
+    ctx.restore();
+  }
+}
 
 export type TeamInfoPhase = 'list' | 'waiting' | 'points' | 'rewards';
 
