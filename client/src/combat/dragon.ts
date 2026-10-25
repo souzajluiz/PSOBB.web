@@ -774,7 +774,14 @@ export class DragonAi extends BrainBase {
   get superArmor(): boolean {
     return this.sid === 0x0d || this.sid === 0x15 || this.sid === 0x16;
   }
-  // The entrance: the hit boxes are disabled (SaintEmilionPart_DisableAll).
+  // The entrance: the body's hit boxes (7, this+0xa4) have bit 0 off. PROVEN (PsoBB.exe): the
+  // entrance's phase 4 calls SaintEmilionPart_DisableAll (0x007ba03c, dump 159373) and its phase 5
+  // EnableAllEntityHitboxes (0x007b9fbc, dump 159657); no other Dragon state writes the body's bit 0.
+  // Collapse (0x09, SinowbeatAttackStateMachine 004203cc) clears bit 0 only on the three child lists
+  // at this+0x1c/+0x20/+0x24 (DragonConstructor, dump 166551: born with bit 0 off, never switched on
+  // in the dump), which the port does not model as entities. Lock-on (check_enemy_is_targetable)
+  // reads bit 0; the port's hit gate uses the same bit as for De Rol Le (ASSUMED for the hit test
+  // itself, not re-traced here).
   get untargetable(): boolean {
     return this.sid === DRAGON_STATE.intro;
   }

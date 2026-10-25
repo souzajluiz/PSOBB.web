@@ -24,6 +24,7 @@ import {
   type DeRolLeOptions,
   type DrlEvent,
 } from '../client/src/combat/derolle.ts';
+import { radarConcealed } from '../client/src/render/combat.ts';
 import {
   DRL_DEBRIS,
   DRL_FIN,
@@ -643,6 +644,9 @@ for (const ultimate of [false, true]) {
   run(hi, [], 1);
   check(hi.segmentParts[0].high && !hi.segmentParts[1].high, 'segment: flag 4 at y 30 and up (high), 2 below');
   eq(new DrlSegmentAi(ai, 9).untargetable, true, 'segment proxy: hidden while the box is off');
+  // The radar: the forced icon (handle_derolle_shell_behavior, dump 176968) has no box gate.
+  eq(radarConcealed({ ai: new DrlSegmentAi(ai, 9) }), false, 'segment radar: shown with its box off (forced icon 1.2)');
+  eq(radarConcealed({ ai: new DrlSegmentAi(ai, 3) }), false, 'segment radar: shown with its box on');
   eq(new DrlSegmentAi(ai, 3).tick().x, 30, 'segment proxy: stands at the segment');
   // A whole segment: its own pool only, the flash.
   ai.events.splice(0);

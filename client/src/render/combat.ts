@@ -562,13 +562,19 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   (e.ai instanceof SmChildAi && e.ai.untargetable) ||
   (e.ai instanceof SinowAi && e.ai.dormant) ||
   (e.ai instanceof NanoDragonAi && e.ai.untargetable);
-// The radar test of concealed(). The Dragon's update (PsoBB.exe OlgaUpdateMainLoop_00423b7c,
-// 0x00423b7c) ends every live frame with enable_reticle_ and unknown_add_minimap_icon3(pos,
-// 0xffffa24c, 0x40000000, flag 1): a forced icon with no state and no distance gate (flag 1
-// skips the distance test). So the entrance (sid 0x1d, untargetable) is on the radar. Its
-// lock-on and hit still follow concealed() (ASSUMED: the hit boxes are off in the entrance,
-// SaintEmilionPart_DisableAll, not traced in the exe).
-export const radarConcealed = (e: { ai: EnemyBrain | null }): boolean => concealed(e) && !(e.ai instanceof DragonAi);
+// The radar test of concealed(). Two families keep their forced icon whatever their box state:
+// - The Dragon's update (PsoBB.exe OlgaUpdateMainLoop_00423b7c, 0x00423b7c) ends every live frame
+//   with enable_reticle_ and unknown_add_minimap_icon3(pos, 0xffffa24c, 0x40000000, flag 1): no
+//   state gate, no distance gate. So the entrance (sid 0x1d, untargetable) is on the radar.
+// - The De Rol Le shell segments (handle_derolle_shell_behavior 0x00435294, dump 176968):
+//   unknown_add_minimap_icon3 at the segment's own x2 with 0x3f99999a (1.2), flag 1, after the
+//   pause gate only. Their box (bit 0, off below y -60, 0x00435070) does not gate the icon.
+// Lock-on and hit still follow concealed(): the Dragon's entrance is the only Dragon state that
+// clears its body boxes' bit 0 (ProcessEnemySinowbeatDragonPhase phase 4 of 0x1d calls
+// SaintEmilionPart_DisableAll 0x007ba03c, dump 159373; phase 5 calls EnableAllEntityHitboxes
+// 0x007b9fbc, dump 159657). See combat/dragon.ts untargetable.
+export const radarConcealed = (e: { ai: EnemyBrain | null }): boolean =>
+  concealed(e) && !(e.ai instanceof DragonAi) && !(e.ai instanceof DrlSegmentAi);
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;

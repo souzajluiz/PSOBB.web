@@ -1,5 +1,35 @@
 # Devlog
 
+## 2026-10-25: Episode 1 bosses: the Dragon's lock and hit are the entrance's box bit 0; De Rol Le's shell segments are on the radar with their box off
+
+**Outcome.** Dragon lock and hit: `concealed()` (`untargetable` = the entrance, sid 0x1d) is now PROVEN, not ASSUMED. Nothing changed in the code path, only the comments and a test. The earlier note that the update clears box bit 0 when the cursor is below 0x32 was wrong: that clear is bit 26 (see below). De Rol Le: the shell segments' forced radar icon has no box gate, so the port now shows a segment on the radar with its box off (`radarConcealed`). The body was already right (its icon is unconditional). Port change: `client/src/render/combat.ts` `radarConcealed` drops `DrlSegmentAi`.
+
+**Proven (PsoBB.exe; community dump `Psobb.exe-05112026.c`, Ghidra, `objdump -D` of the exe).**
+- Box bit 0 is the lock gate. `check_enemy_is_targetable` (dump 785551) is the target test; the hit boxes' bit 0 is the enable bit (`PoisonLilyEnableHitboxes_0052045c` sets it, `..._005204b0` clears it, `EnableAllEntityHitboxes_007b9fbc` / `SaintEmilionPart_DisableAll_007ba03c` are the same bit on a list).
+- Which Dragon states clear the body's bit 0 (the Dragon's own list, `this+0xa4`, 7 boxes, `DragonConstructor` dump 166551 / the body loader):
+  - the entrance (0x1d, `ProcessEnemySinowbeatDragonPhase` dump 159309, the port's `0x0041b220`): phase 4 calls `SaintEmilionPart_DisableAll` (dump 159373), phase 5 calls `EnableAllEntityHitboxes` (dump 159657). That is the only body switch-off and its restore in the Dragon code: the body is on in every other state.
+  - collapse (0x09, `SinowbeatAttackStateMachine_004203cc`, dump 162883): sub-state 1 ends at counter 0x1c1 and calls `ClearHitboxFlags(this+0x694)` (dump 162940), its phase 5 does the same (dump 162994). `ClearHitboxFlags` (dump 166764) clears bit 0 on the three child lists at `+0x1c / +0x20 / +0x24` of the object at `+0x694`. `DragonConstructor` (dump 166551) builds those three children with bit 0 already off (`& 0xfffffffe` at dump 166634, 166693, 166752) and nothing in the dump switches it on. They are inserted into the entity list, but they never become lockable or hittable. The port has no entity for them, so no change.
+- `vtable +0x88` is `FUN_00777ba4` (`objdump`, `777ba4: movl 0x30(%ecx),%eax; andl $0x200`): entity flags (+0x30) `& 0x200`, the defender's "hit this frame" bit (`battle.h` 0x200). The Dragon's update (`OlgaUpdateMainLoop_00423b7c`, dump 165413; `*vtable->field34_0x88` at 0x00423c6b and the other copies, dump 165462 / 165478 / 165494 / 165513) does, when that bit is set and the cursor (+0x684) is below 0x32 and the hp is under the floor (+0x688): `hp = max(floor, hp)` and `unset_hit_flags_on_hitboxes` (dump 303059). That last one clears `0x04000000` (bit 26, "this box was hit") on the Dragon's boxes, not bit 0. So the clamp is the port's existing `if (cursor < 0x32 && thr > hp) hp = thr` (`client/src/combat/dragon.ts`); the lock is not touched.
+- Dragon radar: the update's forced icon `unknown_add_minimap_icon3(&x, 0xffffa24c, 0x40000000, 1, 1)` (dump 165532) has no state or box gate; the entrance is on the radar (as before).
+- De Rol Le body: `UpdateDerolle` (dump 175033) returns early only for the debug monster (175062) and the dead flag 0x8000 (175069). Its icon `unknown_add_minimap_icon3(&x2, 0xffffa24c, 0x40000000, 1, 1)` (dump 175250) comes after `enable_reticle_` with no box or state gate.
+- De Rol Le shell segments: `handle_derolle_shell_behavior` (dump 176942) returns only on the pause gate (176949). It copies the current target's position (the body's slot, +0x398) into x2 (176953-176956) and calls `unknown_add_minimap_icon3(&x2, 0xffffa24c, 0x3f99999a, 1, 1)` (dump 176968) with no box test. Its box is switched by its own update's vtable +0x168 (`0x00435070`, below y -60 off), which does not gate the icon.
+- Icon functions: `0x0080575c` is `unknown_add_minimap_icon3` (objdump: the forced test `testb $1` on the flag, the count cap 0x7f); `0x00805608` is `unknown_add_minimap_icon` (the same shape, the shape word at 0x20(%esp)). The De Rol Le updates call only `0x0080575c` (body 2.0, segment 1.2). No De Rol Le update calls `0x00805608`.
+
+**Corrected.** The 2026-10-25 entry "Episode 1 bosses: the Dragon's radar is the update's forced icon" said the update clears box bit 0 when the cursor is below 0x32 (the lock and hit follow flag 0x200). It clears bit 26 of the boxes and restores the hp; the lock stays on the entrance's bit 0.
+
+**Port.**
+- `client/src/render/combat.ts`: `radarConcealed(e)` = `concealed(e)` without the Dragon and without `DrlSegmentAi`. Comments name the exe sites.
+- `client/src/combat/dragon.ts`: `untargetable` comment: PROVEN (entrance phase 4 / 5). No code change.
+- `client/src/classic/minimap.ts`: `DE_ROL_LE_BODY` comment: the icon callers and the position (proven).
+- `tests/derolle.test.ts`: a segment with its box off is on the radar; a segment with its box on is too.
+- `tests/dragon.test.ts`: unchanged (the entrance is untargetable and on the radar; targetable afterwards).
+
+**ASSUMED / open.**
+- The three Dragon child lists (collapse's clear): the port does not create them, so nothing lockable or hittable is lost; if an exe path sets their bit 0, a Dragon child would be targetable. No setter found in the dump (not searched in the binary).
+- The hit test itself (which bit the port's hit gate reads for the Dragon body) is taken from the De Rol Le rule; the hit path was not re-traced in this pass.
+- De Rol Le segment radar: the port's `root.visible` gate stays (the segments' parked position before the first draw is 10000; the exe has no visibility gate; not traced how the forced icon is drawn at that position).
+- Mericarol, Gibbon, SlimeControl and the other bosses are not in this pass.
+
 ## 2026-10-25: Xbox (XB) .qst: parse and pack, newserv byte cross-check
 
 `formats/qst.ts` takes `version: 'XB'` (`QstVersion`). newserv's `S_OpenFile_XB_44_A6` (`src/CommandFormats.hh`, 0x50 bytes) is the PC / GC open body plus `xb_filename` (pstring 0x10, ASCII, at 0x38) and `content_meta` (u32 at 0x48, `0x30000000 | quest number`, `Quest.cc` `add_open_file_command_t` XB overload). The header is the 4-byte DC-style one; the write commands are the GC ones (`add_write_file_commands_t` with `bb_alignment` false). `qstVersion` returns `XB` for the first command's size 0x54 (it used to refuse). `packQstFiles(..., xb)` takes `{ xbFilename, contentMeta }` and throws without them; `parseQstFiles` returns them as `xb`. `packQst(..., { version: 'XB', language })` names the Xbox file `quest<N>_<c>.dat` with `c` the lowercase language letter (`JEGFSBTK`, default English), as newserv `VersionedQuest::xb_filename`. XB download files are the PSO V2 payload, as on DC / PC / GC (newserv's decode_qst_data_t applies its DLQ decoder to every A6 file).
