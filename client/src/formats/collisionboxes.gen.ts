@@ -614,6 +614,16 @@ export const COLLISION_SITES: readonly CollisionBoxSite[] = [
   { site: 0x005a9eec, func: 0x005a9c58, table: 0x009c0818, via: 0x00521c5c, variants: null },
 ];
 
+// Door boxes by object type (DOOR_CALLERS in the generator, DEVLOG 2026-10-25): the constructor 0x006460d8 copies the
+// stack template 0x00935a94 (offset, shape, flags) and takes radius / halfX from the per-type block its caller pushes
+// (block +0x0c radius, +0x10 halfX). `block` is the exe address of that block.
+export const DOOR_BOXES: Readonly<Record<number, CollisionBoxRow & { block: number }>> = {
+  0x0046: { block: 0x00935ac4, offset: [0, 0, 0], radius: 2, halfX: 25, shape: 1, flags: 0x10003 },
+  0x0047: { block: 0x00935a78, offset: [0, 0, 0], radius: 2, halfX: 24, shape: 1, flags: 0x10003 },
+  0x0048: { block: 0x009c7114, offset: [0, 0, 0], radius: 50, halfX: 6.5, shape: 1, flags: 0x10003 },
+  0x0049: { block: 0x00935a54, offset: [0, 0, 0], radius: 4, halfX: 25, shape: 1, flags: 0x10003 },
+};
+
 // Init sites whose box the constructor writes at run time (CONSTRUCTED_SITES in the generator, DEVLOG
 // 2026-10-25 collision sites). Formula text: arg1 = the constructor's first argument (this+0x1c),
 // arg2 = its second (the set record), this = the object; `.f32+0xNN of X` a float, `.word` / `.dword` integers.
@@ -624,19 +634,21 @@ export interface ConstructedBox {
   owner: 'child' | 'self'; // the object the init boxes (a child: the 0xac object the constructor allocates)
   table: string; // where the init reads the row: 'this+0xNN', 'stack' or 'heap'
   count: number;
+  types: readonly { type: number; depth: number }[]; // object factory types whose creator reaches the constructor (depth in calls)
+  enemies: readonly { type: number; depth: number }[]; // enemy set types whose factory tree reaches it (depth in calls)
   row: { offset: readonly [string, string, string]; radius: string; halfX: string; shape: string; flags: string };
 }
 
 export const CONSTRUCTED_BOXES: readonly ConstructedBox[] = [
-  { site: 0x00619759, func: 0x00619680, owner: 'self', table: "heap", count: 1, row: { offset: ["0", "0", "0"], radius: ".dword+0x8c of this == 0 ? .f32+0x70 of this : .f32+0x6c of this", halfX: ".dword+0x8c of this == 0 ? .f32+0x68 of this : .f32+0x6c of this", shape: "1", flags: "0x18002" } },
-  { site: 0x00635e71, func: 0x00635d98, owner: 'self', table: "heap", count: 1, row: { offset: ["0", "0", "0"], radius: ".dword+0x8c of this == 0 ? .f32+0x70 of this : .f32+0x6c of this", halfX: ".dword+0x8c of this == 0 ? .f32+0x68 of this : .f32+0x6c of this", shape: "1", flags: "0x18002" } },
-  { site: 0x00638261, func: 0x00638188, owner: 'self', table: "heap", count: 1, row: { offset: ["0", "0", "0"], radius: ".dword+0x8c of this == 0 ? .f32+0x70 of this : .f32+0x6c of this", halfX: ".dword+0x8c of this == 0 ? .f32+0x68 of this : .f32+0x6c of this", shape: "1", flags: "0x18002" } },
-  { site: 0x006461cf, func: 0x006460d8, owner: 'self', table: "stack", count: 1, row: { offset: ["0", "0", "0"], radius: ".f32+0x0c of arg2", halfX: ".f32+0x10 of arg2", shape: "1", flags: "0x10003" } },
-  { site: 0x006de7d0, func: 0x006de5f0, owner: 'child', table: "this+0xbc", count: 1, row: { offset: ["0", "0", "0"], radius: "10", halfX: "1", shape: "0", flags: ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107" } },
-  { site: 0x006de9d7, func: 0x006de7fc, owner: 'child', table: "this+0xbc", count: 1, row: { offset: ["0", "0", "0"], radius: "10", halfX: "1", shape: "0", flags: ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107" } },
-  { site: 0x006f010b, func: 0x006efe50, owner: 'child', table: "this+0xfc", count: 1, row: { offset: ["0", "0", "-10"], radius: "5", halfX: "1", shape: "1", flags: ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107" } },
-  { site: 0x006f0435, func: 0x006f0138, owner: 'child', table: "this+0xfc", count: 1, row: { offset: ["0", "0", "-10"], radius: "5", halfX: "1", shape: "1", flags: ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107" } },
-  { site: 0x0077c197, func: 0x0077c070, owner: 'self', table: "this+0xac", count: 1, row: { offset: ["0", "0", "0"], radius: ".f32+0x24 of arg2", halfX: ".f32+0x28 of arg2", shape: ".f32+0x2c of arg2 < 0 ? 1 : 0", flags: "0x10001 | (abs(.f32+0x2c of arg2) >= 1000 ? 0x100 : 0)" } },
+  { site: 0x00619759, func: 0x00619680, owner: 'self', table: "heap", count: 1, types: [{ type: 0x038a, depth: 1 }], enemies: [], row: { offset: ["0", "0", "0"], radius: ".dword+0x8c of this == 0 ? .f32+0x70 of this : .f32+0x6c of this", halfX: ".dword+0x8c of this == 0 ? .f32+0x68 of this : .f32+0x6c of this", shape: "1", flags: "0x18002" } },
+  { site: 0x00635e71, func: 0x00635d98, owner: 'self', table: "heap", count: 1, types: [{ type: 0x0388, depth: 1 }], enemies: [], row: { offset: ["0", "0", "0"], radius: ".dword+0x8c of this == 0 ? .f32+0x70 of this : .f32+0x6c of this", halfX: ".dword+0x8c of this == 0 ? .f32+0x68 of this : .f32+0x6c of this", shape: "1", flags: "0x18002" } },
+  { site: 0x00638261, func: 0x00638188, owner: 'self', table: "heap", count: 1, types: [{ type: 0x0389, depth: 1 }], enemies: [], row: { offset: ["0", "0", "0"], radius: ".dword+0x8c of this == 0 ? .f32+0x70 of this : .f32+0x6c of this", halfX: ".dword+0x8c of this == 0 ? .f32+0x68 of this : .f32+0x6c of this", shape: "1", flags: "0x18002" } },
+  { site: 0x006461cf, func: 0x006460d8, owner: 'self', table: "stack", count: 1, types: [{ type: 0x0047, depth: 0 }, { type: 0x0046, depth: 2 }, { type: 0x0048, depth: 2 }, { type: 0x0049, depth: 2 }], enemies: [], row: { offset: ["0", "0", "0"], radius: ".f32+0x0c of arg3", halfX: ".f32+0x10 of arg3", shape: "1", flags: "0x10003" } },
+  { site: 0x006de7d0, func: 0x006de5f0, owner: 'child', table: "this+0xbc", count: 1, types: [], enemies: [], row: { offset: ["0", "0", "0"], radius: "10", halfX: "1", shape: "0", flags: ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107" } },
+  { site: 0x006de9d7, func: 0x006de7fc, owner: 'child', table: "this+0xbc", count: 1, types: [], enemies: [], row: { offset: ["0", "0", "0"], radius: "10", halfX: "1", shape: "0", flags: ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107" } },
+  { site: 0x006f010b, func: 0x006efe50, owner: 'child', table: "this+0xfc", count: 1, types: [], enemies: [{ type: 0x00d7, depth: 5 }], row: { offset: ["0", "0", "-10"], radius: "5", halfX: "1", shape: "1", flags: ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107" } },
+  { site: 0x006f0435, func: 0x006f0138, owner: 'child', table: "this+0xfc", count: 1, types: [], enemies: [], row: { offset: ["0", "0", "-10"], radius: "5", halfX: "1", shape: "1", flags: ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107" } },
+  { site: 0x0077c197, func: 0x0077c070, owner: 'self', table: "this+0xac", count: 1, types: [{ type: 0x0009, depth: 1 }], enemies: [], row: { offset: ["0", "0", "0"], radius: ".f32+0x24 of arg2", halfX: ".f32+0x28 of arg2", shape: ".f32+0x2c of arg2 < 0 ? 1 : 0", flags: "0x10001 | (abs(.f32+0x2c of arg2) >= 1000 ? 0x100 : 0)" } },
 ];
 
 // Enemy .dat set type -> its factory links (one per factory; areas where it is used).

@@ -23,7 +23,7 @@
 // marked "generic".
 
 import type { ObjectSet } from './setdata.ts';
-import { COLLISION_TABLES } from './collisionboxes.gen.ts';
+import { COLLISION_TABLES, DOOR_BOXES } from './collisionboxes.gen.ts';
 
 export interface ObjectModelContext {
   area: number;
@@ -139,6 +139,15 @@ function generatedBox(address: number): ObjectCollision {
   const r = rows[0];
   const type = r.shape === 1 ? 1 : 0;
   return { address, offset: [r.offset[0], r.offset[1], r.offset[2]], type, halfX: type === 1 ? r.halfX : r.radius, halfZ: r.radius, flags: r.flags };
+}
+
+// A door's box (types 0x46..0x49, DOOR_BOXES in collisionboxes.gen.ts): the constructor 0x006460d8 takes its radius and
+// halfX from the per-type template block its caller pushes as a constant (not from the set record); the row's offset,
+// shape and flags are the stack template's. `address` is that block, as before.
+function doorBox(type: number): ObjectCollision {
+  const d = DOOR_BOXES[type];
+  if (!d) throw new Error(`no door box for type ${type.toString(16)}`);
+  return { address: d.block, offset: [d.offset[0], d.offset[1], d.offset[2]], type: 1, halfX: d.halfX, halfZ: d.radius, flags: d.flags };
 }
 
 // A box picked by an index from a table of rows 0x2c bytes apart: the constructors' `base + 0x2c * [this+0x84]`
@@ -437,12 +446,12 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     // the block's +0x0c (radius) / +0x10 (unk1).
     case 0x0046:
       return spec('TObjCityDoor_Shop', 'bm_obj_city_common.bml', [{ model: 11, textures: 'bm_obj_city_common.xvm', motion: 10, drive: 'door' }], {
-        collision: BOX(0x00935ac4, 25, 2, 0),
+        collision: doorBox(0x0046),
         door: true,
       });
     case 0x0047:
       return spec('TObjCityDoor_Guild', 'bm_obj_city_common.bml', [{ model: 21, textures: 'bm_obj_city_common.xvm', motion: 12, drive: 'door' }], {
-        collision: BOX(0x00935a78, 24, 2, 0),
+        collision: doorBox(0x0047),
         door: true,
       });
     case 0x0048:
@@ -453,7 +462,7 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
           { model: 9, textures: 'bm_obj_city_common.xvm', motion: 8, drive: 'door' },
           { model: 10, textures: 'bm_obj_city_common.xvm', motion: 9, drive: 'door' },
         ],
-        { collision: BOX(0x009c7114, 6.5, 50, 0), door: true },
+        { collision: doorBox(0x0048), door: true },
       );
     // The Medical Center door's motion 11 (fe_obj_o_medical_door01l.njm, 30
     // frames, two leaves) has 16-byte angle keys: 30 consecutive frames on each
@@ -468,7 +477,7 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     // units out in front of the Medical Center wall (the set point is the wall).
     case 0x0049:
       return spec('TObjCityDoor_Med', 'bm_obj_city_common.bml', [{ model: 20, textures: 'bm_obj_city_common.xvm', motion: 11, drive: 'door', keys16: true, offset: [0, 0, -80] }], {
-        collision: BOX(0x00935a54, 25, 4, 0),
+        collision: doorBox(0x0049),
         door: true,
       });
     // TObjGoalWarpAncient (0x0140) / TObjMapWarpAncient (0x0141): ctors

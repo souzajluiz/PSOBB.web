@@ -855,8 +855,18 @@ SITE_OVERRIDES = {
 FLAGS_W_D = ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107"
 ROW_SPHERE10_W_D = {"offset": ["0", "0", "0"], "radius": "10", "halfX": "1", "shape": "0", "flags": FLAGS_W_D}
 ROW_BOX5_Z10_W_D = {"offset": ["0", "0", "-10"], "radius": "5", "halfX": "1", "shape": "1", "flags": FLAGS_W_D}
-ROW_STACK_TEMPLATE = {"offset": ["0", "0", "0"], "radius": ".f32+0x0c of arg2", "halfX": ".f32+0x10 of arg2",
+ROW_STACK_TEMPLATE = {"offset": ["0", "0", "0"], "radius": ".f32+0x0c of arg3", "halfX": ".f32+0x10 of arg3",
                       "shape": "1", "flags": "0x10003"}
+# The door ctor 0x6460d8 (types 0x46..0x49): its third argument is a per-type template block, pushed as a constant
+# by each caller (checked below). The stack row is the template 0x00935a94 with radius / halfX from the block.
+DOOR_CTOR = 0x006460D8
+DOOR_TEMPLATE_VA = 0x00935A94
+DOOR_CALLERS = {  # call site: (object type, block VA)
+    0x00646091: (0x0046, 0x00935AC4),
+    0x00646309: (0x0047, 0x00935A78),
+    0x00646581: (0x0048, 0x009C7114),
+    0x006467A5: (0x0049, 0x00935A54),
+}
 ROW_RECORD_SIGN = {"offset": ["0", "0", "0"], "radius": ".f32+0x24 of arg2", "halfX": ".f32+0x28 of arg2",
                    "shape": ".f32+0x2c of arg2 < 0 ? 1 : 0",
                    "flags": "0x10001 | (abs(.f32+0x2c of arg2) >= 1000 ? 0x100 : 0)"}
@@ -874,8 +884,8 @@ CONSTRUCTED_SITES = {
     # (ctor 0x6efe50, site 0x006f010b; ctor 0x6f0138, site 0x006f0435, the same row).
     0x006F010B: {"func": 0x006EFE50, "owner": "child", "table": "this+0xfc", "count": 1, "row": ROW_BOX5_Z10_W_D},
     0x006F0435: {"func": 0x006F0138, "owner": "child", "table": "this+0xfc", "count": 1, "row": ROW_BOX5_Z10_W_D},
-    # The stack row of ctor 0x6460d8 (types 0x46..0x49; the type table names 0x47 for this creator): radius and halfX
-    # from the set record stored at this+0xb8 (= arg2).
+    # The stack row of ctor 0x6460d8 (types 0x46..0x49, DOOR_CALLERS): radius and halfX from the per-type template
+    # block stored at this+0xb8 (= the ctor's third argument, a constant pushed by each caller; NOT the set record).
     0x006461CF: {"func": 0x006460D8, "owner": "self", "table": "stack", "count": 1, "row": ROW_STACK_TEMPLATE},
     # Type 9 (ctor 0x77c070, factory 0x77c000): the row at this+0xac, from the set record arg2 (the same record fields as
     # the object's +0x38..+0x70 copies). Shape 1 when arg2 +0x2c is negative; flag 0x100 when |arg2 +0x2c| >= 1000.
@@ -1289,6 +1299,41 @@ def main(argv):
         lines.append(f"  {{ site: 0x{s['site']:08x}, func: 0x{s['func']:08x}, table: {table}, via: {via}, variants: {variants} }},")
     lines.append("];")
     lines.append("")
+    # Door boxes (DOOR_CALLERS): each caller must call the door ctor with its block pushed as a constant (checked
+    # against the bytes before the call); the row is the stack template (offset, shape, flags) plus the block's radius / halfX.
+    call_set = set(calls)
+    for site, (t, block) in DOOR_CALLERS.items():
+        o = offset(site)
+        if (site, DOOR_CTOR) not in call_set or o is None or b"\x68" + struct.pack("<I", block) not in DATA[o - 16 : o]:
+            raise SystemExit(f"DOOR_CALLERS: {site:#x} does not push block {block:#x} before the call to {DOOR_CTOR:#x}")
+    st = DOOR_TEMPLATE_VA
+    if u32(st + 0x14) != 1 or u32(st + 0x18) != 0x10003 or f32(st) != 0.0 or f32(st + 4) != 0.0 or f32(st + 8) != 0.0:
+        raise SystemExit("DOOR_TEMPLATE_VA: the stack template is not offset 0, shape 1, flags 0x10003")
+    lines.append("// Door boxes by object type (DOOR_CALLERS in the generator, DEVLOG 2026-10-25): the constructor 0x006460d8 copies the")
+    lines.append("// stack template 0x00935a94 (offset, shape, flags) and takes radius / halfX from the per-type block its caller pushes")
+    lines.append("// (block +0x0c radius, +0x10 halfX). `block` is the exe address of that block.")
+    lines.append("export const DOOR_BOXES: Readonly<Record<number, CollisionBoxRow & { block: number }>> = {")
+    for site, (t, block) in sorted(DOOR_CALLERS.items(), key=lambda kv: kv[1][0]):
+        lines.append(f"  0x{t:04x}: {{ block: 0x{block:08x}, offset: [0, 0, 0], radius: {fmt_num(f32(block + 0x0C))}, "
+                     f"halfX: {fmt_num(f32(block + 0x10))}, shape: 1, flags: 0x10003 }},")
+    lines.append("};")
+    lines.append("")
+    # The factory types each constructor is reached from: the type table's creators (the {type, creator,
+    # 0x48742400, 0} rows) and their depth-limited call trees; reach[func][type] = calls from the creator.
+    creators = collections.defaultdict(set)
+    for name, va, size, raw, rawsize in SECTIONS:
+        if name == ".text":
+            continue
+        for off in range(raw, raw + rawsize - 16, 4):
+            t, c, tag, zero = struct.unpack_from("<IIII", DATA, off)
+            if tag == ROW_TAG and zero == 0 and TEXT_LO <= c < TEXT_HI:
+                creators[t].add(func_of(c) or c)
+    reach = collections.defaultdict(dict)
+    for t, cs in creators.items():
+        for c in cs:
+            for f, d in call_tree(c, callees, DEPTH).items():
+                if d < reach[f].get(t, DEPTH + 1):
+                    reach[f][t] = d
     lines.append("// Init sites whose box the constructor writes at run time (CONSTRUCTED_SITES in the generator, DEVLOG")
     lines.append("// 2026-10-25 collision sites). Formula text: arg1 = the constructor's first argument (this+0x1c),")
     lines.append("// arg2 = its second (the set record), this = the object; `.f32+0xNN of X` a float, `.word` / `.dword` integers.")
@@ -1299,6 +1344,8 @@ def main(argv):
     lines.append("  owner: 'child' | 'self'; // the object the init boxes (a child: the 0xac object the constructor allocates)")
     lines.append("  table: string; // where the init reads the row: 'this+0xNN', 'stack' or 'heap'")
     lines.append("  count: number;")
+    lines.append("  types: readonly { type: number; depth: number }[]; // object factory types whose creator reaches the constructor (depth in calls)")
+    lines.append("  enemies: readonly { type: number; depth: number }[]; // enemy set types whose factory tree reaches it (depth in calls)")
     lines.append("  row: { offset: readonly [string, string, string]; radius: string; halfX: string; shape: string; flags: string };")
     lines.append("}")
     lines.append("")
@@ -1306,8 +1353,15 @@ def main(argv):
     for c in constructed:
         r = c["row"]
         off = ", ".join(json.dumps(v) for v in r["offset"])
+        types = ", ".join(f"{{ type: 0x{t:04x}, depth: {d} }}" for t, d in sorted(reach.get(c["func"], {}).items(), key=lambda x: (x[1], x[0])))
+        # Enemy set types whose factory call tree reaches the constructor (the enemy trees above, depth DEPTH_LIMIT).
+        enemy = collections.defaultdict(lambda: DEPTH_LIMIT + 1)
+        for (t, fac), depth_of in trees.items():
+            if c["func"] in depth_of:
+                enemy[t] = min(enemy[t], depth_of[c["func"]])
+        enemies = ", ".join(f"{{ type: 0x{t:04x}, depth: {d} }}" for t, d in sorted(enemy.items(), key=lambda x: (x[1], x[0])))
         lines.append(f"  {{ site: 0x{c['site']:08x}, func: 0x{c['func']:08x}, owner: '{c['owner']}', table: {json.dumps(c['table'])}, "
-                     f"count: {c['count']}, row: {{ offset: [{off}], radius: {json.dumps(r['radius'])}, "
+                     f"count: {c['count']}, types: [{types}], enemies: [{enemies}], row: {{ offset: [{off}], radius: {json.dumps(r['radius'])}, "
                      f"halfX: {json.dumps(r['halfX'])}, shape: {json.dumps(r['shape'])}, flags: {json.dumps(r['flags'])} }} }},")
     lines.append("];")
     lines.append("")
@@ -1347,20 +1401,6 @@ def main(argv):
     # Factory type id (the type table's {type, creator} rows, objects included) -> the box tables
     # its creator reaches: the depth-limited tree of the creator, the shallowest site (kept for
     # the object pillars; the enemies use ENEMY_COLLISION_LINKS, which resolves each one's own).
-    creators = collections.defaultdict(set)
-    for name, va, size, raw, rawsize in SECTIONS:
-        if name == ".text":
-            continue
-        for off in range(raw, raw + rawsize - 16, 4):
-            t, c, tag, zero = struct.unpack_from("<IIII", DATA, off)
-            if tag == ROW_TAG and zero == 0 and TEXT_LO <= c < TEXT_HI:
-                creators[t].add(func_of(c) or c)
-    reach = collections.defaultdict(dict)
-    for t, cs in creators.items():
-        for c in cs:
-            for f, d in call_tree(c, callees, DEPTH).items():
-                if d < reach[f].get(t, DEPTH + 1):
-                    reach[f][t] = d
     by_type = collections.defaultdict(list)
     for s in sites:
         tabs = list(s["indexed"]["variants"].values()) if s["table"] is None else [s["table"]]

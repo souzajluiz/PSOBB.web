@@ -16,7 +16,8 @@ import type { MapCollision } from '../client/src/formats/crel.ts';
 import { boxPairActive, CollisionWorld, OBJECT_BOX_FLAGS, PLAYER_BOX_FLAGS, PLAYER_RADIUS, type Obstacle } from '../client/src/render/collision.ts';
 import { collectFieldSolids, dist2xz, FallingStalactite, FieldObjects, rockSwitchFlag, solidObstacle, stalactiteDamage, stalactiteInRange, type FieldSolid } from '../client/src/render/fieldobjects.ts';
 import { spotHitsBody } from '../client/src/net/dropspot.ts';
-import { CHILD_COLLISION_LINKS, COLLISION_SITES, COLLISION_TABLES, CONSTRUCTED_BOXES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
+import { CHILD_COLLISION_LINKS, COLLISION_SITES, COLLISION_TABLES, CONSTRUCTED_BOXES, DOOR_BOXES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
+import { objectModelFor } from '../client/src/formats/objectmodels.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, isTargetable, slotSetType, slotVariant } from '../client/src/formats/enemyboxes.ts';
 import { rowsAimHeight, rowsRadius } from '../client/src/combat/techfire.ts';
 import { DerolleEmitter, msvcRand, parseDerolleBlock, ROCK_DEBRIS_BLOCK, STALACTITE_DEBRIS_TEMPLATE, yawPoint } from '../client/src/classic/particles.ts';
@@ -584,9 +585,9 @@ check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag
   check([0x006de7d0, 0x006de9d7, 0x006f010b, 0x006f0435].every((va) => built(va)?.row.flags === flagsWD), 'the four in-object rows take the arg1 flag rule (0x40007 / 0x40107)');
   check(built(0x006f010b)?.row.offset[2] === '-10' && built(0x006f010b)?.row.radius === '5' && built(0x006f010b)?.row.shape === '1', 'site 0x6f010b: box r5 at z -10 (0xc1200000), shape 1');
   check(built(0x006de7d0)?.row.radius === '10' && built(0x006de7d0)?.row.shape === '0', 'site 0x6de7d0: sphere r10 (0x41200000) at the origin');
-  // 0x6461cf: the stack row from the template 0x00935a94 (flags 0x10003, shape 1), radius and halfX from the set record arg2 (+0x0c, +0x10).
+  // 0x6461cf: the stack row from the template 0x00935a94 (flags 0x10003, shape 1), radius and halfX from the block arg3 (+0x0c, +0x10; DOOR_BOXES).
   const stack = built(0x006461cf);
-  check(stack?.owner === 'self' && stack?.table === 'stack' && stack?.row.radius === '.f32+0x0c of arg2' && stack?.row.halfX === '.f32+0x10 of arg2' && stack?.row.flags === '0x10003', 'site 0x6461cf: stack row, radius / halfX from arg2 +0x0c / +0x10, flags 0x10003');
+  check(stack?.owner === 'self' && stack?.table === 'stack' && stack?.row.radius === '.f32+0x0c of arg3' && stack?.row.halfX === '.f32+0x10 of arg3' && stack?.row.flags === '0x10003','site 0x6461cf: stack row, radius / halfX from arg2 +0x0c / +0x10, flags 0x10003');
   // 0x77c197 (type 9): the row at this+0xac from arg2: radius +0x24, halfX +0x28, shape 1 when +0x2c < 0 (fcomp 0x0097939c), flags 0x10001 | 0x100 when |+0x2c| >= 1000 (0x00979398).
   const t9 = built(0x0077c197);
   check(t9?.table === 'this+0xac' && t9?.row.radius === '.f32+0x24 of arg2' && t9?.row.halfX === '.f32+0x28 of arg2', 'site 0x77c197: the row at this+0xac takes radius +0x24 and halfX +0x28 of the set record');
@@ -597,6 +598,33 @@ check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag
   for (const va of [0x00619759, 0x00635e71, 0x00638261]) {
     const b = built(va);
     check(b?.table === 'heap' && b?.row.radius === heapRadius && b?.row.halfX === heapHalf && b?.row.shape === '1' && b?.row.flags === '0x18002', `heap block site ${va.toString(16)}: the sync rule, shape 1, flags 0x18002`);
+  }
+}
+
+// 9. Door boxes (2026-10-25 wiring). The door ctor 0x6460d8 takes its third argument (not the set record's
+// arg2) from a per-type template block, pushed as a constant by each caller: 0x646091 (0x46 block 0x935ac4),
+// 0x646309 (0x47, 0x935a78), 0x646581 (0x48, 0x9c7114), 0x6467a5 (0x49, 0x935a54). The row is the stack template
+// (flags 0x10003, shape 1) with radius = block +0x0c and halfX = block +0x10.
+{
+  const built = (va: number) => CONSTRUCTED_BOXES.find((c) => c.site === va);
+  const stackRow = built(0x006461cf);
+  check(stackRow?.row.radius === '.f32+0x0c of arg3' && stackRow?.row.halfX === '.f32+0x10 of arg3', 'site 0x6461cf: radius / halfX read from arg3 (the template block), not arg2');
+  const typesOf = (va: number) => (CONSTRUCTED_BOXES.find((c) => c.site === va)?.types ?? []).map((t) => t.type).sort();
+  check(JSON.stringify(typesOf(0x006461cf)) === JSON.stringify([0x0046, 0x0047, 0x0048, 0x0049]), 'site 0x6461cf: object types 0x46..0x49 reach the door ctor');
+  check(JSON.stringify(typesOf(0x0077c197)) === JSON.stringify([0x0009]) && JSON.stringify(typesOf(0x00619759)) === JSON.stringify([0x038a]), 'site 0x77c197 is type 0x9, the heap block 0x619759 type 0x38a (object type table)');
+  check((CONSTRUCTED_BOXES.find((c) => c.site === 0x006f010b)?.enemies ?? []).some((e) => e.type === 0x00d7), 'site 0x6f010b is reached from enemy set type 0xd7');
+  // Door blocks as read from the exe (generator): radius / halfX per type, the stack template's shape and flags.
+  const expect: Record<number, [number, number, number]> = { 0x46: [0x00935ac4, 2, 25], 0x47: [0x00935a78, 2, 24], 0x48: [0x009c7114, 50, 6.5], 0x49: [0x00935a54, 4, 25] };
+  for (const [t, [block, radius, halfX]] of Object.entries(expect)) {
+    const d = DOOR_BOXES[Number(t)];
+    check(d?.block === block && d.radius === radius && d.halfX === halfX && d.shape === 1 && d.flags === 0x10003 && d.offset.every((v) => v === 0), `door type ${t}: block ${block.toString(16)}, radius ${radius}, halfX ${halfX}`);
+  }
+  // Runtime: a set record of type 0x47 (fake, the file layout of ObjectSetEntry) gives the door box from its block.
+  const fake = (type: number): ObjectSet => ({ kind: 'object', index: 0, type, floor: 0, group: 0, section: 0, unknownA3: 0, position: [0, 0, 0], rotation: [0, 0, 0], params: [0, 0, 0, 0, 0, 0] });
+  for (const [t, [block, radius, halfX]] of Object.entries(expect)) {
+    const spec = objectModelFor(fake(Number(t)), { area: 0x00, episode: 1 });
+    const c = spec?.collision;
+    check(!!spec?.door && c?.address === block && c.type === 1 && c.halfX === halfX && c.halfZ === radius && c.flags === 0x10003 && c.offset.every((v) => v === 0), `door record type ${t}: runtime box from the block (halfX ${halfX}, halfZ ${radius})`);
   }
 }
 
