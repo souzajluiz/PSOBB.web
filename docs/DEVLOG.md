@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-10-25: Olga tail anchor, pass 8: exhaustive asm check of the anchor slots; verdict still NOT PORTED
+
+**Question:** the tail swipe's anchors (+0x640 / +0x644 / +0x648 base, +0x64c / +0x654 tip) need a writer that the port can copy: a model node, a matrix slot, or a follow rule. Is there one in the exe?
+
+**Answer:** no. The exe has no writer for the Olga1 beast's +0x640..+0x654 that can be decoded, so the anchor is still unbound.
+
+**What this pass proves (objdump, PsoBB.exe, VA 0x497000..0x4a2000, the Olga code range; `objdump -D -M intel` with the range only):**
+- Every instruction with a memory operand `[reg + 0x638..0x661]` (any base, with or without index) in the range. Stores: only 0x49773c (`0x65c`) and 0x49775b (`0x658`), the Olga1 ctor. Reads of +0x640 / +0x644 / +0x648 / +0x64c / +0x654 are the tail function only (0x495684..0x495800: 0x49570a, 0x495726, 0x49572c, 0x495732, 0x495741, 0x49575b; `ebp + 0x4d0` at 0x495789).
+- The `lea` forms that pass an address into a helper: 0x49b13e (+0x638, `RenderVoloptForm7MinionComponents`, a Volopt minion, not the beast), 0x49fa6d and 0x49fb31 (+0x638, the out-slot of `CreateParticleEffect_00486cd0` (dump 205142) in `HandleOlgaMinionStateSync_0049ef68`, 222381, the form-2 minion sync: a particle-object pointer, not form 1), 0x49eee9 (+0x644, the `create_particle_effect_3` out-slot of `HandleOlga2MinionTimerState_0049ee9c`, 222333, the form-2 object, not form 1).
+- No block copy (`rep movs`, `rep stos`) and no `memcpy` / `memset` call sits in the range. So no whole-object copy writes the slots.
+
+**What it means:** +0x644 is written by the form-2 minion code as a particle-object pointer, not as a position. The form-1 tail never writes its own +0x640..+0x654. The beast's memory there is what `allocate_in_main_arena(0x68c)` returned (pass 7, section 17.3): stale bytes (ASSUMED). The tail's test does not read +0x644 (its Y is set to 0 in both cross products, and the tip's Y is the constant 10.0), so only +0x640, +0x648, +0x64c, +0x654 matter to the hit.
+
+**Re-derived constants (exedata, PROVEN):** `g_Olga1TailSwipeMaxHeight` 0x00902668 = 10.5; `g_Olga1TailSwipeMinHeight` 0x00902664 = 15.0; the tail chunk `g_Olga1TailSwipeTailChunkIndex` at 0x009a6ea8 = 51 (the tail function's `mov` at 0x4956ad); the tail function's reads (asm above) match the dump (215137).
+
+**Verdict:** the tail hit stays NOT PORTED. Choosing any anchor (model node 51, the bone table, the spawn position) would be an invention; the exe's values there are stale memory, so no port can match them. The honest port is the documented gap. No port code changed.
+
+**Tooling:** no code change; the scratch work used `objdump` ranges and `tools/exedata.py read/xref`.
+
+**Checks:** `node tests/olgaflowai.test.ts` all checks passed; `NEWSERV=... node tests/combat.test.ts` 5859 checks, 0 failures; `client/node_modules/.bin/tsc --noEmit -p .` (Node 24) exit 0.
+
 ## 2026-10-25: Vol Opt lock-on read from the reticle filter; the monitors have no lock-on caller; no port change
 
 **Outcome.** The reticle's candidate filter is `check_enemy_is_targetable` (exe 0x007a2b28, a function start; dump 785953), not `FUN_007714cc` (that is the AI's nearest-target search, used by enemy AIs such as Darvant and the Vol Opt core's own searches). The filter reads, per player and per weapon record: the record's three masks (field4 box include, field5 box exclude, field6 entity include, field7 entity exclude), the entity's `+0x30` flags, the box bits, the distance and cone tests and, in battle mode, a map ray test. Lock-on is therefore not "box bit 0 only". The Vol Opt facts below follow from that. Verdicts: the monitors are never a lock-on target (no `enable_reticle_` caller in their code); the prison and the control are never (same); the core, the pillars and the rod have per-state lock calls; the body is not mapped by state. Lock and hit gates are NOT changed in the port: the struck test shares `concealed()` with the lock test, so a lock-only change needs the hit path traced first.
