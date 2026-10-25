@@ -155,10 +155,12 @@ export const pelletTargetIndex = (kind: number, i: number): number => {
 // allowed only when the first made none (do_mechguns_attack: iVar1 == 0). Every other pellet is allowed.
 export const pelletAllowed = (kind: number, i: number, bulletMadeSoFar: boolean): boolean =>
   !(kind === MECHGUN_KIND && i === 1 && bulletMadeSoFar);
-// The Rifle (kind 7, group_idx 8..13) hook ExecutePartisanWeaponAttack (0x005fb310) puts a muzzle
-// particle 9 at the hand before the regular shot (for group_idx 12 that is the second muzzle, the
-// default callback's is the other). Returns true for those variants.
+// The Rifle (kind 7, group_idx 8..13) hook ExecutePartisanWeaponAttack (0x005fb310, dump line
+// 457996) puts a muzzle particle 9 at get_weapon_position(item, 1): the weapon walk's entry 1, not
+// the bullet start (the proven decompile). It runs before the regular shot. For group_idx 12 the
+// default callback adds the muzzle at the hand (the other one). Returns true for those variants.
 export const RIFLE_KIND = 7;
+export const RIFLE_HOOK_MUZZLE_ATTACH = 1;
 export const rifleHookMuzzle = (kind: number, variant: number): boolean => kind === RIFLE_KIND && variant >= 8 && variant <= 13;
 
 const TAU = Math.PI * 2;

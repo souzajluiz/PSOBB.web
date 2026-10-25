@@ -120,6 +120,30 @@ Closes HANDOFF item 2 (the 10-22 entry "Dark Falz camera: the live pivots of the
 **Left open:** the clock 0xc0 (Player__Animate not ported) decides whether the rise reaches the apex (ASSUMED).
 
 **Tests:** `node tests/barbaray.test.ts` ALL PASS; `node tests/combat.test.ts` 5852 checks, 0 failures (NEWSERV set); `client` `tsc --noEmit` clean.
+## 2026-10-25: Guns left: the Mechgun's second start is the walk from body node 0x23; the Rifle hook's muzzle is at node 1
+
+**What changed:** `combat/weaponorigin.ts` has `WeaponNodeRef.base` (the body node a weapon walk is pushed from; absent = the hand 0x30) and `SECOND_START_BODY_NODE = 0x23`. `render/lobbyview.ts` `weaponOriginOf` re-bases a based weapon node: the bone's point goes from the hand's frame to the base body node's frame (`base * inv(hand) * p`). `render/combat.ts` `gunShot`: the Mechgun's second pellet (+0x24c) starts there (trail, muzzle, bullet start). The Rifle hook muzzle is at `get_weapon_position(item, 1)` for group_idx 8..13, before the shot; the 'none' branch adds no muzzle at the bullet start for the Rifle any more (the hook's is the one). `combat/gunbullet.ts`: `RIFLE_HOOK_MUZZLE_ATTACH = 1`. Tests: `tests/weaponorigin.test.ts` section 7 (the base refs), `tests/gunbullet.test.ts` (the attach constant).
+
+**Correction:** the 2026-10-25 Mechgun / Rifle entry said the second start reuses the node point (ASSUMED) and that the height reaches the transform through an undecoded path. Both are wrong: the height field is +0x189, and it is read by the transform (below).
+
+**Proven (exe; Ghidra dump `Psobb.exe-05112026.c` in `reverse/refsrc/original-psobb-client-source/src/`, objdump on the Ephinea 1.25.13 `PsoBB.exe`):**
+- The height is +0x189: `unk_y_pos_related` sits between `field317_0x188` and `field319_0x18a` in `item_instance`, and `item_position_y_set` (dump 425357) writes it. `GetItemField189` reads +0x189. +0x188 is the getter's field (vtable 0x7c, `UnknownItemFunction27`, reached from the Mechgun vtable at 0x00b162dc).
+- `UpdateItemPosition` (dump 442975) pushes the owner's matrix at index `(char)+0x189` (`field149_0xe0 + (char)iVar4`). That index is the body node the weapon walk hangs from: 0x30 is the hand, 0x23 is body node 35 (the same numbers as get_weapon_position's attach -1 / -2).
+- `UpdateWeaponPosition_005e74ec` (dump 442050): +0x240 = weapon walk from the current base; `item_position_y_set(this, 0x23)`, `UpdateItemPosition`; restore +0x189; +0x24c = `get_weapon_position(attach)` of the matrices of that pass. So +0x24c is the walk from body node 35. The same pattern: `UpdateWeaponModelPosition_005ec21c` (dump 446300) uses 0x30 then 0x23 for the group_idx 0 gun, and `ApplyItemField189Effect_005e6334` (dump 441365) is the set / update / restore helper.
+- Rifle hook `ExecutePartisanWeaponAttack_005fb310` (dump 457996): for group_idx 8..13, `ConstructWeaponGroup32(...,2,...)` unless 12, then `get_weapon_position(item, 1, &p)` and `create_particle_effect(&p, 9)`. The muzzle is at weapon walk entry 1, before the regular shot.
+- Mechgun ctor (objdump 0x005f473c..0x005f47cd): +0x258 = -1 (dword); = 2 when byte[1] (group_2) == 8 and byte[2] (group_idx) is 5 or 7 (6 keeps -1). +0x25c = 0, +0x260 = -1, +0x264 = 0.
+- `do_mechguns_attack` (0x005f4620): `AddAndWrapUInt16(&+0x25c, 0x2000)` (0x005dd6d0: 16-bit wrap). The spin is 0x2000 BAMS (45 degrees) per burst.
+- The +0x25c reader: Mechgun vtable slot 0xf4 (0x00b16354) = 0x005f4688. It rotates the transform by +0x25c (0x0082d8bc) only when the dword +0x258 equals the dword at 0x00a8d84c. That global is in BSS (not initialised in the file), so its value is a runtime one.
+- `ConstructWeaponGroup32` (dump 460520): the point is `get_weapon_position(item, 2)`. It allocates a 0x44-byte weapon countdown helper (`InitializeWeaponCountdownHelper`, dump 460306: the point; a vector (sin, 1, cos) at heading - 90 degrees, each axis scaled by 1 to 2 (`_rand`); spin angles 0x4000, 0, 0) and a 0x28 countdown helper (`SetGuisesFlagForDestruction`, 15 frames). Its render / update callbacks are not decoded (the object's vtable is the destructor's).
+
+**ASSUMED / open:**
+- The Mechgun's first start is the walk from the hand (0x30): the held +0x189 is 0x30 at the shot. OnEquipItem's table (0x009cb9ac: 62, 63, 24, 36, 50, 35, 48, 10, 19, 0) maps index 6 to 48, and the port's attach is the hand.
+- The second start is the port's weapon bones re-based through the hand bone (`playermodel.ts` attaches the weapon to HAND_NODE). The exe caches +0x240 / +0x24c per frame in UpdateWeaponPosition; the port reads them live. Without a skeleton the fallback is the feet + WEAPON_HEIGHT (as before).
+- The Rifle's group_idx 12 keeps the default callback's muzzle at the bullet start (a second muzzle, as before).
+- Not drawn: the +0x25c spin (the caller of slot 0xf4 is not traced, and the global 0xa8d84c's meaning is not decoded); the ConstructWeaponGroup32 side object (its visual is not decoded). The +0x258 value only feeds that slot-0xf4 compare.
+- Not run in Chrome.
+
+**Checks:** `node tests/mechgun.test.ts` 22 checks, 0 failures. `node tests/gunbullet.test.ts` all passed. `node tests/weaponorigin.test.ts` all passed (with `vendor/newserv` linked). `node tests/combat.test.ts` 5852 checks, 0 failures. `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24) clean.
 
 ## 2026-10-25: Non-BB download `.qst` writer (DC / PC / GC command structs)
 

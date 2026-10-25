@@ -18,6 +18,7 @@ import {
   pelletCount,
   pelletTargetIndex,
   planGunShot,
+  RIFLE_HOOK_MUZZLE_ATTACH,
   rifleHookMuzzle,
   SHOT_ANGLES_BAMS,
   ShotEffect,
@@ -105,6 +106,8 @@ check(pelletAllowed(8, 0, false) && pelletAllowed(8, 0, true) && pelletAllowed(8
 check(pelletAllowed(9, 3, true) && pelletAllowed(6, 0, true), 'other guns: every pellet is allowed');
 // The Rifle's hook muzzle (0x005fb310): group_idx 8..13 only.
 check(rifleHookMuzzle(7, 8) && rifleHookMuzzle(7, 12) && rifleHookMuzzle(7, 13) && !rifleHookMuzzle(7, 7) && !rifleHookMuzzle(7, 14) && !rifleHookMuzzle(6, 8), 'the Rifle hook muzzle is for Rifle group_idx 8..13');
+// The hook's muzzle is get_weapon_position(item, 1): the walk's entry 1 (dump line 458019).
+check(RIFLE_HOOK_MUZZLE_ATTACH === 1, 'the Rifle hook muzzle is the weapon walk entry 1, not the bullet start');
 // planGunShot with allowed = false: the target is aimed at, but no bullet is made (the visual only).
 {
   const sh = planGunShot(O, { heading: 0, angleBams: 0, horizontalDistance: 170 }, { centre: { x: 0, y: 0, z: 60 }, radius: 10 }, noWall, 19, false);

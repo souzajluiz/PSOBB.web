@@ -10,7 +10,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import * as THREE from '../client/node_modules/three/build/three.module.js';
-import { gunBulletStart, weaponAttachRef, type Point, type WeaponNodeRef } from '../client/src/combat/weaponorigin.ts';
+import { gunBulletStart, HAND_BODY_NODE, SECOND_START_BODY_NODE, weaponAttachRef, type Point, type WeaponNodeRef } from '../client/src/combat/weaponorigin.ts';
 import { WEAPON_HEIGHT } from '../client/src/combat/techfire.ts';
 import { exeWalkIndices, skeletonNodePosition } from '../client/src/render/playeranim.ts';
 import { parseItemPMT } from '../client/src/formats/itempmt.ts';
@@ -117,6 +117,28 @@ const FEET: Point = { x: 10, y: 0, z: -4 };
   const pmt = parseItemPMT(new Uint8Array(readFileSync(out)));
   const attach = (c: number, i: number) => pmt.getWeapon(c, i)?.projectile;
   check(attach(6, 0) === 2 && attach(7, 0) === 1 && attach(8, 0) === 1 && attach(9, 0) === 0, `gun attach bytes: Handgun 2, Rifle 1, Mechgun 1, Shot 0 (${attach(6, 0)}, ${attach(7, 0)}, ${attach(8, 0)}, ${attach(9, 0)})`);
+}
+
+// 7. The Mechgun's second start (+0x24c): the weapon walk pushed from body node 0x23 (the +0x189
+// index that item_position_y_set(this, 0x23) writes). The ref carries the base; the hand is the default.
+{
+  check(SECOND_START_BODY_NODE === 0x23 && HAND_BODY_NODE === 0x30, 'the second start is pushed from body node 0x23, the hand is 0x30');
+  check(weaponAttachRef(1).base === undefined && weaponAttachRef(1, HAND_BODY_NODE).base === undefined, 'no base: the hand walk (the default ref)');
+  const b = weaponAttachRef(1, SECOND_START_BODY_NODE);
+  check(b.part === 'weapon' && b.node === 1 && b.base === 0x23, `base 0x23 keeps the walk entry (${JSON.stringify(b)})`);
+  const asked: WeaponNodeRef[] = [];
+  const provider = (ref: WeaponNodeRef, out: Point) => {
+    asked.push(ref);
+    out.x = 7;
+    out.y = 8;
+    out.z = 9;
+    return true;
+  };
+  const out = { x: 0, y: 0, z: 0 };
+  gunBulletStart(1, FEET, provider, out, SECOND_START_BODY_NODE);
+  check(asked[0].part === 'weapon' && asked[0].node === 1 && asked[0].base === 0x23, `second start asks walk entry 1 from 0x23 (${JSON.stringify(asked[0])})`);
+  gunBulletStart(1, FEET, provider, out);
+  check(asked[1].part === 'weapon' && asked[1].node === 1 && asked[1].base === undefined, `first start asks walk entry 1 from the hand (${JSON.stringify(asked[1])})`);
 }
 
 console.log(failures === 0 ? 'weaponorigin: all checks passed' : `weaponorigin: ${failures} failure(s)`);
