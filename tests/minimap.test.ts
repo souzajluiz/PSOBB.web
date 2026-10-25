@@ -630,14 +630,20 @@ for (const t of ['DELDEPTH', 'GI_GUE', 'GIBBLES', 'MERILLIA', 'MERILTAS']) {
 for (const t of ['SINOW_BERILL', 'SINOW_SPIGELL', 'RECON', 'GIRTABLULU', 'SATELLITE_LIZARD_CRATER', 'SATELLITE_LIZARD_DESERT', 'YOWIE_CRATER', 'YOWIE_DESERT']) {
   eq(radarSourceOf(t), 'slot', `${t}: vtable +0x198 is the enemy-base slot 0x00520618, called in its update / dispatcher`);
 }
-// Own icon calls: Astark (0x00b0a420), Sand and Del Rappy (0x00b00da0), Merissa A / AA (0x00b0b6a0), Zu and Pazuzu (0x00b0b480), Pig Ray, Ill Gill (0x00b01760).
-for (const t of ['ASTARK', 'SAND_RAPPY_CRATER', 'SAND_RAPPY_DESERT', 'DEL_RAPPY_CRATER', 'DEL_RAPPY_DESERT', 'MERISSA_A', 'MERISSA_AA', 'ZU_CRATER', 'ZU_DESERT', 'PAZUZU_CRATER', 'PAZUZU_DESERT', 'PIG_RAY', 'ILL_GILL']) {
+// Own icon calls: Astark (0x00b0a420), Merissa A / AA (0x00b0b6a0), Zu and Pazuzu (0x00b0b480), Pig Ray, Ill Gill (0x00b01760).
+for (const t of ['ASTARK', 'MERISSA_A', 'MERISSA_AA', 'ZU_CRATER', 'ZU_DESERT', 'PAZUZU_CRATER', 'PAZUZU_DESERT', 'PIG_RAY', 'ILL_GILL']) {
   eq(radarSourceOf(t), 'own', `${t}: its own icon call in its update or handler (no slot)`);
 }
-// Boota (vtable 0x00b0a680): +0x198 is the placeholder 0x0061cdb0, and no icon in its update or handlers: no row yet.
-eq(radarSourceOf('BOOTA'), null, 'Boota: no row (the icon path of its vtable 0x00b0a680 is not traced)');
+// Sand and Del Rappy (vtable 0x00b00da0, +0x4 = update_rappy 0x005258e0): the same update as the Rag Rappy. The icon
+// follows the pause gate only (every state case returns to the icon's path), so the row is 'rappy'.
+for (const t of ['SAND_RAPPY_CRATER', 'SAND_RAPPY_DESERT', 'DEL_RAPPY_CRATER', 'DEL_RAPPY_DESERT']) {
+  eq(radarSourceOf(t), 'rappy', `${t}: update_rappy 0x005258e0, icon unconditional after the pause gate`);
+}
+// Boota (vtable 0x00b0a680) and Goran (0x00b0af40): the Booma substrate update 0x0052b78c; the Booma's per-state
+// icons apply to their shared states (classic/minimap.ts comments). No row: no port brain yet.
+eq(radarSourceOf('BOOTA'), null, 'Boota: no row (the Booma substrate, no port brain)');
 eq(radarSourceOf('CANADINE_NOT_A_TYPE'), null, 'an unknown type has no radar source');
-eq(radarSourceOf('GORAN'), null, 'Goran: no row (the icon cited for it, 0x005b28dd, is in the Zu update; none proven)');
+eq(radarSourceOf('GORAN'), null, 'Goran: no row (the Booma substrate, no port brain)');
 eq(Object.keys(ENEMY_RADAR_SOURCE).length, 9 + 8 + 1 + 8 + 1 + 1 + 2 + 12 + 5 + 8 + 13, 'the survey table has 68 enemy rows');
 
 if (failures) {
