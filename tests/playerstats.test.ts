@@ -13,6 +13,7 @@ import {
   displayedStats,
   equipmentRange,
   equippedCandidate,
+  magStatContribution,
   recalculateCandidate,
   wornEquipment,
   type CompareStats,
@@ -141,6 +142,13 @@ eq(compareColor(0, 0), VALUE_COLOR.same, 'zero against zero is white');
 
 // The Item Pack's panel keeps the item-only rows (equipStatRows): the sword's ATP is 40 + 14 (min + 2 x grind) there.
 eq(equipStatRows(cur, SWORD_G2, null, pmt, false, true)[0].item, 124, 'Item Pack panel: the item-only delta (110 + min 10 + 2 x grind 2), unchanged');
+
+// --- a worn mag's stat effect (ApplyItemStatBonuses_005d3fa4, dump 426621; the factors are the exe's floats) ---
+// data1: type 2, id 1, level 10; def 350 (3), pow 1251 (& 0x7ffe = 1250, level 12), dex 720 (7), mind 880 (8).
+const MAG = itemFromHex('02010a005e01e304d0027003');
+eq(magStatContribution(MAG), { atp: 24, mst: 16, dfp: 3, ata: 35 }, 'mag: POW x2 to ATP, MIND x2 to MST, DEF x1 to DFP, DEX x10 x0.5 to ATA (tenths)');
+eq(magStatContribution(SWORD_G2), { atp: 0, mst: 0, dfp: 0, ata: 0 }, 'mag effect: a weapon adds none here');
+eq(magStatContribution(itemFromHex('02010a006300000000000000')), { atp: 0, mst: 0, dfp: 0, ata: 0 }, 'mag effect: under one level adds nothing');
 
 console.log(failures === 0 ? 'ALL PASS' : `${failures} FAILED`);
 if (failures) process.exitCode = 1;

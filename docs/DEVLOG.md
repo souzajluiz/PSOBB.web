@@ -1,5 +1,28 @@
 # Devlog
 
+## 2026-10-25: Equipment compare: the mag's stat effect is decoded (ApplyItemStatBonuses_005d3fa4); the compare still does not apply it
+
+**Question:** the ROADMAP "Equipment stat recalculation" item left the mags' stat effect as "ASSUMED 1.0 / not applied in the compare". The 2026-10-23 entry said the stat pointer of `ApplyItemStatBonuses_005d3fa4` was not recovered, so the formula was unknown.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13; dump `src/Psobb.exe-05112026.c`, JP symbol `g_ItemStatMultiplier` = 0x0092c158 in `dirty/dirty_symbols.jsonl`):**
+- The dispatcher `ApplyEquipmentBonuses_005d330c` (dump 426167) calls `ApplyItemStatBonuses_005d3fa4(this)` for `data1[0] == 2` (dump 426234). The decompile shows no stats argument, but the disassembly of 0x005d3fa4 does: `push edi; push ebx; sub esp, 0x38; mov ebx, ecx; mov edi, [esp+0x50]`. After the two pushes and the sub, `[esp+0x50]` is the entry's `esp+0x10`, the fourth stack argument, which is the dispatcher's `param_4`: the stat block (its MST write is `param_4[1]`, dump 426879 area). So the mag writes the same block as the weapon's MST.
+- The body (dump 426621): `GetItemMagData_005d4108` reads def / pow / dex / mind as the 16-bit words at data1 bytes 4, 6, 8, 10, each `& 0x7ffe`. Then `stat[0] += ROUND((pow / 100) * g_ItemStatMultiplier)`, `stat[5] += ROUND(((dex / 100) * 10) * 0.5)`, `stat[4] += ROUND((def / 100) * 1.0)`, `stat[1] += ROUND((mind / 100) * 2.0)`. The divisions are integer.
+- Factors read with `tools/exedata.py read` and checked against the decompile's `DAT_` names: 0x0092c158 = 2.0 (the disassembly's `fmul dword [0x92c158]`, the JP symbol confirms the address), 0x0092c15c = 0.5, 0x0092c160 = 1.0, 0x0092c164 = 2.0. So the mag's effect is POW x2 to ATP, MIND x2 to MST, DEF x1 to DFP and DEX x10 x0.5 (tenths) to ATA, the stat block's indices [0], [1], [4], [5].
+- Whether the compare applies it: `PlayerRecalculateStats_0068e030` (dump 569766) reads the mag slot only when the candidate is a mag (`cVar1 == 2`, dump 569873..569876). For a weapon, armour or shield candidate it takes the worn item of that slot out and, for an armour, its four units (`eVar7` loop); the mag is never touched. The stat block the save holds already carries the worn mag's effect (ASSUMED, the file model of the 2026-10-23 entry), so the compare does not add it again.
+
+**Ported:**
+- `client/src/combat/playerstats.ts`: `MAG_STAT_FACTORS` and `magStatContribution(item)` (`{atp, mst, dfp, ata}`, a mag only, zero otherwise). The header's mag note now names the decoded function and the reason the compare does not apply it.
+- `tests/playerstats.test.ts`: a mag block (def 350, pow 1251 masked to 1250, dex 720, mind 880 gives ATP 24, MST 16, DFP 3, ATA 35), a weapon gives zeros, a mag under one level gives zeros.
+- `docs/ROADMAP.md`: the item's last sentence is updated (mag decoded, set bonuses / rings / bare-handed remote still open).
+
+**ASSUMED / UNCLEAR:**
+- The file's stat block carries the worn mag's effect (not re-derived from the save here); the compare relies on it.
+- `ROUND` is taken as the identity: every product here is an integer (the x0.5 is on a multiple of 10).
+- The mag's effect on the candidate's own mag (a mag candidate) is not in the compare (the compare has no mag rows).
+- The colored rings (`colored_ring_matching_boosts`, dump 427069) and the item set bonus (`handle_item_set_bonus`, dump 427136) run after the same dispatcher for every item and are still not ported.
+
+**Checks:** `node tests/playerstats.test.ts` (ALL PASS), `node tests/playerstatsatp.test.ts` (25/25), `cd client && npx tsc --noEmit -p .` (Node 24) clean. Not run in Chrome.
+
 ## 2026-10-25: Challenge mode left: the material x5 is ported (stale ROADMAP item); the Scape Doll / dead-player rules traced, no port
 
 **Question:** the ROADMAP's Challenge line still lists "the material x5 / Scape Doll / dead-player rules" as open. Which of them can the exe settle with a unit test now?

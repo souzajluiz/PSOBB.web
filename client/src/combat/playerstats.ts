@@ -71,9 +71,12 @@ import { CLASS_MAX_STATS } from './materials.ts';
 // ASSUMED (marked in code): the buff multipliers m / md are 0 (no Shifta / Deband / Jellen /
 // Megid in the file); the set factors are 1.0 (get_equipment_set_atp_bonus_weapon,
 // get_equipment_set_dfp_bonus, get_equipment_set_evp_bonus are not ported); the unit specials
-// 0x52 (beat time) and 0x5c (challenge data) add nothing; mags (ApplyItemStatBonuses_005d3fa4:
-// its stats pointer is not recovered from the dump) add nothing, so their stat effect is only
-// in the file; colored rings and the item set bonus (colored_ring_matching_boosts,
+// 0x52 (beat time) and 0x5c (challenge data) add nothing; mags: magStatContribution is the mag's
+// own stat effect (ApplyItemStatBonuses_005d3fa4, its stats pointer = the stat block, factors read
+// from the exe). PlayerRecalculateStats_0068e030 reads the mag slot only for a mag candidate (dump
+// 569856..569876), so a weapon / armour / shield / unit candidate never removes or adds a worn
+// mag: its effect stays in the file's stat block (ASSUMED, as the file model above), and the
+// compare does not apply magStatContribution; colored rings and the item set bonus (colored_ring_matching_boosts,
 // handle_item_set_bonus) are not applied (not decoded); the elemental resists that armour, shields
 // and units write (resist [1..5]) are not kept, as the compare list does not show them; the
 // file is the save at login, so an equip made in this session is not in its stat block.
@@ -305,6 +308,33 @@ export function statContribution(item: ItemData, pmt: ItemPMT): { atp: number; m
   const b = zeroBlocks();
   applyItem(b, item, pmt, 1);
   return { atp: b.atp, mst: b.mst, ata: b.ata };
+}
+
+// A worn mag's stat effect: ApplyItemStatBonuses_005d3fa4 (PsoBB.exe 0x005d3fa4, dump 426621), the
+// branch of ApplyEquipmentBonuses_005d330c for data1[0] == 2. Its stats pointer is the dispatcher's
+// fourth stack argument (the disassembly: `mov edi, [esp+0x50]` after two pushes and `sub esp, 0x38`,
+// which is param_4 of the dispatcher, the stat block). Stat block indices: [0] ATP, [1] MST, [4] DFP,
+// [5] ATA (tenths). The four factors are the exe's floats (tools/exedata.py read): g_ItemStatMultiplier
+// 0x0092c158 = 2.0 (POW -> ATP), 0x0092c15c = 0.5 (DEX x 10 -> ATA), 0x0092c160 = 1.0 (DEF -> DFP),
+// 0x0092c164 = 2.0 (MIND -> MST). Each mag field is the 16-bit word & 0x7ffe (GetItemMagData_005d4108,
+// dump 426644) over 100 (an integer division), and the products are exact, so ROUND is the identity here.
+export const MAG_STAT_FACTORS = { pow: 2.0, dex: 0.5, def: 1.0, mind: 2.0 } as const;
+
+export function magStatContribution(item: ItemData): { atp: number; mst: number; dfp: number; ata: number } {
+  const d = item.data1;
+  if (d[0] !== 2) return { atp: 0, mst: 0, dfp: 0, ata: 0 };
+  // data1 words: [2] def, [3] pow, [4] dex, [5] mind (the port's magStats / newserv layout).
+  const level = (word: number) => Math.floor(((d[word * 2] | (d[word * 2 + 1] << 8)) & 0x7ffe) / 100);
+  const def = level(2);
+  const pow = level(3);
+  const dex = level(4);
+  const mind = level(5);
+  return {
+    atp: Math.round(pow * MAG_STAT_FACTORS.pow),
+    mst: Math.round(mind * MAG_STAT_FACTORS.mind),
+    dfp: Math.round(def * MAG_STAT_FACTORS.def),
+    ata: Math.round(dex * 10 * MAG_STAT_FACTORS.dex),
+  };
 }
 
 // The blocks of the current state. The file's stats are the stat block (the save, see the
