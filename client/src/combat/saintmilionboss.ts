@@ -52,8 +52,9 @@
 //     (GetGlobalGameState); they end here when their animation has ended
 //     (0x1b waits 60 more frames);
 //   - the aim of the lasers (states 0x13 / 0x14, see SmLaser and laserAim) is
-//     not read from the exe: a stand-in sweep; the laser's hit, its life and
-//     its sound are; the missiles, the wave, the storm and the sand sonic are
+//     drawn by the exe (the draw writes the origin and aim; see SM_LASER): the
+//     length is the exe's ramp (capped ASSUMED), the heading a stand-in sweep;
+//     the laser's hit, its life and its sound are; the missiles, the wave, the storm and the sand sonic are
 //     objects of their own (see SmMissile, SmWave, SmStorm and SmSandSonic);
 //   - the order of the players the followers go round and the stream of the
 //     random numbers (SmRng, see saintmilionents.ts).
@@ -62,7 +63,7 @@ import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_RADIUS } from './enemyshots.ts';
-import { SM_LASER, SM_MISSILE, SM_SAND, SmClock, SmField, SmLaser, SmMissile, SmRng, SmSandSonic, SmStorm, SmTouch, SmWave, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
+import { SM_LASER, SM_MISSILE, SM_SAND, SmClock, SmField, SmLaser, laserLength, SmMissile, SmRng, SmSandSonic, SmStorm, SmTouch, SmWave, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
 
 const BAMS = BAMS_TO_RAD;
 const f32 = Math.fround;
@@ -818,13 +819,14 @@ export class SaintMilionAi extends BrainBase {
     this.pendingShots.push(this.laser);
   }
 
-  // ASSUMED: the laser's aim point is not read from the exe (no writer of the laser's +0x44 found, see the
-  // comment on SM_LASER in combat/saintmilionents.ts). Stand-in: the aim turns through SM_LASER.sweep (BAMS, centred on
-  // the boss's heading) over the sweep frames, at SM_LASER.reach.
+  // The aim point of update k: the exe's ramp length (laserLength, +100 an update, capped at SM_LASER.reach ASSUMED for
+  // the wall) along the heading. The heading is a stand-in (ASSUMED, see SM_LASER): SM_LASER.sweep (BAMS, centred on
+  // the boss's heading) over the sweep frames; the exe's render heading is not decoded.
   private laserAim(k: number): { x: number; z: number } {
     const turn = (k / (SM_LASER.frames - 3) - 0.5) * SM_LASER.sweep * BAMS;
     const a = this.heading * BAMS + turn;
-    return { x: this.x + Math.sin(a) * SM_LASER.reach, z: this.z + Math.cos(a) * SM_LASER.reach };
+    const r = laserLength(k);
+    return { x: this.x + Math.sin(a) * r, z: this.z + Math.cos(a) * r };
   }
 
   // State 21, phase 0 (0x00769808): one beam on the clock's frame 28. Its type: arenas 3 / 4 -> 2 or 3,

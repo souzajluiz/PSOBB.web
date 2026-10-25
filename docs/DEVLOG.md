@@ -1,5 +1,25 @@
 # Devlog
 
+## 2026-10-25: Saint-Milion laser: the draw writes the origin and aim (+0x38 / +0x44), the length is a ramp, 620 is a stand-in
+
+**Outcome.** The 2026-10-21 verdict "no writer of +0x38 / +0x44 in the exe" was wrong: its scan covered the ctor, the base, the spawner, the update and the wall cut, but not the draw. The writers are the laser's render (vtable slot 2) and its draw callback, through pointers the draw passes in. The length is a ramp (+100 an update) cut at the first wall; 620 is not an exe constant. Ported: the ramp, capped at 620 (ASSUMED, the wall stand-in). The 0x8000 sweep stays ASSUMED: its source (the heading from the boss node block) is located, not decoded.
+
+**Writers (PsoBB.exe, Ephinea; objdump, Ghidra dump names as labels).**
+- Vtable 0x00b43410 (the laser's; ctor 0x00765c68, the only other reference is its dtor): slot 0 0x00765ad0, slot 1 the update 0x00765d7c, slot 2 0x00765ed8. The dump has no function at slot 1 or 2.
+- Slot 2 (0x00765ed8, the render) computes the heading from the ctor's +0x54 block (boss+0xe94, the node 0x2a block: +0x30..+0x38 read, atan2 with (0, 0, 1); the vector op 0x0082eab8 is not decoded), stores `[0x00a9b000] = &laser+0x38`, `[0x00a9affc] = &laser+0x44`, `[0x00a9aff8] = laser+0x50`, and calls 0x007657c8 (SaintEmilionPart_Render: sets the draw callback) with the callback 0x00765b44.
+- The callback (0x00765b44) keeps a pass counter [0x00a9afe8]: pass 0 calls 0x00765c1c with the origin pointer; pass 2 translates the render matrix by (0, 0, length) (0x00830b74) and calls 0x00765c1c with the aim pointer. 0x00765c1c stores the current matrix's translation through the pointer (mov [esi] / [esi+4] / [esi+8], 0x00765c49..0x00765c56). Passes 6 (scale) and 8 (translate y) only move the draw.
+- The update 0x00765d7c reads +0x38 and +0x44..+0x4c (origin, aim vector to 0x0082f9c4) and stores +0x30, +0x50, +0x58, +0x5c and the dead bit; no store to +0x38 / +0x44. So the update sees the last draw's values: one draw behind.
+
+**Length (+0x50).** The update: `+= 100.0` (0x00976100) while child slot 1 is flagged (0x00765a90), then the wall cut 0x0077fffc(origin, aim, -1); on a hit, +0x50 = sqrt(0x007a8c28's squared distance) (0x0082dc9c is a sqrt). No 620 anywhere in the exe.
+
+**Hit (0x00768a84, type 4, this = the boss) and its facing test (0x00772c08).** The dispatcher writes r = |aim - boss| (XZ) into battleparams +8, the frame's span |new - prev| into +0xc, and the midpoint into boss+0x60. Per player (not dead, targetable): the wall ray boss -> weapon_position (mask -1) must be clear, then the facing test. For a player with a hitbox list (+0xa4, the player's case) the test is: some box i with |centre_i| < radius_i + r (the hitbox loop, `local_18 < local_1c`) and |bearing_i - midpoint| < span (strict, `uVar1 < Δ`). The no-hitbox branch (0x00772da9..0x00772e3e) tests d^2 <= r^4 (two squarings of r: the x87 chain at 0x00772ce2..0x00772dd0): it is not a player's path. The port's `reach + PLAYER_RADIUS` and the strict bearing test are the hitbox form with one circle.
+
+**Port.** `combat/saintmilionents.ts`: `SM_LASER.lengthStep = 100`, `laserLength(k) = min(100 * (k + 1), SM_LASER.reach)`; the comments carry the writers, the ramp and the hit. `combat/saintmilionboss.ts`: `laserAim(k)` puts the aim at laserLength(k) along the heading (the stand-in sweep). The SmLaser class is unchanged (it takes the aim from the boss).
+
+**ASSUMED / not reproduced.** The cap 620 (the wall stand-in; the exe's cut is the first wall distance, with no geometry in the port). The sweep: 0x8000 is a stand-in for the render's node heading (not decoded). The origin: the port uses the boss position; the exe's is the render translation. The one-draw lag (the port uses this update's length). Child slot 1 flagged on every update. One circle for the box. The wall cut and the impact particle (0x00661448) are not reproduced.
+
+**Checks.** `tests/saintmilionboss.test.ts` ALL PASS (section 12: laserLength 100 / 500 / 600 / 620 / the cap; a player at 150 on the sixth update's midpoint hit by the ramp, not by a length-100 aim). `tests/combat.test.ts` 5859 checks, 0 failures (NEWSERV = vendor/newserv). `tests/bossrooms.test.ts` ALL PASS. `client`: `npx tsc --noEmit -p .` clean (Node 24).
+
 ## 2026-10-25: The beat clock window: the owner is the field player menu's submenu, the window eases and cycles, and the HUD draws it
 
 **Question:** what opens the window that owns the beat clock (ChatShortcutMenuWindow_UpdateVisuals_0075855c), and what do the callees 0x0077bb1c and 0x0077baf8 do?

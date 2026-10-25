@@ -377,32 +377,48 @@ export class SmWave extends EnemyShot {
 // The hit (0x00768a84, this = the boss): the span is |cur - prev| (0x007a9018), the heading the midpoint
 // (0x007a8cb8 = cur + ((prev - cur) as int16 >> 1)), and each player who is not dead, whose horizontal distance
 // from the boss is below the reach + its box radius and whose bearing is inside the span, takes entity_hit_by_tech
+// (the facing test 0x00772c08, hitbox branch: some box i with |centre_i| < radius_i + reach and |bearing_i - mid| < span;
+// the port uses one circle of PLAYER_RADIUS for the box, ASSUMED; the no-hitbox branch is not a player's)
 // group 0 with power = MovementData iparam2 (the row's +0x1c, dispatcher case 4), no knockback, every frame.
 // The hit's own wall test (0x0077fffc with the boss's +0x38) runs only when the caller's flag (param_6) is set,
 // which the laser does not set (0).
-// WRITERS OF THE LASER'S +0x38 (origin) AND +0x44 (aim): NONE FOUND in the paths traced: the ctor 0x00765c68
-// (writes +0x0 .. +0x5c except +0x38..+0x4c), its bases 0x00765a14 / 0x008193cc (+0x0 .. +0x18), the spawner
-// 0x0076b85c (nothing after the ctor), the update 0x00765d7c (reads only), the wall cut 0x0077fffc (no store
-// through its arguments), the impact 0x00661448 (takes the pointer), the child creation 0x00765638. The allocator
-// 0x007a8a38 is a free-list one and does not zero. Not searched: the owner's loop over its children and any copy
-// from another object. So the exe's origin and aim are not written by the laser's own code, and the port keeps
-// them as ASSUMED (see SaintMilionAi.laserAim).
+// WRITERS OF THE LASER'S +0x38 (origin) AND +0x44 (aim): the DRAW, not the update (settled 2026-10-25).
+// The laser's vtable slot 2 (0x00765ed8, the render) stores &+0x38, &+0x44 and the length +0x50 in the globals
+// [0x00a9b000], [0x00a9affc], [0x00a9aff8] and calls the draw callback 0x00765b44 through 0x007657c8. The
+// callback keeps a pass counter [0x00a9afe8]: pass 0 calls 0x00765c1c with the origin pointer (+0x38), pass 2
+// translates the render matrix by (0, 0, length) and calls 0x00765c1c with the aim pointer (+0x44). 0x00765c1c
+// stores the current matrix's translation through the pointer (three dword stores at 0x00765c49..0x00765c56). So the aim is
+// origin + length * forward of the render matrix, and the update reads the values the last draw wrote (one draw
+// behind). The update 0x00765d7c never stores them (checked: only reads of +0x38 / +0x44..+0x4c).
+// The render's heading (slot 2) is an atan2 of a vector built from the boss's node block (the ctor's +0x54 is
+// boss+0xe94, its +0x30..+0x38 read by slot 2); the vector op 0x0082eab8 is not decoded, so the sweep's source is
+// ASSUMED (the port's stand-in below).
+// The length +0x50 is a ramp: +100.0 an update (0x00976100) while child slot 1 is flagged (ASSUMED always), then the
+// wall cut (0x0077fffc) sets it to sqrt of the squared distance to the first wall point (0x007a8c28 / 0x0082dc9c).
+// No wall geometry in the port: the cut is not reproduced, the ramp is capped at SM_LASER.reach (ASSUMED).
 // ASSUMED: the origin is the boss's position read every frame; the box radius is PLAYER_RADIUS; child slots 1 and 2
 // are flagged on every frame of the laser's life; the line of sight is clear when no `clear` is given.
-// NOT REPRODUCED: the wall cut (the length +0x50 and the impact 0x00661448), so the reach is not cut at a wall.
 export const SM_LASER = {
   // The clock's end: frames of bm_obj_ep4_boss09_laser.bml motion 0 (the laser is updated 125 times, the last one ends it).
   frames: 126,
   // The sound of the laser (0x6f8 of boss09's sound table): a loop from the first update to the end update.
   se: 0x6f8,
-  // ASSUMED: the aim's reach. The exe's reach is the distance from the origin to the aim point (+0x44, no writer
-  // found) cut at the first wall; the port has no aim source to measure, so the centre arenas' range (SM_ARENAS 3 / 4)
-  // stands in as 620.
+  // The length ramp (0x00976100 = 100.0, added to +0x50 each update). Proven.
+  lengthStep: 100,
+  // ASSUMED cap: the exe's length stops at the first wall (no geometry here), so the ramp is capped at the centre
+  // arenas' range (SM_ARENAS 3 / 4) as a stand-in. Not an exe constant.
   reach: 620,
   // ASSUMED: the total turn of the aim over the sweep frames, centred on the boss's heading (half a circle). The exe
-  // has no sweep constant: the turn is whatever the aim point does, and that point has no writer found.
+  // has no sweep constant: the turn comes from the node-based heading of the render (see above), not decoded.
   sweep: 0x8000,
 } as const;
+
+// The laser's length after update k (0-based): the exe's ramp, capped (see SM_LASER). The aim of that update is
+// origin + this length along the sweep heading. ASSUMED: the exe's hit reads the previous draw's aim (one update
+// behind); the port uses this update's length.
+export function laserLength(k: number): number {
+  return Math.min(SM_LASER.lengthStep * (k + 1), SM_LASER.reach);
+}
 
 export interface SmLaserOptions {
   // The boss's position (the dispatcher's origin, the boss's +0x38).
