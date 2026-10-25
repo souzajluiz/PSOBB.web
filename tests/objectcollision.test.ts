@@ -453,6 +453,41 @@ check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag
   check(ENEMY_COLLISION_LINKS[0x65]?.[0]?.table === 0x009bf3e4 && ENEMY_COLLISION_LINKS[0x65]?.[0]?.depth === 1, 'the 0x65 link is the depth-1 table 0x009bf3e4 once the call graph uses instruction-aligned calls');
 }
 
+// Every type whose generated entry changed in the 2026-10-25 regeneration (DEVLOG 2026-10-25, the aligned-call
+// generator). Exe facts: the factory rows of the 0x45 / 0x65 / 0x116 / 0xcb / 0xca sets (ENEMY_FACTORY_TABLE),
+// the ctor's init call (objdump), and the old chain's edge, a bytes-inside-an-instruction misread (the mid-
+// instruction check of each site). The 0x116 ambiguity: the own init is the ctor's first call on `this`.
+{
+  const hasTable = (t: number, table: number) => !!TYPE_COLLISION_TABLES[t]?.some((l) => l.table === table);
+  const enemy0 = (t: number) => ENEMY_COLLISION_LINKS[t]?.[0];
+  // 0x45: factory 0x0060c518 calls ctor 0x0060c5e4 (0x0060c5ba); the ctor's init 0x0060c709 (count 1, table 0x009c4344).
+  check(enemy0(0x45)?.table === 0x009c4344 && enemy0(0x45)?.func === 0x0060c5e4 && enemy0(0x45)?.depth === 1 && !enemy0(0x45)?.ambiguous, '0x45 links its own table 0x009c4344 from ctor 0x0060c5e4 (depth 1; the old func 0x0060c6ba was mid-ctor)');
+  check(hasTable(0x45, 0x009c4344) && !!COLLISION_SITES.find((s) => s.site === 0x0060c709 && s.func === 0x0060c5e4), 'type 0x45 reaches table 0x009c4344 through the init at 0x0060c709 in ctor 0x0060c5e4');
+  // 0x65: factory 0x00582e44 calls the ctor 0x00582ef4 at 0x00582ecf; its init 0x00582fde (count 1, table 0x009bf3e4). The
+  // table 0x009bf60c is the 0x478 child that 0x00586b44 builds (0x005832c0): not the enemy's own box.
+  check(enemy0(0x65)?.table === 0x009bf3e4 && enemy0(0x65)?.depth === 1 && !(ENEMY_COLLISION_LINKS[0x65] ?? []).some((l) => l.table === 0x009bf60c), '0x65 links its own table 0x009bf3e4 (depth 1); 0x009bf60c is the child 0x478 box, not the link');
+  // 0x116: factory 0x005a673c -> ctor 0x005a67b8 (0x005a6796) -> 0x005a9c58 (0x005a6907). Own init 0x005a9cb9 (ecx = this,
+  // via 0x0051ff3c, table 0x009c07c0). 0x009c0844 is the init at 0x005a9f65 on the 0xac child stored at this+0x4a4.
+  check(enemy0(0x116)?.table === 0x009c07c0 && enemy0(0x116)?.via === 0x0051ff3c && enemy0(0x116)?.func === 0x005a9c58 && enemy0(0x116)?.ambiguous === false, '0x116 links its own table 0x009c07c0 (via helper 0x0051ff3c); 0x009c0844 is the child box, not ambiguous');
+  check(!!COLLISION_SITES.find((s) => s.site === 0x005a9f65 && s.func === 0x005a9c58 && s.table === 0x009c0844), 'the 0x116 child init 0x005a9f65 is in ctor 0x005a9c58 (table 0x009c0844)');
+  // 0xcb: the old 0x009ac120 chain went through 0x004accd0 (inside `movl %edx, -0x18(%ebp)`): no box. 0xcb has no TYPE entry either.
+  check(TYPE_COLLISION_TABLES[0xcb] === undefined && !hasTable(0xcb, 0x009ac120), '0xcb (Sinow Berill) has no table: the 0x009ac120 edge was a misread inside an instruction');
+  // Types that lost a deep table (the old edge was a misread: 0x509874 / 0x65bc1b / 0x54dc7d / 0x65cb0e / 0x613fb9 /
+  // 0x6556c3 / 0x65be4b / 0x65ce66 / 0x64d11f are all mid-instruction). Each keeps its own table(s).
+  check(!hasTable(0x13, 0x009bb630) && hasTable(0x13, 0x009c5cc0), '0x13 loses the misread table 0x009bb630 and keeps its own 0x009c5cc0');
+  check(!hasTable(0x8b, 0x009bb260) && !hasTable(0x8b, 0x009bb28c) && !hasTable(0x8b, 0x009bb2b8) && hasTable(0x8b, 0x009c735c), '0x8b loses the 0x63 variant tables (misread at 0x0064d11f) and keeps 0x009c735c');
+  check(!hasTable(0x8f, 0x009bba60) && hasTable(0x8f, 0x009c80d0), '0x8f loses the misread table 0x009bba60 and keeps 0x009c80d0');
+  check(!hasTable(0xdc, 0x009bcc20) && hasTable(0xdc, 0x009bd3a0), '0xdc loses the misread table 0x009bcc20 (edge 0x0054dc7d) and keeps 0x009bd3a0');
+  check(!hasTable(0x1a9, 0x009bba60) && hasTable(0x1a9, 0x009c8020), '0x1a9 loses the misread table 0x009bba60 and keeps 0x009c8020');
+  check(!hasTable(0x2b1, 0x009cf95c) && hasTable(0x2b1, 0x009c8160), '0x2b1 loses the misread table 0x009cf95c (edge 0x0065cb0e) and keeps 0x009c8160');
+  check(!hasTable(0x2b3, 0x009cf95c) && hasTable(0x2b3, 0x009c81b8), '0x2b3 loses the misread table 0x009cf95c (edge 0x0065ce66) and keeps 0x009c81b8');
+  check(!hasTable(0x390, 0x009bb630) && hasTable(0x390, 0x009c9ec4), '0x390 loses the misread table 0x009bb630 (edge 0x00509874) and keeps 0x009c9ec4');
+  // Types that lost every table: the only edges were misreads (0x613fb9 for 0x170; 0x6556c3 for 0x183). No aligned
+  // path within depth 5 reaches another init site (ASSUMED: no box, not walked per instruction).
+  check(TYPE_COLLISION_TABLES[0x170] === undefined, '0x170 has no box table (its misread edge 0x00613fb9 was mid-instruction; ASSUMED none)');
+  check(TYPE_COLLISION_TABLES[0x183] === undefined, '0x183 has no box table (its misread edges 0x006556c3 were mid-instruction; ASSUMED none)');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exitCode = 1;
