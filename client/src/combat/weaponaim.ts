@@ -109,3 +109,37 @@ export function inMeleeReach(
   }
   return true;
 }
+
+// One box of a target (formats/collisionboxes.gen.ts CollisionBoxRow, with its centre already
+// offset from the target's origin). The exe keeps a target per enabled box (check_enemy_is_targetable's
+// loop over hitbox_count): flag bit 0 is the box's enabled bit, and the weapon's field4 mask
+// (ApplyTargetingUIConfig, 0x8000; 0xa000 when the player has the +0x8fc word) selects the boxes it may
+// strike. The live enabled bit of a box is not tracked by the port: the static row's bit stands in for it.
+export interface MeleeBox {
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  flags: number;
+}
+export const MELEE_BOX_ENABLED = 1;
+export const MELEE_BOX_KIND = 0x8000;
+
+// The nearest XZ distance (squared) from the weapon to a box that passes inMeleeReach, over the
+// enabled boxes whose flags carry `kind`; Infinity when no box passes. The enemy is a target when
+// this is finite; the value is its sort key (the exe sorts per box by wpn_to_trgt_dist_sq).
+export function meleeReachAny(
+  w: { x: number; y: number; z: number },
+  aim: MeleeAim,
+  boxes: readonly MeleeBox[],
+  kind: number = MELEE_BOX_KIND,
+): number {
+  let best = Infinity;
+  for (const b of boxes) {
+    if ((b.flags & MELEE_BOX_ENABLED) === 0 || (b.flags & kind) === 0) continue;
+    if (!inMeleeReach(w, aim, b, b.radius)) continue;
+    const d = (b.x - w.x) ** 2 + (b.z - w.z) ** 2;
+    if (d < best) best = d;
+  }
+  return best;
+}

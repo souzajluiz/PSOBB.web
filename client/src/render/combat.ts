@@ -22,7 +22,7 @@ import { HOTBAR_KEYS, KEYS, PALETTE_KEYS, paletteChannelDown } from '../input/ke
 import { hotbarAction, type HotbarAction } from '../classic/hotbar.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { AttackState, type AttackEvents, burstCount } from '../combat/attack.ts';
-import { facingOf, inMeleeReach, type MeleeAim, type WeaponReach } from '../combat/weaponaim.ts';
+import { facingOf, inMeleeReach, meleeReachAny, type MeleeAim, type WeaponReach } from '../combat/weaponaim.ts';
 import {
   AI_PROFILES,
   aiConfig,
@@ -147,7 +147,7 @@ import {
 import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MECHGUN_KIND, MUZZLE_PARTICLE, movedTowards, pelletAllowed, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, RIFLE_HOOK_MUZZLE_ATTACH, rifleHookMuzzle, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, slotSetType, slotVariant, VOLOPT_SET_TYPE } from '../formats/enemyboxes.ts';
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
-import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
+import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { gunBulletStart, SECOND_START_BODY_NODE, weaponPositionY, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { STATUS_ICON_BLAST_FIRST } from '../classic/hud.ts';
@@ -6919,9 +6919,11 @@ export class CombatView {
     if (!me) return [];
     const range = this.weaponRange(attackType);
     const aim: MeleeAim = { heading: me.angle, horizontal: range.horizontal, vertical: range.vertical, hAngle: range.horizontalHalfAngle, vAngle: range.verticalHalfAngle };
-    // ASSUMED: the weapon point is WEAPON_HEIGHT above the feet (the player's weapon_position
-    // is not traced; the same fallback as the gun's origin, combat/weaponorigin.ts).
-    const weapon = { x: from.x, y: from.y + WEAPON_HEIGHT, z: from.z };
+    // The weapon point is the player's weapon_position (player +0x300, UpdatePlayerWeaponPosition_0077a1f4):
+    // x and z are the feet, y is the feet plus 0.5 * the bloodstain offset (weaponPositionY; the offset
+    // is ASSUMED 0, so the point is the feet).
+    const weapon = { x: from.x, y: weaponPositionY(from.y), z: from.z };
+    const keys = new Map<EnemyRuntime, number>();
     const targets: EnemyRuntime[] = [];
     for (const e of this.enemies.values()) {
       if (e.dead) continue;
@@ -6929,6 +6931,20 @@ export class CombatView {
       // is hidden by render/waves.ts), so it cannot be hit.
       if (!struckShown(e) || concealed(e) || !splitStruckOk(e)) continue;
       const p = e.instance.root.position;
+      // The exe's per-box loop (check_enemy_is_targetable): every enabled box with the kind bit is a
+      // candidate with its own centre (position2) and radius; the enemy is a target when one passes.
+      // The centre is the origin plus the row's offset, ASSUMED unrotated (the exe rotates the offset by
+      // the enemy's yaw). The entity gates (0x60000000 / 0x40800 on the entity flags) are not ported.
+      const rows = this.enemyBoxRows(e);
+      if (rows) {
+        const boxes = rows.map((r) => ({ x: p.x + r.offset[0], y: p.y + r.offset[1], z: p.z + r.offset[2], radius: r.radius, flags: r.flags }));
+        const key = meleeReachAny(weapon, aim, boxes);
+        if (key === Infinity) continue;
+        keys.set(e, key);
+        targets.push(e);
+        continue;
+      }
+      // No box table is known for this enemy (ASSUMED: the port's point test with the family's radius).
       // ASSUMED: a box counts from its surface; the Dragon's seven body boxes
       // all sit at its origin, the biggest with radius 15 (combat/dragon.ts
       // DRAGON_BODY_BOXES). Every other enemy keeps the point test.
@@ -6943,11 +6959,19 @@ export class CombatView {
       // boxes sit at its origin.
       const centre = { x: p.x, y: e.ai instanceof DragonAi || e.ai instanceof GoldDragonAi ? p.y : p.y + this.aimHeightOf(e), z: p.z };
       if (!inMeleeReach(weapon, aim, centre, reach)) continue;
+      keys.set(e, (p.x - weapon.x) ** 2 + (p.z - weapon.z) ** 2);
       targets.push(e);
     }
-    const xzSq = (e: EnemyRuntime) => (e.instance.root.position.x - weapon.x) ** 2 + (e.instance.root.position.z - weapon.z) ** 2;
-    targets.sort((a, b) => xzSq(a) - xzSq(b));
+    targets.sort((a, b) => keys.get(a)! - keys.get(b)!);
     return targets;
+  }
+
+  // The enemy's box rows (formats/enemyboxes.ts): a Vol Opt monitor's own row set, else the set type's
+  // table for its area and variant. Null when no table is known.
+  private enemyBoxRows(e: EnemyRuntime): readonly CollisionBoxRow[] | null {
+    const monitor = this.voloptMonitorRows(e);
+    if (monitor) return monitor;
+    return enemyBoxTable(slotSetType(e.slot), this.area, slotVariant(e.slot))?.rows ?? null;
   }
 
   // Battle Mode: the remote players a melee strike reaches (combat/pvp.ts pvpInReach, the
