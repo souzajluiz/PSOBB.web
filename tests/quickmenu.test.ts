@@ -22,11 +22,15 @@ import type { ItemData } from '../client/src/formats/itemnames.ts';
 import { techMenuOrder, techMenuPayload, writeTechMenuOrder } from '../client/src/net/charfile.ts';
 import { compareColor, equipStatRows, VALUE_COLOR, EQUIP_STAT_ROWS } from '../client/src/classic/itemdetail.ts';
 import {
+  classCheck,
   magCellUsable,
+  techniqueMinMst,
   toolCheckerBits,
   toolCombinationPasses,
   type ToolCheckContext,
 } from '../client/src/classic/quickmenu.ts';
+import { CLASS_FLAGS } from '../client/src/combat/progression.ts';
+import { techData } from '../client/src/combat/techniques.ts';
 import {
   QUICK_MENU_GUI,
   canCreateChallengeTrapManager,
@@ -381,7 +385,11 @@ const TOOL_INV = [weapon(0x100, true), toolItem(0x200), toolItem(0x201, true), t
 // dump 417953; the combination check, dump 418088). The flags are the tool's PMT +0x14 word.
 // A tool at class 0 index 0 with flags 0x7f (Monomate-like: bit 0 set, the 0x10 / 0x20 flags set).
 function toolFixture(over: Partial<ToolCheckContext> = {}): ToolCheckContext {
-  return { pmt: fakePmt({ '0.0': 0x7f, '3.0': 0x7f, '12.0': 0x7f, '13.0': 0xfa, '10.0': 0x7b }), safeMap: true, bossMap: false, level: 10, charClass: 0, equipped: [], magStage: null, ...over };
+  return {
+    pmt: fakePmt({ '0.0': 0x7f, '3.0': 0x7f, '12.0': 0x7f, '13.0': 0xfa, '10.0': 0x7b }), safeMap: true, bossMap: false, level: 10, charClass: 0, equipped: [], magStage: null,
+    telepipe: true, challengeObject: false, mst: 0x7fff, techLevels: [], statusType: 0, materialUsable: () => true,
+    ...over,
+  };
 }
 function fakePmt(flags: Record<string, number>, combinations: ItemCombination[] = []): ItemPMT {
   const pmt = new ItemPMT();
@@ -450,6 +458,67 @@ check('tools bits: a mag cell variant 0 with no mag is blocked', !tools([3, 12, 
 check('tools bits: a mag cell variant 0 with a level 50 mag is blocked', !tools([3, 12, 0], toolFixture({ equipped: [magEq(50)] })));
 check('tools bits: a mag cell variant 0 with a level 100 mag is in', tools([3, 12, 0], toolFixture({ magStage: 0, equipped: [magEq(100)] })));
 check('tools bits: a mag cell variant 6 is blocked even with a strong mag', !tools([3, 12, 6], toolFixture({ pmt: fakePmt({ '12.6': 0x7f }), magStage: 0, equipped: [magEq(200)] })));
+
+// The rest of CheckItemEquipConditions_005d5f40's tool branch (dump names: class_check,
+// IsTelepipeEnabled, GetTechniqueData / CalculateEffectiveTechniqueLevel / GetPMTTechniqueValue,
+// the grinder's max_grind, can_use_material, the antidote's 0x25c test).
+{
+  const blocked = (b: number) => (b & 1) !== 0;
+  // class_check(0xd7): the android flags pass, the HUmar flags (0x25: hunter, 0x4) fail.
+  check('class_check: the android flags (0x31) pass 0xd7', classCheck(0x31, 0xd7));
+  check('class_check: the HUmar flags (0x25) fail 0xd7', !classCheck(0x25, 0xd7));
+  check('class_check: CLASS_FLAGS[2] (android) passes 0xd7', classCheck(CLASS_FLAGS[2], 0xd7));
+  const hunterFlag = fakePmt({ '0.0': 0x77 }); // flag 0x8 clear, so the class test runs
+  // The dump blocks on a nonzero class_check when flag 0x8 is clear (`(flags & 8) == 0 && iVar6 != 0`).
+  check('tools bits: flag 0x8 clear and class_check failing does not block (HUmar)', !blocked(toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture({ pmt: hunterFlag, charClass: 0 }))));
+  check('tools bits: flag 0x8 clear and class_check passing blocks (android)', blocked(toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture({ pmt: hunterFlag, charClass: 2 }))));
+  check('tools bits: flag 0x8 set skips class_check', !blocked(toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture({ pmt: fakePmt({ '0.0': 0x7f }), charClass: 0 }))));
+  check('tools bits: flag 0x40 clear in a challenge game blocks (g_ChallengeObject)', blocked(toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture({ pmt: fakePmt({ '0.0': 0x3f }), challengeObject: true, charClass: 2 }))));
+  check('tools bits: flag 0x40 set in a challenge game does not block', !blocked(toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture({ pmt: fakePmt({ '0.0': 0x7f }), challengeObject: true, charClass: 2 }))));
+  check('tools bits: a tool missing from the PMT skips the flag tests (no flag blocks)', !blocked(toolCheckerBits(new Uint8Array([3, 0, 5, 0, 0]), toolFixture({ safeMap: false, bossMap: true, challengeObject: true, charClass: 2 }))) );
+  // Class 6: the antidote (variant 0) needs status type 0x0f, the antiparalysis (variant 1) 0x10.
+  check('class 6: antidote with poison (0x0f) is in', !blocked(toolCheckerBits(new Uint8Array([3, 6, 0, 0, 0]), toolFixture({ statusType: 0x0f }))));
+  check('class 6: antidote without poison is blocked', blocked(toolCheckerBits(new Uint8Array([3, 6, 0, 0, 0]), toolFixture({ statusType: 0 }))));
+  check('class 6: antiparalysis with paralysis (0x10) is in', !blocked(toolCheckerBits(new Uint8Array([3, 6, 1, 0, 0]), toolFixture({ statusType: 0x10 }))));
+  check('class 6: antiparalysis with poison is blocked', blocked(toolCheckerBits(new Uint8Array([3, 6, 1, 0, 0]), toolFixture({ statusType: 0x0f }))));
+  check('class 6: a variant above 1 is not tested', !blocked(toolCheckerBits(new Uint8Array([3, 6, 2, 0, 0]), toolFixture({ statusType: 0 }))));
+  // Class 7: the Telepipe needs IsTelepipeEnabled.
+  check('class 7: the Telepipe is blocked when the pipe is not allowed', blocked(toolCheckerBits(new Uint8Array([3, 7, 0, 0, 0]), toolFixture({ telepipe: false }))));
+  check('class 7: the Telepipe is in when the pipe is allowed', !blocked(toolCheckerBits(new Uint8Array([3, 7, 0, 0, 0]), toolFixture({ telepipe: true }))));
+  // Class 0x0a: the weapon's grind (data1[3]) must be below its PMT max_grind.
+  const weaponPmt = (maxGrind: number): ItemPMT => {
+    const p = fakePmt({ '10.0': 0x7f });
+    (p as unknown as { getWeapon: () => { maxGrind: number } }).getWeapon = () => ({ maxGrind });
+    return p;
+  };
+  const grinderWeapon = (grind: number) => ({ data1: new Uint8Array([0, 1, 0, grind]), magLevel: 0 });
+  check('grinder: a weapon below its max grind is in', !blocked(toolCheckerBits(new Uint8Array([3, 10, 0, 0, 0]), toolFixture({ pmt: weaponPmt(10), equipped: [grinderWeapon(9)] }))));
+  check('grinder: a weapon at its max grind is blocked', blocked(toolCheckerBits(new Uint8Array([3, 10, 0, 0, 0]), toolFixture({ pmt: weaponPmt(10), equipped: [grinderWeapon(10)] }))));
+  check('grinder: a weapon with no PMT entry is not blocked by the grind', !blocked(toolCheckerBits(new Uint8Array([3, 10, 0, 0, 0]), toolFixture({ equipped: [grinderWeapon(200)] }))));
+  // Class 0x0b: the material use check (combat/materials.ts), variants 0..6.
+  check('material: a usable material is in', !blocked(toolCheckerBits(new Uint8Array([3, 11, 0, 0, 0]), toolFixture({ materialUsable: () => true }))));
+  check('material: an unusable material is blocked', blocked(toolCheckerBits(new Uint8Array([3, 11, 3, 0, 0]), toolFixture({ materialUsable: () => false }))));
+  check('material: a variant above 6 is not tested', !blocked(toolCheckerBits(new Uint8Array([3, 11, 9, 0, 0]), toolFixture({ materialUsable: () => false }))));
+  // Class 2: the technique scroll. The MST needs the requirement, a learned level blocks an equal or
+  // lower scroll, the class maximum caps the level (0xff: cannot learn).
+  const tech = 3;
+  const need = techniqueMinMst(tech);
+  const scroll = new Uint8Array([3, 2, 4, 0, tech]);
+  const sPmt = fakePmt({ '2.3': 0x7f });
+  sPmt.maxTechLevels[tech] = [14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14];
+  check('technique: the MST at the requirement is in', !blocked(toolCheckerBits(scroll, toolFixture({ pmt: sPmt, mst: need }))));
+  check('technique: the MST below the requirement is blocked', blocked(toolCheckerBits(scroll, toolFixture({ pmt: sPmt, mst: need - 1 }))));
+  check('technique: a learned level equal to the scroll level blocks', blocked(toolCheckerBits(scroll, toolFixture({ pmt: sPmt, mst: 0x7fff, techLevels: [...new Array(tech).fill(null), 5] }))));
+  check('technique: a learned level above the scroll level blocks', blocked(toolCheckerBits(scroll, toolFixture({ pmt: sPmt, mst: 0x7fff, techLevels: [...new Array(tech).fill(null), 6] }))));
+  check('technique: a learned level below the scroll level is in', !blocked(toolCheckerBits(scroll, toolFixture({ pmt: sPmt, mst: 0x7fff, techLevels: [...new Array(tech).fill(null), 4] }))));
+  const capped = fakePmt({ '2.3': 0x7f });
+  capped.maxTechLevels[tech] = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3];
+  check('technique: a scroll above the class maximum is blocked', blocked(toolCheckerBits(scroll, toolFixture({ pmt: capped, mst: 0x7fff }))));
+  const noLearn = fakePmt({ '2.3': 0x7f });
+  noLearn.maxTechLevels[tech] = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+  check('technique: a technique the class cannot learn (0xff) is blocked', blocked(toolCheckerBits(scroll, toolFixture({ pmt: noLearn, mst: 0x7fff }))));
+  check('technique: the MST requirement is a signed short', techniqueMinMst(tech) === ((techData(tech, 0).charge << 16) >> 16));
+}
 // The populate's stat rows (equipStatRows, the same as the equipment panel): six rows in label order.
 {
   const cur = { atp: 100, dfp: 10, mst: 5, ata: 20, evp: 8, lck: 3 };

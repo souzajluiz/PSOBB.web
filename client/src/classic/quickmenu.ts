@@ -1,4 +1,6 @@
 import type { ItemCombination, ItemPMT } from '../formats/itempmt.ts';
+import { CLASS_FLAGS } from '../combat/progression.ts';
+import { techData } from '../combat/techniques.ts';
 
 // The End-key quick menu (classic), the model part: which tab the menu opens on,
 // how the tab cursor moves, and the gui positions of its lists.
@@ -476,6 +478,12 @@ export interface ToolCheckContext {
   charClass: number; // the character's class index
   equipped: readonly ToolCheckEquipped[]; // every equipped item (the equipment slots)
   magStage: number | null; // the equipped mag's evolution stage (null: no mag equipped)
+  telepipe: boolean; // SinowberillChallengePlayer_IsTelepipeEnabled (0x0068bfa0): class 7
+  challengeObject: boolean; // g_ChallengeObject is set (ASSUMED: the port's challenge game)
+  mst: number; // the stat block's MST (player +0x2b4, the battle params)
+  techLevels: readonly (number | null)[]; // the learned techniques, 1-based (null: not learned)
+  statusType: number; // the status slot 0 type (player +0x25c): 0x0f poison, 0x10 paralysis, 0 none
+  materialUsable: (kind: number) => boolean; // combat/materials.ts materialUsable (class 0x0b)
 }
 
 const WILD = 0xff; // a PMT wildcard byte (pmt_get_barrier's -1 / 0xff)
@@ -562,27 +570,112 @@ export function magCellUsable(variant: number, mag: ToolCheckEquipped | null): b
 // The mag cell (class 0x0c) is blocked when magCellUsable is false for its variant (data1[2]), so
 // with no mag equipped every mag cell is blocked (2026-10-25).
 //
-// ASSUMED off (not decoded or not in the port): the challenge object (g_ChallengeObject, bit
-// 0x40 of the flags); class_check(0xd7) (flags bit 8); the technique scroll (class 2: the
-// technique's min mst and the level, GetTechniqueData / CalculateEffectiveTechniqueLevel); the
-// Sinowberill telepipe (class 7); class 6 (player field 0x25c); the grinder's grind test (class
-// 0x0a: the exe reads an uninitialised byte there, only the empty-weapon test is taken); the
-// material rules (class 0x0b: class max and the material cap, can_use_material); the armour
-// rule (class 0x0f).
+// class_check (dump 418805, called as class_check(player, 0xd7) in the tool branch): the player's
+// class flags word (player +0x964, CLASS_FLAGS) against the mask. Each flag group demands one mask
+// bit: 0x20 -> 1 (else 0x40 -> 2, else 4); 0x10 -> 0x10 (else 0x8 -> 0x20, else 0x4 -> 8); 0x1 -> 0x40
+// (else 0x2 -> 0x80). Androids (0x10) pass 0xd7.
+export function classCheck(flags: number, mask: number): boolean {
+  if ((flags & 0x20) === 0) {
+    if ((flags & 0x40) === 0) {
+      if ((mask & 4) === 0) return false;
+    } else if ((mask & 2) === 0) return false;
+  } else if ((mask & 1) === 0) return false;
+  if ((flags & 0x10) === 0) {
+    if ((flags & 8) === 0) {
+      if ((flags & 4) !== 0 && (mask & 8) === 0) return false;
+    } else if ((mask & 0x20) === 0) return false;
+  } else if ((mask & 0x10) === 0) return false;
+  if ((flags & 1) === 0) {
+    if ((flags & 2) !== 0 && (mask & 0x80) === 0) return false;
+  } else if ((mask & 0x40) === 0) return false;
+  return true;
+}
+
+// The technique's MST requirement: the word at +0x14 of GetTechniqueData_006ded14's record (the
+// dump's technique_data unknown1, compared as a signed short with the MST). The port's TABLE
+// field 5 (named charge in combat/techniques.ts) is that word; it is not level dependent.
+export function techniqueMinMst(tech: number): number {
+  return (techData(tech, 0).charge << 16) >> 16;
+}
+
+// The technique scroll (class 2, dump 427777..427797). The MST must reach the scroll's requirement;
+// a learned technique blocks a scroll whose level is not above it (the port's techLevels are
+// 1-based, the exe's CalculateEffectiveTechniqueLevel is 0-based, so the learned level is
+// techLevels - 1); the level must not pass the class maximum (pmt.maxTechLevels, 0xff: cannot learn).
+// ASSUMED: GetTechniqueData never returns null for a scroll (its null path is not decoded).
+function techniqueScrollUsable(data1: Uint8Array, ctx: ToolCheckContext): boolean {
+  const level = data1[2] ?? 0;
+  const tech = data1[4] ?? 0;
+  if (ctx.mst < techniqueMinMst(tech)) return false;
+  const learned = ctx.techLevels[tech] ?? null;
+  if (learned !== null && level <= learned - 1) return false;
+  const max = ctx.pmt.maxTechLevels[tech]?.[ctx.charClass] ?? 0xff;
+  return max !== 0xff && level <= max;
+}
+
+// The checker bits of CheckItemEquipConditions_005d5f40 for a tool (group 3), as the populate
+// (ListWindowObject_PopulateTwoHandedWeapons, dump 719618) reads them through
+// GetItemAttackData_005c50b4 (dump names in the 2026-10-25 entries).
+//
+// The flag-word tests (0x2, 0x4, 0x8, 0x10, 0x20, 0x40) run only when the PMT has the tool (the
+// dump's `in_stack != 0`). Flag 0x8 is class_check(player, 0xd7); flag 0x40 is g_ChallengeObject
+// (ASSUMED: the port's challenge game, ctx.challengeObject). The class branches:
+//   class 6 (status cure): the antidote (variant 0) needs status slot 0 type 0x0f, the
+//     antiparalysis (variant 1) 0x10; other variants are not tested;
+//   class 7 (Telepipe): IsTelepipeEnabled;
+//   class 2 (technique scroll): techniqueScrollUsable;
+//   class 0x0a (grinder): a weapon must be equipped and its grind below the PMT max_grind (the grind
+//     is the weapon's data1[3]: the dump's compact copy is not decoded, ASSUMED);
+//   class 0x0b (material): materialUsable(variant) for variants 0..6;
+//   class 0x0c (mag cell): magCellUsable (below).
+// Not ported (ASSUMED off): the second challenge rule (g_QuestStarted, g_ChallengeAllowedItemTypes
+// +0x1c bit 0x40, dump end of the function); the armour rule (class 0x0f: no armour, or the item's
+// vtable +0x94 above 3; the vtable slot is not named); the unit terms of the material variants 3 / 4
+// (CalculateEffectiveHP / TP subtract CalculateSpecialAttackPower; the port keeps the bonus alone).
 export function toolCheckerBits(data1: Uint8Array, ctx: ToolCheckContext): number {
   if (data1[0] !== GROUP_TOOLS_TECHS) return 0;
   if (((data1[4] ?? 0) & 0x40) !== 0) return 0;
-  const flags = ctx.pmt.getTool(data1[1] ?? 0, data1[2] ?? 0)?.itemFlags ?? 0;
+  // A technique scroll's PMT tool is the class 2 row of its technique (data1[4]), and none above
+  // level 0x1d (the tool lookup in 0x005d2890, group 3, class 2: `cmp $0x1d`); the other tools
+  // index by class and variant.
+  const tool =
+    (data1[1] ?? 0) === 2
+      ? (data1[2] ?? 0) > 0x1d
+        ? undefined
+        : ctx.pmt.getTool(2, data1[4] ?? 0)
+      : ctx.pmt.getTool(data1[1] ?? 0, data1[2] ?? 0);
+  const flags = tool?.itemFlags ?? 0;
   let bits = 0;
   if (toolCanEquip(data1, flags, ctx)) bits |= ATTACK_BIT_EQUIPPABLE;
-  if ((flags & 0x4) !== 0) bits |= 0x4;
-  if ((flags & 0x2) === 0) bits |= 0x10; // flag 0x2 clear
-  if ((flags & 0x10) === 0 && !ctx.safeMap) bits |= ATTACK_BIT_BLOCKED;
-  if ((flags & 0x20) === 0 && ctx.bossMap) bits |= ATTACK_BIT_BLOCKED;
-  if (data1[1] === 0x0a && !ctx.equipped.some((e) => e.data1[0] === 0)) bits |= ATTACK_BIT_BLOCKED;
-  if (data1[1] === 0x0c) {
+  if (tool) {
+    if ((flags & 0x4) !== 0) bits |= 0x4;
+    if ((flags & 0x2) === 0) bits |= 0x10; // flag 0x2 clear
+    if ((flags & 0x8) === 0 && classCheck(CLASS_FLAGS[ctx.charClass] ?? 0, 0xd7)) bits |= ATTACK_BIT_BLOCKED;
+    if ((flags & 0x10) === 0 && !ctx.safeMap) bits |= ATTACK_BIT_BLOCKED;
+    if ((flags & 0x20) === 0 && ctx.bossMap) bits |= ATTACK_BIT_BLOCKED;
+    if ((flags & 0x40) === 0 && ctx.challengeObject) bits |= ATTACK_BIT_BLOCKED;
+  }
+  const cls = data1[1] ?? 0;
+  const variant = data1[2] ?? 0;
+  if (cls === 0x06) {
+    if (variant === 0 && ctx.statusType !== 0x0f) bits |= ATTACK_BIT_BLOCKED;
+    if (variant === 1 && ctx.statusType !== 0x10) bits |= ATTACK_BIT_BLOCKED;
+  } else if (cls === 0x07) {
+    if (!ctx.telepipe) bits |= ATTACK_BIT_BLOCKED;
+  } else if (cls === 0x02) {
+    if (!techniqueScrollUsable(data1, ctx)) bits |= ATTACK_BIT_BLOCKED;
+  } else if (cls === 0x0a) {
+    const weapon = ctx.equipped.find((e) => e.data1[0] === 0);
+    if (!weapon) bits |= ATTACK_BIT_BLOCKED;
+    else {
+      const max = ctx.pmt.getWeapon(weapon.data1[1] ?? 0, weapon.data1[2] ?? 0)?.maxGrind;
+      if (max !== undefined && max <= (weapon.data1[3] ?? 0)) bits |= ATTACK_BIT_BLOCKED;
+    }
+  } else if (cls === 0x0b) {
+    if (variant <= 6 && !ctx.materialUsable(variant)) bits |= ATTACK_BIT_BLOCKED;
+  } else if (cls === 0x0c) {
     const mag = ctx.equipped.find((e) => e.data1[0] === 2) ?? null;
-    if (!magCellUsable(data1[2] ?? 0, mag)) bits |= ATTACK_BIT_BLOCKED;
+    if (!magCellUsable(variant, mag)) bits |= ATTACK_BIT_BLOCKED;
   }
   return bits;
 }
