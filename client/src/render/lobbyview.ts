@@ -30,7 +30,7 @@ import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator, skeletonNodePosition } from './playeranim.ts';
 import { HAND_BODY_NODE, type WeaponNodeRef } from '../combat/weaponorigin.ts';
-import { PlayerMover, RAND_MAX_C, fromBams, legSpeed, modifyDirection, rampAxis, remoteStep, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
+import { KEY_RAMP_MAX, KEY_RAMP_WALK_MAX, PlayerMover, RAND_MAX_C, autoForwardRamp, fromBams, lateralDecay, legSpeed, modifyDirection, rampAxis, remoteStep, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 import { HeldWeaponFiles, type HeldWeapon } from './heldweapon.ts';
 import { addBurstSpin, applyWeaponSpin, NO_SPIN_NODE, restPoses, spinNodeOf } from './weaponspin.ts';
@@ -888,13 +888,18 @@ export class LobbyView {
       // A held key ramps its axis once per game tick (0x0070a60c): in the move
       // loop, and while dead (the move loop is off then, the camera still turns).
       if (!stick && (moveOn || dead)) {
-        this.keyFb = rampAxis(this.keyFb, keys.has(KEYS.moveBackward), keys.has(KEYS.moveForward));
-        this.keyLr = rampAxis(this.keyLr, keys.has(KEYS.moveLeft), keys.has(KEYS.moveRight));
+        // The exe's order (0x0070a60c): forward wins over back, left over right; the cap is
+        // 64 under the auto walk setting (KEY_RAMP_WALK_MAX), else 128. With no key held and an
+        // auto move on, the forward axis ramps to the cap and the lateral one falls back to 0
+        // (ramps, not jumps); with the auto move off, a released key is 0.
+        const cap = this.auto.mode === 'walk' ? KEY_RAMP_WALK_MAX : KEY_RAMP_MAX;
         const axes = moveOn ? autoMoveAxes(this.auto.mode) : null;
-        if (axes) {
-          this.keyFb = axes.fb;
-          this.keyLr = axes.lr;
-        }
+        const fbHeld = keys.has(KEYS.moveBackward) || keys.has(KEYS.moveForward);
+        const lrHeld = keys.has(KEYS.moveLeft) || keys.has(KEYS.moveRight);
+        if (fbHeld) this.keyFb = rampAxis(this.keyFb, keys.has(KEYS.moveBackward), keys.has(KEYS.moveForward), false, cap);
+        else this.keyFb = axes ? autoForwardRamp(this.keyFb, axes.fb) : 0;
+        if (lrHeld) this.keyLr = rampAxis(this.keyLr, keys.has(KEYS.moveLeft), keys.has(KEYS.moveRight), true, cap);
+        else this.keyLr = axes ? lateralDecay(this.keyLr) : 0;
       }
       const lr = stick ? stick.lr : this.keyLr;
       const fb = stick ? stick.fb : this.keyFb;

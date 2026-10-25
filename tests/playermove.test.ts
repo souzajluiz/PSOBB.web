@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { toBams, RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, remoteStep, slowApplies, inUnsafeMap, guardStance, GUARD_HUNTER_CLASSES } from '../client/src/render/playermove.ts';
+import { toBams, RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, KEY_RAMP_WALK_MAX, autoForwardRamp, lateralDecay, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, remoteStep, slowApplies, inUnsafeMap, guardStance, GUARD_HUNTER_CLASSES } from '../client/src/render/playermove.ts';
 
 assert.equal(RUN_SPEED, 45);
 assert.equal(WALK_SPEED, 30);
@@ -10,6 +10,38 @@ const seq: number[] = [];
 for (let i = 0; i < 5; i++) seq.push((v = rampAxis(v, false, true)));
 assert.deepEqual(seq, [32, 64, 96, 128, 128]);
 assert.equal(rampAxis(128, false, false), 0);
+// The keyboard ramp of PsoBB.exe (0x0070a60c, dump get_input_movement_speed), re-read from objdump:
+// the step is 0x0096ed7c = 32.0, the cap 0x0096ed88 = 128.0 and 0x0096ed84 = 64.0 under the auto
+// walk setting; the lateral decay is 0x0096ed74 = -8.0 and 0x0096ed78 = 8.0 (tools/exedata.py read).
+assert.equal(KEY_RAMP_WALK_MAX, 64);
+{
+  // a held forward key (the port's +) ramps 32 a poll to the cap
+  let f = 0;
+  const fs: number[] = [];
+  for (let i = 0; i < 6; i++) fs.push((f = rampAxis(f, false, true, false)));
+  assert.deepEqual(fs, [32, 64, 96, 128, 128, 128]);
+  // under the auto walk the cap is 64
+  assert.equal(rampAxis(64, false, true, false, KEY_RAMP_WALK_MAX), 64);
+  assert.equal(rampAxis(32, false, true, false, KEY_RAMP_WALK_MAX), 64);
+  // both held: forward wins over back (exe 0x70a7fb je to 0x70a82a, 0x70a828 jmp past back),
+  // left wins over right (exe 0x70a8e8 jmp past right)
+  assert.equal(rampAxis(0, true, true, false), 32, 'forward and back held: forward');
+  assert.equal(rampAxis(0, true, true, true), -32, 'left and right held: left');
+  // a released key is 0 at once (the auto move off, 0x70aa4c)
+  assert.equal(rampAxis(96, false, false, false), 0);
+  // the auto forward ramp: 32 a poll to the auto walk cap (0x70aa6d), never a jump
+  let a = 0;
+  const as: number[] = [];
+  for (let i = 0; i < 4; i++) as.push((a = autoForwardRamp(a, KEY_RAMP_WALK_MAX)));
+  assert.deepEqual(as, [32, 64, 64, 64]);
+  // the lateral decay: 8 a poll toward 0 from either side, then 0
+  assert.equal(lateralDecay(20), 12);
+  assert.equal(lateralDecay(12), 4);
+  assert.equal(lateralDecay(4), 0);
+  assert.equal(lateralDecay(0), 0);
+  assert.equal(lateralDecay(-20), -12);
+  assert.equal(lateralDecay(-4), 0);
+}
 // 0.1 and 0.75 of the sum of squares / 16384: the third poll runs, the first does not
 assert.ok(32 * 32 / 16384 < 0.1 && 64 * 64 / 16384 > 0.1 && 96 * 96 / 16384 < 0.75 + 0.0001 && 128 * 128 / 16384 > 0.75);
 assert.equal(headingStep(0, 0x1000), 0x400); // a quarter

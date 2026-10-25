@@ -1,5 +1,29 @@
 # Devlog
 
+## 2026-10-25: keyboard ramp checked against the exe (`0x0070a60c`, the field movement input)
+
+**Question.** The ROADMAP's movement line left open that the keyboard ramp (32 a poll to 128) was not confirmed against the exe. Decode the function, port what differs, mark the rest.
+
+**Source.** `get_input_movement_speed` in the reference dump (`Psobb.exe-5-10-2026.c`, the function at 0x0070a60c; its branches and names were read against objdump of 0x0070a60c..0x0070aa98, and every constant below was read with `tools/exedata.py read`).
+
+**Verdicts (exe addresses).**
+- Step: PROVEN 32.0 (`0x0096ed7c`, the `fsub` / `fadd` of each axis at 0x70a809, 0x70a842, 0x70a8bd, 0x70a902).
+- Cap: PROVEN 128.0 (`0x0096ed88`, the default of both caps at 0x70a61d..0x70a63a). The auto walk setting (`g_MouseControlsSetting` == 1, `cmp edx,1` at 0x70a63a) takes 64.0 (`0x0096ed84`). Both caps are the same for both axes.
+- Order: PROVEN forward before back (`je 0x70a82a` at 0x70a801, the forward ramp ends `jmp 0x70a8a5` at 0x70a828, so back is not tested); left before right (the left ramp ends `jmp 0x70a94f` at 0x70a8e8, so right is not tested). The port had back first on the forward axis: when both were held it moved the wrong way. Fixed.
+- Held key: PROVEN the ramp is `max(amount - 32, -cap)` for forward / left and `min(amount + 32, cap)` for back / right (0x70a804..0x70a822, 0x70a8b7..0x70a8e0, 0x70a8fc..0x70a91d).
+- Back key with the auto move on: PROVEN `setting = off` once the forward amount is >= 0 (0x70a86c `fcomp [0x0096ed80]` = 0.0, `mov [0xa97f48], 0`), so a back key ends the auto move.
+- No key, auto move off: PROVEN 0 at once (0x70aa6b `je 0x70aa97` for forward; 0x70aa4c for lateral).
+- No key, auto move on (stick at 0): PROVEN the forward axis ramps `max(amount - 32, -cap)` (0x70aa6d..0x70aa92), and the lateral axis falls back to 0 by 8 a poll from either side (`0x0096ed74` = -8.0, `0x0096ed78` = 8.0; 0x70a9e1, 0x70aa1c). The port had jumped the axis to 64 / 128 and zeroed the lateral one at once.
+- Gate: PROVEN the whole block is skipped when `camera_input_enabled` is 0 and a key of the six-key table is held (0x70a6c4..0x70a744: `X = camera != 1`, `ValidateMovementKey` over 0..5). NOT PORTED: the camera global's field value is not read (ASSUMED on), and the key-table test is a keyboard-binding conflict check (ASSUMED no effect with the default bindings).
+- Poll rate: ASSUMED the poll is the game tick (30 / s), as the callers' input state handlers run per player tick (`handle_input_state_move_start`, `handle_input_state_0xab`); not re-measured.
+- Not changed: the auto move's start / stop rules (automove.ts, the direction key still ends it at once; the exe ends it on the back key and on a stop without a key, ASSUMED simplification kept).
+
+**Port.** `client/src/render/playermove.ts`: `rampAxis(value, neg, pos, negFirst = true, cap = KEY_RAMP_MAX)` (the order and the cap), `KEY_RAMP_WALK_MAX` (64), `autoForwardRamp(value, cap)` and `lateralDecay(value)` (8 a poll). `client/src/render/lobbyview.ts`: the held-key ramp uses the cap of the auto walk, the forward axis is `rampAxis(.., false, ..)` (forward wins), and with no key and an auto move on the axes ramp instead of jumping; a held key now wins over the auto move's axes (the exe's key branch comes first).
+
+**Checks.** `tests/playermove.test.ts` (new asserts: 32 / 64 / 96 / 128 steps, walk cap 64, both-held order, release 0, auto forward ramp 32 / 64 / 64, lateral decay 8). `node tests/playermove.test.ts` ok; `node tests/shortcuts.test.ts` all pass; `NEWSERV=vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures; `npx tsc --noEmit -p .` clean. Not run in Chrome.
+
+**Open.** The camera gate (above); the auto move's start / stop rules (automove.ts); whether the field poll is exactly 30 / s.
+
 ## 2026-10-25: Merissa A / AA, part 3: the brain (OWN_FSM 'MerissaA') and the radar gate
 
 **Question.** Give Merissa A / AA a brain so it moves, attacks, takes damage and dies, and gate its radar icon on the exe's +0x37c bit 0x8.
