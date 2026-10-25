@@ -155,7 +155,7 @@ const tgt = (over: Partial<TrapTarget>): TrapTarget => ({ id: 1, x: 0, z: 0, flo
   t.state = 4;
   f['traps'].push(t);
   const inRange = tgt({ id: 2, x: TRAP_BLAST_RADIUS - 1, z: 0, local: true });
-  const ev = f.tick([inRange], { trapsHitOwner: false });
+  const ev = f.tick([inRange, tgt({ id: 1, x: 900, z: 900 })], { trapsHitOwner: false });
   eq(ev.map((e) => e.kind), ['hit', 'announce', 'burst'], 'blast hits, announces, bursts');
   eq(f.traps.length, 0, 'the spent trap is removed');
 }
@@ -391,7 +391,7 @@ const tgt = (over: Partial<TrapTarget>): TrapTarget => ({ id: 1, x: 0, z: 0, flo
       t.room2 = room.room2;
     }
     f['traps'].push(t);
-    return f.tick([tgt({ id: 2, x: 1, z: 0, local: true, ...target })], { trapsHitOwner: false });
+    return f.tick([tgt({ id: 2, x: 1, z: 0, local: true, ...target }), tgt({ id: 1, x: 900, z: 900 })], { trapsHitOwner: false });
   };
   eq(blastOne({ dead: true }).map((e) => e.kind), ['burst'], 'dead player: no hit, no announce (the burst still runs)');
   eq(blastOne({ invulnerable: true }).map((e) => e.kind), ['burst'], 'maybe_invuln player: skipped');
@@ -410,6 +410,27 @@ const tgt = (over: Partial<TrapTarget>): TrapTarget => ({ id: 1, x: 0, z: 0, flo
   fo['traps'].push(ot);
   eq(fo.tick([tgt({ id: 1, x: 0, z: 0, local: true })], { trapsHitOwner: false }).map((e) => e.kind), ['burst'], 'blast: the owner is skipped with the rule off');
   eq(fo.tick([], { trapsHitOwner: false }).length, 0, 'no further events once the trap is removed');
+}
+
+// --- the announce's owner check (Trap_CheckPlayerInBattleAndGetName, dump 492456, 2026-10-25) --------
+{
+  // The caller stores the function's result in +0x388 and runs it again on each in-range player hit
+  // until it returns 1. It returns 0 when the owner's player is gone, so the blast still hits and the
+  // announce waits for a later hit with the owner present.
+  const f = new TrapField();
+  const t = new BattleTrap(1, 0, 1, 0, 0, 0, 3, 0);
+  t.state = 4;
+  f['traps'].push(t);
+  const hitter = tgt({ id: 2, x: 1, z: 0, local: true });
+  const ev1 = f.tick([hitter], { trapsHitOwner: false });
+  eq(ev1.map((e) => e.kind), ['hit', 'burst'], 'owner absent: the hit lands, no announce');
+  eq(t.announced, false, 'owner absent: the announce flag stays 0 (retried)');
+  const t2 = new BattleTrap(1, 0, 1, 0, 0, 0, 3, 0);
+  t2.state = 4;
+  f['traps'].push(t2);
+  const ev2 = f.tick([hitter, tgt({ id: 1, x: 900, z: 900 })], { trapsHitOwner: false });
+  eq(ev2.map((e) => e.kind), ['hit', 'announce', 'burst'], 'owner present: the announce runs on the hit');
+  eq(t2.announced, true, 'owner present: the flag is set');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

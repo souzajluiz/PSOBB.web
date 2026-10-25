@@ -439,13 +439,18 @@ export class TrapField {
         // update_trap state 4 (dump 492596..492700): the outer filter is (character_flags & (maybe_invuln |
         // dead)) == 0, the room test and the owner rule, then the range (strictly under the blast radius).
         // A player's hit is refused at +0x32c == 2; the announce still runs (it is in the outer block).
+        // Trap_CheckPlayerInBattleAndGetName (VERIFIED, dump 492456): it returns 1 only when the owner's
+        // player exists (GetPlayer(+0x2dc)) and has a name, and the caller stores the result in +0x388 and
+        // retries on every in-range player hit until it is 1. ASSUMED: the battle-mode check passes and a
+        // present owner has a name.
+        const ownerPresent = targets.some((g) => g.id === t.owner);
         for (const g of targets) {
           if (g.dead || g.invulnerable || g.floor !== t.floor) continue;
           if (g.id === t.owner && !rules.trapsHitOwner) continue;
           if (!blastRoomMatch(t, g)) continue;
           if (dist2(t.x, t.z, g.x, g.z) >= t.blast * t.blast) continue;
           if (g.local && !g.challengeTwo) events.push({ kind: 'hit', trap: t, target: g });
-          if (!t.announced) {
+          if (!t.announced && ownerPresent) {
             t.announced = true;
             events.push({ kind: 'announce', trap: t });
           }

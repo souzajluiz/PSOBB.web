@@ -1,5 +1,20 @@
 # Devlog
 
+## 2026-10-25: Battle trap announce: the owner check (Trap_CheckPlayerInBattleAndGetName)
+
+**What changed:** `quest/battletraps.ts` `TrapField.tick` now emits the trap's "<name> TRAP" announce only when the owner is among the targets (the owner's player exists). Before, the announce fired on the first in-range player hit whatever the owner. Test: `tests/battletraps.test.ts` (new block: owner absent, the hit lands and the flag stays 0; owner present on a later hit, the announce runs once). The blast helpers in the tests now include the owner's record.
+
+**Exe evidence (Ghidra dump `Psobb.exe-05112026.c`):**
+- `update_trap` state 4 (492596..492700): the in-range player hit calls `set_enemy_target` and the hit, then `if (param_1->field433_0x388 != 1) { field433 = Trap_CheckPlayerInBattleAndGetName_0062f1a0(trap, player); }`. So the announce is retried on every in-range player hit until the call returns 1.
+- `Trap_CheckPlayerInBattleAndGetName_0062f1a0` (492456): returns 1 only when `unknown_is_in_battle_mode()` is non-zero, `GetPlayer_0068d5a8(+0x2dc)` (the owner) is non-null, and `get_player_name` of it is non-null; then it prints `\tC4<name>\tC0 TRAP` style text and returns 1. Otherwise 0.
+- The hit is outside the `unknown_flags_invincibility != 2` branch, so the announce is not refused by +0x32c == 2 (unchanged).
+
+**Proven:** the owner-lookup rule and the retry until 1 (VERIFIED from the dump lines above). **ASSUMED:** the battle-mode check is true whenever the blast runs in the port (`TrapField.tick` is only called in battle), and a present owner always has a name (the port has no names on `TrapTarget`). The announce text is the port's existing `trapAnnouncement`.
+
+**Not changed:** the reveal's state-2 position copy. Disassembled at `0x0062eb29..0x0062eb57` (lldb, `disassemble -F intel`): on a revealed trap (`+0xa4 == 2`) it calls `CheckEnemyTargetability_006945fc` and copies the owner's dwords `+0x33c / +0x340 / +0x344` into the trap's `+0x38 / +0x3c / +0x40` (raw integer moves). The dump's decompile shows these as `(float)` conversions of `unknown_flags_2` etc., which the disassembly does not show. The trap's `+0x38` is the position the range test reads, so the copy would make the trap's position the owner's flag words. Whether those words are a position in the owner struct is UNCLEAR; left open, not ported.
+
+**Checks:** `node tests/battletraps.test.ts` ALL PASS; `node tests/pvp.test.ts` ALL PASS; `node tests/battle.test.ts` ALL PASS; `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5852 checks, 0 failures; `cd client && npx tsc --noEmit -p .` clean. Chrome check not run.
+
 ## 2026-10-25: Darvant child link: the constant table of the Dark Falz grid
 
 **What changed:** `tools/gen-collision-boxes.py` has a second loop-child list, `CHILD_CONST_CALLERS`, for a constructor whose box table is one constant (no index, no mask). Dark Falz's Darvants (set type 0xc8) are the entry. The generator regenerates `client/src/formats/collisionboxes.gen.ts` with `CHILD_COLLISION_LINKS[0x00c8] = { callee: 0x0045fbd4, count: 80, mask: 0, variants: { 0: 0x009a67c8 } }`. `childBoxTable(0xc8, k)` now returns the row set for each Darvant `k` in 0..79 (`mask 0`: every child takes variant 0). No runtime code reads it yet; the Darvant is not drawn or hit through this table.
