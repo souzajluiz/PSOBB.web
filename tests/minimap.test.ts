@@ -42,6 +42,10 @@ import {
   raderIconColour,
   raderIconIcon,
   raderIconObject,
+  BASE_ICON_HIDDEN_FLAGS,
+  BOOMA_ICON_STATES,
+  baseIconShown,
+  boomaIconShown,
 } from '../client/src/classic/minimap.ts';
 import { AREA_MAP_MENU_ID, AREA_MAP_WINDOW, AreaMapWindow, type AreaMapEnv, type AreaMapInput } from '../client/src/classic/areamap.ts';
 import { FieldMenu, validateMenuEntry, type FieldMenuEnv, type MenuRules } from '../client/src/classic/fieldmenu.ts';
@@ -531,6 +535,27 @@ eq(fadeColor(0xffffffff, 0xffff0000), 0xffffefef, 'fade: green and blue (255) st
   radar.enterFloor(0, 0, null, floors);
   eq([radar.loaded, radar.ready], [false, false], 'Pioneer 2 has no minimap rooms: nothing is loaded or drawn');
 }
+
+// --- Ordinary enemies' radar baseline (PsoBB.exe enemy-base slot 0x00520618, DEVLOG 2026-10-25) ---
+// The shared slot adds the icon unless (flags+0x30) has 0x800 (dead) or 0x40000 (radar hidden).
+eq(BASE_ICON_HIDDEN_FLAGS, 0x40800, 'the slot mask 0x40800 (0x00520618: test ((flags+0x30) & 0x40800))');
+eq(baseIconShown(0), true, 'a plain living enemy is on the radar');
+eq(baseIconShown(0x40000), false, '0x40000 (radar / lock-on bit, set by +0x184) hides the icon');
+eq(baseIconShown(0x800), false, '0x800 (dead) hides the icon');
+eq(baseIconShown(0x40800), false, 'both bits hide it');
+eq(baseIconShown(0x4000000), true, '0x4000000 (invulnerable, +0x174) alone does not hide the radar icon');
+eq(baseIconShown(0x2000000 | 0x4040000), false, '+0x184 flags (0x4040000) hide the icon');
+eq(baseIconShown(0x20 | 0x100000), true, 'unrelated entity bits keep the icon');
+
+// --- Booma family per-state radar icons (vtable 0x00b01fc0, handlers 0x0052a6e4..0x0052b518) ---
+// Spawn (state 0) adds none; states 1-5 and 7 add their own icon; 6 and 8 add none.
+eq(BOOMA_ICON_STATES.join(','), '1,2,3,4,5,7', 'the Booma states that add a radar icon');
+eq(boomaIconShown(0), false, 'Booma spawn (0x00535a6c) has no icon');
+eq(boomaIconShown(1), true, 'Booma walk (0x0052a6e4, icon 0x0052ab6b)');
+eq(boomaIconShown(3), true, 'Booma chase (0x0052afe4, icon 0x0052b148)');
+eq(boomaIconShown(6), false, 'state 6 is an empty slot');
+eq(boomaIconShown(8), false, 'state 8 (0x0052b518) adds no icon');
+eq(boomaIconShown(9), false, 'state 9 (0x0073d160) adds no icon');
 
 if (failures) {
   console.log(`${failures} failure(s)`);
