@@ -1977,7 +1977,8 @@ export class CombatView {
       // The Dark Gunner's icon follows its state (classic/minimap.ts DARK_GUNNER_BRAIN_EXE_STATE);
       // a timed status (paralysis, freeze, shock or the hold) adds one in any state (the update's
       // timed-status branch, which skips the dispatcher).
-      if (e.slot.type === 'DARK_GUNNER' && e.ai instanceof GunnerAi && !e.status.locked && !darkGunnerBrainIconShown(e.ai.state)) continue;
+      // The flinch (owner damage state, exe state 4 = 0x00544704) shows the icon in any brain state.
+      if (e.slot.type === 'DARK_GUNNER' && e.ai instanceof GunnerAi && !e.status.locked && !darkGunnerBrainIconShown(e.state === 'damage' ? 'flinch' : e.ai.state)) continue;
       // Dark Falz's forms have their own forced icons (minimapIcons); a ring Darvant's plain icon
       // is in this list only while its box is on (its forced icon is in minimapIcons).
       if (e.ai instanceof DarkFalzPartAi) {

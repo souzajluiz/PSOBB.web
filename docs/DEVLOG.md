@@ -1,5 +1,27 @@
 # Devlog
 
+## 2026-10-25: Dubchic's radar row is 'own' (vtable 0x00b04760); the Dark Gunner's flinch shows its icon
+
+**Outcome.** The DUBCHIC row of `ENEMY_RADAR_SOURCE` moves from 'slot' to 'own'. The Dark Gunner's flinch (exe state 4, 0x00544704) now shows the radar icon in any brain state, so an idle gunner that is hit is drawn while it flinches (`render/combat.ts` `minimapEnemies` passes the 'flinch' brain while the owner's damage state runs). The port's flinch was already a hit reaction (owner damage motion, resumed to hover when the animation ends); this pass adds no new GunnerAi state.
+
+**Dubchic (PROVEN).** Enemy id 0x80 (`formats/setdata.ts`: p6 == 0 Dubchic, p6 != 0 Gillchic).
+- The factory table (rows of 16 bytes, file offset 0x5f9040, VA 0x009fa440): id 0x80 -> ctor 0x00556600 (`gilchic_constructor`). Dubchic and Gillchic share it; param6 only changes the stats and the model (`initdata_param6`).
+- The ctor writes vtable 0x00b04760 at 0x005566b7 (objdump), before any p6 test.
+- Vtable 0x00b04760: slot +0x198 = 0 (no shared-slot icon); slot +0x4 = 0x005548f0 (`RappyAIUpdateLoop_005548f0`), which calls `unknown_add_minimap_icon` after the pause gate only (dump 338624). Row 'own'.
+- The old row's vtables 0x00b04a40 and 0x00b04cc0 are not Dubchic's. Their writes (0x00557934, 0x005579bc, 0x0055836a, 0x005585f0; `xref`) sit in the Dragon base constructor that Epsigard builds on (0x00557908, 0x005579d0, caller 0x0055be9c) and in the Derolle functions (0x00558334, 0x005584f0). No id-0x80 path reaches them.
+
+**Dark Gunner flinch (exe state 4, 0x00544704).**
+- Trigger: the EntityHitEntity routine (0x00773350) sets +0x30 took_damage (0x200) on any hit that is not resisted (the `local_14 >= 0` branch, dump 747690). The gunner's update (0x00543e8c) calls vtable slot +0x88 (0x00777ba4: `flags & 0x200`); when it is set, slot +0x100 (0x0054615c) runs: if the current state is 4 it returns; if the current state is 2 with the Death Gunner flag 0x4000000 it stuns the group (0x00543c88) instead; else it sets the pending state (+0x37c) to 4 and remembers the previous one (+0x388). The flinch is taken from any other state, including stun and home.
+- Handler (0x00544704): on entry it clears 0x200000, sets the animation to 5 (9 when +0x390 bit 0x800000 is set), clamps the speed, sets the phase to 1; the phase-1 body damps the velocity, animates, checks line of sight, updates the vertical position and collision, and adds the icon on every path.
+- Exit: when `animation_flags != 8` (the animation has finished), it clears took_damage, 0x100 and 0x40000, snapshots hp into +0x346 and calls 0x005445f4, which sets the pending state 1 (unless the timed flag 0x1 is set) and bit 0x20000. So the flinch lasts as long as its animation; there is no frame count.
+- Port: the owner plays the damage motion (flinch 3, or stun flinch 6 when stunned) and calls `resume()` (hover, state 1) when it ends (`render/combat.ts` 1670, 9382). Gaps still open: the exe takes the flinch on a hit of 0 damage too (took_damage is set before the damage test); the port requires `damage >= 1` (`flinches` default). ASSUMED not changed here.
+
+**Dark Gunner state 3 (the 15-frame wait, 0x005448e0).**
+- Entry copies the counter from +0x342 (set to 15 by the gunner ctor, dump 329823-329824; `movzwl 0x342` at 0x005448fd) into +0x344. Each tick decrements it; when the pre-decrement value is below 0 it calls 0x005445f4 (pending 1). No animation gate. That is 16 ticks after the load tick.
+- Writer: none in the gunner range (0x00543e8c-0x00546300). Every `movl $0x3, 0x37c(...)` there is in the Death Gunner control (update_death_gunner, 0x0054363f / 0x00543663 / 0x005438ea) and writes the control's own pending state. ASSUMED no gunner reaches 3. Still open.
+
+**Tests.** `tests/minimap.test.ts`: the flinch maps to 4 with icon; DUBCHIC is 'own'. `tests/minimap.test.ts`, `tests/enemyfsm.test.ts`, `tests/enemyfsmruins.test.ts`, `tests/galgryphonai.test.ts`: ok. `NEWSERV=.../vendor/newserv node tests/combat.test.ts`: 5859 checks, 0 failures. `cd client && npx tsc --noEmit -p .`: no output (clean). Not run in Chrome (no Playwright).
+
 ## 2026-10-25: Radar per state for the Dark Gunner; Gillchic and Sinow Gold rows
 
 **Outcome.** The Dark Gunner's radar icon now follows its state, as the Booma's does (`darkGunnerBrainIconShown`, gated in `render/combat.ts` `minimapEnemies`). The Gillchic and Sinow Gold rows of `ENEMY_RADAR_SOURCE` are resolved (both 'own', the port's default behaviour, so no change on the radar). The survey note "no stateful Dark Gunner brain" was wrong: `GunnerAi` (`combat/enemyfsmruins.ts`) has a `state` field, so the mapping is by state, not by default.

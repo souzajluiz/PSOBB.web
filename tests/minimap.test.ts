@@ -49,6 +49,7 @@ import {
   boomaBrainIconShown,
   darkGunnerBrainIconShown,
   darkGunnerIconShown,
+  DARK_GUNNER_BRAIN_EXE_STATE,
   BOOMA_BRAIN_TYPES,
   ENEMY_RADAR_SOURCE,
   radarSourceOf,
@@ -585,6 +586,9 @@ eq(darkGunnerBrainIconShown('stun'), true, 'Dark Gunner stun = exe state 6 (0x00
 eq(darkGunnerBrainIconShown('home'), false, 'Dark Gunner home = exe state 8 (0x00544410): no icon');
 eq(darkGunnerBrainIconShown('dead'), false, 'Dark Gunner dead = exe state 5 (0x00544634): no icon');
 eq(darkGunnerBrainIconShown('unknown-brain'), true, 'an unmapped Dark Gunner state keeps the default icon');
+// The flinch (exe state 4, 0x00544704; the owner's damage state maps to it in render/combat.ts): icon in any brain state.
+eq(DARK_GUNNER_BRAIN_EXE_STATE.flinch, 4, 'the flinch is exe state 4 (0x00544704)');
+eq(darkGunnerBrainIconShown('flinch'), true, 'Dark Gunner flinch = exe state 4: icon (idle gunner hit too)');
 
 // Per-enemy radar source (vtable survey, DEVLOG 2026-10-25).
 // Booma table families: Booma, Gobooma, Gigobooma (ctor 0x00535f1c, vtable 0x00b01fc0).
@@ -596,8 +600,9 @@ for (const t of ['DIMENIAN', 'LA_DIMENIAN', 'SO_DIMENIAN']) eq(radarSourceOf(t),
 eq([...BOOMA_BRAIN_TYPES].sort().join(','), ['BOOMA', 'DIMENIAN', 'EVIL_SHARK', 'GIGOBOOMA', 'GOBOOMA', 'GUIL_SHARK', 'LA_DIMENIAN', 'PAL_SHARK', 'SO_DIMENIAN'].join(','), 'the brain-gated families are the Booma-table families');
 // The shared slot 0x00520618 at +0x198 of the vtable (PROVEN by read, DEVLOG 2026-10-25): Savage Wolf (0x00b00260),
 // Chaos Sorcerer (0x00b09c60), Chaos Bringer (0x00b026e0), Dark Belra (0x00b02280), Canadine (0x00b02be0), Poison Lily
-// and Del Lily (0x00b00fe0), Dubchic (0x00b04a40 / 0x00b04cc0).
-for (const t of ['SAVAGE_WOLF', 'CHAOS_SORCERER', 'CHAOS_BRINGER', 'DARK_BELRA', 'CANADINE', 'POISON_LILY', 'DEL_LILY', 'DUBCHIC']) eq(radarSourceOf(t), 'slot', `${t}: the enemy-base slot 0x00520618 is in its vtable`);
+// and Del Lily (0x00b00fe0). Dubchic is not here: id 0x80 gets vtable 0x00b04760 (slot +0x198 null), see below.
+for (const t of ['SAVAGE_WOLF', 'CHAOS_SORCERER', 'CHAOS_BRINGER', 'DARK_BELRA', 'CANADINE', 'POISON_LILY', 'DEL_LILY']) eq(radarSourceOf(t), 'slot', `${t}: the enemy-base slot 0x00520618 is in its vtable`);
+eq(radarSourceOf('DUBCHIC'), 'own', 'Dubchic: factory id 0x80 -> gilchic_constructor 0x00556600, vtable 0x00b04760, icon in update 0x005548f0');
 eq(baseIconShown(0), true, 'a slot family with no hidden bits is on the radar (the default)');
 // Rappy (update_rappy, dump 308039): the icon is unconditional in the alive branch.
 eq(radarSourceOf('RAPPY'), 'rappy', 'Rappy: unconditional icon in its alive update (dump 308039)');
