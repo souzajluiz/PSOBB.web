@@ -1,5 +1,32 @@
 # Devlog
 
+## 2026-10-25: Hidoom / Migium radar, lock-on and hit: the state entries' lock flag (+0x38c) and box bit 0 are proven; Mericarol, Gibbon and Gibbles are not ported yet
+
+**Question:** the Hidoom and Migium halves still used the generic `concealed()` rule. What do the exe's update and state entries do for the radar, the reticle and the hit?
+
+**Exe evidence (Ephinea 1.25.13; `objdump -d -M intel` on PsoBB.exe; decompile by `tools/ghidra/decomp.sh`; the dump has no names for these addresses):**
+- The halves' update is FUN_00583eb0 (vtable `g_HidoomMigium_vtbl` 0x00b07a60, slot +4; ctor 0x00586bf8, the port's address). Its state table is 0x009bf580: pairs (init at +0, update at +4), states 0..16. The only per-half difference is the kind word +0x388 (Hidoom 0, Migium 1: the entries' `!= 1` / `== 0` tests).
+- `enable_reticle` (0x007aa094) runs in the update while state != 0 and +0x38c != 0 (0x583fa5..0x583fd3). **Proven.**
+- `unknown_add_minimap_icon` (0x00805608) runs while state != 0, +0x38c != 0 and state != 7 (0x583fb3; the state 1 and 5 branches pass another position, the others the lock point +0x300). **Proven.**
+- The writers of +0x38c (lock), +0x390 (timer) and the box bit 0 (sub-object +0x384, field +0x18) are the state init entries only (decompiled: 0x587a78 .. 0x5873a4). The update's tail (0x584179) clears box bit 0 while +0x390 == 0 in a state other than 0. No `call 0x53fdf0` in 0x580000..0x58a000 (no `|= 0x28`): the halves' hit is box bit 0, not the slime's 0x28 rule. **The writes are proven; the reader of bit 0 (the hit test) is ASSUMED**, as for the slime.
+- The rows the port uses (exe state: lock / timer / box after the entry; blank = kept): 0 hidden (0x587a78) lock 0, timer 0, box off; 1 split (0x587a04) lock 1, timer 0, box off; 2 roam (0x587978) timer 1, box on; 3 walk (0x58794c) box on; 4 align (0x587914) box on; 5 merge (0x5878c8) box off; 7 death (0x587720) lock 1, timer 0, box kept (the tail clears it); 8 (0x587700) = hidden's three fields, read as `hidden`; 9 charge (0x5876b8), 10 back off (0x587638), 11 attack (0x5875e8), 12 call (0x587560, Hidoom only), 14 touch (0x5874a8, Migium only), 13 help (0x587504, Migium only), 16 mourn (0x5873a4): lock 1, timer 1, box on. State 15 (Resta, Hidoom only, 0x58744c) is the call's state and is not a port state.
+- State 6 (flinch, 0x587838) writes lock 1 and timer 1 and no box bit. The port has no flinch state: a flinching half keeps its state's predicates (ASSUMED harmless: a hit lands only in states already with box on and, since the split, the lock).
+- The Migium's call entry (12) and the Hidoom's help / touch entries (13, 14) return at once, so the port's kind-specific dispatch is the same.
+
+**Port:**
+- `client/src/combat/enemysplits.ts`: `HALF_ENTRY` (the rows above), `PanHalfAi.setState` (the one writer of `state`; every transition goes through it), `settleBox` (the tail, run before each tick's return), `kill()` enters state 7. Getters: `radar` (state != 0, lock, state != 7), `lockOn` / `lockable` (state != 0 and lock), `invulnerable` (= box off). `untargetable` stays `hidden`.
+- `client/src/render/combat.ts`: `isSplitPart` covers the slime, the Pan Arms and the halves in `splitRadarOk` / `splitLockOk` / `splitStruckOk`; `concealed()` no longer lists `PanHalfAi`.
+- ASSUMED initial values: the ctor enters state 0 (its entry writes the three fields).
+
+**Tests:** `tests/enemysplits.test.ts`: the radar / lock-on / hit in each of the 12 mapped states (from a roam with the lock set), hidden, death (kill then one tick clears the box), and the sticky lock with the tail (a walk that never split).
+
+**Still on `concealed()` (not ported; the exe rules are only partly read):**
+- Gibbles (ctor 0x00563200, vtable 0x00b054e0, dispatcher 0x0056021c, 12 states; box on the sub-object +0xa4, field +0x18, bit 0): `unknown_add_minimap_icon` and `enable_reticle` in the frames of states 2 to 8, 10 and 11 (reticle only in 9); none in 0 and 1. Box bit 0: cleared in 0, 1, 2 and 10 (0x54fcf0, 0x562d24, 0x562a98, 0x560534), set in 3, 4, 5 and 11 (0x562754, 0x561798, 0x56135c, 0x560338); state 8 clears 0x4000000 only; states 6, 7 and 9 are not read. The icon in state 3 sits inside `if (FUN_00770738() != 0)` (a target), the others were not gated.
+- Gibbon (Ul / Zol; ctor 0x00564a64, vtable 0x00b05750, dispatcher 0x00564ff0 with states 0..20, update 0x005687bc): no `unknown_add_minimap_icon` in its own code (the sites at 0x005696df and above are Gi Gue's). `enable_reticle` in several state frames (state 1 at 0x5685f4 each frame; state 7 inline in the dispatcher). Whether the body shows on the radar at all is NOT resolved: the generic controller `update_enemy_control_object` (0x00787a80) calls the icon only in its dead branch (0x00787b37, gate `vtable +0x98 / +0xa4 / +0xa8` not traced).
+- Mericarol (ctor 0x00572cd2, factory 0x00572b84, vtable 0x00b06320, update 0x00573050 -> body 0x00572068, dispatcher 0x005710b8): no minimap call in the body's states (0x571174..0x5738b0). The minimap sites at 0x00574792..0x00575a67 are in functions near its tech code (not read: the entities they drive are not traced). The body's radar is NOT resolved.
+
+**Checks:** `cd client && npx tsc --noEmit -p .` clean (Node 24). `tests/enemysplits.test.ts`, `tests/combat.test.ts` (5859 checks), `tests/combatdepth.test.ts` (836), `tests/minimap.test.ts`, `tests/enemyfsmep2b.test.ts` pass. Not run in Chrome.
+
 ## 2026-10-25: The beat clock window: the owner is the field player menu's submenu, the window eases and cycles, and the HUD draws it
 
 **Question:** what opens the window that owns the beat clock (ChatShortcutMenuWindow_UpdateVisuals_0075855c), and what do the callees 0x0077bb1c and 0x0077baf8 do?

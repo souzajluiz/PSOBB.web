@@ -489,6 +489,30 @@ const HALF_ANIM = {
 
 export type HalfState = 'hidden' | 'split' | 'roam' | 'mergeWalk' | 'align' | 'merging' | 'charge' | 'backoff' | 'attack' | 'call' | 'help' | 'touch' | 'mourn' | 'dead';
 
+// What each state's init entry (0x009bf580 + 8 * state, the table of FUN_00583eb0) writes to the
+// lock flag (+0x38c, the radar / reticle gate), the timer flag (+0x390, the update's box clear) and
+// bit 0 of the box flags (the sub-object at +0x384, its +0x18). A field a row leaves out is not
+// written by the entry (it keeps its value). Proven from the decompile of each entry; the
+// flinch (state 6, 0x587838) writes no box bit and is not a port state (see PanHalfAi.setState).
+// State 8 (0x587700) has the same three fields as the hidden state 0 and is read as `hidden`.
+type HalfEntry = { lock?: boolean; timer?: 0 | 1; box?: boolean };
+const HALF_ENTRY: Record<HalfState, HalfEntry> = {
+  hidden: { lock: false, timer: 0, box: false }, // state 0 (0x587a78)
+  split: { lock: true, timer: 0, box: false }, // state 1 (0x587a04)
+  roam: { timer: 1, box: true }, // state 2 (0x587978)
+  mergeWalk: { box: true }, // state 3 (0x58794c)
+  align: { box: true }, // state 4 (0x587914)
+  merging: { box: false }, // state 5 (0x5878c8)
+  dead: { lock: true, timer: 0 }, // state 7 (0x587720): the box bit is left as it was, the update clears it
+  charge: { lock: true, timer: 1, box: true }, // state 9 (0x5876b8)
+  backoff: { lock: true, timer: 1, box: true }, // state 10 (0x587638)
+  attack: { lock: true, timer: 1, box: true }, // state 11 (0x5875e8)
+  call: { lock: true, timer: 1, box: true }, // state 12 (0x587560, Hidoom only: Migium's entry does nothing)
+  help: { lock: true, timer: 1, box: true }, // state 13 (0x587504, Migium only)
+  touch: { lock: true, timer: 1, box: true }, // state 14 (0x5874a8, Migium only)
+  mourn: { lock: true, timer: 1, box: true }, // state 16 (0x5873a4)
+};
+
 export interface HalfBuff {
   clientId: number;
   tech: 'jellen' | 'zalure';
@@ -540,16 +564,62 @@ export class PanHalfAi extends BrainBase {
     this.current = this.anim.wait;
   }
 
+  // The three fields the state entries write (HALF_ENTRY). ASSUMED initial values: the ctor
+  // enters state 0 (hidden), whose entry writes all three.
+  private lockFlag = false; // +0x38c
+  private timerFlag: 0 | 1 = 0; // +0x390
+  private boxOn = false; // bit 0 of the box flags (+0x384, +0x18)
+
+  // The one place a state is entered: the state's entry writes its row of HALF_ENTRY.
+  private setState(s: HalfState): void {
+    this.state = s;
+    const e = HALF_ENTRY[s];
+    if (e.lock !== undefined) this.lockFlag = e.lock;
+    if (e.timer !== undefined) this.timerFlag = e.timer;
+    if (e.box !== undefined) this.boxOn = e.box;
+  }
+
+  // The update's tail (FUN_00583eb0 at 0x584179): in a state other than 0, a timer flag of 0
+  // clears the box bit. Run after each frame's state logic.
+  private settleBox(): void {
+    if (this.state !== 'hidden' && this.timerFlag === 0) this.boxOn = false;
+  }
+
+  override kill(): void {
+    this.setState('dead');
+    this.current = null;
+  }
+
   get hidden(): boolean {
     return this.state === 'hidden';
   }
 
+  // Not a target when hidden. Kept for the port's older callers; the combat code reads
+  // `radar`, `lockOn` and `invulnerable` (FUN_00583eb0's gates, see the getters below).
   get untargetable(): boolean {
     return this.hidden;
   }
 
+  // The radar icon (unknown_add_minimap_icon at 0x584058 / 0x584167 / 0x58407d): state != 0,
+  // +0x38c set and state != 7 (the death). Proven from the update's branches.
+  get radar(): boolean {
+    return this.state !== 'hidden' && this.lockFlag && this.state !== 'dead';
+  }
+
+  // enable_reticle (0x7aa094): state != 0 and +0x38c set, in the death too. The dead half is
+  // still left out of the lock-on by the combat code (`e.dead`).
+  get lockOn(): boolean {
+    return this.state !== 'hidden' && this.lockFlag;
+  }
+
+  get lockable(): boolean {
+    return this.lockOn;
+  }
+
+  // The hit: bit 0 of the box is off. ASSUMED reader: the hit test reads the box's bit 0 (the
+  // exe's collision reader is not traced; the Pan Arms' and the slime's rules are the same kind).
   get invulnerable(): boolean {
-    return this.state === 'hidden' || this.state === 'split' || this.state === 'merging';
+    return !this.boxOn;
   }
 
   get flinchMotion() {
@@ -578,7 +648,7 @@ export class PanHalfAi extends BrainBase {
     this.warps++;
     this.spawnX = this.x;
     this.spawnZ = this.z;
-    this.state = 'split';
+    this.setState('split');
     this.aligned = false;
     this.called = false;
     this.touched = false;
@@ -590,7 +660,7 @@ export class PanHalfAi extends BrainBase {
 
   roam(): void {
     if (this.state === 'dead') return;
-    this.state = 'roam';
+    this.setState('roam');
     this.aligned = false;
     this.speed = 0;
     this.timer = Math.trunc(this.rng() * HALF.waitRand + HALF.waitBase);
@@ -604,7 +674,7 @@ export class PanHalfAi extends BrainBase {
     this.mergeX = x + Math.cos(angle) * HALF.mergeRight * s + Math.sin(angle) * HALF.mergeForward;
     this.mergeZ = z - Math.sin(angle) * HALF.mergeRight * s + Math.cos(angle) * HALF.mergeForward;
     this.mergeAngle = wrap(angle - s * HALF.mergeHeading * BAMS);
-    this.state = 'mergeWalk';
+    this.setState('mergeWalk');
     this.aligned = false;
     this.speed = 0;
     this.current = this.anim.walk;
@@ -613,19 +683,19 @@ export class PanHalfAi extends BrainBase {
 
   merging(): void {
     if (this.state === 'dead') return;
-    this.state = 'merging';
+    this.setState('merging');
     this.current = this.anim.merge;
     this.pending = this.anim.merge;
   }
 
   hide(): void {
     if (this.state === 'dead') return;
-    this.state = 'hidden';
+    this.setState('hidden');
     this.aligned = false;
   }
 
   private go(out: AiFrame, s: HalfState): void {
-    this.state = s;
+    this.setState(s);
     this.frames = 0;
     this.dealt = false;
     if (s === 'roam') {
@@ -665,6 +735,7 @@ export class PanHalfAi extends BrainBase {
     }
     if (this.state === 'dead' || this.state === 'hidden') {
       out.hidden = this.state === 'hidden';
+      this.settleBox();
       return this.finish(out);
     }
     this.frames += this.current?.speed ?? 0;
@@ -769,7 +840,7 @@ export class PanHalfAi extends BrainBase {
         this.angle = turnToward(this.angle, Math.atan2(this.mergeX - this.x, this.mergeZ - this.z), HALF.turn * BAMS);
         this.move();
         if (d < HALF.mergeArrive) {
-          this.state = 'align';
+          this.setState('align');
           this.timer = HALF.alignFrames;
           this.play(out, this.anim.wait);
         }
@@ -788,6 +859,7 @@ export class PanHalfAi extends BrainBase {
         exhaustive(this.state);
     }
     out.hidden = this.hidden;
+    this.settleBox();
     return this.finish(out);
   }
 

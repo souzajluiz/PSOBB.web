@@ -652,6 +652,70 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   check(splitRadarOk({ ai: killed }), 'a flinching slime is on the radar');
 }
 
+// --- Hidoom / Migium: the radar, the lock-on and the hit (FUN_00583eb0 and the state entries) ---
+// The radar icon: state != 0, +0x38c set and state != 7 (0x583fb3, 0x58407d). The lock-on
+// (enable_reticle, 0x7aa094): state != 0 and +0x38c set. The hit: bit 0 of the box (+0x384 / +0x18),
+// written by each state's entry (0x9bf580 table) and cleared by the update's tail while the
+// timer flag (+0x390) is 0. The entries' rows are in HALF_ENTRY (combat/enemysplits.ts).
+{
+  const setState = (h: PanHalfAi, s: string) => (h as unknown as { setState(x: string): void }).setState(s);
+  const half = (kind: 'hidoom' | 'migium' = 'hidoom') => new PanHalfAi(kind, { x: 0, z: 0, angle: 0, movement: mv({ fparam2: 0.5, fparam3: 0.5 }), restaLevel: 0, rng: () => 0.5 });
+  const EXPECT: Record<string, [boolean, boolean, boolean]> = {
+    // [radar, lock-on, struck] after the entry, from a half that already has its lock flag set
+    split: [true, true, false],
+    roam: [true, true, true],
+    mergeWalk: [true, true, true],
+    align: [true, true, true],
+    merging: [true, true, false],
+    charge: [true, true, true],
+    backoff: [true, true, true],
+    attack: [true, true, true],
+    call: [true, true, true],
+    help: [true, true, true],
+    touch: [true, true, true],
+    mourn: [true, true, true],
+  };
+  for (const [st, [radar, lock, struck]] of Object.entries(EXPECT)) {
+    const h = half();
+    setState(h, 'split');
+    setState(h, 'roam');
+    setState(h, st);
+    eq(splitRadarOk({ ai: h }), radar, `Hidoom radar in ${st} (+0x38c set, state != 7)`);
+    eq(splitLockOk({ ai: h }), lock, `Hidoom lock-on in ${st} (enable_reticle gate)`);
+    eq(splitStruckOk({ ai: h }), struck, `Hidoom hit in ${st} (box bit 0, the entry's write)`);
+  }
+  // Hidden (state 0): nothing is drawn on the radar, locked or struck, whatever came before.
+  {
+    const h = half();
+    setState(h, 'split');
+    setState(h, 'hidden');
+    eq([splitRadarOk({ ai: h }), splitLockOk({ ai: h }), splitStruckOk({ ai: h })], [false, false, false], 'Hidoom hidden: no radar, no lock, no hit');
+    check(h.untargetable && h.hidden, 'Hidoom hidden: untargetable');
+  }
+  // The death (state 7): off the radar and not struck once the update has run; the reticle
+  // gate stays on (the combat code drops a dead half from the lock-on list by e.dead).
+  {
+    const h = half();
+    setState(h, 'split');
+    setState(h, 'roam');
+    h.kill();
+    eq(splitRadarOk({ ai: h }), false, 'Hidoom dead: off the radar');
+    eq(splitLockOk({ ai: h }), true, 'Hidoom dead: the reticle gate is on (+0x38c), the dead are dropped by the caller');
+    h.tick([]);
+    eq(splitStruckOk({ ai: h }), false, 'Hidoom dead: the update clears the box (+0x390 = 0)');
+  }
+  // The lock flag is sticky: a half that never split (+0x38c clear) is off the radar in a walk,
+  // and its box is cleared by the update's tail (+0x390 clear) once it ticks.
+  {
+    const h = half('migium');
+    h.mergeAt(100, 0, 0); // far from the merge point, so the walk does not end on this tick
+    eq([splitRadarOk({ ai: h }), splitLockOk({ ai: h }), splitStruckOk({ ai: h })], [false, false, true], 'mergeWalk without the lock flag: no radar, no lock, struck (box set by the entry)');
+    h.tick([]);
+    eq(h.state, 'mergeWalk', 'still walking after the tick');
+    eq(splitStruckOk({ ai: h }), false, 'mergeWalk without the timer flag: the tail clears the box');
+  }
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);
