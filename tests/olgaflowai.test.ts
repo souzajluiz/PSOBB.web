@@ -16,7 +16,22 @@ import {
   encodeOlgaA4,
   type OlgaEvent,
 } from '../client/src/combat/olgaflowai.ts';
-import { OLGA_SWORD_STAB, OlgaStabObject, olgaStabRange, olgaBattlePower, randomlyAdjust, stabGroundPoint, swordWaveTouches } from '../client/src/combat/olgaflowhits.ts';
+import {
+  OLGA_LANCER,
+  OLGA_SWORD_STAB,
+  OlgaStabObject,
+  lancerBlade,
+  lancerGate,
+  lancerQuad,
+  lancerTouches,
+  olgaBattlePower,
+  olgaLancerLeadHold,
+  olgaLancerProgress,
+  olgaStabRange,
+  randomlyAdjust,
+  stabGroundPoint,
+  swordWaveTouches,
+} from '../client/src/combat/olgaflowhits.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -237,7 +252,8 @@ const sends = (ai: OlgaFlowAi): OlgaEvent[] => ai.drainEvents().filter((ev) => e
   eq(randomlyAdjust(1, 0.1, 0.25), 1, 'the adjusted power is at least 1');
   eq(olgaBattlePower(0), 20, 'a zero animation speed falls back to 20');
   eq(olgaBattlePower(-3), 20, 'a negative animation speed falls back to 20');
-  eq(olgaBattlePower(43.4), 43, 'the animation speed is rounded');
+  eq(olgaBattlePower(43.4), 43, 'the animation speed is an int');
+  eq(olgaBattlePower(43.9), 43, 'the animation speed truncates (fistp under RC = truncate)');
 }
 
 {
@@ -316,6 +332,109 @@ const sends = (ai: OlgaFlowAi): OlgaEvent[] => ai.drainEvents().filter((ev) => e
   check(OLGA_SWORD_STAB.axisThreshold === 150 && OLGA_SWORD_STAB.floorPlane === 0 && OLGA_SWORD_STAB.epsilon === 1e-5, 'stab constants from the exe');
   check([0, 1, 2, 3].map(olgaStabRange).join() === '15,20,25,50', 'stab range per difficulty 15/20/25/50');
   check(olgaStabRange(4) === 15 && olgaStabRange(-1) === 15, 'an out-of-table difficulty reads row 0');
+}
+
+// --- the fire lancer (row 22; exe 0x0049876c, 0x0049592c; combat/olgaflowhits.ts, pass 6) ----------
+
+{
+  // The window (exe 0x004994b4 and 0x0049876c): the timer starts at lead + hold + 30 and the hit runs on [30, hold].
+  // Defaults (BattleParam fields 10 / 11 not positive): 90 + 180 + 30 = 300, so the hit runs on ticks 121..271 (151).
+  const ai = make({ leader: () => false });
+  ai.setState(OLGA1.fireLancer);
+  eq(ai.total, 300, 'the lancer timer is lead 90 + hold 180 + 30');
+  let on = 0;
+  let first = -1;
+  let last = -1;
+  let progressAt150 = 0;
+  for (let i = 1; i <= 301; i++) {
+    ai.tick([]);
+    if (ai.lancerTick) {
+      on++;
+      if (first < 0) first = i;
+      last = i;
+    }
+    if (i === 150) progressAt150 = ai.lancerProgress;
+    if (i === 300) eq(ai.stateIndex, OLGA1.fireLancer, 'the lancer holds through its last tick');
+  }
+  eq(on, 151, 'the lancer hit runs on 151 ticks with the defaults');
+  eq(first, 121, 'the first lancer hit is tick 121 (after the 90-tick lead)');
+  eq(last, 271, 'the last lancer hit is tick 271 (timer 30)');
+  check(Math.abs(progressAt150 - 1) < 1e-6, `the progress reaches 1 after 30 hit ticks (got ${progressAt150})`);
+  eq(ai.stateIndex, OLGA1.hub, 'the lancer ends at the hub when its timer runs out (exe: timer < 0 -> 1)');
+  eq(ai.lancerProgress, 0, 'the progress resets when the lancer ends');
+}
+
+{
+  // BattleParam iparam5 / iparam6 (exe +0x4a4 / +0x4a8): lead 40, hold 60, timer 130, hits on timers 30..60 (31 ticks).
+  const ai = make({ leader: () => false, iparam: [0, 0, 0, 0, 40, 60] });
+  ai.setState(OLGA1.fireLancer);
+  let on = 0;
+  let first = -1;
+  for (let i = 1; i <= 130; i++) {
+    ai.tick([]);
+    if (ai.lancerTick) {
+      on++;
+      if (first < 0) first = i;
+    }
+  }
+  eq(on, 31, 'the lancer hit runs on 31 ticks with hold 60');
+  eq(first, 71, 'the first hit is tick 71 (lead 40 + the 30 before the window)');
+  // A hold below the first timer never hits (30 > hold): the state still runs its timer.
+  const none = make({ leader: () => false, iparam: [0, 0, 0, 0, 10, 20] });
+  none.setState(OLGA1.fireLancer);
+  let hits = 0;
+  for (let i = 0; i < 60; i++) {
+    none.tick([]);
+    if (none.lancerTick) hits++;
+  }
+  eq(hits, 0, 'a hold under 30 never runs the lancer hit');
+}
+
+{
+  // The lancer's lead and hold (exe fallbacks 90 and 180 when the field is not positive).
+  eq(olgaLancerLeadHold(undefined).lead, 90, 'no iparam: lead 90');
+  eq(olgaLancerLeadHold(undefined).hold, 180, 'no iparam: hold 180');
+  const lh = olgaLancerLeadHold([1, 2, 3, 4, -5, 0]);
+  eq(lh.lead, 90, 'a negative lead falls back to 90');
+  eq(lh.hold, 180, 'a zero hold falls back to 180');
+  eq(olgaLancerLeadHold([0, 0, 0, 0, 12, 34]).hold, 34, 'a positive hold is taken as is');
+}
+
+{
+  // The progress: +1/30 per hit tick (cap 1), -2/15 per other tick (floor 0) (exe 0x009026ac, 0x00902a90, 0x009026b0, 0x00902a8c).
+  check(Math.abs(olgaLancerProgress(0, true) - 1 / 30) < 1e-7, 'a hit tick adds 1/30');
+  eq(olgaLancerProgress(0.99, true), OLGA_LANCER.progressCap, 'the progress caps at 1');
+  check(Math.abs(olgaLancerProgress(0.5, false) - (0.5 - 2 / 15)) < 1e-6, 'a non-hit tick takes 2/15 off');
+  eq(olgaLancerProgress(0.05, false), 0, 'the progress floors at 0');
+}
+
+{
+  // The blade: m = (A + B) / 2, P1 = m + (A - m) t, P2 = m + (B - m) t.
+  const A = { x: 0, y: 0, z: 0 };
+  const B = { x: 0, y: 0, z: 20 };
+  const full = lancerBlade(A, B, 1);
+  check(full.p1.x === 0 && full.p1.z === 0 && full.p2.z === 20, 'at t = 1 the blade is A to B');
+  const half = lancerBlade(A, B, 0.5);
+  check(Math.abs(half.p1.z - 5) < 1e-9 && Math.abs(half.p2.z - 15) < 1e-9, 'at t = 0.5 the blade is spread about the middle (5 and 15)');
+  // The gate: |B - A| >= 10 (3D), and the progress is not 0.
+  check(!lancerGate(A, { x: 0, y: 0, z: 9 }, 1), 'a blade 9 long fails the gate');
+  check(lancerGate(A, { x: 0, y: 0, z: 10 }, 1), 'a blade 10 long passes the gate');
+  check(lancerGate(A, { x: 3, y: 4, z: 9 }, 1) === (Math.sqrt(106) >= 10), 'the 3D gate follows the length');
+  check(!lancerGate(A, { x: 0, y: 0, z: 20 }, 0), 'progress 0 fails the gate (exe 0x00902acc)');
+}
+
+{
+  // The quad (heading pi/2: sin 1, cos 0, so d = (-500, 0)): the blade along z extruded 500 toward -x.
+  const quad = lancerQuad({ x: 0, z: 0 }, { x: 0, z: 20 }, Math.PI / 2);
+  check(Math.abs(quad[2].x + 500) < 1e-6 && Math.abs(quad[3].x + 500) < 1e-6, 'the quad extrudes 500 along the heading (-500 sin h, -500 cos h)');
+  check(lancerTouches({ x: -100, z: 10 }, quad), 'a player 100 along the extrusion and mid-blade is inside');
+  check(!lancerTouches({ x: -100, z: 30 }, quad), 'a player beside the blade end is outside');
+  check(!lancerTouches({ x: 10, z: 10 }, quad), 'a player on the blade side (behind the blade) is outside');
+  check(!lancerTouches({ x: -600, z: 10 }, quad), 'a player past the 500 extrusion is outside');
+  // Heading 0: d = (0, -500), the blade along z is degenerate; the same points still test the quad by its edges.
+  const q0 = lancerQuad({ x: 0, z: 0 }, { x: 10, z: 0 }, 0);
+  check(Math.abs(q0[2].z + 500) < 1e-6, 'heading 0 extrudes along -z');
+  check(lancerTouches({ x: 5, z: -250 }, q0), 'a player inside the heading-0 quad is hit');
 }
 
 console.log(failures === 0 ? 'olgaflowai: all checks passed' : `olgaflowai: ${failures} failure(s)`);

@@ -30,7 +30,7 @@
 
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
 import { BrainBase, loop, once, turnToward } from './enemyfsm.ts';
-import { OLGA_SWORD_WAVE } from './olgaflowhits.ts';
+import { OLGA_LANCER, OLGA_SWORD_WAVE, olgaLancerLeadHold, olgaLancerProgress } from './olgaflowhits.ts';
 
 // --- wire ----------------------------------------------------------------------
 
@@ -211,10 +211,18 @@ export const OLGA_TIMER = {
 // the dump's IsOlga1* helpers store in their globals (0x00a472cc / d4 / dc, set once on first use).
 export const OLGA_RANGE = { within: 230, far: 140, close: 40 } as const;
 
-// The leader's damage snapshots (the HP at the last hub entry, +0x4b8) and the two thresholds that
-// trigger the 0x17 / 0x18 attacks (+0x494, +0x498). The exe reads them from BattleParam fields 6..11
-// of the boss row; not bound in this pass, so the exe's fallback 200 is used (ASSUMED).
-const DAMAGE_PROGRESS = 200;
+// The leader's damage snapshots (the HP at the last hub entry, +0x4b8) and the two thresholds of the attack
+// choice: +0x494 (CheckOlga1AttackProgress_00496910, the flag 0x41c clear) and +0x498 (_00496880, the flag set).
+// The exe reads them from BattleParam row 43's iparam1 and iparam2 (fields 6 and 7, 0x497d1a..0x497d3c), each
+// the int when positive, else 200 (0x00c8, exe fallback). PROVEN; the values come in through the init.
+const DAMAGE_PROGRESS_DEFAULT = 200;
+
+// The BattleParam row 43's iparam1..6 (the exe's fields 6..11) as the brain reads them: the two damage thresholds
+// (+0x494, +0x498) and the lancer's lead and hold (+0x4a4, +0x4a8).
+export function olgaIntParam(iparam: readonly number[] | undefined, index: number, fallback: number): number {
+  const v = iparam?.[index] ?? 0;
+  return v > 0 ? v : fallback;
+}
 
 // The attack-selection table of ProcessOlga1AttackSelection (g_Olga1AttackSelectionTable, 5 bytes).
 // The address is not bound (the dump names it only): ASSUMED values, chosen so each branch the
@@ -241,6 +249,8 @@ export interface OlgaFlowInit {
   leader: () => boolean;
   // The archive's frame count of a motion (the timers of a row without a decoded one).
   frames?: (motion: number) => number;
+  // BattleParam row 43's iparam1..6 (exe fields 6..11): the damage thresholds and the lancer's timers.
+  iparam?: readonly number[] | undefined;
   rand: () => number;
 }
 
@@ -285,6 +295,15 @@ export class OlgaFlowAi extends BrainBase {
   waveTick = false;
   // The sword stab's spawn runs in the frame fns of rows 11..20 (0x004986c8 calls CheckOlga1SwordStab every tick).
   stabTick = false;
+  // True on a tick whose frame fn runs the lancer's hit (row 22, the timer in [30, hold]; exe 0x0049876c).
+  lancerTick = false;
+  // The lancer's progress t (+0x4e4) after this tick's update: the blade's lerp (olgaflowhits.ts lancerBlade).
+  lancerProgress = 0;
+  // The thresholds (+0x494, +0x498) and the lancer's lead / hold (+0x4a4, +0x4a8), from the init's iparam.
+  private readonly progress494: number;
+  private readonly progress498: number;
+  private readonly lancerLead: number;
+  private readonly lancerHold: number;
   private pendingMotion: EnemyAiMotion | null = null;
 
   constructor(init: OlgaFlowInit) {
@@ -296,6 +315,11 @@ export class OlgaFlowAi extends BrainBase {
     this.height = init.height;
     this.home = { x: init.x, y: init.height, z: init.z };
     this.isLeader = init.leader;
+    this.progress494 = olgaIntParam(init.iparam, 0, DAMAGE_PROGRESS_DEFAULT);
+    this.progress498 = olgaIntParam(init.iparam, 1, DAMAGE_PROGRESS_DEFAULT);
+    const lh = olgaLancerLeadHold(init.iparam);
+    this.lancerLead = lh.lead;
+    this.lancerHold = lh.hold;
     this.frames = init.frames ?? (() => 30);
     this.state = 'olga1:0';
     this.enter(OLGA1.entrance);
@@ -354,6 +378,7 @@ export class OlgaFlowAi extends BrainBase {
     const out = this.frame();
     this.waveTick = false;
     this.stabTick = false;
+    this.lancerTick = false;
     if (this.dead) return this.finish(out);
     if (this.dying) {
       this.deathTimer -= 1;
@@ -367,6 +392,7 @@ export class OlgaFlowAi extends BrainBase {
     this.stateTicks += 1;
     this.waveTick = this.swordWaveWindow();
     this.stabTick = this.stabWindow();
+    this.lancerUpdate();
     // The frame fn's arc (SetOlga1AttackPosition2) runs on the timer before it counts down.
     if (OLGA1_ARC_ROWS.has(this.stateIndex)) this.moveArc(this.timer, this.total);
     this.timer -= 1;
@@ -454,6 +480,14 @@ export class OlgaFlowAi extends BrainBase {
     this.total = this.timer;
   }
 
+  // The lancer frame (exe 0x0049876c, row 22): the hit runs while the timer is in [0x1e, hold]; the progress t
+  // rises by 1/30 on those ticks and falls by 2/15 on the others (0x004967ec / 0x00496810), before the hit test.
+  private lancerUpdate(): void {
+    if (this.stateIndex !== OLGA1.fireLancer) return;
+    this.lancerTick = this.timer >= OLGA_LANCER.firstTimer && this.timer <= this.lancerHold;
+    this.lancerProgress = olgaLancerProgress(this.lancerProgress, this.lancerTick);
+  }
+
   // The stab's spawn runs in the frame fn of rows 11..20 (exe 0x004986c8, every tick of the row).
   private stabWindow(): boolean {
     const n = this.stateIndex;
@@ -470,6 +504,8 @@ export class OlgaFlowAi extends BrainBase {
   }
 
   private durationOf(index: number): number {
+    // The lancer's timer is lead + hold + 0x1e (exe 0x004994b4 writes +0x414 and +0x418 that way).
+    if (index === OLGA1.fireLancer) return Math.min(OLGA_TIMER.cap, this.lancerLead + this.lancerHold + OLGA_LANCER.firstTimer);
     if (index === OLGA1.entrance) return OLGA_TIMER.entrance;
     if (index === OLGA1.hub) return OLGA_TIMER.hub;
     if (index === OLGA1.idle) return OLGA_TIMER.idle;
@@ -501,6 +537,8 @@ export class OlgaFlowAi extends BrainBase {
       return this.setState(n === OLGA1.hub ? OLGA1.exit : OLGA1.hub);
     }
     if (n === OLGA1.entrance) return this.setState(OLGA1.hub);
+    // Olga1ResetAttackProgress (0x00496834) at the lancer's end: t = 0, then the hub (exe 0x0049876c).
+    if (n === OLGA1.fireLancer) this.lancerProgress = 0;
     if (n === OLGA1.idle) return this.setState(OLGA1.exit);
     if (n >= 5 && n <= 7) return this.setState(n === OLGA1.swordWaveTop ? OLGA1.hub : n - 1);
     if (n >= 8 && n <= 10) return this.setState(n === OLGA1.swordWaveMoveTop ? OLGA1.hub : n - 1);
@@ -539,13 +577,13 @@ export class OlgaFlowAi extends BrainBase {
   // Olga1UpdateAttack_00498484 (the hub's leader fn): the progress pick, the flag branch, the history.
   private decide(): void {
     // CheckOlga1AttackProgress_00496910: no attack flag, and the HP lost since the snapshot reached the threshold.
-    if (this.flag41c === 0 && DAMAGE_PROGRESS <= this.hpDown()) {
+    if (this.flag41c === 0 && this.progress494 <= this.hpDown()) {
       this.send(0x17, 0, 0, 0);
       return;
     }
     if (this.flag41c !== 0) {
       // CheckOlga1AttackProgress_00496880 (the flag set and the progress threshold); else the selection.
-      if (DAMAGE_PROGRESS <= this.hpDown()) this.selectAndSend();
+      if (this.progress498 <= this.hpDown()) this.selectAndSend();
       else this.processSelection();
       return;
     }

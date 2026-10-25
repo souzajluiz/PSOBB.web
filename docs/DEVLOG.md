@@ -1,5 +1,29 @@
 # Devlog
 
+## 2026-10-25: Olga Flow form 1: the fire lancer (row 22), the thresholds from BattleParam, the truncated power
+
+**What changed:** `combat/olgaflowhits.ts` ports the lancer's hit (`CheckOlga1SwordWaveHit_0049592c`, the quad test,
+`OLGA_LANCER`, `olgaLancerProgress`, `lancerGate`, `lancerQuad`, `lancerTouches`); `combat/olgaflowai.ts` runs the
+lancer's window and progress (`lancerTick`, `lancerProgress`) and binds the two damage thresholds (+0x494 / +0x498) and
+the lancer's lead / hold (+0x4a4 / +0x4a8) from BattleParam row 43 (`OlgaFlowInit.iparam`); `render/combat.ts` `olgaLancer`
+tests the local player. `olgaBattlePower` is `Math.trunc` (fistp under RC = 11 truncates).
+
+**Proven:** the quad's four points and the edge order (asm 0x00495b96..0x00495d4f: V1 = P2, V2 = P2 + d, V3 = P1 + d, edges
+V(k+1) - V(k) tested with the player minus V(k)); the damage power is the int at +0x48c, randomly adjusted by 0.1. Map section 16.
+
+**Corrected:** the stab's hit was already ported (2026-10-24, section 15), and its gate constants and ranges are decoded
+(section 15.x). HANDOFF's "stab still open" was stale.
+
+**ASSUMED:** the lancer's anchors A (+0x5b0) and B (+0x5c8) are the model's bones 4 and 5 (no decoded writer of the
+beast's own copies); the local-player-only test; the heading as radians. NOT PORTED: the push-out, the orbit
+(SetOlga1AttackPosition3), the chunks and sounds.
+
+**Still open:** the tail swipe's hit. No store to +0x640..+0x654 sits in the Olga code range; the owner of the stores at
+0x0042a7xx and 0x004cb8xx is not identified (map section 16.7).
+
+**Checks:** `client/node_modules/.bin/tsc --noEmit -p client` (Node 24) exit 0; `node tests/olgaflowai.test.ts` all
+checks passed; `node tests/bossrooms.test.ts` ALL PASS. Not run in Chrome.
+
 ## 2026-10-24: NPC attack AI: the cast eligibility of the head's chooser (CanPlayerCastTechnique)
 
 **Question:** the ROADMAP's "NPC players' attack AI" line lists the NPC's own level / MST / eligibility as open. The chooser (`NpcHeadChooser`, AIProcessState) asked `canCast` and the town answered `true`. What does the exe's eligibility test check for B's player?
