@@ -396,6 +396,10 @@ console.log(`area script: labels without code ${noLabel.join(', ') || 'none'}; $
     const world = new CollisionWorld(parseMapCRel(new Uint8Array(readFileSync(crel))));
     const sections = parseMapNRel(new Uint8Array(readFileSync(join(scene, 'map_city00_00n.rel')))).sections;
     const placed = placeEntities(parseSetFile('map_city00_00e.dat', read('map_city00_00e.dat')!), sections, 0);
+    // Pioneer 2 has no hostile entities (DEVLOG 2026-10-23 "lock-on and minimap"): every
+    // enemy-set entry is a NON_ENEMY_NPC, so the enemy layer (category 'enemy') takes none.
+    const hostile = placed.filter((p) => p.entity.kind === 'enemy' && p.category === 'enemy');
+    check(hostile.length === 0, `Pioneer 2 hostile entries: ${hostile.length}`);
     const wanderers = placed.filter((p) => p.entity.kind === 'enemy' && p.entity.params[5] === 1);
     check(wanderers.length === 7, `Pioneer 2 wanderers: ${wanderers.length}`);
     const env: NpcWorld = { collision: world, rand };
