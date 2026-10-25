@@ -13,6 +13,22 @@
 **Port:** none. The item stays open for the Scape Doll revive and the challenge dead-player 0x60 action. ROADMAP line 269 is updated (material x5 done).
 
 **Checks:** `node tests/materials.test.ts` (50/50). No code changed.
+## 2026-10-25: Pioneer 2 in a game: lock-on and minimap settled; the city set has no hostile entries
+
+**Question:** the ROADMAP "Pioneer 2 inside a game (floor 0)" line still listed the lock-on and minimap rules on Pioneer 2 as "not read". The 2026-10-23 "lock-on and minimap" entry had read them, so the question was what is left open.
+
+**Exe evidence (Ghidra dump `Psobb.exe-05112026.c`, `tools/refsrc.sh`):**
+- `update_reticle_` (dump 785873) gates each reticle type on the map: type 2 (attack) on `is_player_allowed_to_attack`; types 3 and 5 (tech) on `is_current_map_safe` (`== 0` refuses). Type 4 (support: Resta / Anti / Reverser) has no map test: its `else if (bVar3 != 4)` branch is skipped, so the support cursor is drawn on Pioneer 2. The port's `updateAllyLock` (`render/combat.ts`) has no map gate either. Matches.
+- The cast is gated separately. `CanPlayerCastTechnique_0069a0c4` (dump 580425) returns 1 only when `IsTechniqueLevelUnlimited_006ad158` is 0 AND `is_player_in_unsafe_map` is non-zero, then the TP test. The port's `castTechnique` refuses on `!inUnsafeMap` (the same table). So a Resta or Anti cast on Pioneer 2 is refused in both, while the cursor shows.
+- `Player_CanPerformAction_007a3790` (dump 786124): the palette path for group 3 calls `CanPlayerCastTechnique_0069a0c4`. For group 4, ids 9..10 pass with no map test (what those ids are is not traced).
+- Enemy lock-on: Pioneer 2's enemy set (`map_city00_00e.dat`) has no hostile entries. `placeEntities` (`formats/setdata.ts`) categorises each one as `npc` through `enemyKind` (NON_ENEMY_NPC). The enemy layer takes only the `category === 'enemy'` entries, so no cursor and no target card. This is the 2026-10-23 claim, now pinned by a check on the real data.
+- Minimap: nothing (no `map_city00_00r.rel`), as the 2026-10-23 entry has it.
+
+**Port change:** none in behaviour. `tests/npcs.test.ts` (the Pioneer 2 block, the real city data) checks that no placed entry of `map_city00_00e.dat` has category `enemy` (`hostile` 0).
+
+**ASSUMED (still open):** the caller of `find_targets_for_weapons_and_techs` (dump 785117) is not named in the dump, so whether the type-4 record is built on Pioneer 2 is not traced. The port shows the support cursor there, as the exe's reticle code does when the record exists. The Chrome check is not run.
+
+**Checks:** `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/npcs.test.ts` ALL PASS (Node 24). `cd client && npx tsc --noEmit -p .` clean.
 
 ## 2026-10-25: Battle trap announce: the owner check (Trap_CheckPlayerInBattleAndGetName)
 
