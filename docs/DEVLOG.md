@@ -55,6 +55,34 @@
 - Stand-in rendering: the same material scale as the level-up light (ASSUMED, see `render/levelupfx.ts`).
 
 **Checks:** `node tests/level.test.ts` (74/74: the cast colours by tech, frames 31 with round(15.5) = 16 and the ramps divided by 15.5, the colour held through frame 15, 10% back from frame 16, the level-up spec unchanged); `node tests/techlightning.test.ts` (all checks passed, the Foie cast colour added); `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` (5852 checks, 0 failures); `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome.
+## 2026-10-25: Dark Falz camera: the five live pivots wired (formula read, entities identified)
+
+Closes HANDOFF item 2 (the 10-22 entry "Dark Falz camera: the live pivots of the five scenes" left the formula and the entities open). The exe bytes are now read for both.
+
+**The brain formula, read (0x0044E14E..0x0044E1D9, objdump).** Stores 75.0 to [0x00A44D98] (the first time, flag bit 0 of 0x00A44D94). Z = [0x00A44D60]: brain +0x3A4 / +0x3A8 / +0x3AC = Z +0x38 / +0x3C / +0x40, then 0x0082DF08 normalizes (x, z) IN MEMORY (`fstp [edi]`, `[edi+8]`), and the code loads the normalized pair: brain +0x3A4 = x - 75 x/|xz|, brain +0x3AC = z - 75 z/|xz|, brain +0x3A8 = 0 (0x44E1CC), brain +0x3B0 = Z +0x60 (0x44E1D6). The Ghidra fragment at 0x44E1A3 looked like it used the raw x; the in-memory normalize in the bytes settles it. The reference C (`InitializeVoloptMonitorWithOffset`, `vec3_normalize(&local_24)`) agrees. The JP tree's `asm/FUN_0044e19c.c` is a different function (its 0x44E19C is not 0x44E120), so it does not cover this.
+
+**The three entities (store, creator, ctor vtable, port form).**
+- X = [0x00A44D5C]: stored at 0x0044DB5A, create 0x0045E4F0 (0x538), ctor 0x0045E5A0, vtable 0x00AF7A60 = port form 3 (`darkfalz3.ts`). Read by DIE TYPE3 (0x0044DFB2..C7, scene 14).
+- Y = [0x00A44D64]: stored at 0x0044E450 (in the APP TYPE2 caller, `mov [0xa44d64], eax` after `call 0x457000`), create 0x00457000 (0x4A4), ctor 0x004570B0, vtable 0x00AF75A0 = port form 1. Read by APP TYPE2 (0x0044E2F4, scene 7), which then clears it.
+- Z = [0x00A44D60]: stored at 0x0044D8AF by FUN_0044D7A8 (the counter at +0x388, SetScene 8), create 0x00459820 (0x47C), ctor 0x004598D0, which writes vtable 0x00AF77E0 = port form 2 (the serpent, `darkfalz2.ts`). Read by DIE TYPE2 (0x0044E120, scene 9), which then clears it.
+- The port's form-2 header cited "create 0x00457E7C". That was wrong: 0x00457E7C is an update helper (it reads 0x3D8..0x3E4), not the creator. Corrected in `darkfalz2.ts` and `darkfalzcamera.ts`.
+- The dump's names are community labels: Y is named `g_pVoloptEntityForm2` / `InitializeVoloptForm7Hazard` and Z `g_pVoloptEntityContext` / `CreateVoloptForm7HazardController`. The vtables above decide the form numbers.
+
+**The scene enters (table 0x009A5940, read from the exe).** APP TYPE2 enter 0x0044E2F4, DIE TYPE2 enter 0x0044E120, GET RING enter 0x0044E0F0 (its ctor call 0x0044E108), DEMO_WARP2 enter 0x0044E0B8 (ctor call 0x0044E0D0), DIE TYPE3 enter 0x0044DF90 (ctor call 0x0044DFC7). GET RING and DEMO_WARP2 are reached only from DIE TYPE2 (the port's transitions agree), so they read the brain as DIE TYPE2 left it. ASSUMED: no other writer of the brain's +0x3A4 / +0x3B0 on that path (the dump's other +0x3B0 writers are `unknown_set_volopt_form2` and `init_volopt_stuff`, which play the Vol Opt tracks; they belong to area 0x0D's object).
+
+**The port.** Each enter reads the forms' poses before it drops the forms (`darkfalz.ts` `enterScene`, `captureCameraLive` in `darkfalzcamera.ts`):
+- APP TYPE2: `camLive.form1` = form 1's (x, y, z, yaw).
+- DIE TYPE2: `camLive.dieType2Source` = form 2's pose and `camLive.brain` = `brainPivotOf(that)` (zero when form 2 is missing, as the exe's 0x0044E2AF).
+- DIE TYPE3: `camLive.form3` = form 3's pose.
+- `render/combat.ts` `bossCameraView` builds `cameraSourceOf(rel, head.ai.cameraLive())` per call (the rel is read once; the live pivots change with the scene).
+
+**Where a pose is lacking or unproven.** Form 1 has no y in the port (its `y` stays 0, as its spots and appear point are at y 0): the exe's Y +0x3C is not read, so APP TYPE2's pivot y is ASSUMED 0. The yaw of each form is the port's BAMS field (`yaw`, form 2 `-angle`): the port's value is taken to be the exe's +0x60; the writer of +0x60 in each form's update was not read (ASSUMED). The position fields +0x38 / +0x40 are taken as the port's x / z (ASSUMED, the port's coordinates are the exe's). If a form is gone (null), APP TYPE2 and DIE TYPE3 give no view (the exe's BSS fallbacks 0x00A44D9C / 0x00A44D88 are not read, UNCLEAR, not guessed); DIE TYPE2 with no form 2 gives the zero brain, as the exe does.
+
+**What is still open.** The view itself is not checked in Chrome (no Playwright run in this change). The DEMO_WARP0 dark view question of 10-22 is unchanged. The 0x100 / time-unit items of 10-22 are unchanged.
+
+**Checks.** `node tests/darkfalzcamera.test.ts`: `darkfalzcamera tests passed` (new: the formula with the normalized pair, the enter-capture per scene, the zero brain with no form 2, the control's APP TYPE2 snapshot after a form move). `node tests/darkfalz.test.ts`: `darkfalz tests passed`. `npx tsc --noEmit -p .` in client (Node 24): clean.
+
+**Tools.** Ghidra `tools/ghidra/decomp.sh` for the fragments (the store sites and the creators); `tools/exedata.py read 009a5940 u 80` for the scene table; `tools/exedata.py xref` for the vtable writers (0xaf77e0, 0xaf75a0, 0xaf7a60); objdump -D on the exe for 0x44E14E..0x44E1E0 and 0x82DF08.
 
 ## 2026-10-25: Non-BB download `.qst` writer (DC / PC / GC command structs)
 

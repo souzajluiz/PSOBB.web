@@ -22,6 +22,8 @@ import {
   bossCameraView,
   brainPivotOf,
   cameraSourceOf,
+  captureCameraLive,
+  poseOf,
   type LiveCameraInputs,
   composeCameraUp,
   stepCameraObject,
@@ -414,6 +416,58 @@ if (fs.existsSync(GSL)) {
   for (const o of ['ctor44f4ec', 'ctor450fc4', 'ctor44ffd8']) eq(cameraSourceOf({ motions: [] } as never).pivot(o), null, `${o} null without live`);
   // A missing entity gives no view (the BSS fallback is not read).
   eq(cameraSourceOf({ motions: [] } as never, { form1: null }).pivot('ctor44f4ec'), null, 'APP TYPE2 without its entity: null (UNCLEAR fallback)');
+}
+
+// The snapshot the scene enters take (captureCameraLive, 0x0044E2F4 / 0x0044E120 / 0x0044DF90): each live
+// input is the pose at its enter, the DIE TYPE2 brain is the formula on the form 2 pose, and the others
+// keep what they had. Null forms give the exe's zero brain (0x0044E2AF) and no pose for APP TYPE2 / DIE TYPE3.
+{
+  const pose = (x: number, y: number, z: number, yaw: number) => ({ x, y, z, yaw });
+  const none = { form1: null, form2: null, form3: null };
+  let live: LiveCameraInputs = {};
+  live = captureCameraLive(live, SCENE.type1, { form1: pose(1, 2, 3, 4), form2: pose(5, 6, 7, 8), form3: pose(9, 10, 11, 12) });
+  eq(Object.keys(live).length, 0, 'TYPE1 enter captures nothing');
+  live = captureCameraLive(live, SCENE.appType2, { form1: pose(10, 20, 30, 111), form2: pose(5, 6, 7, 8), form3: null });
+  nearV(live.form1!.pos, [10, 20, 30], 'APP TYPE2 captures form 1 position (+0x38)');
+  eq(live.form1!.yaw, 111, 'APP TYPE2 captures form 1 yaw (+0x60)');
+  eq(live.brain, undefined, 'APP TYPE2 leaves the brain snapshot alone');
+  live = captureCameraLive(live, SCENE.dieType2, { form1: null, form2: pose(300, 50, 400, 333), form3: null });
+  nearV(live.brain!.pivot, [255, 0, 340], 'DIE TYPE2 brain pivot = form 2 position minus 75 along its XZ unit');
+  eq(live.brain!.yaw, 333, 'DIE TYPE2 brain yaw = form 2 +0x60');
+  eq(live.form1!.yaw, 111, 'DIE TYPE2 keeps the APP TYPE2 pose');
+  live = captureCameraLive(live, SCENE.getRing, { form1: null, form2: null, form3: null });
+  nearV(live.brain!.pivot, [255, 0, 340], 'GET RING does not recapture the brain');
+  live = captureCameraLive(live, SCENE.demoWarp2, { ...none, form2: pose(0, 0, 0, 0) });
+  nearV(live.brain!.pivot, [255, 0, 340], 'DEMO_WARP2 does not recapture the brain');
+  live = captureCameraLive(live, SCENE.dieType2, { ...none });
+  nearV(live.brain!.pivot, [0, 0, 0], 'DIE TYPE2 with no form 2: brain pivot 0 (0x0044E2AF)');
+  eq(live.brain!.yaw, 0, 'DIE TYPE2 with no form 2: brain yaw 0');
+  live = captureCameraLive(live, SCENE.dieType3, { form1: null, form2: null, form3: pose(-5, 6, 7, 222) });
+  nearV(live.form3!.pos, [-5, 6, 7], 'DIE TYPE3 captures form 3 position (+0x38)');
+  eq(live.form3!.yaw, 222, 'DIE TYPE3 captures form 3 yaw (+0x60)');
+  eq(poseOf(null), null, 'poseOf(null) is null');
+  eq(captureCameraLive({}, SCENE.appType2, none).form1, null, 'APP TYPE2 without form 1: no pose (the BSS fallback is UNCLEAR)');
+  // The five live pivots through cameraSourceOf, from the snapshot.
+  const from = cameraSourceOf({ motions: [] } as never, live);
+  nearV(from.pivot('ctor44fa8c')!.pivot, [0, 0, 0], 'DIE TYPE2 camera pivot from the dead form 2 snapshot');
+  eq(from.pivot('ctor450fc4')!.yaw, 222, 'DIE TYPE3 camera yaw from the snapshot');
+}
+
+// The control keeps the snapshot: a DarkFalzAi whose form 1 is moved reports that pose at the APP TYPE2 enter.
+{
+  const f = new DarkFalzAi({ x: 0, z: 0, angle: 0, difficulty: 0, rows, leader: () => true, selfId: () => 0, partySize: () => 1, rng: () => 0.5 });
+  f.receive(SCENE.type1, 0xffffffff);
+  check(f.form1 !== null, 'TYPE1 makes form 1');
+  if (f.form1) {
+    f.form1.x = 123;
+    f.form1.z = -456;
+    f.form1.yaw = 0x2000;
+  }
+  f.receive(SCENE.appType2, 0xffffffff);
+  eq(f.form1, null, 'APP TYPE2 drops form 1');
+  const src = cameraSourceOf({ motions: [] } as never, f.cameraLive());
+  nearV(src.pivot('ctor44f4ec')!.pivot, [123, 0, -456], 'the control hands APP TYPE2 the form 1 pose it had at the enter');
+  eq(src.pivot('ctor44f4ec')!.yaw, 0x2000, 'the control hands APP TYPE2 the form 1 yaw');
 }
 
 if (failures) {

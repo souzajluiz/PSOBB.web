@@ -52,7 +52,7 @@ import {
 import { DfForm1, F1, type Form1Row } from './darkfalz1.ts';
 import { DfForm2, F2, type Form2Row } from './darkfalz2.ts';
 import { DfForm3, F3, f3Spot, type Form3Row } from './darkfalz3.ts';
-import { bossCameraView, type BossCameraSource } from './darkfalzcamera.ts';
+import { bossCameraView, captureCameraLive, type BossCameraSource, type LiveCameraInputs } from './darkfalzcamera.ts';
 
 export { SCENE, SCENE_NAMES, DF_ID } from './darkfalzcommon.ts';
 
@@ -157,6 +157,8 @@ export class DarkFalzAi extends BrainBase implements DfFight {
   scene: number = SCENE.editor;
   private sceneTimer = 0; // +0x388
   private sceneFrames = 0; // ticks since the scene was set (the boss camera's frame; UNCLEAR, see darkfalzcamera.ts)
+  // The boss camera's live pivots, captured at the scene enters that read them (darkfalzcamera.ts).
+  private camLive: LiveCameraInputs = {};
   private soundTimer = 0; // +0x37c
   made = 0; // +0x390
   kills = 0; // +0x394
@@ -335,6 +337,12 @@ export class DarkFalzAi extends BrainBase implements DfFight {
     return bossCameraView(this.scene, this.sceneFrames, source);
   }
 
+  // The live pivot inputs of the boss camera (darkfalzcamera.ts LiveCameraInputs): the poses the
+  // scene enters captured. Pass them to cameraSourceOf(rel, ai.cameraLive()).
+  cameraLive(): LiveCameraInputs {
+    return this.camLive;
+  }
+
   // The DEMO_WARP0 object's timer (demoWarpFrame), null outside DEMO_WARP0.
   get warpFrame(): number | null {
     return demoWarpFrame(this.scene, this.sceneFrames);
@@ -354,6 +362,8 @@ export class DarkFalzAi extends BrainBase implements DfFight {
   }
 
   private enterScene(n: number): void {
+    // The enters read the forms' poses before they drop the forms (the exe clears its entity pointers here).
+    this.camLive = captureCameraLive(this.camLive, n, { form1: this.form1, form2: this.form2, form3: this.form3 });
     switch (n) {
       case SCENE.demoWarp0:
         // 0x0044E504: the players stand in a small circle; the cutscene object.

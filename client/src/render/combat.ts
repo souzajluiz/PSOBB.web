@@ -77,8 +77,8 @@ import { OLGA_AREA, OLGA_LANCER, OLGA_SWORD_WAVE, OlgaSwordTrail, OlgaStabObject
 import { galgryphonAttackBurst, GALFX_RING, GALFX_RING_PARTICLES } from '../combat/galgryphonfx.ts';
 import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
 import { DEMO_WARP_PARTS } from '../formats/enemymodels.ts';
-import { cameraSourceOf, DARKFALZ_CAMERA_FILE, type BossCameraSource } from '../combat/darkfalzcamera.ts';
-import { parseCameraRel } from '../formats/cameramotion.ts';
+import { cameraSourceOf, DARKFALZ_CAMERA_FILE } from '../combat/darkfalzcamera.ts';
+import { parseCameraRel, type CameraRel } from '../formats/cameramotion.ts';
 import { F1_ANIM_ROWS } from '../combat/darkfalz1.ts';
 import { F2_ANIM_ROWS } from '../combat/darkfalz2.ts';
 import { F3_ANIM_ROWS } from '../combat/darkfalz3.ts';
@@ -4061,7 +4061,7 @@ export class CombatView {
   // (animation 20.5) throws them through GalgryphonAi's throwMinion (spawn wiring above).
   private readonly galMinions = new GalgryphonMinionManager();
   // Dark Falz's cutscene camera file (bo04opcam.rel), read on the first call of bossCameraView.
-  private bossCameraSource: BossCameraSource | null = null;
+  private bossCameraRel: CameraRel | null = null;
   private bossCameraLoad: Promise<void> | null = null;
   private falzProxies = new Map<number, EnemyRuntime>(); // by offset from the control
   private falzSpawning = new Set<number>();
@@ -4184,7 +4184,9 @@ export class CombatView {
     const head = this.falzHead;
     if (!head || !(head.ai instanceof DarkFalzAi)) return null;
     this.loadBossCamera();
-    const v = head.ai.cameraView(this.bossCameraSource);
+    // The live pivots come from the control's scene enters (darkfalz.ts cameraLive), read each call.
+    const rel = this.bossCameraRel;
+    const v = head.ai.cameraView(rel ? cameraSourceOf(rel, head.ai.cameraLive()) : null);
     if (!v) return null;
     return {
       source: { x: v.source[0], y: v.source[1], z: v.source[2] },
@@ -4198,9 +4200,9 @@ export class CombatView {
     if (this.bossCameraLoad) return;
     this.bossCameraLoad = (async () => {
       if (!(await this.files.has(DARKFALZ_CAMERA_FILE))) return;
-      this.bossCameraSource = cameraSourceOf(parseCameraRel(await this.files.read(DARKFALZ_CAMERA_FILE)));
+      this.bossCameraRel = parseCameraRel(await this.files.read(DARKFALZ_CAMERA_FILE));
     })().catch(() => {
-      this.bossCameraSource = null;
+      this.bossCameraRel = null;
     });
   }
 
