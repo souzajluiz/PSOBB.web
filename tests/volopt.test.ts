@@ -309,13 +309,27 @@ const act = (log: VoloptEvent[], action: number) => log.filter((e) => e.kind ===
   f.step();
   const up = f.c.monitors.filter((m) => m.targetable);
   check(up.length === 4 && up.every((m) => m.wall === wall), `the four monitors of wall ${wall} are targetable (${up.length})`);
-  check(f.c.monitors.filter((m) => m.wall !== wall).every((m) => !m.targetable), 'no other wall can be shot');
+  check(f.c.monitors.filter((m) => m.wall !== wall).every((m) => !m.targetable), 'no other wall is shown as exposed');
   f.log.length = 0;
   f.c.damagePart(f.c.monitors[wall * 4 + 1].entity, 50, true);
   f.step(2);
   const hit = f.log.filter((e) => e.kind === 'coreHit');
   eq(hit.length, 1, 'a hit on a monitor of the core\'s wall reaches the core once');
   eq((hit[0] as { local: boolean }).local, true, 'and says we dealt it');
+  // The exe strikes a monitor on any wall (EntityHitEntity has no exposure test, 0x00773350):
+  // the hit lands and the damage applies, but the core is not reached (player_hit_volopt_monitor
+  // forwards only on the exposed wall, 0x00441558). A fallen monitor is not struck.
+  const far = f.c.monitors.find((m) => m.wall !== wall)!;
+  const farAi = new VoloptPartAi(far, f.c);
+  check(!farAi.untargetable && splitStruckOk({ ai: farAi }), 'a monitor on another wall is struck (no exposure gate in the hit)');
+  f.log.length = 0;
+  const far0 = far.hp;
+  f.c.damagePart(far.entity, 50, true);
+  f.step(2);
+  eq(far.hp, far0 - 50, 'the monitor on another wall takes the damage');
+  eq(f.log.filter((e) => e.kind === 'coreHit').length, 0, 'and its hit does not reach the core');
+  far.breakDown();
+  check(farAi.untargetable, 'a fallen monitor is not struck (0x800 refuses it)');
   // A hit that arrives as a 6x0A does not strike the core from here.
   f.log.length = 0;
   f.step(10);

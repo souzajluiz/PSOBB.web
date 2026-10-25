@@ -796,6 +796,15 @@ export class VoloptMonitor extends VoloptPart {
   private locked = false;
   private readonly fight: VoloptFight;
   broken = false; // flag 0x40000 of +0x390
+  // The struck test (EntityHitEntity 0x00773350 via the box overlap 0x007b5e40 and
+  // do_collision_check_with_enemies 0x007b8980, PsoBB.exe): a monitor is struck while its
+  // entity is not dead (+0x30 0x800) and its boxes are on (bit 0 and 0x8000, fixed in the
+  // table). No exposure test is in that path; the exposure only gates the forward to the core
+  // (player_hit_volopt_monitor 0x00441558, `wall == exposed >> 2`), see `forward`. So a monitor
+  // on another wall takes damage, and it is `targetable` (the display window) only when exposed.
+  get hittable(): boolean {
+    return !this.broken && !this.dead;
+  }
   constructor(index: number, hpBig: number, hpSmall: number, fight: VoloptFight, ox: number, oz: number) {
     const shape = index & 3;
     super('monitor', index, VO_ID.monitor + index, shape === 0 ? hpBig : hpSmall);
@@ -1972,8 +1981,10 @@ export class VoloptPartAi implements EnemyBrain {
     this.part = part;
     this.owner = owner;
   }
+  // The hit gate: a monitor is struck unless it is down (see VoloptMonitor.hittable); the other
+  // parts keep their `targetable` (the port's window, not traced for them).
   get untargetable(): boolean {
-    return !this.part.targetable;
+    return this.part instanceof VoloptMonitor ? !this.part.hittable : !this.part.targetable;
   }
   tick(): AiFrame {
     this.frame.x = this.part.x;

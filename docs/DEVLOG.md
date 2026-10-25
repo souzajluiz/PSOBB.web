@@ -1,5 +1,42 @@
 # Devlog
 
+## 2026-10-25: weapon hit pipeline (box overlap to EntityHitEntity); Vol Opt monitors are struck on any wall
+
+**Question.** Which gates decide a weapon hit in the exe, and does a Vol Opt monitor need an exposed wall to be struck (the port's `targetable = exposed`)?
+
+**Answer.** The exe's struck test has no exposure gate. A monitor is struck while it stands; the exposure only decides whether its break reaches the core. The port now strikes a monitor on any wall (`VoloptMonitor.hittable`, `VoloptPartAi.untargetable`, `struckShown` in `render/combat.ts`). The port's melee / gun target pick (`weaponTargets`, cone and reach) is NOT the exe's box test; that divergence is open (the attacker's box is not traced).
+
+**The pipeline (PROVEN from the refsrc decompile of PsoBB.exe, `Psobb.exe-5-10-2026.c`, cross-checked with objdump; the names carry the exe addresses).**
+1. Per-entity collision update `EnemyUpdateLogic_00521cf8` (0x00521cf8): flags bit 0 calls `Entity_CheckAllCollisions_007b8618` (0x007b8618, the enemy's box against the players); bit 1 calls `do_collision_check_with_enemies` (FUN_007b8980, the attacker's box against the enemies; the weapon case). Then it walks the result cache (16 slots) and calls the attacker's vtable +0x4c (defender, flags, param) for each entry with: `+0x96 == 1`, not the attacker, `defender +0x30 & 0x4000000 == 0`.
+2. Candidate filter (FUN_007b8980): the attacker's `+0x30 & 0x800` (dead) refuses; the defender must not be the attacker, must have `entity_index` in (0x0fff, 0x4000), and its `+0x30 & 0x80000800 == 0` (0x800 dead; 0x80000000 is not named); XZ distance² `<= g_EnemyCollisionRadiusSq` (the global's value not read).
+3. Box pair `CheckTwoHitboxCollision_007b5e40` (0x007b5e40), box at +0x18 flags `uA` (attacker) and `uD` (defender), per box pair (`collision_box`: position1 +0x0, radius +0xc, unk1 +0x10, kind unk2 +0x14, flags +0x18, position2 +0x1c, damage_reduction +0x28; 44 bytes):
+   - bit 0 on both (`uA & uD & 1`);
+   - a shared kind bit (`uA & uD & 6`);
+   - no cross exclusion: `0x8` vs `0x2000`, `0x10` vs `0x4000`, `0x20` vs `0x8000`, `0x40` vs `0x10000`, `0x80` vs `0x40000` (each: the attacker's bit with the defender's excluded bit set refuses, both ways);
+   - then the geometry (the `unk2 == 1` shape cases; NOT traced here: the height and the angle tests live there). The returned box is the defender's.
+4. On a hit: the defender's matched box gets `|= 0x4000000` (hit-this-swing, 801945 and 801840 in the sweep), and the attacker's box `|= 0x100000` (the cache flag). The defender box's `0x4000000` is consumed by `EntityHitEntity` (it clears it per box, `& 0xfbffffff`).
+5. `EntityHitEntity_00773350` (0x00773350): refuses an attacker that is null or has `player_idx == -1`; refuses a defender with `+0x30 & 0x800` (dead); refuses `+0x30 & 0x4000000` without `0x2000000` (`maybe_invuln` = 0x4000000, the invulnerable case, which also shows the damage-number path); the defense roll for `entity_index < 0x1000`; then the per-box damage (box `damage_reduction`, the attacker's attribute table, the crit roll) over the boxes that carry `0x4000000`. A total `>= 0` sets `took_damage` (0x200) and applies `deal_damage` (unless the form-2 rule sets `local_20`); `hp < 1` sets `dead` (0x800); the hit reaction is vtable +0x130 (the hit record, `FUN_00787578`, 0x787578: it writes a per-id damage record, no gate) and +0x134 on the other branch. Below 1.0 damage there is no HP change and `+0x100` (0x00773893, the port's "no HP" path).
+
+**Monitors (PROVEN, objdump 0x004414d8..0x00442254 and the vtable slots of 0x00af5c60 read with `tools/exedata.py read`).**
+- Vtable: +0x88 = 0x00777ba4 (`took_damage` 0x200 test), +0x8c = 0x00777bb0 (`dead` 0x800 test), +0x100 = 0x0053175c, +0x104 = 0x0052c9c4 (`st = 5` pending, `+0x390 |= 1`), +0x130 = 0x00787578 (the hit record).
+- Update 0x004419d4: at 0x004419e8 `call [+0x8c]`; if dead, `call [+0x104]` (the break, state 5); else `call [+0x88]` then `[+0x100]` (took damage). The monitor's state 5 (dispatch 0x00441bf0, `+0x32e == 5`, sub `+0x384 == 0` at 0x00441c27) calls the forward `0x00441558` at 0x00441c4c.
+- Forward 0x00441558 (PROVEN, asm 0x00441558..0x004415a6): `if (!(+0x390 & 0x40000) && g_CurrentVoloptMonitorId (0x00a447ac) >= 0 && (+0x394 / 4) == (id / 4)` (signed `/4` by the sar/shr idiom) then `call 0x0043ff8c` (the core's hit, the port's `coreHit`). So the exposure gates the core forward only.
+- No monitor code tests exposure before the hit: the strike needs no state. Box bits 0 and 0x8000 are fixed per table (0x009a5100, from the earlier DEVLOG); no code toggles them.
+- Vtable +0x130 writes no state and tests no gate (FUN_00787578 records the hit per id).
+
+**Port divergence and fix (proven).** `concealed()` treated a Vol Opt monitor as untargetable unless exposed, and the struck loops also required the monitor's proxy to be visible (`root.visible = shown && targetable`). The exe has neither test. Fix:
+- `VoloptMonitor.hittable` = `!broken && !dead` (the exe's 0x800 refusal; the break sets it). `VoloptPartAi.untargetable` uses it for monitors. `targetable` (the exposure window) is kept for the display and the forward (`forward()` already checks `exposed >> 2 === wall`).
+- `struckShown(e)` (render/combat.ts): a monitor's proxy is struck while its head is visible (same pattern as the radar's `onField`), so the hidden display window does not hide it. Used in the five struck loops (`weaponTargets`, the box-based targets, the tech world's `live`, and the hit loop of `render/combat.ts` near line 7119); the lock and the tech-record loops are unchanged (monitors have no lock site).
+- Radar (`voloptRadar`, 'always' unless broken), the lock (`voloptLockOk` false), and the forward are unchanged.
+
+**Not changed / open.**
+- The player's attack box (the `collision_data` that `do_collision_check_with_enemies` reads) and its caller were not traced; the port's melee and gun pick (`weaponTargets`, a cone with `horizontal + vertical` reach, `combat.ts` ~6887) is not the box pair test. ASSUMED equal for the common swing; open.
+- `g_EnemyCollisionRadiusSq` value and the geometry branches of `CheckTwoHitboxCollision` (heights, angles) not read.
+- The callback gate in step 1 refuses any `0x4000000` on the defender, while `EntityHitEntity` lets `0x2000000` override it; the exe's order is kept as read (the callback path is the attacker vtable +0x4c, owner not traced).
+- The rod's hit (states 1 / 4) and the core's hit remain as before.
+
+**Tests.** `tests/volopt.test.ts`: the "Monitors can be shot only on the core's wall" block now asserts the exe's rule: a monitor on another wall is struck and takes its damage, its hit does not reach the core, and a fallen one is not struck; the display window (`targetable`) is still exposed-only. `node tests/volopt.test.ts` passed; `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures; `node tests/combatdepth.test.ts` 0 failures; `node tests/enemysplits.test.ts` passed; `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome (no Playwright).
+
 ## 2026-10-25: Olga tail anchor, pass 8: exhaustive asm check of the anchor slots; verdict still NOT PORTED
 
 **Question:** the tail swipe's anchors (+0x640 / +0x644 / +0x648 base, +0x64c / +0x654 tip) need a writer that the port can copy: a model node, a matrix slot, or a follow rule. Is there one in the exe?
