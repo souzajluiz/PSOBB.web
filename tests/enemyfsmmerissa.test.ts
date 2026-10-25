@@ -22,7 +22,10 @@ import {
   merissaPickNearAttack,
   merissaRngBucket,
   merissaVanishStep,
+  MERISSA_SLOTS,
+  MerissaAi,
 } from '../client/src/combat/enemyfsmmerissa.ts';
+import type { AiTarget } from '../client/src/combat/enemyai.ts';
 
 let failures = 0;
 const check = (ok: boolean, what: string) => {
@@ -126,6 +129,121 @@ eq(merissaPickNearAttack(1, 0x80000000, false), { record: 1, freeze: false }, 'o
 eq(merissaPickFarAttack(0, 0), 4, 'far roll 0 takes record C');
 eq(merissaPickFarAttack(1, 0x80000000), null, 'far roll other than 0 fails');
 eq(merissaPickFarAttack(1, 0), 5, 'variant AA far record is 5');
+
+
+// --- Port brain (MerissaAi, OWN_FSM 'MerissaA') ---------------------------------------------
+// PROVEN parts: appear -> idle (row 0 countdown), idle acquires within 250 (row 1), the near
+// gate and the freeze roll, the +0x37c flags. ASSUMED parts (chase walk, attack timeline, damage
+// hold, death) are checked only for their own internal consistency.
+const tgt = (x: number, z: number, clientId = 1): AiTarget => ({ clientId, x, z, charClass: 0, dead: false });
+const brain = (rng = () => 0.5, angle = 0) => new MerissaAi({ x: 0, z: 0, angle, movement: null, variant: 0, rng });
+const dist = (a: { x: number; z: number }, b: { x: number; z: number }) => Math.hypot(a.x - b.x, a.z - b.z);
+const toIdle = (m: MerissaAi) => {
+  m.tick([]);
+  for (let i = 0; i < 40; i++) m.tick([]);
+};
+
+// Ctor: +0x37c = row 0 mask (0x4), the radar icon shows, the vanish motion (slot 0) plays.
+{
+  const m = brain();
+  eq(m.flagsWord, 0x4, 'ctor flags word is row 0 mask');
+  check(m.radar, 'ctor: radar shown');
+  eq(m.state, 'appear', 'ctor state is appear (row 0)');
+  eq(m.motion?.index, MERISSA_SLOTS[0].index, 'ctor motion is the vanish slot');
+}
+
+// Row 0 countdown, then idle (row 1, wait slot): the Merissa stands still with no player near.
+{
+  const m = brain();
+  toIdle(m);
+  eq(m.state, 'idle', 'appear ends in idle with no player');
+  const f = m.tick([]);
+  eq(f.motion?.index, MERISSA_SLOTS[1].index, 'idle plays the wait slot');
+  eq([f.x, f.z], [0, 0], 'idle does not move (row 1 has no movement)');
+}
+
+// Walks to a target inside the 250 acquire range; each step closes the distance.
+{
+  const m = brain();
+  toIdle(m);
+  const t = tgt(0, 200);
+  let f = m.tick([t]);
+  eq(m.state, 'chase', 'a player within 250 starts the chase');
+  const d0 = dist(m, t);
+  for (let i = 0; i < 20; i++) f = m.tick([t]);
+  check(dist(m, t) < d0 - 15, 'chase walks toward the target');
+  check(f.motion?.index === MERISSA_SLOTS[2].index, 'chase plays the walk slot');
+  // Outside the 250 acquire range the idle keeps its distance.
+  const far = brain();
+  toIdle(far);
+  far.tick([tgt(0, 300)]);
+  eq(far.state, 'idle', 'a player at 300 does not wake the idle state');
+}
+
+// Attack in range: the near gate (dist^2 < 1600, angle < 10 degrees) with a roll of 0.5
+// (not freeze) gives record A; the stab hits the target once in its window.
+{
+  const m = brain(() => 0.5, 0); // facing +z, the target straight ahead
+  const t = tgt(0, 30);
+  toIdle(m);
+  m.tick([t]); // acquire
+  let hits = 0;
+  let attacked = false;
+  for (let i = 0; i < 60; i++) {
+    const f = m.tick([t]);
+    if (f.hit) hits++;
+    if (m.state === 'attack') attacked = true;
+  }
+  check(attacked, 'in range the Merissa enters the attack state');
+  eq(hits, 1, 'the stab hits the target exactly once');
+  // The target stays in range, so the pickers roll again (ASSUMED: the chase re-attacks at once).
+  check(m.state === 'chase' || m.state === 'attack', 'after the recovery the Merissa chases or re-attacks');
+  for (let i = 0; i < 5; i++) m.tick([]);
+  eq(m.state, 'idle', 'with no player left the Merissa returns to idle');
+  eq(m.flagsWord & MERISSA_FREEZE_MASK, 0, 'a 0.5 roll does not freeze');
+}
+
+// Freeze roll (rng 0.1 < 1/3 for the near roll): record 6 and +0x37c |= 0x10.
+{
+  const m = brain(() => 0.1, 0);
+  const t = tgt(0, 30);
+  toIdle(m);
+  m.tick([t]);
+  for (let i = 0; i < 5 && m.state !== 'attack'; i++) m.tick([t]);
+  eq(m.state, 'attack', 'the freeze roll still enters the attack');
+  check((m.flagsWord & MERISSA_FREEZE_MASK) !== 0, 'the freeze roll sets +0x37c bit 0x10');
+}
+
+// Radar gate: bit 0x8 (state 6, the vanish) hides the icon; leaving the state shows it again.
+{
+  const m = brain();
+  m.startVanish();
+  eq(m.state, 'vanish', 'startVanish enters the vanish state');
+  check((m.flagsWord & MERISSA_RADAR_HIDE_BIT) !== 0, 'vanish sets bit 0x8');
+  check(!m.radar, 'radar hidden while bit 0x8 is set');
+  m.tick([]);
+  check(!m.removed, 'vanish is not removed on the first frame');
+  check(!m.radar, 'the vanish keeps the radar hidden on later frames');
+  check(brain().radar, 'the appear state shows the radar');
+}
+
+// Death (kill): row 5's mask (0x2), state dead.
+{
+  const m = brain();
+  m.kill();
+  eq(m.state, 'dead', 'kill sets dead');
+  check((m.flagsWord & 0x2) !== 0, 'death sets row 5 mask 0x2');
+}
+
+// Damage: a hit in the idle flinches; the flinch ends in idle with no target.
+{
+  const m = brain();
+  toIdle(m);
+  m.onDamage(7);
+  eq(m.state, 'damage', 'a hit in idle flinches');
+  for (let i = 0; i < 20; i++) m.tick([]);
+  eq(m.state, 'idle', 'the flinch ends in idle with no target');
+}
 
 if (failures) {
   console.log(`enemyfsmmerissa: ${failures} failure(s)`);

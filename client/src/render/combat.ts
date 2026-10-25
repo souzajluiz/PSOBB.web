@@ -56,6 +56,7 @@ import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
 import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MORFOS, MorfosAi, MorfosBolt, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
 import { IllGillAi } from '../combat/enemyfsmillgill.ts';
+import { MerissaAi } from '../combat/enemyfsmmerissa.ts';
 import { EpsilonFx } from './epsilonfx.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DrlSegmentAi, DRL_BEAM, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
@@ -502,6 +503,8 @@ const OWN_FSM = new Set([
   'Episode4Boss',
   // Ill Gill (combat/enemyfsmillgill.ts): the radar follows its per-state tail (IllGillAi.radar).
   'TObjEneIllGill',
+  // Merissa A / AA (combat/enemyfsmmerissa.ts): the radar follows its +0x37c bit 0x8 (MerissaAi.radar).
+  'MerissaA',
   // Dark Falz (combat/darkfalz*.ts).
   'TBoss4DarkFalz',
 ]);
@@ -556,7 +559,7 @@ const isSplitPart = (ai: EnemyBrain | null): boolean => ai instanceof SlimeAi ||
 // rule, see applyEnemyHit), and they stay on the radar and lockable.
 const isEp2Hidden = (ai: EnemyBrain | null): boolean => (ai instanceof MericarolAi || ai instanceof GibbonAi) && ai.untargetable;
 export const splitRadarOk = (e: { ai: EnemyBrain | null }): boolean =>
-  (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi | GibblesAi).radar) && !isEp2Hidden(e.ai) && (!(e.ai instanceof IllGillAi) || e.ai.radar);
+  (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi | GibblesAi).radar) && !isEp2Hidden(e.ai) && (!(e.ai instanceof IllGillAi) || e.ai.radar) && (!(e.ai instanceof MerissaAi) || e.ai.radar);
 const splitLockBase = (e: { ai: EnemyBrain | null }): boolean =>
   (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi | GibblesAi).lockable) && !isEp2Hidden(e.ai);
 // Lock-on and the technique records (the reticle's per-frame lockable flag). A Vol Opt entity is
@@ -1313,6 +1316,8 @@ export class CombatView {
           ill.health = () => stats.hp / Math.max(1, stats.maxHp);
           ai = ill;
         }
+        // Merissa A / AA: the variant is the set param6 bit (+0x380, enemymodels 0x112).
+        else if (className === 'MerissaA') ai = new MerissaAi({ ...at, variant: subtype & 1, movement, rng: () => this.rng() });
         else if (className === 'TObjEneMorfos') {
           const mor = new MorfosAi({ ...at, params: setParams, movement, attack, difficulty, radius, phase: head.index, rng: () => this.rng() });
           mor.health = () => stats.hp / Math.max(1, stats.maxHp);
