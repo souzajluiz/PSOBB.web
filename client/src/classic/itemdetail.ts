@@ -376,8 +376,8 @@ export const MAG_ELEMENT = {
 // The mag's photon rows (0x7267dc) call SinowberillChallengeObject_UpdateItemUI_0070ff48(element,
 // type, index): type 0 = a blank row (the element kind 7, default UVs from 0x96f59c / 0x96f5a0), type
 // 5 = the photon blast's picture (kind 5, the UV pair from table 0x009f1600 at the blast index). So an
-// empty row is NOT text: it is `(element, 0, 0)`. The port draws the blast's name in the row until the
-// picture (the item sheet's UVs) is ported (ASSUMED stand-in).
+// empty row is NOT text: it is `(element, 0, 0)`. The picture is palette.ts photonPictureUv on texture 5
+// (magmenu.ts drawPhotonList); the blast name is only the fallback when no texture is given.
 export function photonRowArgs(blast: number | null): readonly [number, number] {
   return blast === null ? [0, 0] : [5, blast];
 }

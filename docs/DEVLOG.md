@@ -49,6 +49,27 @@
 - The colored rings (`colored_ring_matching_boosts`, dump 427069) and the item set bonus (`handle_item_set_bonus`, dump 427136) run after the same dispatcher for every item and are still not ported.
 
 **Checks:** `node tests/playerstats.test.ts` (ALL PASS), `node tests/playerstatsatp.test.ts` (25/25), `cd client && npx tsc --noEmit -p .` (Node 24) clean. Not run in Chrome.
+## 2026-10-25: Field HUD: the Status window has no route (exe); the photon blast pictures ported
+
+**Question:** the ROADMAP's Field HUD left-to-do line. Its first open items: the Status window (menu id 0x19, "no menu or key opens it") and the photon blast pictures (kind 5, the UVs from table 0x009f1600, not ported). Which can the exe settle?
+
+**Status window (0x19): the exe's menu tables hold no 0x19. Still not opened; ASSUMED no key path either.**
+- `handle_player_menu_select` (dump `Psobb.exe-05112026.c:700118`, `player_menu_entry`, `player_status_menu=25`) has the switch with `ChatShortcutMenuWindow_Constructor_00756ff4` at its case 25. Its callers pass a menu id taken from a list: `handle_player_menu_inputs` (`:699686`, the yes/no item id), `ChallengeMenuObject_HandleItemSelection_00733714` (`:700710`, from the key handler at `:682808` and the list actions, `:682228`, `SinowberillChallengeObjectListWindow_HandleAction_0071b494`) and `ChallengeMenuObject_DisableSubWindow_007337e8` (`:700763`).
+- The two list layouts the menu fills, `ChallengeMenuObject_UpdatePlayerLayout_00733d70` (`:701039`) through `ChallengeMenuObject_PopulateMenu_007334d4` (`:700562`): the layout at 0x009f2f40 (human) and 0x009f3020 (android), 8-byte rows whose first short is the id, read until the terminator 0x30. Human: 2, 0, 3, 5, 35, 6, 7; android: 2, 0, 5, 35, 6, 7 (`tools/exedata.py read 009f2f40 h 40`). Neither holds 0x19 (25).
+- So the Home / field player menu cannot reach menu 0x19. The other lists (the trade, the chat shortcut and the team lists) were not scanned row by row: ASSUMED they do not hold 0x19 either. The port keeps the Status window closed (`classic/fieldmenu.ts` `open`, the comment at 0x19). No code change.
+
+**Photon blast pictures: ported.** `SinowberillChallengeObject_UpdateItemUI_0070ff48` (`:671950`), type 5 (the mag's photon row, `(element, 5, blast)`): texture 5 (the same texture as the palette's group 5, `PaletteMenu_UpdateTextures_0070ff56`), the texel origin (u, v) at table 0x009f1600 + blast * 8 (float pairs). The element's right and bottom are (u + 50) and (v + 43) texels, scaled by `0x0096f590` = 1/256 (a 256 sheet): the picture is 50 x 43 texels (`0x0096f598`, `0x0096f594`).
+- Table 0x009f1600 (`exedata read 009f1600 f 16`): blast 0 (200, 172), 1 (150, 129), 2 (150, 172), 3 (200, 129), 4 (100, 172), 5 (100, 129), 6 (150, 107). The next float pair is 50000.0, so the table ends at 6. Mag photon blasts are 0..5 (`addPhotonBlast` rejects 6+).
+- The port's palette table had only blasts 0..2 (the palette's photon slots); it now has the seven pairs (`classic/palette.ts` TYPE5_UV), `photonPictureUv(blast)` reads it, and the palette's group 5 gets blasts 3..6 too (exe-faithful: the table is indexed by blast, not by slot).
+- `classic/magmenu.ts` `drawPhotonList`: a blast row draws texel rect (u, v, 50, 43) of texture 5 (`tex.palette.icons[5]`, the same `f256_hyouji.prs` texture the palette uses). The name stand-in stays as the fallback when no texture is given.
+
+**ASSUMED (not proven by the exe):**
+- The on-screen size of the picture: the row's height (20) at the 50 x 43 aspect. The element's own size (the element table of entry 0xA) is not decoded.
+- The other lists' menu ids (see above): no 0x19 traced there.
+
+**Checks:** `node tests/fieldhud.test.ts` (new: the seven table pairs, the eighth as null, 50 x 43, the palette's blast 5), `node tests/customize.test.ts`, `hotbar`, `playerstats`, `quickmenu`, `shop` and `magfeed` pass. `cd client && npx tsc --noEmit -p .` clean. No Playwright (the brief).
+
+**Left:** the photon row's exe size; the Status window's other lists (trade, chat shortcut, team) row by row.
 
 ## 2026-10-25: Challenge mode left: the material x5 is ported (stale ROADMAP item); the Scape Doll / dead-player rules traced, no port
 

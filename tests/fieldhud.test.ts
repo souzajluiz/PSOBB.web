@@ -26,7 +26,7 @@ import {
   type ItemRow,
   type RowContext,
 } from '../client/src/classic/itempack.ts';
-import { CONFIG_OFFSET, currentPalette, paletteFromCharacter, paletteIcon, parsePalette, slotCount, EMPTY_ICON } from '../client/src/classic/palette.ts';
+import { CONFIG_OFFSET, currentPalette, paletteFromCharacter, paletteIcon, parsePalette, photonPictureUv, slotCount, EMPTY_ICON, ICON_H, ICON_W } from '../client/src/classic/palette.ts';
 import { techInfo, techItems, techTpCost, TECH_TYPES } from '../client/src/classic/techmenu.ts';
 import {
   attributeRows, candidateStats, compareColor, equipContribution, equipStatRows, hasEquipPanel, magPhotonRows, magRows, magStatRows, magStatText, MAG_PAGE, MAG_ELEMENT, nextPage, PAGE_COUNT, PAGE_SLIDE, pageSlideAfter, photonDescriptionIndex, photonRowArgs, panelKind, RESIST_LABELS, slotValue, SLOT_LABEL, VALUE_COLOR, type EquipStatRow,
@@ -679,6 +679,10 @@ if (failures) {
   eq([...used].sort((a, b) => a - b), Array.from({ length: 16 }, (_, i) => i), 'MAG elements: page 1 uses elements 0..15, each once');
   eq([photonRowArgs(null), photonRowArgs(3)], [[0, 0], [5, 3]], 'MAG photon row: an empty row is UpdateItemUI(elem, 0, 0), a blast is kind 5 with its index');
   eq([photonDescriptionIndex(3), photonDescriptionIndex(null)], [0x2a, null], 'MAG photon info: group 7 index blast + 0x27');
+  // The photon blast pictures: texture 5 at table 0x009f1600 (exedata: seven float pairs, the eighth is 50000.0).
+  eq(Array.from({ length: 8 }, (_, b) => photonPictureUv(b)), [[200, 172], [150, 129], [150, 172], [200, 129], [100, 172], [100, 129], [150, 107], null], 'MAG photon picture: table 0x009f1600 by blast index, none past the table');
+  eq([ICON_W, ICON_H], [50, 43], 'MAG photon picture: 50 x 43 texels (0x0096f598 / 0x0096f594)');
+  eq([paletteIcon(5, 5).texture, paletteIcon(5, 5).u, paletteIcon(5, 5).v], [5, 100, 129], 'palette type 5: blast 5 is texture 5 at (100, 129), the same table');
   eq([nextPage(0, 1), nextPage(2, 1), nextPage(0, -1), nextPage(1, -1), PAGE_COUNT], [1, 0, 2, 0, 3], 'MAG page keys: the page wraps over 3');
   eq(Math.abs(pageSlideAfter(10) - 8.5) < 1e-9, true, 'MAG page slide: 10 decays to 8.5 (0.85 a tick)');
 }

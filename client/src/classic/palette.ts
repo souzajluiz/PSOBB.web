@@ -117,7 +117,12 @@ const ITEM_UV: ReadonlyArray<readonly [number, number]> = [
   [0, 0], [0, 43], [0, 86], [50, 0], [50, 43], [50, 86], [100, 0], [50, 129], [100, 43], [0, 172],
   [0, 129], [150, 43], [50, 172], [0, 129], [0, 0], [0, 86], [0, 43], [0, 0],
 ];
-const TYPE5_UV: ReadonlyArray<readonly [number, number]> = [[200, 172], [150, 129], [150, 172]]; // 0x009f1600
+// 0x009f1600, by photon blast index (float pairs read with tools/exedata.py; seven pairs, the eighth
+// float pair is 50000.0, not a texel origin). The palette's photon slots use 0..2; the mag's photon
+// rows (magmenu.ts) use any blast index below 6 (addPhotonBlast).
+const TYPE5_UV: ReadonlyArray<readonly [number, number]> = [
+  [200, 172], [150, 129], [150, 172], [200, 129], [100, 172], [100, 129], [150, 107],
+];
 // 0x009f1420, special actions.
 const SPECIAL_UV: ReadonlyArray<readonly [number, number]> = [
   [100, 0], [100, 129], [100, 172], [200, 129], [200, 172], [100, 86], [100, 86], [50, 0], [150, 129], [150, 86], [150, 172], [0, 172],
@@ -126,6 +131,12 @@ const SPECIAL_UV: ReadonlyArray<readonly [number, number]> = [
 export const PALETTE_ITEMS: ReadonlyArray<readonly [number, number]> = [
   [0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2], [6, 0], [6, 1], [3, 0], [4, 0], [5, 0], [7, 0], [8, 0],
 ];
+
+// The photon blast picture's texel origin on texture 5 (kind 5, UpdateItemUI_0070ff48 with table 0x009f1600);
+// its size is ICON_W x ICON_H. Null for an index the table does not hold.
+export function photonPictureUv(blast: number): readonly [number, number] | null {
+  return TYPE5_UV[blast] ?? null;
+}
 
 export const EMPTY_ICON: PaletteIcon = { texture: 7, u: 100, v: 0 }; // 0x0096f5a0 / 0x0096f59c
 
