@@ -62,6 +62,7 @@
 import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
+import { enemyTargetStateSets } from './enemystate.ts';
 import { EnemyShot, PLAYER_RADIUS, type ShotEffect, type ShotLook } from './enemyshots.ts';
 
 const BAMS = BAMS_TO_RAD;
@@ -1057,6 +1058,14 @@ export class DragonAi extends BrainBase {
   // A follower applies the leader's 6x12.
   applyRemote(state: number, cursor: number, target: number | null, x: number, z: number): void {
     this.applyPacket(state, cursor, target, x, z);
+  }
+
+  // A 6x10 / 6x11 (ApplyEnemyTargetAndState_00423a78 / ..._ConditionalState_00423ac8): the target,
+  // the cursor, then the state (6x11 only on a change). No x / z and no phase 7: those are the 6x12's.
+  applyTargetState(state: number, cursor: number, target: number | null, sub: number): void {
+    this.setTarget(target);
+    this.cursor = cursor;
+    if (enemyTargetStateSets(sub, state, this.sid)) this.setState(state);
   }
 
   // The direct packet of the entrance (state 0, no phase 6).
