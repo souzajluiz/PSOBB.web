@@ -1,5 +1,50 @@
 # Devlog
 
+## 2026-10-25: Vol Opt lock-on read from the reticle filter; the monitors have no lock-on caller; no port change
+
+**Outcome.** The reticle's candidate filter is `check_enemy_is_targetable` (exe 0x007a2b28, a function start; dump 785953), not `FUN_007714cc` (that is the AI's nearest-target search, used by enemy AIs such as Darvant and the Vol Opt core's own searches). The filter reads, per player and per weapon record: the record's three masks (field4 box include, field5 box exclude, field6 entity include, field7 entity exclude), the entity's `+0x30` flags, the box bits, the distance and cone tests and, in battle mode, a map ray test. Lock-on is therefore not "box bit 0 only". The Vol Opt facts below follow from that. Verdicts: the monitors are never a lock-on target (no `enable_reticle_` caller in their code); the prison and the control are never (same); the core, the pillars and the rod have per-state lock calls; the body is not mapped by state. Lock and hit gates are NOT changed in the port: the struck test shares `concealed()` with the lock test, so a lock-only change needs the hit path traced first.
+
+**The filter (dump 785953, PROVEN).**
+- Player side: the player's `character_flags` must not have `dead` (0x800) or `took_damage` (0x200). The room rule: a target with `flags & 0x60000000 == 0x20000000` in another room is refused (`player_heading != -1`).
+- Target side: `CheckEntityStepConstructed_008173b4`; `(field6 & entity_flags) != 0` and `(field7 & entity_flags) == 0`.
+- Per box (`collision_box`, 44 bytes, `unknown_flags` at +0x18): bit 0 must be set; `(field4 & box) != 0`; `(field5 & box) == 0`; then `wpn_to_trgt_dist_sq` (XZ) and the reach `radius + horizontal_distance`; the cone tests; battle mode adds `cast_ray_at_map_collision_geometry` on flags 0xa000. Each box also clears bit 28 (0x10000000) and calls `DisableEntityHitbox_007b9f34` (clears that player's bit in `unknown_hitbox_info`, a per-player box guard, not box bit 0; its reset is not traced).
+
+**Masks by record (PROVEN, dump 785164-785302, 785463-785474).** `unknown_update_equipment_properties_from_pmt` fills the record per `reticle_color_type`:
+- 2 (equipped weapon, the common case): field5 = 0, field7 = 0x40800 (0x800 dead / broken, 0x40000 the monitor window). field4 and field6 come from `SinowberillWeaponObject_ApplyTargetingUIConfig_007a21d0`: 0x8000 and 0x60000000 (0xa000 and 0x70000000 when `player+0x8fc != 0`). So a normal weapon needs the entity's flags to carry 0x20000000 or 0x40000000 and neither 0x800 nor 0x40000.
+- 1: field4 0x20000, field5 0x8000, field6 0xc0000000, field7 0x30040800.
+- 3 (techniques), 4 (support palette: Resta, Anti, Reverser, field7 0xe0000800), 5 (photon blast): see dump 785305-785441.
+- The entity's base flags (the 0x20000000 / 0x40000000 default) are NOT traced for Vol Opt. ASSUMED: every Vol Opt entity carries 0x60000000 from its base constructor (no Vol Opt ctor ORs it: the objdump scan of 0x43c000..0x452000 finds no 0x20000000 / 0x40000000 immediate).
+
+**Box tables (PROVEN values, `tools/exedata.py read`).** The init copies the table's `unknown_flags` verbatim (`InitEnemyCollisionBoxes_007b9a88`, dump 802579). No Vol Opt code toggles box bit 0 (earlier pass). So bit 0 is fixed per entity:
+- monitor table 0x009a5100 (stride 0x2c; the monitor ctor's push at 0x00441f97 and the index walk at 0x004417e5): entry 0 flags 0x8005, entry 1 0x8003. bit 0 and 0x8000 set.
+- pillar table 0x009a52c0 (push at 0x00443f12, count 1 pushed at 0x00443efa): 0x8003.
+- prison table 0x009a55c0 (push at 0x00449d3d, call 0x00449d4e): 0x8003.
+- core table 0x009a4eb0 (push 0x00440483, call 0x00440488): 0x8003. Count and the caller's `this` are ASSUMED (the call sits after the core vtable store at 0x0044010d).
+- The control's table is not located (ASSUMED no box: "no hit box", flags 0x6040000).
+So the geometry gate (bit 0, field4 0x8000) passes for every table entry read. The lock is decided by the entity flags (+0x30) and the distance / cone tests.
+
+**`enable_reticle_` (0x007aa094) callers in the Vol Opt code (PROVEN, objdump `calll 0x7aa094`).** Each call adds the entity's records; the entity must make the call for it to be a lock-on target.
+- Control (0x0043c508..0x0043e338): none. Never a lock-on target.
+- Core, per state (dispatch 0x0043f17c; handlers from the earlier pass): state 10 at 0x0043f208 and 0x0043f2a7; state 7 at 0x0043f4e7; state 5 at 0x0043f557; state 4 at 0x0043f630; state 2 at 0x0043f9c6; state 1 at 0x0043fbac; state 9 at 0x0044031b (ASSUMED: the handler's end). State 0 (0x0043fcfc) has no call: not lock-on.
+- Monitor (0x004414d8 dtor, update 0x004419d4, draw 0x0044181c; vtable 0x00af5c60): no call in 0x004414d8..0x00442254. PROVEN for the monitor's own code. ASSUMED that no base-class helper reached through its vtable (slots +0x0c..+0x40 are shared functions) calls it; the base functions were not traced.
+- Rod (update 0x00440d58): 0x00440f2a, 0x00440ff9, 0x0044102a, 0x004410f7, after the icon at 0x00440e55, so on every live frame that passes the pause test. The rod's state 7 sets 0x40000 at 0x00440ef8 (excluded by field7). ASSUMED the rod sets no 0x800.
+- Pillar (dispatch 0x00442730): state 5 at 0x00442796 (handler 0x00442770); state 9 at 0x00442a79 (handler 0x004428b0); state 4 at 0x00442cec (handler 0x00442c98); state 2 at 0x00442f62, 0x0044320b, 0x0044333f, 0x004434cb, 0x00443516 (handler 0x00442ec0); state 0 at 0x00443b46 (handler 0x00443b0c). States 1, 3, 6, 7, 8 have no call: not lock-on. The state 2 path writes 0x40000 at 0x00442f16 / 0x00442f40 (`+0x390`/flags as the earlier pass), so the reticle's 0x40800 test may drop a pillar that is inside its 0x40000 window; ASSUMED which sub-state paths are inside it.
+- Body (update 0x004442e0, dispatch 0x004446fc): calls at 0x00444e17..0x00448377 (17 sites). State mapping not traced; ASSUMED lock-on per the body's state the same as its radar.
+- Prison (0x00449c33..0x0044a0d8): none. Never a lock-on target.
+
+**Lock-on targets vs the port (what this changes).**
+- Port `voloptRadar` / `concealed()` treat the monitors as lock-on when not broken and exposed. The exe has no lock-on caller for them: the port's monitor lock is probably too generous. Not changed here: the struck test (`render/combat.ts` 6809) also uses `concealed()`, and the monitor's hit path is not traced. Open for the main thread.
+- The rod: port `targetable = st === 1 || st === 4` (`combat/volopt.ts` 957). The exe calls the reticle every live frame, so the rod is lock-on in every state except its state 7 window (0x40000). Not changed: the rod's hit uses the same flag in the port.
+- Pillars: port per state is the radar mapping; the exe's lock states are 0, 2, 4, 5, 9 (ASSUMED sub-path gates).
+
+**Corrections.** The 2026-10-25 "Vol Opt radar per entity" and "Vol Opt's radar per state" entries say lock and hit are unchanged; still true. The earlier note "the lock needs box bit 0" is incomplete: it also needs field4 / field6 / field7 and the entity flags. The older address 0x007a2e74 (DEVLOG 8506) is not a function start; the function starts at 0x007a2b28.
+
+**Hit: NOT decided.** The hit path (`EntityHitEntity` 0x00773350, vtable +0x174 / +0x180 / +0x184) was not traced for Vol Opt. The box bit 0 is the same for lock and hit (the table value), so the port's hit gate stays as it was.
+
+**Scratch.** The full objdump of PsoBB.exe was used and deleted; only the scratch notes under the session's scratchpad remain.
+
+**Tests.** No port code changed. `tests/volopt.test.ts`, `tests/minimap.test.ts`, `NEWSERV=.../vendor/newserv node tests/combat.test.ts`, and `cd client && npx tsc --noEmit -p .` are run as the baseline; results are in the commit message.
+
 ## 2026-10-25: Dubchic's radar row is 'own' (vtable 0x00b04760); the Dark Gunner's flinch shows its icon
 
 **Outcome.** The DUBCHIC row of `ENEMY_RADAR_SOURCE` moves from 'slot' to 'own'. The Dark Gunner's flinch (exe state 4, 0x00544704) now shows the radar icon in any brain state, so an idle gunner that is hit is drawn while it flinches (`render/combat.ts` `minimapEnemies` passes the 'flinch' brain while the owner's damage state runs). The port's flinch was already a hit reaction (owner damage motion, resumed to hover when the animation ends); this pass adds no new GunnerAi state.
