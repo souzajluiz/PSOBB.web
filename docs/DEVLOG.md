@@ -94,6 +94,41 @@
 **ASSUMED / open.**
 - The NPC takeover (state 3) and its AI owner-side strikes are not ported; the NPC melee `6x46` is not sent.
 - The NPC cast path (`render/combat.ts` `npcCastTechnique`) sends 6x47 and 6x48 back to back; the exe's `HandlePlayerTechCastState_007b2bc0` release gate is not traced here.
+## 2026-10-25: Episode 4 radar pass: Sinow Berill is a slot family, the forced 2.0 was the Pig Ray; Recon, Ill Gill and the Ep4 rows
+
+**Outcome.** `client/src/classic/minimap.ts` ENEMY_RADAR_SOURCE has 68 rows (was 50). The forced icon SINOW_BERILL (2.0) is removed; PIG_RAY takes it (forced 2.0). New 'slot' rows: Sinow Berill, Sinow Spigell, Recon, Girtablulu, Satellite Lizard and Yowie. New 'own' rows: Astark, Sand / Del Rappy, Merissa A / AA, Zu and Pazuzu, Pig Ray, Ill Gill. Dorphon keeps 'slot' but its vtable is corrected to 0x00b0a9c0. Goran's old 'own' row is removed (no icon proven). Boota has no row. No gate is newly applied: the port's render changes are only the Sinow Berill (forced 2.0 becomes the plain range-checked icon) and the Pig Ray (forced 2.0). Tests: `tests/minimap.test.ts` (the table length 68, the forced rules, the new rows).
+
+**Method.** As the survey entry above: `tools/exedata.py read` for vtable slots and the set-type factory table (0x009fba60, rows of `{type, factory, dist2, children}`), `objdump -d -M intel` for the call sites (the disassembly of PsoBB.exe written to a scratch file), and the dump `Psobb.exe-05112026.c` for names only. Factories were matched to vtables by the ctor's `mov dword ptr [reg], imm` writes, one call deep.
+
+**Sinow Berill (vtable 0x00b0a120) and the forced icon.**
+- The real Sinow Berill is vtable 0x00b0a120: its ctor 0x0059e01c writes it at 0x0059e0eb, +0x4 is the update 0x0059e288, +0x198 is the shared slot 0x00520618.
+- Its per-frame state code is the dispatcher `SinowberillProcessState_0059eb08`, which the enemy base calls through vtable +0x164 (0x00b0a284 holds 0x0059eb08). The dispatcher ends with `call *0x198` at 0x0059ec5a, skipped only when the state field +0x3c8 is 1 and the argument is 1 or 2. The slot is `PoisonLilyUpdateMinimap_00520618` (dump line 304049): the plain icon (scale 1, colour 0xffffa24c) unless the entity's +0x30 has 0x40800. PROVEN for the vtable and the call; the update 0x0059e288 has no icon of its own.
+- The forced 2.0 rule was attributed to vtable 0x00afa7c0 (update 0x004addc0). That vtable is the Pig Ray's: its ctor 0x004ad95c writes it at 0x004ad9a6 (and 0x004ad8ec at 0x004ad922), and the update's icon call at 0x004adeea is icon3 (0x0080575c) with 0xffffa24c, scale 0x40000000 (2.0), flags 1, after enable_reticle on the alive path. The Pig Ray is the Barba Ray's minion (the spawner 0x004b4e6c, port `combat/barbaminion.ts`). The DEVLOG 2026-10-25 line that called 0x004addc0 the Sinow Berill's update was wrong.
+- Spigell (set 0xd4 with p6 > 0) is the same ctor, as the 2026-10-25 Sinow Berill entry already says; its row is 'slot' ASSUMED from that.
+- Still open: the Sinow Berill sub-entity icons (the entries of the 2026-10-25 Berill notes; their owners are ASSUMED).
+
+**Recon (vtable 0x00b08100): slot, PROVEN.** The ctor 0x0058a200 writes the vtable at 0x0058a2e9; +0x4 is the update 0x0058a3d4 (the function runs to the ret at 0x0058a55c); its `call *0x198` at 0x0058a54a is on the unpaused tail (after `enable_reticle`-style call 0x006401f0 and before the ground check 0x0058a600). The earlier note (the call is in `SinowberillResetGlobalState_0058a1dc`) is wrong: 0x0058a1dc has no slot call. Recon is the Recobox's child (`enemyslots.ts`).
+
+**Ill Gill (factory 0x0052e380): vtable 0x00b01760, own, per-state icons.**
+- Factory 0x0052e380 calls the ctor 0x0052e44c (at 0x0052e422), which writes the vtable at 0x0052e490. +0x4 is the update 0x0052e7c0, a switch on `unknown_ai_state`. +0x198 is 0x00b01910 (not the slot).
+- Plain icons (`unknown_add_minimap_icon`, scale 1, colour 0xffffa24c, flags 0): state 0 at 0x00530695, 1 at 0x0053054a, 2 at 0x0053042b, 3 at 0x0053006b, 4 at 0x0052f9aa, 5 at 0x0052efe4, 6 at 0x0052eb31 and 0x0052eb8d (the second only while the counter +0x3a4 is not below 0). None in 7 (death, 0x0052ea00) or 8 (dying, 0x0052e898). The handler ranges are the next function starts (0x0052ebc0, 0x0052f18c, 0x0052fb78, 0x005301f0, 0x0053044c, 0x00530554).
+- Not ported: the port's Ill Gill has no per-state icon gate; the row is 'own' (the default), so the state 7 and 8 icons still show while the render's `e.state === 'death'` hides the dead ones.
+
+**Episode 4 rows (set type to factory to vtable, by the per-area table).** Set types from `formats/setdata.ts` `enemyKind`.
+- Astark (0x110, factory 0x005a3d60 writes vtable 0x00b0a420 at 0x005a3e78): update 0x005a1e84, plain icon 0x005a1f82 on the alive path after the target block (no state gate found). Own.
+- Satellite Lizard and Yowie (0x111, factory 0x005ae7cc writes vtable 0x00b0b1c0 at 0x005ae88a; the p2 flag picks Yowie, one class): +0x198 is 0x00520618, update 0x005b160c calls it at 0x005b171b. Slot.
+- Girtablulu (0x113, factory 0x005ab9ac -> ctor 0x005aba28 writes vtable 0x00b0aca0 at 0x005aba74): update 0x005abf34 (the dump's `DorphonProcessState`), slot call 0x005abfa1. Slot. The Girtablulu death 0x005aa2d8 (DEVLOG 2026-10-25 death table) is called from 0x005aa26f, inside this class's range (ctor 0x005aa074), which agrees.
+- Dorphon (0x116, factory 0x005a673c -> ctor 0x005a67b8 writes vtable 0x00b0a9c0 at 0x005a67fa): update 0x005a69d8, slot call 0x005a6a36. Slot. The old DORPHON row used 0x00b0aca0 (that is Girtablulu's): the verdict 'slot' stands, the vtable in the comment is fixed. The Dorphon death 0x005a72d8 (DEVLOG death table) is called from 0x005a70aa, in this class's range.
+- Sand / Del Rappy (0x41, factory 0x00526cc4 -> ctor 0x00526d90 writes vtable 0x00b00da0 at 0x00526dd5; the same set type covers Rag Rappy in areas 1, 2, 13, 14 by the table, not ported here): update 0x005258e0, plain icon 0x005259dd on the common path. ASSUMED: the state cases that jump past it (0x005258ff, 0x0052594e, 0x00525957, 0x00525960) add none. Own. Rag Rappy's row is not added: its vtable is this one, and the port's RAPPY row is a different class (ASSUMED, not checked here).
+- Merissa A / AA (0x112, factory 0x005b6b24 writes vtable 0x00b0b6a0 at 0x005b6c32): +0x198 is 0, update 0x005b66ec, plain icon 0x005b67d3 skipped while +0x37c has bit 0x8. Own; the gate is not ported (no Merissa brain in the port).
+- Zu and Pazuzu (0x114, factory 0x005b47b8 -> ctor 0x005b4884 writes vtable 0x00b0b480 at 0x005b48c6): +0x198 is a data word (0x19930520), update 0x005b27e8, plain icon 0x005b28dd skipped while +0x390 has bit 0x40000 (the radar-hidden bit of `baseIconShown`). Own; gate not ported (no Zu brain). Pazuzu shares the set type and the vtable (ASSUMED: the port's Pazuzu is the same class).
+- Boota (0x115, factory 0x005a5c08 -> ctor 0x005a5cd4 writes vtable 0x00b0a680 at 0x005a5d20): +0x198 is the placeholder 0x0061cdb0, update 0x0052b78c (the Booma substrate, no icon), handlers at +0x188..+0x194 and +0x1a0 with no icon. No icon found in the vtable's direct code; the icon may come through an indirect dispatch not traced. No row.
+
+**Goran: row removed.** The 2026-10-25 survey entry gave Goran's icon as 0x005b28dd in its state-4 init 0x005b2588. That address is inside Zu's update 0x005b27e8; the init at 0x005b2588 is 11 instructions with no icon. Goran's vtable 0x00b0af40 has the update 0x0052b78c (no icon) and +0x198 0x005ad6fc (no direct icon call). No icon proven, so no row.
+
+**Open.** Boota's icon path. The gates not ported: Merissa (+0x37c bit 0x8), Zu / Pazuzu (+0x390 bit 0x40000), Ill Gill's per-state icons (the table above), Sand Rappy's state cases. The Sinow Berill sub-entity icons (ASSUMED owners). The Rag Rappy vtable (0x00b00da0) against the port's RAPPY row.
+
+**Tests.** `node tests/minimap.test.ts` (all checks passed), `tests/enemysplits.test.ts`, `NEWSERV=... node tests/combat.test.ts` (5859 checks, 0 failures), `cd client && npx tsc --noEmit -p .` (clean).
 
 ## 2026-10-25: Radar per state for the Dark Gunner; Gillchic and Sinow Gold rows
 
