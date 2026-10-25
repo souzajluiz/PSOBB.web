@@ -79,6 +79,22 @@
 - `form` (`kind === 3 || sid >= 11`) reads 2 in 0x19, the cutscene rows. No attack runs there, so nothing is affected; the exe's form for these rows was not traced.
 
 **Checks:** `node tests/saintmilionboss.test.ts` (ALL PASS), `node tests/saintmilion.test.ts` (all checks passed). No code changed, so no typecheck was run. Not run in Chrome (the Chrome run was 2026-10-24 "Boss leftovers in Chrome").
+## 2026-10-25: Olga tail anchor (+0x640..+0x654): owners of the stores, verdict NOT PORTED
+
+**Question:** the tail swipe's hit reads the beast's +0x640..+0x654. Which functions store to those offsets, and do any run on the Olga object?
+
+**Answer (map section 17):** no store to the slots runs on the Olga beast, and no decoded code writes the Olga's anchor.
+- 0x0042a731..0x0042a7bf: `DestroyDerolleEntity_0042a40c` (dump 169147), the Derolle destructor. It clears pointer slots (`|= 1` on each object, then 0). Not Olga.
+- 0x004cb8b2..0x004cb8eb: `InitializeDragonEntity_004cb480` (dump 246611, Ghidra FUN_004cb480), the 0x8b4 dragon-family base ctor. It copies the spawn position into 0x63c..0x650 and zeroes 0x654 / 0x658. The Olga beast is 0x68c bytes from `CreateOlga1Form1Entity_004974d0` and never calls it. Not Olga.
+- 0x004c8cba / 0x004c90d9 / 0x004c92ae: FUN_004c8b2c, flags into 0x654 on the dragon family (ASSUMED family). 0x00423e4a is a thunk.
+- No literal-offset writer for 0x63c..0x658 in the Olga range (0x0049xxxx..0x004a0xxx). The beast's memory is `allocate_in_main_arena`, which does not zero, so the anchor is stale arena bytes (ASSUMED).
+
+**Verdict:** the tail hit stays NOT PORTED. Porting it would mean inventing the anchor. Left: a computed-offset writer search in the Olga range; if none, a documented choice (zero anchors or ASSUMED spawn positions).
+
+**Tooling:** `tools/exedata.py` failed on `.text` (the code section is unnamed in PsoBB.exe). It now falls back to the first section.
+
+**Checks:** no port code changed. `tsc --noEmit -p .` in client/ (Node 24, the main checkout's typescript) exit 0; `node tests/olgaflowai.test.ts` all checks passed.
+
 ## 2026-10-25: Olga Flow form 1: the fire lancer (row 22), the thresholds from BattleParam, the truncated power
 
 **What changed:** `combat/olgaflowhits.ts` ports the lancer's hit (`CheckOlga1SwordWaveHit_0049592c`, the quad test,

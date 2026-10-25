@@ -55,7 +55,7 @@
   files; its death goes through the brain since 2026-10-24). Olga Flow has a partial brain,
   form 1 (combat/olgaflowai.ts, 2026-10-24; map in docs/bosses/olgaflow-map.md; the sword wave hits and the
   arcs / turn since 2026-10-24, combat/olgaflowhits.ts; the stab's hit is in since 2026-10-24, the lancer since
-  2026-10-25; the tail hit is still open: its anchor +0x640..+0x654 has no writer in the Olga code).
+  2026-10-25; the tail hit is still open: its anchor +0x640..+0x654 has no writer on the Olga beast; the exe's stores belong to the Derolle destructor and the dragon-family ctor, map section 17).
 - tools/ghidra/decomp.sh now works from git worktrees.
 
 Rewritten 2026-10-21 at the end of the day (the user: "pare tudo e documente pra
@@ -157,7 +157,7 @@ worktrees are left.
      combat/olgaflowai.ts, map docs/bosses/olgaflow-map.md sections 13 and 14): the hub, the attack
      choice, the sword chains, the HP / death, the sword wave's hit (combat/olgaflowhits.ts, render
      olgaSwordWave), the stab's hit (pass 5, map section 15; its gate constants and range are ASSUMED), the arcs and the turn are ported. Left: the tail's hit (its
-     anchor has no writer in the Olga code), the lancer's push-out and orbit (the hit is in, 2026-10-25), the mines, the controller's
+     anchor has no writer on the Olga beast, map section 17: stale arena bytes, not ported), the lancer's push-out and orbit (the hit is in, 2026-10-25), the mines, the controller's
      sub-states, form 2 (unreached in this build). The sword tip and the attack anchors are ASSUMED;
    - Tower / Epsilon not seen in Chrome (no enemies there);
    - floors 1, 5, 7, 10: 2026-10-24 long watch per wave group (`client/e2e/ep2-floors-watch.spec.ts`,
