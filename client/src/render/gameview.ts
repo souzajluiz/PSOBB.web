@@ -206,6 +206,9 @@ export class GameView {
         return v ? radToBams(Math.atan2(v.source.x - v.target.x, v.source.z - v.target.z)) : 0;
       },
       floorFilesFor: (f) => this.floorFilesFor(f),
+      // The death drop check and the Scape Doll revive's 6x29 (net/items.ts).
+      dropCheckItem: () => this.items.dropCheckItem(),
+      consumeItem: (itemId) => this.items.consumeOne(itemId),
       ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
       // cast_ray_at_map_collision_geometry(from, to, 0x8100) for a gun's bullet (combat/gunbullet.ts).
       wallBlocks: (a, b, mask = 0x8100) => (this.collision ? this.collision.segmentHit([a.x, a.y, a.z], [b.x, b.y, b.z], mask) !== null : false),

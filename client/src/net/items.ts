@@ -66,6 +66,7 @@ import type { Command } from './bbconnection.ts';
 import { applyMagFeed, FeedTimer, isMagFood, type FeedContext } from './magfeed.ts';
 import type { Game } from './game.ts';
 import { DROP_HOLD_FRAMES, DropSearch } from './dropspot.ts';
+import { dropCheckClass, DROP_CHECK_ITEMS, SCAPE_DOLL_CLASS } from '../combat/playerdamage.ts';
 
 export const MESETA_ITEM_ID = 0xffffffff;
 export const PICKUP_SERVER_RANGE = 30; // newserv: dist^2 > 900 is refused
@@ -1436,6 +1437,29 @@ export class GameItems {
     c.meseta -= MEDICAL_COST;
     this.game.sendSubcommand(0xc5, new Uint8Array(0));
     this.log(`medical center: treated for ${MEDICAL_COST} meseta`);
+    this.changed();
+  }
+
+  // The death drop check's first match (combat/playerdamage.ts DROP_CHECK_ITEMS,
+  // the exe's order: all of class 0, then 1, then 2): its item id and whether it
+  // is a Scape Doll. Null without an inventory or without a match.
+  dropCheckItem(): { id: number; scapeDoll: boolean } | null {
+    const inv = this.inventory;
+    if (!inv) return null;
+    for (let k = 0; k < DROP_CHECK_ITEMS.length; k++) {
+      const it = inv.items.find((i) => dropCheckClass(i.data.data1) === k);
+      if (it) return { id: it.data.id >>> 0, scapeDoll: k === SCAPE_DOLL_CLASS };
+    }
+    return null;
+  }
+
+  // 6x29 {item id, 1}: one item used up (a Scape Doll's revive, the exe's
+  // Player_RemoveItemFromSlot_0068ee54 with the amount 1).
+  consumeOne(itemId: number): void {
+    const inv = this.inventory;
+    if (!inv?.find(itemId)) return;
+    this.game.sendSubcommand(0x29, buildDeleteItem(this.game.selfId, itemId, 1).subarray(4));
+    inv.remove(itemId, 1);
     this.changed();
   }
 

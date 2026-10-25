@@ -536,6 +536,9 @@ const TECH_HEIGHT_WINDOW = 40;
 
 export interface CombatOptions {
   log: (msg: string) => void;
+  // The death drop check's first item (GameItems.dropCheckItem) and the 6x29 of a Scape Doll's revive.
+  dropCheckItem?: () => { id: number; scapeDoll: boolean } | null;
+  consumeItem?: (itemId: number) => void;
   // The camera's yaw as a BAMS angle (render/gameview.ts): the Rafoie fire sphere's turn.
   cameraYaw?: () => number;
   // The death fade is over and 6x4E went out (the dead prompt opens), and the
@@ -765,6 +768,8 @@ export class CombatView {
         this.game.sendHitByEnemy(heavy, angle, hp, vx, vz);
       },
       sendShieldAttack: () => this.game.sendShieldAttack(),
+      findDropCheckItem: () => this.opts.dropCheckItem?.() ?? null,
+      sendConsumeItem: (itemId) => this.opts.consumeItem?.(itemId),
       sendDeath: (killer, flags) => this.game.sendPlayerDeath(killer, flags),
       sendRevivable: () => {
         this.game.sendPlayerRevivable();
