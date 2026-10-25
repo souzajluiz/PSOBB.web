@@ -27,16 +27,14 @@ import { CLASS_MAX_STATS } from './materials.ts';
 //
 // The item part (ApplyEquipmentBonuses_005d330c, dump 426168, and its helpers):
 //   - weapon (type 0): range min / max += atp_min / atp_max + 2 * grind (the set factor
-//     get_equipment_set_atp_bonus_weapon is 1.0 unless its set matches, and the morning glory
-//     base g_MorningGlory_ATP_Bonus_Base is 0.0 at 0x0092c448); ata_range_min += ata * 10 plus
+//     setFactorAtp (get_equipment_set_atp_bonus_weapon) scales the range, 1.0 unless its set matches;
+//     the morning glory base is 0.0 at 0x0092c448, the sub 0x94 term is beat time / 4); ata_range_min += ata * 10 plus
 //     10 * (next byte) for each special slot whose byte is 5; stat MST += mst.
 //   - armour (type 1, sub 1, ApplyWeaponStats_005d4840, dump 426949): resist EVP += pmt evp
 //     (0x0e) + get_armor_evp (item bytes 8..9); resist DFP dword += pmt dfp (0x0c) +
-//     get_armor_dfp (item bytes 6..7). The set factors are 1.0.
+//     get_armor_dfp (item bytes 6..7). The pmt DFP is ROUND(dfp * setFactorDfp + morning) (2026-10-25).
 //   - shield (type 1, sub 2, ApplyWeaponStatsVariant_005d4774, dump 426913): resist EVP += get_armor_evp
-//     + ROUND(pmt evp * set_evp + morning); resist DFP += pmt dfp + get_armor_dfp (no set factor).
-//     The armour's DFP has the set factor and its EVP none, so the two differ only in where the
-//     factor sits; with the factors at 1.0 (ASSUMED) the numbers are the armour's, as applyItem does.
+//     + ROUND(pmt evp * setFactorEvp + morning); resist DFP += pmt dfp + get_armor_dfp (no factor).
 //   - unit (type 1, sub 3, ApplyItemStatBonuses_005d41a0, dump 426690): value = pmt amount (0x0e)
 //     + the item's modifier (bytes 6..7); pmt stat (0x0c) picks the stat-block field (0 ATP, 1 MST,
 //     2 ATA x10, 3 EVP, 6 DFP, 7 LCK, 8 all of ATP / MST / ATA / EVP / DFP / LCK), 4 / 5 are the HP /
@@ -69,16 +67,17 @@ import { CLASS_MAX_STATS } from './materials.ts';
 // class and the worn items; displayedStats() gives the totals the compare list's current row shows.
 //
 // ASSUMED (marked in code): the buff multipliers m / md are 0 (no Shifta / Deband / Jellen /
-// Megid in the file); the set factors are 1.0 (get_equipment_set_atp_bonus_weapon,
-// get_equipment_set_dfp_bonus, get_equipment_set_evp_bonus are not ported); the unit specials
+// Megid in the file); the set factors and the item set bonus read the beat time (0), the teammates
+// close by (0), the colored ring count (0), the party (the worn armour only) and the movement bits
+// (standing), which the save does not hold (SetContext, defaultSetContext); the unit specials
 // 0x52 (beat time) and 0x5c (challenge data) add nothing; mags: magStatContribution is the mag's
 // own stat effect (ApplyItemStatBonuses_005d3fa4, its stats pointer = the stat block, factors read
 // from the exe). PlayerRecalculateStats_0068e030 reads the mag slot only for a mag candidate (dump
 // 569856..569876), so a weapon / armour / shield / unit candidate never removes or adds a worn
 // mag: its effect stays in the file's stat block (ASSUMED, as the file model above), and the
-// compare does not apply magStatContribution; colored rings and the item set bonus (colored_ring_matching_boosts,
-// handle_item_set_bonus) are not applied (not decoded); the elemental resists that armour, shields
-// and units write (resist [1..5]) are not kept, as the compare list does not show them; the
+// compare does not apply magStatContribution; the elemental resists that armour, shields, units and
+// the set bonuses write (resist [1..5]) are not kept, as the compare list does not show them; the
+// set-bonus branches listed above handle_item_set_bonus are not ported; the
 // file is the save at login, so an equip made in this session is not in its stat block.
 
 // The file's displayed stats the compare list reads (PlayerDispData stats, net/charfile.ts).
@@ -117,6 +116,7 @@ export interface WornEquipment {
   armour: ItemData | null;
   shield: ItemData | null;
   units: ItemData[];
+  mag?: ItemData | null; // equipment slot 1 (the set bonuses read it, handle_item_set_bonus)
 }
 
 // Units are group 1 = 1, group 2 = 3 (item_group_2 units = 3).
@@ -141,10 +141,14 @@ export function compareSlot(item: ItemData): CompareSlot | null {
 }
 
 export function wornEquipment(equipped: readonly ItemData[]): WornEquipment {
-  const w: WornEquipment = { weapon: null, armour: null, shield: null, units: [] };
+  const w: WornEquipment = { weapon: null, armour: null, shield: null, units: [], mag: null };
   for (const it of equipped) {
     if (isUnit(it)) {
       if (w.units.length < 4) w.units.push(it);
+      continue;
+    }
+    if (it.data1[0] === 2) {
+      if (!w.mag) w.mag = it;
       continue;
     }
     const slot = compareSlot(it);
@@ -235,30 +239,45 @@ function applyOption(b: CandidateBlocks, index: number, pmt: ItemPMT, sign: 1 | 
 // The item's contribution to the blocks, added (sign 1) or taken away (sign -1). The exe takes
 // an item away with its stored bonuses (UnknownItemFunction19_005d22cc); the same formula with
 // sign -1 is equal when the stored values are the current ones (ASSUMED).
-export function applyItem(b: CandidateBlocks, item: ItemData, pmt: ItemPMT, sign: 1 | -1): void {
+export function applyItem(b: CandidateBlocks, item: ItemData, pmt: ItemPMT, sign: 1 | -1, ctx: SetContext | null = null): void {
   const d = item.data1;
   if (d[0] === 0) {
     const w = pmt.getWeapon(d[1], d[2]);
     if (!w) return;
     const g2 = 2 * d[3];
-    b.rmin += sign * (w.atpMin + g2);
-    b.rmax += sign * (w.atpMax + g2);
+    // ApplyEquipmentBonuses_005d330c (dump 426168): the weapon's ATP range is scaled by the set
+    // factor and gets the morning glory bonus (ROUND(x * factor + morning)); ATA and MST are not.
+    const f = ctx ? setFactorAtp(item, ctx) : 1;
+    const m = ctx ? morningGloryAtpBonus(item, ctx.beatTime) : 0;
+    b.rmin += sign * roundF(F(F(F(w.atpMin + g2) * F(f)) + m));
+    b.rmax += sign * roundF(F(F(F(w.atpMax + g2) * F(f)) + m));
     b.ataMin += sign * (w.ata * 10 + ataSpecials(d));
     b.mst += sign * w.mst;
     applyOption(b, w.statBoostEntryIndex, pmt, sign);
+    if (ctx) applySetBonuses(item, ctx, b, sign);
     return;
   }
   if (d[0] === 1 && (d[1] === 1 || d[1] === 2)) {
-    // Armour (ApplyWeaponStats_005d4840) and shield (ApplyWeaponStatsVariant_005d4774): the same
-    // numbers with the set factors at 1.0 (ASSUMED).
+    // Armour (ApplyWeaponStats_005d4840, dump 426949): the pmt DFP is ROUND(dfp * setDfp + morning),
+    // the pmt EVP is added as it is. Shield (ApplyWeaponStatsVariant_005d4774, dump 426913): the pmt
+    // EVP is the scaled one (setEvp), the pmt DFP is added as it is.
     const a = (d[1] === 1 ? pmt.armors : pmt.shields)[d[2]];
     if (!a) return;
-    b.resDfp += sign * (a.dfp + s16(d[6], d[7]));
-    b.resEvp += sign * (a.evp + s16(d[8], d[9]));
+    const f = ctx ? (d[1] === 1 ? setFactorDfp(item, ctx) : setFactorEvp(item, ctx)) : 1;
+    const m = ctx ? morningGloryAtpBonus(item, ctx.beatTime) : 0;
+    if (d[1] === 1) {
+      b.resDfp += sign * (roundF(F(F(a.dfp * F(f)) + m)) + s16(d[6], d[7]));
+      b.resEvp += sign * (a.evp + s16(d[8], d[9]));
+    } else {
+      b.resDfp += sign * (a.dfp + s16(d[6], d[7]));
+      b.resEvp += sign * (roundF(F(F(a.evp * F(f)) + m)) + s16(d[8], d[9]));
+    }
     applyOption(b, a.statBoostEntryIndex, pmt, sign);
+    if (ctx) applySetBonuses(item, ctx, b, sign);
     return;
   }
   if (isUnit(item)) applyUnit(b, d, pmt, sign);
+  if (ctx && d[0] === 1 && d[1] === 3) applySetBonuses(item, ctx, b, sign);
 }
 
 // ApplyItemStatBonuses_005d41a0 (dump 426690), a unit: the pmt amount plus the item's modifier
@@ -299,6 +318,354 @@ function applyUnit(b: CandidateBlocks, d: Uint8Array | number[], pmt: ItemPMT, s
     default:
       break;
   }
+}
+
+// ---- Set bonuses, colored rings and the item set bonus (ported 2026-10-25) ----
+// Ghidra (tools/ghidra/decomp.sh) of PsoBB.exe; the dump's community names in brackets. Addresses:
+//   get_equipment_set_bonus            0x005d3584 [dump 426246] dispatch on the candidate: weapon ->
+//                                      ATP factor; armour (sub 1) -> DFP factor; shield (sub 2) -> EVP
+//                                      factor; anything else 1.0 (g_DefaultEquipmentSetBonus 0x0092c4a4).
+//   get_equipment_set_atp_bonus_weapon 0x005d3b54 [dump 426491]
+//   get_equipment_set_dfp_bonus        0x005d3780 [dump 426335]
+//   get_equipment_set_evp_bonus        0x005d35d0 [dump 426273]
+//   colored_ring_matching_boosts       0x005d4afc [dump 427069]: a shield (1, 2) with idx 0x53..0x82.
+//   handle_item_set_bonus              0x005d4c38 [dump 427136]: weapon -> 0x005d583c, armour ->
+//                                      0x005d53ac, shield -> 0x005d4e14, unit 'P' (0x50) -> the table
+//                                      DAT_0092c280 (proof_of_sword_saint_weapons, 27 triples).
+//   morning_glory_atp_bonus            0x005d3f70 [dump 426ff]
+// Callers: ApplyEquipmentBonuses_005d330c (dump 426168) runs the set factor (weapon / armour /
+// shield), the option row, colored_ring_matching_boosts and handle_item_set_bonus, in that order.
+// The Ghidra decompile reads the worn items through FUN_0069792c(slot) (the current player); the
+// dump reads the party loop through each player's equipment, so the party loop follows the dump.
+// Equipment slots (dump 89169): mag 1, armor 2, shield 3, weapon 6, unit1..unit4 9..12.
+// Item bytes: data1[0] type, [1] sub (group_2), [2] index (group_idx), [3] grind.
+//
+// The float constants are the exe's (tools/exedata.py read 0092c440 f 28), named by their Ghidra address.
+// Each is a float32, so Math.fround gives the same value; products are float32 (F).
+const F = (x: number): number => Math.fround(x);
+const roundF = (x: number): number => roundHalfEven(x);
+const SET_F = {
+  one: F(1.0), // 0x0092c470 / 0x0092c490 / 0x0092c4a0 / 0x0092c4a4
+  atpArmourSet: F(1.5), // 0x0092c468: weapon sub 1 idx 5 with shield 0x26 + armour 0x28, and the other set pairs
+  atpSet1_3: F(1.3), // 0x0092c46c: armour 0x40 (x) / 0x45 / 0x56 with the matching weapon
+  atpShieldSet: F(2.0), // 0x0092c464: weapon sub 0x1a with a shield 0x1a
+  atpLow: F(0.5), // 0x0092c460
+  atpGalatine: [F(0.33), F(0.5), F(1.0), F(2.0), F(3.0)] as const, // 0x0092c458 / 0x460 / 470 / 464 / 45c
+  atpNearby: [F(1.15), F(1.2), F(1.25)] as const, // 0x0092c44c / 0x450 / 0x454 (armour 0x45 with 1..3 players)
+  dfpArmourSet: F(1.2), // 0x0092c478
+  dfpSwordShield: F(1.5), // 0x0092c47c
+  dfpHoneycombMoving: F(0.5), // 0x0092c474
+  dfpSweetheart: [F(0.85), F(0.8), F(0.75)] as const, // 0x0092c484 / 0x488 / 0x48c (1..3 nearby)
+  dfpShield2A: F(1.1), // 0x0092c480
+  evpSwordShield: F(2.0), // 0x0092c494 (weapon sub 0x1a)
+  evpSaberArmour: F(1.5), // 0x0092c49c
+  evpNoMovement: F(0.5), // 0x0092c498
+  morningBase: 0, // 0x0092c448
+};
+
+// The worn state and the inputs the exe reads from the game (none of them is in the save).
+export interface SetContext {
+  worn: WornEquipment;
+  beatTime: number; // get_beat_time (FUN_0077bab4): the clock behind galatine and morning glory
+  nearby: number; // count_nearby_players (FUN_005e27a8): the teammates close by
+  barrier: number; // barrier_player_proximity_check (FUN_005e26dc): the colored ring count
+  party: readonly number[]; // the armour index of each party member (the DFP 0x18..0x1a loop)
+  movement: number; // player +0x328, the movement bits (standing = 0x2, moving = 0x1e & ~0x2)
+}
+
+// The compare list has no beat time, no other players and no movement state in the save, so the
+// defaults are ASSUMED: beat 0, nobody nearby, no colored ring count, the party is the worn armour
+// (the player's own), and the player stands still.
+export function defaultSetContext(worn: WornEquipment): SetContext {
+  return {
+    worn,
+    beatTime: 0,
+    nearby: 0,
+    barrier: 0,
+    party: worn.armour ? [worn.armour.data1[2]] : [],
+    movement: 0x2,
+  };
+}
+
+// The movement bits at player +0x328: standing 0x2; the 0x1e mask is running | unknown | walking | standing.
+const STANDING = 0x2;
+
+// A worn item's group_2 / index, -1 when the slot is empty (no compare matches -1).
+const slotByte = (it: ItemData | null | undefined, i: number): number => (it ? it.data1[i] : -1);
+
+// morning_glory_atp_bonus (FUN_005d3f70): only an item whose sub is 0x94 gets the beat-time term,
+// ((beat >> 1) >>> 30) + beat) >> 2; otherwise the base 0.0 (0x0092c448).
+export function morningGloryAtpBonus(item: ItemData, beatTime: number): number {
+  if (item.data1[1] !== 0x94) return SET_F.morningBase;
+  return ((((beatTime >> 1) >>> 30) + beatTime) >> 2);
+}
+
+// get_equipment_set_atp_bonus_weapon (FUN_005d3b54). The galatine (sub 1, idx 8) factor is a
+// ladder on the beat time: the exe's && chain leaves the last assigned value at each step.
+function galatineFactor(t: number): number {
+  const g = SET_F.atpGalatine;
+  if (t <= 124) return g[0];
+  if (t <= 249) return g[1];
+  if (t <= 374) return g[2];
+  if (t <= 499) return g[3];
+  if (t <= 624) return g[4];
+  if (t <= 749) return g[3];
+  if (t < 875) return g[2];
+  return g[1];
+}
+
+export function setFactorAtp(item: ItemData, ctx: SetContext): number {
+  const d = item.data1;
+  const { worn } = ctx;
+  const shield = slotByte(worn.shield, 2);
+  const armour = slotByte(worn.armour, 2);
+  const weapon = d[2];
+  let f = SET_F.one;
+  if (d[1] === 1) {
+    if (d[2] === 5) {
+      if (shield === 0x26 && armour === 0x28) f = SET_F.atpArmourSet;
+    } else if (d[2] === 8) {
+      f = galatineFactor(ctx.beatTime);
+    }
+  } else if (d[1] === 2) {
+    if (d[2] === 5 && shield === 0x24 && armour === 0x26) f = SET_F.atpArmourSet;
+  } else if (d[1] === 6) {
+    if (d[2] === 6 && shield === 0x25 && armour === 0x27) f = SET_F.atpArmourSet;
+  } else if (d[1] === 0x1a) {
+    if (shield === 0x1a) f = SET_F.atpShieldSet;
+  } else if (d[1] === 0x2d || d[1] === 0x39 || d[1] === 0x41) {
+    if (armour === 0x40) f = SET_F.atpSet1_3;
+    else if (armour === 0x50) f = SET_F.atpArmourSet;
+  } else if (d[1] === 5) {
+    if (armour === 0x41 && weapon > 4 && weapon < 8) f = SET_F.atpArmourSet;
+  } else if (d[1] === 0x99) {
+    if (armour === 0x45) f = SET_F.atpSet1_3;
+  } else if (d[1] === 0x10) {
+    if (armour === 0x56 && weapon < 7) f = SET_F.atpSet1_3;
+  }
+  // The sweetheart armour (0x45) multiplies by the teammates close by (after the weapon branch).
+  if (armour === 0x45) {
+    if (ctx.nearby === 1) f = F(f * SET_F.atpNearby[0]);
+    else if (ctx.nearby === 2) f = F(f * SET_F.atpNearby[1]);
+    else if (ctx.nearby === 3) f = F(f * SET_F.atpNearby[2]);
+  }
+  return f;
+}
+
+// get_equipment_set_dfp_bonus (FUN_005d3780, dump 426335): the armour's DFP factor.
+export function setFactorDfp(item: ItemData, ctx: SetContext): number {
+  const { worn } = ctx;
+  const shield = slotByte(worn.shield, 2);
+  const weaponSub = slotByte(worn.weapon, 1);
+  const weaponIdx = slotByte(worn.weapon, 2);
+  const party = (set: readonly number[]) => ctx.party.some((i) => set.includes(i));
+  let f = SET_F.one;
+  switch (item.data1[2]) {
+    case 0x18:
+      if (party([0x19, 0x1a])) f = SET_F.dfpArmourSet;
+      break;
+    case 0x19:
+      if (party([0x1a, 0x18])) f = SET_F.dfpArmourSet;
+      break;
+    case 0x1a:
+      if (party([0x19, 0x18])) f = SET_F.dfpArmourSet;
+      break;
+    case 0x26:
+      if (weaponSub === 2 && weaponIdx === 5 && shield === 0x24) f = SET_F.dfpSwordShield;
+      break;
+    case 0x27:
+      if (weaponSub === 6 && weaponIdx === 6 && shield === 0x25) f = SET_F.dfpSwordShield;
+      break;
+    case 0x28:
+      if (weaponSub === 1 && weaponIdx === 5 && shield === 0x26) f = SET_F.dfpSwordShield;
+      break;
+    case 0x2d:
+      if (ctx.nearby !== 0) f = SET_F.dfpSwordShield;
+      break;
+    case 0x45:
+      if (ctx.nearby === 1) f = SET_F.dfpSweetheart[0];
+      else if (ctx.nearby === 2) f = SET_F.dfpSweetheart[1];
+      else if (ctx.nearby === 3) f = SET_F.dfpSweetheart[2];
+      if (shield === 0x2a) f = SET_F.dfpShield2A;
+      break;
+    default:
+      break;
+  }
+  // The honeycomb reflector (shield 0x92) overrides the factor while the player is not standing.
+  if (shield === 0x92 && (ctx.movement & STANDING) === 0) {
+    f = (ctx.movement & 0x1e) !== 0 ? SET_F.one : SET_F.dfpHoneycombMoving;
+  }
+  return f;
+}
+
+// get_equipment_set_evp_bonus (FUN_005d35d0, dump 426273): the shield's EVP factor.
+export function setFactorEvp(item: ItemData, ctx: SetContext): number {
+  const { worn } = ctx;
+  const armour = slotByte(worn.armour, 2);
+  const weaponSub = slotByte(worn.weapon, 1);
+  const weaponIdx = slotByte(worn.weapon, 2);
+  let f = SET_F.one;
+  switch (item.data1[2]) {
+    case 0x1a:
+      if (weaponSub === 0x1a) f = SET_F.evpSwordShield;
+      break;
+    case 0x26:
+      if (weaponSub === 1 && weaponIdx === 5 && armour === 0x28) f = SET_F.evpSaberArmour;
+      break;
+    case 0x24:
+      if (weaponSub === 2 && weaponIdx === 5 && armour === 0x26) f = SET_F.evpSaberArmour;
+      break;
+    case 0x25:
+      if (weaponSub === 6 && weaponIdx === 6 && armour === 0x27) f = SET_F.evpSaberArmour;
+      break;
+    case 0x92:
+      // g_EquipmentSetBonus_SaberArmor (1.5) while standing, else NoMovement (0.5) when still and 1.0 when moving.
+      if ((ctx.movement & STANDING) !== 0) f = SET_F.evpSaberArmour;
+      else f = (ctx.movement & 0x1e) !== 0 ? SET_F.one : SET_F.evpNoMovement;
+      break;
+    default:
+      break;
+  }
+  return f;
+}
+
+// colored_ring_matching_boosts (FUN_005d4afc, dump 427069): shields 0x53..0x82 scale their effect
+// with the colored ring count (barrier_player_proximity_check) by a table of 8 weights on
+// (idx - 0x53) & 7. Writes go into t (the caller adds them with its sign).
+const RING_WEIGHT = [0, 50, 25, 25, 100, 50, 50, 10] as const;
+export function applyColoredRing(item: ItemData, barrier: number, t: CandidateBlocks): void {
+  const d = item.data1;
+  if (!(d[0] === 1 && d[1] === 2 && d[2] > 0x52 && d[2] < 0x83)) return;
+  const k = (d[2] - 0x53) & 7;
+  const s = barrier * RING_WEIGHT[k];
+  switch (k) {
+    case 1: t.resDfp += s; break; // resist dword +0x1c (DFP)
+    case 2: t.resEvp += s; break; // resist [0] (EVP)
+    case 3: t.lck += s; break; // stat [6]
+    case 4: t.ataMin += s; break; // range [2] (ATA, tenths)
+    case 5: t.rmin += s; t.rmax += s; break; // range [0], [1] (ATP)
+    case 6: t.mst += s; break; // stat [1]
+    default: break; // 0: nothing; 7: the elemental resists [1..5], not compared
+  }
+}
+
+// handle_item_set_bonus (FUN_005d4c38, dump 427136) and its handlers. Only the branches whose
+// effect is a stat or the compared resist (DFP / EVP) and whose condition is in the worn slots
+// are ported. Not ported (ASSUMED no effect in the compare): the branches that write the
+// elemental resists [1..5] (weapon 0xc5 / 0xac, armour 0x9b, shield 0x9b / 0x93 / 0x2a's armour
+// part, mag 'D'); the branches gated on param_6 (the float writes and the stat of a 0xe / 0xc
+// slot, null in PlayerRecalculateStats); the armour 0x55 and the shield 0x95 (table FUN_00797790,
+// the player's +0xeb4 and the DAT_00aaacc4.. set table); the weapon-misc tail (party table).
+const PROOF_OF_SWORD_SAINT: readonly (readonly [number, number, number])[] = [
+  [0x00, 0x03, 0x09], [0x00, 0x89, 0x00], [0x00, 0x89, 0x01], [0x00, 0x89, 0x02], [0x00, 0x89, 0x03],
+  [0x00, 0xb8, 0x00], [0x00, 0x10, 0x00], [0x00, 0x10, 0x07], [0x00, 0x8a, 0x00], [0x00, 0x8a, 0x01],
+  [0x00, 0x8a, 0x02], [0x00, 0x29, 0x00], [0x00, 0xb6, 0x00], [0x00, 0xb7, 0x00], [0x00, 0xc6, 0x00],
+  [0x00, 0xc7, 0x00], [0x00, 0x01, 0x06], [0x00, 0x01, 0x07], [0x00, 0x01, 0x08], [0x00, 0x2d, 0x00],
+  [0x00, 0x1a, 0x00], [0x00, 0x2c, 0x00], [0x00, 0x1f, 0x00], [0x00, 0x27, 0x00], [0x00, 0xb4, 0x00],
+  [0x00, 0xac, 0x00], [0x00, 0xb9, 0x00],
+];
+
+// handle_weapon_misc_set_bonus (FUN_005d583c): keyed by the candidate weapon's sub (d[1]).
+function weaponMiscSetBonus(d: Uint8Array | number[], ctx: SetContext, t: CandidateBlocks): void {
+  const { worn } = ctx;
+  const sub = d[1];
+  if (sub === 0x06) {
+    // The mag slot (1) with sub 'H' (0x48) and the weapon index 8: LCK +100.
+    if (d[2] === 8 && worn.mag && worn.mag.data1[1] === 0x48) t.lck += 100;
+  } else if (sub === 0xb4) {
+    // A unit 'H' in the unit slots: ATA range +300 (once).
+    if (worn.units.some((u) => u.data1[0] === 1 && u.data1[1] === 3 && u.data1[2] === 0x48)) t.ataMin += 300;
+  } else if (sub === 0xbf) {
+    // The shield 0x87 (1, 2): ATP range +30.
+    const s = worn.shield;
+    if (s && s.data1[0] === 1 && s.data1[1] === 2 && s.data1[2] === 0x87) {
+      t.rmin += 30;
+      t.rmax += 30;
+    }
+  }
+}
+
+// handle_frame_weapon_set_bonus (FUN_005d53ac): keyed by the candidate armour's index (d[2]); the
+// weapon in slot 6 is the condition. Case 0x55 is not ported (see the header note above).
+function frameWeaponSetBonus(idx: number, ctx: SetContext, t: CandidateBlocks): void {
+  const sub = slotByte(ctx.worn.weapon, 1);
+  const wi = slotByte(ctx.worn.weapon, 2);
+  switch (idx) {
+    case 0x37:
+      if (sub === 0x94) { t.rmin += 150; t.rmax += 150; t.ataMin += 100; }
+      break;
+    case 0x3b:
+      if ((sub === 0x89 && wi === 3) || (sub === 0x8a && wi < 3)) { t.rmin += 100; t.rmax += 100; t.ataMin += 100; }
+      break;
+    case 0x40:
+      if (sub === 0x2d || sub === 0x39 || sub === 0x41) t.ataMin += 150;
+      break;
+    case 0x41:
+      if (sub === 0x05 && wi > 4 && wi < 8) t.ataMin += 300;
+      break;
+    case 0x45:
+      if (sub === 0x99) t.ataMin += 120;
+      break;
+    case 0x50:
+      if (sub === 0x2d || sub === 0x39 || sub === 0x41) t.ataMin += 220;
+      break;
+    case 0x56:
+      if (sub === 0x10 && wi < 7) t.ataMin += 200;
+      break;
+    default:
+      break;
+  }
+}
+
+// handle_barrier_and_weapon_set_bonus (FUN_005d4e14): keyed by the candidate shield's index (d[2]).
+function barrierWeaponSetBonus(idx: number, ctx: SetContext, t: CandidateBlocks): void {
+  const sub = slotByte(ctx.worn.weapon, 1);
+  const wi = slotByte(ctx.worn.weapon, 2);
+  if (idx === 0x2a) {
+    if (sub === 0x14 && wi === 1) t.ataMin += 300;
+  } else if (idx === 0x85) {
+    // The weapon's sub decides; the ATA range goes down for 0x07 items by their index.
+    if (sub === 0x65 || (sub >= 0x6a && sub <= 0x6c)) {
+      t.ataMin += 300;
+    } else if (sub === 0x07) {
+      if (wi === 8) { t.ataMin -= 200; t.resDfp -= 10; }
+      else if (wi >= 9 && wi <= 0xc) t.ataMin -= 200;
+      else if (wi === 0xd) t.ataMin -= 300;
+    }
+  } else if (idx === 0x87) {
+    if (sub === 0xbf) t.resEvp += 50;
+  }
+}
+
+// PlayerRecalculateStats' candidate also runs handle_item_set_bonus for a unit 'P' (0x50): the worn
+// weapon in the table gives ATA range +300, EVP +60 and DFP -20.
+function proofOfSwordSaint(ctx: SetContext, t: CandidateBlocks): void {
+  const w = ctx.worn.weapon;
+  if (!w) return;
+  const d = w.data1;
+  if (PROOF_OF_SWORD_SAINT.some(([a, b, c]) => d[0] === a && d[1] === b && d[2] === c)) {
+    t.ataMin += 300;
+    t.resEvp += 60;
+    t.resDfp -= 20;
+  }
+}
+
+// The colored ring and the item set bonus for one candidate (both run for every item in
+// ApplyEquipmentBonuses_005d330c). Writes into t; the caller adds t with its sign.
+export function itemSetBonusDelta(item: ItemData, ctx: SetContext): CandidateBlocks {
+  const t = zeroBlocks();
+  const d = item.data1;
+  applyColoredRing(item, ctx.barrier, t);
+  if (d[0] === 0) weaponMiscSetBonus(d, ctx, t);
+  else if (d[0] === 1 && d[1] === 1) frameWeaponSetBonus(d[2], ctx, t);
+  else if (d[0] === 1 && d[1] === 2) barrierWeaponSetBonus(d[2], ctx, t);
+  else if (d[0] === 1 && d[1] === 3 && d[2] === 0x50) proofOfSwordSaint(ctx, t);
+  return t;
+}
+
+function applySetBonuses(item: ItemData, ctx: SetContext, b: CandidateBlocks, sign: 1 | -1): void {
+  const t = itemSetBonusDelta(item, ctx);
+  for (const k of Object.keys(t) as (keyof CandidateBlocks)[]) b[k] += sign * t[k];
 }
 
 // One item's stat-block contribution (stat [0] ATP, [1] MST, [5] ATA): what ApplyEquipmentBonuses_005d330c
@@ -344,7 +711,8 @@ export function magStatContribution(item: ItemData): { atp: number; mst: number;
 export function blocksFromFile(file: CompareStats, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateBlocks {
   const cls = PLAYER_CLASS_ATTACK[charClass] ?? PLAYER_CLASS_ATTACK[0];
   const wz = zeroBlocks();
-  for (const it of [worn.weapon, worn.armour, worn.shield, ...worn.units]) if (it) applyItem(wz, it, pmt, 1);
+  const ctx = defaultSetContext(worn);
+  for (const it of [worn.weapon, worn.armour, worn.shield, ...worn.units]) if (it) applyItem(wz, it, pmt, 1, ctx);
   return {
     atp: file.atp,
     mst: file.mst,
@@ -399,13 +767,14 @@ function clampToClass(s: CandidateBlocks, charClass: number): void {
 // six values.
 export function recalculateCandidate(file: CompareStats, item: ItemData, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateStats {
   const s = blocksFromFile(file, worn, charClass, pmt);
+  const ctx = defaultSetContext(worn);
   const slot = compareSlot(item);
   const old = slot ? worn[slot] : null;
   if (old) {
-    applyItem(s, old, pmt, -1);
-    if (isArmour(old)) for (const u of worn.units) applyItem(s, u, pmt, -1);
+    applyItem(s, old, pmt, -1, ctx);
+    if (isArmour(old)) for (const u of worn.units) applyItem(s, u, pmt, -1, ctx);
   }
-  applyItem(s, item, pmt, 1);
+  applyItem(s, item, pmt, 1, ctx);
   clampToClass(s, charClass);
   return challengeOutputs(s);
 }
@@ -415,8 +784,9 @@ export function recalculateCandidate(file: CompareStats, item: ItemData, worn: W
 // CalculateChallengeDamage.
 export function equippedCandidate(file: CompareStats, item: ItemData, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateStats {
   const s = blocksFromFile(file, worn, charClass, pmt);
-  applyItem(s, item, pmt, -1);
-  if (isArmour(item)) for (const u of worn.units) applyItem(s, u, pmt, -1);
+  const ctx = defaultSetContext(worn);
+  applyItem(s, item, pmt, -1, ctx);
+  if (isArmour(item)) for (const u of worn.units) applyItem(s, u, pmt, -1, ctx);
   return challengeOutputs(s);
 }
 
