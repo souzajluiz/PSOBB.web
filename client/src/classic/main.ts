@@ -11,7 +11,7 @@ import { Game, type GameListEntry } from '../net/game.ts';
 import type { BBConnection } from '../net/bbconnection.ts';
 import type { Lobby } from '../net/lobby.ts';
 import type { GuildCardSearchResult } from '../net/guildcard.ts';
-import { exchangeTeamPointsPayload, inviteSubcommand, membershipFromSave, NO_TEAM, TEAM_INVITE_ACCEPT, TEAM_POINTS_SUB, TeamClient } from '../net/team.ts';
+import { exchangeTeamPointsPayload, inviteSubcommand, membershipFromSave, NO_TEAM, TEAM_INVITE_ACCEPT, TEAM_INVITE_DECLINE, TEAM_POINTS_SUB, TeamClient } from '../net/team.ts';
 import { InventoryModel } from '../net/items.ts';
 import { TeamChat } from './teamchat.ts';
 import { GameView } from '../render/gameview.ts';
@@ -502,6 +502,8 @@ async function main(): Promise<void> {
       },
       // Team Invite (0x29): the lobby's team info rows (14EA -> 15EA).
       nearby: async () => (await c.nearby()).map((r) => ({ name: r.name, guildCard: r.guildCard })),
+      // The own team's name for the Invite's team-full text (unitxt 0x152).
+      teamName: () => c.membership.name,
       // Team Invite (0x29), state 3..6: the picked card's client id (the lobby's player list) gets the
       // 6xC1 (0x62 relay); the invitee's 6xC2 answer decides: accept -> 03EA with the answer's card
       // and the 04EA flag; any other answer is a decline. The card the row carries is the one sent.
@@ -511,7 +513,9 @@ async function main(): Promise<void> {
         const answer = owner.waitInviteAnswer();
         conn.send(0x62, target.clientId, inviteSubcommand({ selfId: owner.selfId, name: owner.self?.name ?? '', teamName: c.membership.name }));
         const a = await answer;
-        if (a.action !== TEAM_INVITE_ACCEPT) return 'declined';
+        // 3 is the decline (state 5); any other answer is state 8, the failed text (0x153).
+        if (a.action === TEAM_INVITE_DECLINE) return 'declined';
+        if (a.action !== TEAM_INVITE_ACCEPT) return 'failed';
         const flag = await c.addMember(a.guildCard);
         if (flag === 0) return 'joined';
         return flag === 5 ? 'full' : 'failed'; // 04EA: 0 ok, 5 full, other error (net/team.ts)

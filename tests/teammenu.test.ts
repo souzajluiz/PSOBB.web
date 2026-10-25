@@ -910,7 +910,8 @@ async function openMaster(h: TeamHost) {
   inv.key(k('Escape'));
   eq(inv.open, true, 'Cancel is ignored while the answer is pending (ASSUMED)');
   await flush();
-  eq([inv.open, inv.pending], [false, false], 'a declined answer closes the window');
+  eq([inv.open, inv.pending, inv.shown], [true, false, 'T11[14d]'], 'a declined answer shows its message (the window stays open)');
+  eq([inv.key(k('Enter')), inv.open], [false, false], 'Enter on the message closes the window');
 
   // Cancel closes the list with no invite.
   const quiet = new TeamInviteWindow(host, t11);
@@ -931,6 +932,93 @@ async function openMaster(h: TeamHost) {
   inv.close();
   inv.draw(ctx, skin, 0);
   check(true, 'Invite draw smoke');
+}
+
+// --- Home menu > Team > Invite: the inviter's message box (unitxt 11, the exe's states 3..9) ----
+{
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  const texts: Record<number, string> = {
+    0x14c: 'Now inviting %s.',
+    0x14d: '%s',
+    0x150: 'has agreed to join',
+    0x152: 'Team [%s] is already full.',
+    0x153: 'Invitation failed.',
+  };
+  const tx = (i: number) => texts[i] ?? `?${i.toString(16)}`;
+  let settle: ((o: 'joined' | 'full' | 'failed' | 'declined' | 'absent') => void) | null = null;
+  let sent = 0;
+  const host = {
+    nearby: async () => [
+      { name: 'Ann', guildCard: 7 },
+      { name: 'Bo', guildCard: 9 },
+    ],
+    invite: (_gc: number) => {
+      sent++;
+      return new Promise<'joined' | 'full' | 'failed' | 'declined' | 'absent'>((r) => {
+        settle = r;
+      });
+    },
+    teamName: () => 'Blue',
+  };
+  const answer = async (o: 'joined' | 'full' | 'failed' | 'declined' | 'absent') => {
+    settle?.(o);
+    await flush();
+  };
+  const open = async () => {
+    const w = new TeamInviteWindow(host, tx);
+    w.show();
+    await flush();
+    return w;
+  };
+
+  // Sent: the row's name goes into the sent text while the answer is awaited (state 3..4).
+  let w = await open();
+  w.key(k('Enter'));
+  eq([w.pending, w.shown, sent], [true, 'Now inviting Ann.', 1], 'Enter on Ann: the sent text (0x14c) shows while waiting');
+  await answer('declined');
+  eq([w.pending, w.open, w.shown], [false, true, 'Ann'], 'declined (3): the name text (0x14d) with the invitee name');
+  w.key(k('Enter'));
+  eq(w.open, false, 'decide closes the declined message');
+
+  w = await open();
+  w.key(k('Enter'));
+  await answer('joined');
+  eq(w.shown, 'has agreed to join', 'joined (04EA 0): the agreed text (0x150)');
+  w.key(k('Enter'));
+  eq(w.open, false, 'decide closes the joined message');
+
+  w = await open();
+  w.key(k('ArrowDown'));
+  w.key(k('Enter'));
+  await answer('full');
+  eq(w.shown, 'Team [Blue] is already full.', 'full (04EA 5): the own team name in the full text (0x152)');
+
+  w = await open();
+  w.key(k('Enter'));
+  await answer('failed');
+  eq(w.shown, 'Invitation failed.', 'failed (other 04EA flag, or another 6xC2 answer): 0x153');
+
+  w = await open();
+  w.key(k('Enter'));
+  await answer('absent');
+  eq(w.shown, 'Invitation failed.', 'absent (no such player): 0x153 as the exe state 8');
+
+  // Idle: the list counter (DAT_00973a48 = 300) past 300 frames shows the failed text.
+  w = await open();
+  for (let i = 0; i < 300; i++) w.tick();
+  eq([w.open, w.shown], [true, ''], '300 idle frames: the list is still open');
+  w.tick();
+  eq(w.shown, 'Invitation failed.', 'the 301st idle frame: the failed text (state 8)');
+  w.key(k('Enter'));
+  eq(w.open, false, 'decide closes the idle message');
+
+  const skin = { frame: {} as CanvasImageSource, bars: {} as CanvasImageSource };
+  w = await open();
+  w.draw(ctx, skin, 0);
+  w.key(k('Enter'));
+  await answer('declined');
+  w.draw(ctx, skin, 0);
+  check(true, 'Invite message draw smoke');
 }
 
 // --- Home menu > Team > Point Regist (0x2d): the items, the amount, Yes / No and the 6xCC -------

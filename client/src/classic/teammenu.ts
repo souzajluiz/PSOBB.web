@@ -65,7 +65,8 @@
 // decoded; the row is greyed here), Buying Privileges / Team Flag Records (the
 // 19EA / 1AEA / 1BEA / 0FEA packets exist in net/team.ts, the windows do not),
 // the Home menu's Invite (0x29) and Point Regist (0x2d) are in the Home leaves, see the
-// TeamInviteWindow and TeamPointWindow sections below (their message texts are not identified),
+// TeamInviteWindow and TeamPointWindow sections below (the Invite's texts are unitxt group 11, the
+// invitee's prompt its own; see the DEVLOG 2026-10-25 entries),
 // the team chat line, the banned-name check (ValidatePlayerName 0x00819f28 against the 90
 // strings of banned_names_list; the server is the only check here).
 // ASSUMED (undecodable from the dump): the width of the master menu and of the
@@ -182,6 +183,8 @@ export interface TeamHost {
   // (6xC1, the answer 6xC2, then 03EA / 04EA; see net/team.ts). Optional: a host without them has no Invite.
   nearby?(): Promise<TeamInviteRow[]>;
   invite?(guildCard: number): Promise<TeamInviteOutcome>;
+  // The own team's name for the Invite's team-full text (unitxt 0x152).
+  teamName?(): string;
   // The invitee's add-member result (04EA) after an accept (TeamInviteAnswerWindow); null when none came.
   joinResult?(): Promise<number | null>;
   // Point Regist (0x2d, TeamPointWindow): the 6xCC exchange (the local inventory loses the amount).
@@ -1307,35 +1310,71 @@ export class TeamLogWindow {
 // 0x0074c964). Its list is titled unitxt (11, 0x15a) at get_gui_position(0x15) = (13, 256) and
 // its rows are the team info records of the 15EA answer (ChallengeMenuListWindow_UpdateItems_0074d37c:
 // stride 0x85C, name at +0x3c, guild card at +0x34), so the window asks 14EA first (ASSUMED: sent
-// when the window opens). A decided row goes to state 3: the picked player's client id is found
-// (the 12 player records), 6xC1 is sent to it (0x62), and the window waits in state 4 for the
-// invitee's 6xC2 answer. 2 = accept: 03EA with the answer's card, then the 04EA result (state 6);
-// 3 = declined (state 5); anything else is the error path (state 8). The messages of those states
-// are per-file strings (FUN_0079317c), not unitxt, and are not identified: the port shows no
-// message and closes the window when the answer comes (ASSUMED). Keys are ignored while the answer
-// is pending (ASSUMED: Cancel too). The list's 300-frame counter (state 2, DAT_00973a48) is not
-// ported (ASSUMED: no idle close).
+// when the window opens). The exe's states (the jump table at 0x00973a00; the state byte at +0x1c):
+//   2  the list is open. A decided row goes on (state 3); the frame counter (DAT_00973a48 = 300.0,
+//      +0x2c, one per frame, no reset) past 300 goes to state 8 (the failed text, below).
+//   3  the picked card is matched to the player (12 slots): 6xC1 sent (0x62 relay to the player's
+//      client id), the message box shows unitxt 0x14c "Now inviting %s." (the picked player's name)
+//      and the window waits for the answer (state 4). No player matched -> state 8.
+//   4  the invitee's 6xC2 answer: 2 accept -> 03EA with the answer's card and state 6; 3 decline ->
+//      state 5; any other answer -> state 8.
+//   5  declined: the box shows unitxt 0x14d "%s" (the invitee's name), then state 10.
+//   6  waits for the add-member result 04EA: 0 -> state 7, 5 -> state 9, other -> state 8.
+//   7  joined: the box shows unitxt 0x150 "has agreed to join"; the name and team fragments
+//      (0x14d, 0x14e, 0x151) go to the team log (not ported, ASSUMED: see the team log window).
+//   8  failed (other answer, absent card, idle time-out): the box shows unitxt 0x153 "Invitation
+//      failed.", a 6xC2 with action 4 is relayed (the target word is 0xffff on the idle path, ASSUMED
+//      no effect), then state 10.
+//   9  team full (04EA 5): the box shows unitxt 0x152 "Team [%s] is already full." (the own team's
+//      name); the second fragment 0x153 is not a row of its own (see Fragments above).
+//   10 the message waits for the decide key (ASSUMED: the same key as the other message boxes), then
+//      the window closes (state 11).
+// Messages are unitxt group 11 read by FUN_0079317c (dump name unitxt_get_group_11_String, which
+// reads unitxt+0x2c), the same table as the invitee's prompt (parseUnitxt, unitxt_j.prs).
+// The message box is get_gui_position(0x8a) = (419, 256) (table 0x00971f40 + 8 * 0x8a) at 206 x 180
+// (the float constants stored for the box's size in states 3..9, ASSUMED to be the box's size).
+// Fragments: the exe appends the second fragment of a text with wcsncat onto a buffer that
+// overlaps the first one, and the row (ListWindowObject_AddItem, 0x0073ae38) is the first buffer;
+// so only the first fragment is a row (ASSUMED from the buffer layout, not run).
+// The exe's CreateItemObject_006dc358 (called before the 0x182..0x185 texts) is a stub that returns
+// 0 (PROVEN, 0x006dc358: xor eax, eax; ret), so its "== 3" branches (0x182, 0x183, 0x184, 0x185) are
+// never taken from this window: the inviter uses the 0x14c..0x153 texts only.
 export const T11_TEAM_INVITE = { title: 0x15a } as const;
 export const TEAM_INVITE_POS = { x: 13, y: 256 } as const; // get_gui_position(0x15), static 0x00971f40 + 8 * 0x15
+export const T11_TEAM_INVITE_MESSAGE = { sent: 0x14c, declined: 0x14d, joined: 0x150, full: 0x152, failed: 0x153 } as const;
+export const TEAM_INVITE_MESSAGE_POS = { x: 419, y: 256, w: 206, h: 180 } as const; // get_gui_position(0x8a) and the box size (ASSUMED)
+export const TEAM_INVITE_IDLE_FRAMES = 300; // DAT_00973a48 (300.0): the list's idle count before the failed text
 
 export interface TeamInviteRow {
   name: string;
   guildCard: number;
 }
 
-// The outcome of one invite: 'joined' (04EA 0), 'full' (04EA 5), 'failed' (other 04EA flag),
-// 'declined' (6xC2 action other than 2), 'absent' (no such player in the lobby, nothing sent).
+// The outcome of one invite: 'joined' (04EA 0), 'full' (04EA 5), 'failed' (other 04EA flag, or a 6xC2
+// answer other than 2 or 3, i.e. state 8), 'declined' (6xC2 action 3), 'absent' (no such player in
+// the lobby, nothing sent; the exe's state 8 shows the failed text too).
 export type TeamInviteOutcome = 'joined' | 'full' | 'failed' | 'declined' | 'absent';
 
 export interface TeamInviteHost {
   nearby(): Promise<TeamInviteRow[]>;
   invite(guildCard: number): Promise<TeamInviteOutcome>;
+  // The own team's name for the team-full text (0x152); '' when the host has none.
+  teamName?(): string;
+}
+
+// The box drawn for a message (the exe's message list: frame, then the text lines).
+export function drawTextBox(ctx: CanvasRenderingContext2D, skin: WindowSkin, text: string, at: { x: number; y: number; w: number; h: number }): void {
+  drawWindowFrame(ctx, skin.frame, at.x, at.y, at.w, at.h);
+  wrapGameText(text, at.w - 2 * INSET).forEach((line, i) => drawGameText(ctx, line, at.x + INSET, at.y + INSET + i * 20));
 }
 
 export class TeamInviteWindow {
   private visible = false;
   private epoch = 0;
   private waiting = false;
+  private idle = 0;
+  // The message box's text (the sent text while waiting, then the outcome); null while the list is shown.
+  private message: string | null = null;
   private list = new PickList([]);
   private readonly host: TeamInviteHost;
   private readonly text: Text;
@@ -1353,10 +1392,17 @@ export class TeamInviteWindow {
     return this.waiting;
   }
 
+  // The message text on screen (the outcome or the sent text), '' when the list is shown.
+  get shown(): string {
+    return this.message ?? '';
+  }
+
   show(): void {
     const epoch = ++this.epoch;
     this.visible = true;
     this.waiting = false;
+    this.idle = 0;
+    this.message = null;
     this.list = new PickList([]);
     this.host
       .nearby()
@@ -1371,12 +1417,27 @@ export class TeamInviteWindow {
     this.epoch++;
     this.visible = false;
     this.waiting = false;
+    this.message = null;
+  }
+
+  // The exe's list counter (state 2): one per frame while no row is decided; past 300 the failed
+  // text is shown (state 8). Not reset by the keys (the exe does not reset +0x2c there).
+  tick(): void {
+    if (!this.visible || this.waiting || this.message !== null) return;
+    if (++this.idle > TEAM_INVITE_IDLE_FRAMES) this.say('failed');
   }
 
   // Returns whether the window is still open.
   key(e: MenuKey): boolean {
     if (!this.visible) return false;
     if (this.waiting) return true;
+    if (this.message !== null) {
+      if (menuKeyOf(e) === 'decide') {
+        this.close();
+        return false;
+      }
+      return true;
+    }
     if (menuKeyOf(e) === 'cancel') {
       this.close();
       return false;
@@ -1385,22 +1446,31 @@ export class TeamInviteWindow {
     const r = this.list.result;
     this.list.result = null;
     const row = this.list.selected;
-    if (r === 'decide' && row?.enabled) this.ask(row.value as number);
+    if (r === 'decide' && row?.enabled) this.ask(row.value as number, row.label);
     return true;
   }
 
-  private ask(guildCard: number): void {
+  private say(outcome: TeamInviteOutcome, name = ''): void {
+    if (outcome === 'declined') this.message = format(this.text(T11_TEAM_INVITE_MESSAGE.declined), name);
+    else if (outcome === 'joined') this.message = this.text(T11_TEAM_INVITE_MESSAGE.joined);
+    else if (outcome === 'full') this.message = format(this.text(T11_TEAM_INVITE_MESSAGE.full), this.host.teamName?.() ?? '');
+    else this.message = this.text(T11_TEAM_INVITE_MESSAGE.failed);
+  }
+
+  private ask(guildCard: number, name: string): void {
     const epoch = ++this.epoch;
     this.waiting = true;
+    this.message = format(this.text(T11_TEAM_INVITE_MESSAGE.sent), name);
     this.host.invite(guildCard).then(
       (outcome) => {
         if (epoch !== this.epoch || !this.visible) return;
-        console.info(`[classic] Team Invite: ${outcome} (not shown: the message strings are not identified)`);
-        this.close();
+        this.waiting = false;
+        this.say(outcome, name);
       },
       () => {
         if (epoch !== this.epoch || !this.visible) return;
-        this.close();
+        this.waiting = false;
+        this.say('failed');
       },
     );
   }
@@ -1409,7 +1479,11 @@ export class TeamInviteWindow {
     if (!this.visible) return;
     ctx.save();
     ctx.translate(extra / 2, 0); // menus follow the counter's centring
-    this.list.draw(ctx, skin, TEAM_INVITE_POS.x, TEAM_INVITE_POS.y, this.text(T11_TEAM_INVITE.title));
+    if (this.message === null) {
+      this.list.draw(ctx, skin, TEAM_INVITE_POS.x, TEAM_INVITE_POS.y, this.text(T11_TEAM_INVITE.title));
+    } else {
+      drawTextBox(ctx, skin, this.message, TEAM_INVITE_MESSAGE_POS);
+    }
     ctx.restore();
   }
 }
@@ -1589,8 +1663,7 @@ export class TeamInviteAnswerWindow {
   }
 
   private box(ctx: CanvasRenderingContext2D, skin: WindowSkin, text: string, at: { x: number; y: number; w: number; h: number }): void {
-    drawWindowFrame(ctx, skin.frame, at.x, at.y, at.w, at.h);
-    wrapGameText(text, at.w - 2 * INSET).forEach((line, i) => drawGameText(ctx, line, at.x + INSET, at.y + INSET + i * 20));
+    drawTextBox(ctx, skin, text, at);
   }
 
   private yesNo(ctx: CanvasRenderingContext2D, skin: WindowSkin, at: { x: number; y: number }): void {
