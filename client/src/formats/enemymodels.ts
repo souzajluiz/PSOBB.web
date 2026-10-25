@@ -1030,8 +1030,14 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // list (unknown_get_njcm_chunks / njtl with index 0), motion row 0 of
     // DAT_009c4478 = motion 0 at 0.5 (mode 1, next 0). The NPC's own registration
     // of the stage NPC array (ids 0x32..0x34) is the enemy's, not drawn here.
+    // The BML choice is the loader's, not the enemy's `pick`: init_hildebear_global_config
+    // (0x00516124, dump .c:296485) tests only `g_CurrentFloor == ultimate` (cmp
+    // [0x00a9cd68], 3 at 0x00516150; g_CurrentFloor is difficulty_level, ultimate = 3),
+    // with no online flag (FUN_00520e6c also needs DAT_009f9860, the enemies' rule)
+    // and no low-detail branch (its two LoadBML calls are the 0x9bb540 / 0x9bb4f0 pair).
     case 0x46: {
-      const bml = pick('bm_ene_bm2_moja.bml', ctx);
+      const moja = BY_BML.get('bm_ene_bm2_moja.bml')!;
+      const bml = moja.ultimate && ctx.difficulty === 3 ? moja.ultimate : moja.bml;
       return spec('TObjNpcMoja', bml, [{ model: 0, motion: loop(0, 0.5) }]);
     }
     // Chaos Bringer NPC (0xa9): factory 0x006074c8, init 0x00607594 with
