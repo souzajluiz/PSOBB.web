@@ -1,5 +1,24 @@
 # Devlog
 
+## 2026-10-25: Non-BB download `.qst` writer (DC / PC / GC command structs)
+
+**Question:** the open-file and write-file commands of a DC / PC / GC `.qst`, online (44 / 13) and download (A6 / A7), byte for byte as newserv writes them, and the download writer hooked up where the online `.qst` writer lives (`packQst`).
+
+**Reference (newserv, `vendor/newserv/src`):**
+- `Quest.cc` `encode_qst_file` (line 1291), `add_open_file_command_t` (1233, the XB overload at 1253), `add_write_file_commands_t` (1269): every open first, then every write; a write's `flag` is `z >> 10` and its size is `sizeof(header) + 0x414`; no alignment outside BB.
+- `Quest.cc` `decode_qst_data` (1191): the version from the first 4 bytes (`BB 58 00 44/A6`, `PC 3C 00 44/A6`, `DC/GC 44/A6 ?? 3C 00`, `XB 44 ?? 54 00`); DC against GC by the open body's type field (> 3 means DC).
+- `CommandFormats.hh`: `S_OpenFile_DC_44_A6` (0x38: name 0x22, u8 type, filename 0x11, size), `S_OpenFile_PC_GC_44_A6` (0x38: name 0x22, u16 type, filename 0x10, size), `S_WriteFile_13_A7` (0x414).
+- `PSOProtocol.hh`: `PSOCommandHeaderPC` (u16 size, u8 cmd, u8 flag), `PSOCommandHeaderDCV3` (u8 cmd, u8 flag, u16 size; DC and GC).
+- `Quest.cc` `encode_download_quest_data` (839): the download payload, which the A6 files carry on DC / PC / GC.
+
+**Finding:** the A6 / A7 `.qst` written before this change used the BB header and plain PRS for every version. For DC / PC / GC newserv's files use the non-BB headers, no alignment, and the PSO V2 payload (`psov2.ts`). The BB A6 files are still plain PRS in the port (ASSUMED; newserv's decoder would treat them as payloads too: open).
+
+**Port:** `client/src/formats/qst.ts`: a per-version layout table (`LAYOUTS`), `qstVersion`, `parseQstFiles` (any version; decodes the DLQ payload of a DC / PC / GC download and returns its seed), `packQstFiles(files, name, download, version)` (a DLQ payload needs the file's seed), `packQst` with `version` and `seeds`. `parseQst` (the BB quest parse) refuses non-BB files. XB is refused. `packQst` now refuses a name that does not fit the field (it was truncated silently).
+
+**Verification:** `node tests/qstnonbb.test.ts` OK. Layout checks read newserv's offsets (headers, open bodies, write sizes, chunk flags, the payload's u32 size and seed, PSO V2 of the stream). With `vendor/newserv/build/newserv`: `encode-qst` output for DC v2, PC and GC, online and download, parses, and our re-pack from newserv's streams and seeds gives its bytes exactly; `decode-qst` reads our download `.qst` and returns our files. `tests/questwrite.test.ts` and `tests/quests.test.ts` still OK (BB unchanged).
+
+**Left open:** XB; the `create_download_quest` language override of the `.bin`; the BB A6 payload (newserv decodes A6 as DLQ on every version); the download-quest menu.
+
 ## 2026-10-24: PSO V2 download payload (non-BB quest writers)
 
 **Question:** the ROADMAP's last quest-writer item is the PSO V2 encrypted download format of DC v2 / PC / GC quests. What does newserv write, and can the port write the cipher and the payload byte-identical to it?
