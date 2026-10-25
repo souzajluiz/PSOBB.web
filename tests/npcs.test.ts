@@ -537,6 +537,10 @@ console.log(`area script: labels without code ${noLabel.join(', ') || 'none'}; $
   const hm = hilde?.parts[0]?.motion;
   check(hm?.index === 0 && Math.abs(hm.speed - 0.5) < 1e-6 && hm.loop === true, `Hildebear NPC motion row 0: motion 0 at 0.5 (${hm?.index}, ${hm?.speed})`);
   check(enemyModelFor(npc(0x46), ctx(1, 3, 0))?.bml === 'bm_ene_bm2_moja_a.bml', 'Hildebear NPC ultimate takes the _a BML');
+  // init_hildebear_global_config (0x00516124): the _a BML on difficulty 3 alone, no online flag, no low branch.
+  check(enemyModelFor(npc(0x46), { ...ctx(1, 3, 0), online: false })?.bml === 'bm_ene_bm2_moja_a.bml', 'Hildebear NPC offline ultimate still takes the _a BML (the exe init has no online test)');
+  check(enemyModelFor(npc(0x46), { ...ctx(1, 0, 0), lowModels: true })?.bml === 'bm_ene_bm2_moja.bml', 'Hildebear NPC on low detail takes the full BML (no low branch in the NPC init)');
+  check(enemyModelFor(npc(0x46), { ...ctx(1, 2, 0), online: true })?.bml === 'bm_ene_bm2_moja.bml', 'Hildebear NPC on very hard takes the base BML');
   // TObjNpcEnemy (0x33): angle.x is the rank of the area's registered id (STAGE_NPC_LISTS).
   // Forest 2 (0x02): 01..0B, 32, 33, 34, 3C, 3D; slot 12 is 0x33 (Hildebear), slot 1 is 0x02 (Booma).
   check(stageNpcIds(0x02)?.length === 16 && stageNpcSlotId(0x02, 12) === 0x33 && stageNpcSlotId(0x02, 16) === null, 'Forest 2 stage NPC list: slot 12 = 0x33');

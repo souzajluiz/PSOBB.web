@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-10-25: NPC Hildebear (0x46) BML: the loader's floor-only ultimate rule, no low branch
+
+**Question:** the ROADMAP "NPCs: drawn now" item listed the NPC Hildebear's BML choice as settled by the enemy's rule (`pick`: ultimate needs the online flag, low detail applies). What does the exe's NPC init do?
+
+**Exe (PsoBB.exe; dump `Psobb.exe-05112026.c`, objdump of `~/Downloads/psobb-client/PsoBB.exe`):**
+- `init_hildebear_global_config` (0x00516124, .c:296485) is the loader the Hildebear NPC init reads (`hildebear_bml_stuff`, InitializeHildebearEnemyObject_0060df14 .c:471320). Its first test is `g_CurrentFloor == ultimate` (dump type `difficulty_level`, `ultimate=3` at .c:86143): objdump at 0x00516150 is `cmp eax, 3` on `[0x00a9cd68]`, `jne 0x5161ac`.
+- The ultimate branch loads `0x009bb540` (`bm_ene_bm2_moja_a.bml`), the other `0x009bb4f0` (`bm_ene_bm2_moja.bml`), both through `LoadBML_005b7a84`. No low-detail call in the function (the two LoadBML sites are the only ones in the excerpt read, DEVLOG 2026-10-23 names the same two).
+- The enemies' ultimate rule is FUN_00520e6c (0x00520e6c): `[0x009f9860]` (online) must be set and `[0x00a9cd68] == 3`. So the NPC does not take the online flag; an offline ultimate floor gives the NPC `_a` and the enemy the base BML.
+
+**Ported:** `formats/enemymodels.ts` `case 0x46`: `_a` on `difficulty === 3` alone, else the base BML (no `online`, no `lowModels`). The 0x33 slot and the enemy Hildebear keep `pick`.
+
+**Still open (ASSUMED):** the 0x33 slot's id and njm (the registrant's table), and the 0x118 open items below.
+
+**Traced for 0x118 (no port):**
+- `ChallengeEntityStateDispatcher_00602c1c` (.c:463444) is the only caller of the 0x118 motion table. States 1 and 2 call `Player__ApplyWeaponAnimationData` with row 0 only (`&DAT_009c2b80 + idx * 0x4c0`). No other call in the dump selects a second row, so the walk row is not in this table. The walk is set elsewhere (not found; the handlers of `+0x32e` 0..3 are read through the object's vtable, `EnemyObjectUpdateAnimation_00606e34` .c:466328). The town walk still stands in (ASSUMED).
+- The 0x118 weapon: state 1 and 2 also equip `g_ChallengeEntityWeaponData[g_CurrentFloor][npc index]` (`InitializeChallengeEntityWeapon_00605304`, .c:465202) when the scene is `logged_in` and the map is safe (`is_current_map_safe`), and the render draws it only when the item asset is loaded (`RenderPlayerChallengeEntities_00605998`). The port draws no weapon for the quest NPC. The per-floor table is not decoded (its entries are pointers to `compact_item_data`), so no port.
+- The texture archive `LoadChallengeEntityData_00605950` loads into obj+0x3ec (`g_pChallengeEntityResourcePath[class]`, the plAsmp file): no reader of +0x3ec is found in the challenge range, so its use stays ASSUMED.
+- The 0x118 vtable is `g_ChallengeEntityVtable` (loaded at 0x00602b6b from 0x009c3e50); the pointer is not in an initialised section of the file, so its entries are not read.
+
+**Tests:** `tests/npcs.test.ts` section 10: the offline ultimate NPC takes `_a`, the low-detail NPC takes the base BML, very hard takes the base BML. `enemies.test.ts` passes; `npcs.test.ts` ALL PASS; client `tsc --noEmit -p .` clean (Node 24). Not run in Chrome.
+
 ## 2026-10-25: Challenge mode left: the material x5 is ported (stale ROADMAP item); the Scape Doll / dead-player rules traced, no port
 
 **Question:** the ROADMAP's Challenge line still lists "the material x5 / Scape Doll / dead-player rules" as open. Which of them can the exe settle with a unit test now?
