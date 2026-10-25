@@ -127,7 +127,8 @@ export class Darvant extends DfEntity {
   timer = 0; // +0x3ac
   clock = 0; // +0x3c0
   // The ring's hit box flag (+0x3B0, bit 0 of the box at +0x38C is set to it each tick) and its
-  // cycle timer (+0x3B4, see DARVANT.boxCycle). ASSUMED: both start at 0.
+  // cycle timer (+0x3B4, see DARVANT.boxCycle). Created by darvantBoxStart; nothing else writes
+  // the timer (no reset on a state change or a hit).
   boxOn = false;
   boxTimer = 0;
   speed = 0.4;
@@ -142,6 +143,17 @@ export class Darvant extends DfEntity {
     if (this.kind === 'ring') return this.boxOn;
     return this.kind === 'spit' || this.st !== DARVANT.rise;
   }
+}
+
+// The box timer a Darvant is created with (exe 0x0045FBD4, the init shared by the ring, the spat
+// and the beam ones): w = the entity index word (+0x1C, "entity_index_small + 4096"), then
+// +0x3B4 = 225 * (2 * (w - 6 * (w / 3)) + 2) by the exe's signed divide (0x0045FDC8..0x0045FDF9),
+// and +0x3B0 = 0. Only w 0, 1 and 2 give a positive start (450, 900, 1350); for w >= 3 (every
+// wire id, 0x1000 + slot) the value is 0 or below, and the first hover tick reloads the timer
+// exactly as a zero start does.
+export function darvantBoxStart(w: number): number {
+  const e = 2 * (w - 6 * Math.trunc(w / 3)) + 2;
+  return 225 * e;
 }
 
 // The cycle of the ring's box (exe 0x0045F25C, the top of the update in states 1 and 2).
@@ -175,6 +187,8 @@ export interface DarkFalzOptions {
   // The party at the time the control is built (+0x398, 1..4).
   partySize: () => number;
   rng: () => number;
+  // The control's entity index word (0x1000 + its slot, render/combat.ts entityId); its Darvants are +1 .. +0x1FD.
+  entityId?: number;
 }
 
 const EMPTY_ROWS: DfRows = { darvant: EMPTY_ROW, df1: EMPTY_ROW, df2: EMPTY_ROW, df3: EMPTY_ROW, darvantFalz: EMPTY_ROW };
@@ -211,6 +225,7 @@ export class DarkFalzAi extends BrainBase implements DfFight {
   private readonly isLeader: () => boolean;
   private readonly self: () => number;
   private readonly rand: () => number;
+  private readonly entityId: number;
   finished = false;
   private killedSent = false;
   readonly cx: number;
@@ -226,6 +241,7 @@ export class DarkFalzAi extends BrainBase implements DfFight {
     this.isLeader = opts.leader;
     this.self = opts.selfId;
     this.rand = opts.rng;
+    this.entityId = opts.entityId ?? 0x1000;
     this.cx = opts.x;
     this.cz = opts.z;
     // The constructor counts the room's players: 0 or more than 4 -> 1.
@@ -333,6 +349,7 @@ export class DarkFalzAi extends BrainBase implements DfFight {
     d.homeZ = z;
     d.speed = kind === 'spit' ? row.f1 || 0.5 : row.f1 || 0.4;
     d.timer = 0;
+    d.boxTimer = darvantBoxStart(this.entityId + id);
     d.born = this.made;
     this.made++;
     this.darvants.push(d);

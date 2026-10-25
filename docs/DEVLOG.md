@@ -14,15 +14,27 @@
 - **Control** (0x0044E5FC): no icon call in its range (0x0044E5FC to 0x0044EB18).
 - **Spat Darvant** (0x0045FF50; its state tails 0x0046013B, 0x00460A02 / 0x00460A8B, 0x00460B15): plain icon 0x805608 when state != 3. No box write in the spat code.
 
+**Timer writers (+0x3B4, objdump of the .text; the coordinator's list).** Only the Darvant's own code is the ring's cycle. The rest of the Dark Falz range belongs to form 3 (its ctor 0x0045E5A0 sets vtable 0x00AF7A60; its table 0x009A6530), where +0x3B4 is `oldFace` and +0x3B0 is `face` (port `DfForm3`):
+- 0x0045C4EA, 0x0045CAC3, 0x0045CED7, 0x0045DF27 (readers): form 3's turn and position code (the angle from `oldFace` / `face`, `FUN_007A900C` / `FUN_007A8C74`).
+- 0x0045D4FC (FUN_0045D4EC): form 3 sets `oldFace` and `face` to the 4-bit slot of its heading (`(0xF800 - yaw) >> 12 & 0xF`).
+- 0x0045E9BF (form 3 ctor FUN_0045E5A0): `oldFace = 0` (eax 0), with `+0x3A8 = +0x3AC = 0x10`.
+- 0x0045EAD8 (FUN_0045EAB0, the packed action unpack): `oldFace = (w >> 15) & 0xF`, `face = (w >> 19) & 0xF`.
+- 0x0045EEC6, 0x0045EF1E (form 3 states that set `to` and `from` to 0x11 = above): `oldFace = face`.
+- 0x0045EF52, 0x0045EF69, 0x0045EFF7: form 3 state functions that store a parameter or a register into `oldFace` (their callers were not traced one by one).
+- Darvant (AF7D60 ring, update 0x0045F25C): 0x0045FDF9 (the factory, init above), 0x0045F2B5 (the cycle's store), 0x0045F5AC (the reset to 0xA8C, with +0x3B0 = 0 at 0x0045F5A2), and the reads 0x0045F2A4 / 0x0045F351 / 0x0045F384 (the cycle and the fade).
+- Spat (AF7EC0, 0x0045FF50) and beam (AF8020, update 0x00460938): no access to +0x3B0 / +0x3B4 at all.
+- Death (0x0045F238): +0x3B0 = 0 only. No writer resets the Darvant timer on a hit or a state change (the rise, the chase entry and the hits do not touch 0x3B4); the only reset is the cycle's own at a negative timer.
+- The beam's class is AF8020 (ctor 0x0045F1D4, factory 0x00460E14), so its box is not the ring's; its box rule is ASSUMED (not traced).
+
 **ASSUMED / open.**
-- The Darvant timer starts at 0 (the ctor 0x0045F160 does not write +0x3B0 / +0x3B4; allocation zeroes them is not traced).
+- Darvant start (proven, see "Timer writers" below): the factory 0x0045FBD4 (shared by the ring, the spat and the beam ones) writes +0x3B0 = 0 and +0x3B4 = 225 * (2 * (w - 6 * (w / 3)) + 2), w = the entity index word (+0x1C, "entity_index_small + 4096", dump struct enemy). Only w 0..2 start positive; every wire id (0x1000 + slot) starts at or below 0, which the first hover tick reloads, so the port's start is exact for them. ASSUMED: the control's wire id is `0x1000 | head.index` (render/combat.ts entityId) and the Darvant's is that + its offset.
 - Form 2's box rule is written against the port's `blend` (= +0x3F0). The port's dead and waiting states keep the old test.
 - Form 1's box: no DF code writes it, so it is treated as on from creation (the port's `awake` / dead / waitKill rule is unchanged). The 0x200 flag's writers in form 1 are not traced.
 - Spat Darvants and beam Darvants: box rule not traced (the beam's class is not confirmed as 0x00AF7D60). They keep the state rule.
 - The control: its box and entity flags are not traced; it stays concealed.
 
 **Port.**
-- `client/src/combat/darkfalz.ts`: `DARVANT.boxCycle` / `boxOnBelow` / `forcedIconColour`; `Darvant.boxOn` / `boxTimer`; `Darvant.targetable` for a ring is `boxOn` (and not dead or gone); `darvantBoxStep` (the cycle, run in hover and chase); `darvantRingIcon` ('forced' / 'plain' / null); `killDarvant` clears `boxOn`.
+- `client/src/combat/darkfalz.ts`: `DARVANT.boxCycle` / `boxOnBelow` / `forcedIconColour`; `Darvant.boxOn` / `boxTimer`; `Darvant.targetable` for a ring is `boxOn` (and not dead or gone); `darvantBoxStart(w)` (the creation init, `Darvant.boxTimer` is set from `DarkFalzOptions.entityId` + the offset); `darvantBoxStep` (the cycle, run in hover and chase); `darvantRingIcon` ('forced' / 'plain' / null); `killDarvant` clears `boxOn`.
 - `client/src/combat/darkfalz2.ts`: `targetable` needs `blend === 0`; `minimapIcons` lists the body's forced 5.0 icon (`F2.bodyIcon`) while the form is there.
 - `client/src/render/combat.ts`: `minimapEnemies` skips the forms 1-3 parts and a ring Darvant that is not 'plain'; `minimapIcons` lists the forced ring icons and no longer gates the form 1 / form 3 icons on death or on `concealed()` (only on the part being drawn).
 - `tests/darkfalz.test.ts`: the cycle (450 on in 2701), the forced / plain / null icon, form 2's hit and body icon, and the Darvant hits now wait for the box window (`clearZako`, the kill loops). The form 2 beam test filters the body icon out of the ball count. The MD_STOP1 check now expects the table's 75 frames (the old +1 was the TYPE1 -> TYPE2 phase, which the longer ZAKO wait moves).

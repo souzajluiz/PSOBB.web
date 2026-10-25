@@ -1345,6 +1345,7 @@ export class CombatView {
             ...at,
             difficulty,
             rows: this.falzRows(params, difficulty),
+            entityId,
             leader: () => this.game.selfId === this.game.leaderId,
             selfId: () => this.game.selfId,
             partySize: () => this.game.players.size,

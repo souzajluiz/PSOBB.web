@@ -9,7 +9,7 @@
 // each form's own rule (DfAnim), tested against the tables' chains.
 //
 // Run: node tests/darkfalz.test.ts
-import { DARVANT, DarkFalzAi, DarkFalzPartAi, Darvant, DF_ID, SCENE, SCENE_NAMES, darvantBoxStep, darvantRingIcon } from '../client/src/combat/darkfalz.ts';
+import { DARVANT, DarkFalzAi, DarkFalzPartAi, Darvant, DF_ID, SCENE, SCENE_NAMES, darvantBoxStart, darvantBoxStep, darvantRingIcon } from '../client/src/combat/darkfalz.ts';
 import { DfForm1, F1, F1_ANIM_ROWS, pickWeighted } from '../client/src/combat/darkfalz1.ts';
 import { DfForm2, F2, F2_ANIM_ROWS } from '../client/src/combat/darkfalz2.ts';
 import { advanceScale, DfForm3, F3, F3_ANIM_ROWS, HomingBolt, f3Spot } from '../client/src/combat/darkfalz3.ts';
@@ -1217,6 +1217,27 @@ function clearZakoBoth(fi: Fight): void {
   d.boxOn = false;
   eq(darvantRingIcon(d), null, 'dead: no icon');
   check(!d.targetable, 'dead: cannot be hit');
+  // The creation init (0x0045FBD4): +0x3B4 = 225 * (2 * (w - 6 * (w / 3)) + 2), w = the entity index
+  // word (0x1000 + slot). Only w 0..2 start positive; a wire id starts at or below 0, which the first
+  // hover tick reloads (the same as a zero start).
+  eq(darvantBoxStart(0), 450, 'init w 0: 450');
+  eq(darvantBoxStart(1), 900, 'init w 1: 900');
+  eq(darvantBoxStart(2), 1350, 'init w 2: 1350');
+  check(darvantBoxStart(0x1000 + 1) <= 0, 'a wire id (0x1001) starts at or below 0');
+  const early = new Darvant(1, 10);
+  early.st = DARVANT.hover;
+  early.boxTimer = darvantBoxStart(0);
+  darvantBoxStep(early);
+  check(early.boxOn, 'init 450: the first hover tick is already in the window (449 < 450)');
+  const late = new Darvant(2, 10);
+  late.st = DARVANT.hover;
+  late.boxTimer = darvantBoxStart(0x1000 + 2);
+  darvantBoxStep(late);
+  check(!late.boxOn && late.boxTimer === DARVANT.boxCycle, 'a wire id: the first hover tick reloads the timer, box off');
+  const fz = fight({ party: 2 });
+  toArena(fz, CASKET.x, CASKET.z);
+  fz.until(() => fz.c.scene === SCENE.zako, 400, 'ZAKO');
+  eq(fz.c.darvants[0].boxTimer, darvantBoxStart(0x1000 + 1), 'the control creates each Darvant with that init');
   // Form 2: the body's hit box is on only at blend 0 (0x00457BD4: +0x3F0 == 0.0), and its forced icon
   // is drawn every live frame (no state gate).
   const fi = fight();
