@@ -167,8 +167,12 @@ export const BOOMA_BRAIN_EXE_STATE: Readonly<Record<string, number>> = {
   attack: 5,
   recover: 5,
   dead: 8,
+  // The Goran's leap (combat/goranai.ts 'warp'): exe state 10.
+  warp: 10,
 };
 export function boomaBrainIconShown(brain: string): boolean {
+  // The Goran's leap (exe state 10, 0x005acb8c): its icon call at 0x005acd6e is unconditional (VERIFIED).
+  if (brain === 'warp') return true;
   const state = BOOMA_BRAIN_EXE_STATE[brain];
   return state === undefined ? true : boomaIconShown(state);
 }
