@@ -1065,6 +1065,18 @@ export class NpcHead {
   }
 }
 
+// The chain's gate (SinowberillChallengePlayer_Update_007aefd4, .c:794696..794747). The character flag
+// dead (0x800, enum character_flags) of the OWNER stops the chain and the 2764 dispatch (.c:794710). The
+// NPC's own dead flag (.c:794711) runs the 0x800 branch (`NpcHead.deadStep`) instead of the normal updates.
+// The 2764 dispatch runs after either branch (the call at .c:794746 is outside the if / else).
+export const CHARACTER_FLAG_DEAD = 0x800;
+export type HeadChainBranch = 'owner-dead' | 'npc-dead' | 'live';
+export function headChainBranch(ownerFlags: number, npcFlags: number): HeadChainBranch {
+  if ((ownerFlags & CHARACTER_FLAG_DEAD) !== 0) return 'owner-dead';
+  if ((npcFlags & CHARACTER_FLAG_DEAD) !== 0) return 'npc-dead';
+  return 'live';
+}
+
 // The state-1 sends read the head's send target: the distance from it to the NPC, and the
 // state. Returns that distance (XZ), or null when the send is not in state 1 (the run flag is
 // then cleared by the caller, NpcMoveSender.reset).

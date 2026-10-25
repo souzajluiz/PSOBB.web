@@ -52,7 +52,7 @@ import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, inUnsafeMap, toBams } from '../render/playermove.ts';
 import { followPoint, headStatusFlags, NO_LEADER, NpcAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, npcCanCastTech, npcWalkFlags, NPC_TP_ASSUMED } from './npcai.ts';
-import { acquireClosestTargets, HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARGET_HIT, HEAD_OWNER_ACQUIRE, HEAD_STATE_ATTACK, HEAD_STATE_CAST, HEAD_STATE_IDLE, HEAD_STOP_DISTANCE, headProbeEnemies, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
+import { acquireClosestTargets, CHARACTER_FLAG_DEAD, headChainBranch, HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARGET_HIT, HEAD_OWNER_ACQUIRE, HEAD_STATE_ATTACK, HEAD_STATE_CAST, HEAD_STATE_IDLE, HEAD_STOP_DISTANCE, headProbeEnemies, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
 import { TECH, techTpCost } from '../combat/techniques.ts';
 import { QuestUi } from './questui.ts';
 import { timerText } from './cmode.ts';
@@ -795,13 +795,14 @@ export class QuestTown {
     const standing = !p.moving;
     // ResetEntityHitboxes_007b34e8 (the tick's bits) runs first, outside the owner's dead test (.c:794709).
     head.resetEntityBits(owner);
-    // The owner's dead flag (0x800 of Q, .c:794719): the chain and the 2764 do nothing, so the NPC does not walk.
-    // The other players' death is not in the port (ASSUMED alive).
-    if (this.ownerDead(leader)) return;
-    // The rest of the chain of SinowberillChallengePlayer_Update_007aefd4 (.c:794690).
-    // The NPC's dead flag (0x800 of B): no port source (ASSUMED alive). With it, the dead branch replaces the chain.
-    const npcDead = false;
-    if (npcDead) {
+    // The chain's gate (headChainBranch, .c:794696..794711). The owner's dead flag (0x800 of Q) stops the chain
+    // and the 2764: the NPC does not walk. The other players' death is not in the port (ASSUMED alive).
+    // The NPC's dead flag (0x800 of B) has no port source (ASSUMED 0, alive), so the dead branch is dormant.
+    const npcFlags = 0; // ASSUMED: the NPC's character flags are not modelled
+    const branch = headChainBranch(this.ownerDead(leader) ? CHARACTER_FLAG_DEAD : 0, npcFlags);
+    if (branch === 'owner-dead') return;
+    if (branch === 'npc-dead') {
+      // The 0x800 branch (deadStep): idle, +0x62 counts, the anchor at the NPC. The 2764 below still runs.
       head.deadStep(npc);
     } else {
       const ownerF90 = combat && leader.clientId === this.game.selfId ? headStatusFlags(combat.npcOwnerStatus()).f90 : 0;
