@@ -512,25 +512,28 @@ for (const n of ['TObjEneMe3StelthReal', 'TObjEneMe3SinowZoaReal', 'TObjEneDelDe
 }
 // A Bulclaw's child slots (newserv: 4 CLAW children).
 const BULCLAW_CLAWS = 4;
-// A hidden Hidoom / Migium, a slime control, or the other split / boss parts: not on the
-// radar, not locked on, not struck, not a technique or confused-enemy target
-// (combat/enemysplits.ts untargetable). Vol Opt's control object, its parts that
-// are not up and its body before the fight are hidden the same way.
-// A Pan Arms and a Pofuilly Slime follow the exe's three rules instead (PanArmsAi / SlimeAi
-// radar / lockable / invulnerable), so the three predicates below read them:
+// A slime control, or the other split / boss parts: not on the radar, not locked on, not struck,
+// not a technique or confused-enemy target (combat/enemysplits.ts untargetable). Vol Opt's control
+// object, its parts that are not up and its body before the fight are hidden the same way.
+// The Pan Arms, its Hidoom / Migium halves and a Pofuilly Slime follow the exe's three rules
+// instead (PanArmsAi / PanHalfAi / SlimeAi radar / lockable / invulnerable), so the three
+// predicates below read them:
 //   - the radar icon: the Pofuilly every frame but the dead one (SinowzoaUpdate_00596104,
 //     `field_0x38c != 0xd`); the Pan Arms while buried or lockable (DerolleUpdateStateTransition
-//     _00580b2c, state != 0 and (+0x3e4 set and state != 4, or state 1));
+//     _00580b2c, state != 0 and (+0x3e4 set and state != 4, or state 1)); a Hidoom / Migium
+//     while state != 0, +0x38c set and state != 7 (FUN_00583eb0, 0x583fb3);
 //   - the lock-on and the technique records only while the lock flag is set (enable_reticle):
-//     +0x3f4 for the slime, +0x3e4 for the Pan Arms;
+//     +0x3f4 for the slime, +0x3e4 for the Pan Arms, +0x38c for the halves;
 //   - the hit only while the box is on: the slime's 0x28 bits (SetEnemyInvulnerableAndImmune);
-//     the Pan Arms' hit is ASSUMED (its own box bits are not traced, see PanArmsAi.invulnerable).
-export const splitRadarOk = (e: { ai: EnemyBrain | null }): boolean => !(e.ai instanceof SlimeAi || e.ai instanceof PanArmsAi) || e.ai.radar;
-export const splitLockOk = (e: { ai: EnemyBrain | null }): boolean => !(e.ai instanceof SlimeAi || e.ai instanceof PanArmsAi) || e.ai.lockable;
-export const splitStruckOk = (e: { ai: EnemyBrain | null }): boolean => !(e.ai instanceof SlimeAi || e.ai instanceof PanArmsAi) || !e.ai.invulnerable;
+//     the halves' bit 0 of the box (+0x384, +0x18); the Pan Arms' hit is ASSUMED (its own box
+//     bits are not traced, see PanArmsAi.invulnerable).
+const isSplitPart = (ai: EnemyBrain | null): boolean => ai instanceof SlimeAi || ai instanceof PanArmsAi || ai instanceof PanHalfAi;
+export const splitRadarOk = (e: { ai: EnemyBrain | null }): boolean => !isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi).radar;
+export const splitLockOk = (e: { ai: EnemyBrain | null }): boolean => !isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi).lockable;
+export const splitStruckOk = (e: { ai: EnemyBrain | null }): boolean => !isSplitPart(e.ai) || !(e.ai as SlimeAi | PanArmsAi | PanHalfAi).invulnerable;
 const techRecordOk = splitLockOk;
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
-  ((e.ai instanceof PanHalfAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
+  (e.ai instanceof SlimeControl && e.ai.untargetable) ||
   ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
   (e.ai instanceof GoldDragonAi && e.ai.untargetable) ||
   (e.ai instanceof DubwitchAi && e.ai.untargetable) ||
