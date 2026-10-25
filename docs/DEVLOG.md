@@ -1,5 +1,27 @@
 # Devlog
 
+## 2026-10-25: The beat clock: get_beat_time is the local clock on a base that the server's B1 sets (UTC+1 with newserv), and the set factors read it
+
+**Question:** the set factors read `get_beat_time` (FUN_0077bab4) and the port used beat 0 everywhere, so live Galatine (weapon 1/8) always rolled the 0.33 step and Morning Glory was always 0.
+
+**Exe (PsoBB.exe, Ephinea addresses; dump `src/Psobb.exe-05112026.c` 752556..752740, the asm from `llvm-objdump`, constants read from the bytes):**
+- `get_beat_time_0077bab4` = `(GetBeatTime_0077b950 / 0xa20) % 1000`. 0xa20 = 2592 frames (30 fps) = 86.4 s = one beat; a day is 1000 beats. Signed division (imul magic for /2592, /1000).
+- `GetBeatTime_0077b950` = `30 * (second + 60 * (minute + 60 * hour)) + g_PhaseTimerBeatTimeBase` (0x00a9b1e8). The clock is `get_time` = `GetLocalTime` (the machine's zone; seconds only).
+- The base is written in two places. `InitializePhaseTimer_0077bc80` sets 0x1a5e00 (1728000 frames = 16 h; no caller found in the dump, ASSUMED to run at start). `HandlePacketBaseBeatTime_0079d89c` (packet 0xB1, handler slot 0x1b) calls `set_base_beat_time_from_packet_b1_0077bb68`: `base = server_frames - local_frames + 0x1a5e0`, folded into [0, 2592000) by the exe's two loops. `0x1a5e0` = 108000 frames = 3600 s, so the B1 base makes the beat Swatch Internet Time (BMT = UTC+1) when the server sends UTC.
+- The B1 string is 24 chars `YYYY:MM:DD: HH:MM:SS.mmm` (`astruct_63`); only hour, minute and second are read (`get_base_beat_time_in_frames_0077bbfc`).
+- newserv `send_server_time` (`SendCommands.cc`) sends gmtime after the 6F join, so with newserv the beat is `(UTC frames + 0x1a5e0) / 2592 mod 1000`, independent of the machine's zone.
+- HUD: the beat is drawn in `RenderChatShortcutMenuTimer_0077b5ac` (3-digit `(GetBeatTime / 0xa20) % 1000` plus the sub-beat bar `% 0xa20`).
+
+**Galatine ladder, checked against the asm of `get_equipment_set_atp_bonus_weapon` 0x005d3b54 (beat branch 0x005d3e78):** beat < 125 0.33 (0x92c458); 125..249 0.5 (0x92c460); 250..374 1.0 (0x92c470); 375..499 2.0 (0x92c464); 500..624 3.0 (0x92c45c); 625..749 2.0; 750..874 1.0; 875+ 0.5. The port's `galatineFactor` already matched; the Ghidra decomp's `g_ATP_*` names are misleading (the asm loads the constants directly). Morning Glory `morning_glory_atp_bonus_005d3f70` = `((beat >> 1) >>> 30 + beat) >> 2` for sub 0x94, base 0.0 otherwise: matches the port.
+
+**Port:**
+- `client/src/combat/beattime.ts` (new): `beatTime(nowMs, base = 0x1a5e00)` is the pure function (local clock of the epoch ms), `beatBaseFromServer` / `parseServerTimeB1` are the B1 path, `setPhaseBaseFromServerTime` holds the one global base, `liveBeatTime(nowMs)` reads it.
+- `net/game.ts` case 0xb1 sets the base from the packet string before the existing 99 answer.
+- `render/combat.ts` `liveSetContext` and `render/fieldhud.ts` (the compare rows and the current row) and `ui/inventoryPanel.ts` pass `liveBeatTime()`. `combat/playerstats.ts`: `defaultSetContext(worn, beatTime = 0)`, and `blocksFromFile` / `displayedStats` / `recalculateCandidate` / `equippedCandidate` take an optional `beatTime` (default 0, so the tests stay deterministic).
+- `tests/beattime.test.ts` (42 checks): the frame arithmetic, the offline base (00:00 -> 666, 12:00 -> 166, 16:00 -> 333), the B1 base with a UTC server at a UTC+4 machine (same beat), the fold, the live follow of the clock, and the galatine ladder and morning glory through the SetContext and the compare.
+
+**ASSUMED:** the purpose of 0x1a5e00 (16 h of frames, offline clock + 16 h) is not proven; no server means the base stays at 0x1a5e00 and the beat follows the local clock. The base is not stored in the save file (newserv's `server_time_delta_frames` at system file +0x08 is 1728000 by default, the same value, but the exe's read/write of it is not found).
+
 ## 2026-10-25: Team invite layout: the 6xC1 invite is built inline, the global-copy sender is the 6xC2 answer
 
 **Question:** the Team Invite port (0x29) was to copy the global 0x00a9c8c0 into the 6xC1 body with +8 = 4. Is that the invite layout?
@@ -95,7 +117,7 @@
 
 **Tests:** `node tests/combatsetatp.test.ts` (10 checks: the matching set 60..70 -> 90..105, the attacker split 95 / spread 20, the applyItem agreement, morning glory at beat 400, galatine at beat 0), `node tests/playerstats.test.ts` (25/25), `NEWSERV=<main>/vendor/newserv node tests/combat.test.ts` (5859, 0 failures), `node tests/combatdepth.test.ts` (836, 0 failures), `node tests/pvp.test.ts` (ALL PASS), `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome.
 
-## 2026-10-25: Equipment compare: the set bonuses, the colored rings and the item set bonus are ported (the compare applies them; the beat time / party / movement inputs are ASSUMED)
+## 2026-10-25: Equipment compare: the set bonuses, the colored rings and the item set bonus are ported (the compare applies them; the party / movement inputs are ASSUMED; the beat time is the exe's clock since 2026-10-25 beat clock)
 
 **Question:** the ROADMAP "Equipment stat recalculation" item still listed the weapon / armour set bonuses (`get_equipment_set_*`), the colored rings (`colored_ring_matching_boosts`, dump 427069) and the item set bonus (`handle_item_set_bonus`, dump 427136) as not decoded. The previous compare used set factors of 1.0 and applied no ring or item set.
 

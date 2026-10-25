@@ -22,7 +22,8 @@
 
 import { NO_OWNER, parseTelepipeState, readTelepipe, TelepipeStore, writeTelepipe, type TelepipeState } from './telepipe.ts';
 import type { BBConnection, Command } from './bbconnection.ts';
-import { readUtf16 } from './bbconnection.ts';
+import { readAscii, readUtf16 } from './bbconnection.ts';
+import { setPhaseBaseFromServerTime } from '../combat/beattime.ts';
 import { Lobby, parseLobbyPlayer, stripMarkers, type LobbyPlayer } from './lobby.ts';
 import { equippedWeaponOf, INVENTORY_BYTES } from './playerweapon.ts';
 import { splitLevel } from '../combat/techniques.ts';
@@ -506,7 +507,8 @@ export class Game extends Lobby {
       case 0x8a: // game name
         if (c.data.length) this.name = stripMarkers(readUtf16(c.data, 0, c.data.length >> 1));
         return;
-      case 0xb1: // server time, sent after 6F; the client answers 99
+      case 0xb1: // server time, sent after 6F; the client answers 99. The time sets the beat clock's base (combat/beattime.ts).
+        setPhaseBaseFromServerTime(readAscii(c.data, 0, 0x19), Date.now());
         if (this.info && !this.loading) {
           this.conn.send(0x99, 0);
           this.resolveReady();

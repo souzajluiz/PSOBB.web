@@ -41,6 +41,7 @@ import { equipProblems, itemRowName, itemRows, undroppable, type ChallengeListEn
 import { menuRowSelectable } from '../quest/battleitems.ts';
 import { compareStatRows, type EquipStatRow, type StatBlock } from '../classic/itemdetail.ts';
 import { displayedStats, equippedCandidate, recalculateCandidate, wornEquipment, type CompareStats } from '../combat/playerstats.ts';
+import { liveBeatTime } from '../combat/beattime.ts';
 import type { ToolCheckContext } from '../classic/quickmenu.ts';
 import { magStats } from '../formats/itemnames.ts';
 import { techMenuOrder } from '../net/charfile.ts';
@@ -539,12 +540,13 @@ export class FieldHud {
       lck: c.stats.lck,
     };
     const worn = wornEquipment(c.inventory.filter((o) => o.equipped).map((o) => o.data));
-    const current: StatBlock = displayedStats(file, worn, c.charClass, pmt);
+    const beat = liveBeatTime();
+    const current: StatBlock = displayedStats(file, worn, c.charClass, pmt, beat);
     const problems = equipProblems(it.data, rc);
     // PlayerRecalculateStats_0068e030 (not worn) / PlayerCalculateItemStats_0068e4e8 (worn).
     const cand = it.equipped
-      ? equippedCandidate(file, it.data, worn, c.charClass, pmt)
-      : recalculateCandidate(file, it.data, worn, c.charClass, pmt);
+      ? equippedCandidate(file, it.data, worn, c.charClass, pmt, beat)
+      : recalculateCandidate(file, it.data, worn, c.charClass, pmt, beat);
     return compareStatRows(current, cand, problems === 0);
   }
 
@@ -563,7 +565,7 @@ export class FieldHud {
       lck: c?.stats.lck ?? 0,
     };
     const worn = c ? wornEquipment(c.inventory.filter((o) => o.equipped).map((o) => o.data)) : null;
-    const shown = c && pmt && worn ? displayedStats(file, worn, c.charClass, pmt) : file;
+    const shown = c && pmt && worn ? displayedStats(file, worn, c.charClass, pmt, liveBeatTime()) : file;
     return {
       names: this.names(),
       charClass: c?.charClass ?? 0,

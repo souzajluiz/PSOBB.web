@@ -22,6 +22,7 @@ import { CLASS_NAMES, SECTION_IDS, type BBSession } from '../net/bbsession.ts';
 import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
 import { stackSize } from '../net/items.ts';
 import { displayedStats, wornEquipment } from '../combat/playerstats.ts';
+import { liveBeatTime } from '../combat/beattime.ts';
 
 export interface InventoryActions {
   equip(itemId: number): void;
@@ -148,6 +149,7 @@ export function initInventoryPanel(after: HTMLElement, log: (msg: string) => voi
             wornEquipment(c.inventory.filter((it) => it.equipped).map((it) => it.data)),
             c.charClass,
             pmt,
+            liveBeatTime(),
           )
         : file;
       const rows: Array<[string, string | number]> = [
