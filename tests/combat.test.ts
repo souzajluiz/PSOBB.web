@@ -19,6 +19,8 @@ import {
   ATTACK_ACCURACY_MULT,
   ATTACK_DAMAGE_MULT,
   COMBO_ACCURACY_MULT,
+  defenceResists,
+  enemyDefence,
   enemyDefender,
   FLAG_BIG_HIT,
   FLAG_DEAD,
@@ -61,6 +63,19 @@ near(hitChance(atk, def, 1, 1), (180 * 0.7 * 1.3 - 10) * 0.01, 1e-6, 'hit chance
 near(hitChance(atk, def, 2, 2), (180 * 0.5 * 1.69 - 10) * 0.01, 1e-6, 'hit chance special, third attack');
 check(!rollHit(atk, { ...def, evp: 100000 }, 0, 0, () => 0), 'a negative chance never hits');
 check(rollHit(atk, def, 0, 0, () => 0), 'a roll of 0 hits');
+
+// GetEnemyDefense_00773a44 and the defence roll (EntityHitEntity_00773350, 0x773397).
+check(enemyDefence(null) === 0, 'an enemy (null +0x324 row) has no defence');
+check(enemyDefence({ short5: 0 }) === 0 && enemyDefence({ short5: -5 }) === 0, 'a row value <= 0 gives no defence');
+near(enemyDefence({ short5: 30 }), 0.3, 1e-9, 'defence = value * 0.01');
+check(enemyDefence({ short5: 500 }) === 1, 'defence is clamped to 1.0');
+{
+  let drawn = 0;
+  const rng = () => ((drawn++), 0);
+  check(!defenceResists(0, rng) && drawn === 0, 'a zero defence resists nothing and draws no number');
+  check(defenceResists(0.3, () => 0.29) && !defenceResists(0.3, () => 0.3), 'the roll resists below the defence only');
+  check(!defenceResists(enemyDefence(null), rng) && drawn === 0, 'no enemy attack is resisted: the roll is never drawn');
+}
 
 // FUN_007732b8: (ATP + spread * r) * 0.2 + equip ATP * 0.2 * (1 + attr) - DFP * 0.2, then the type multiplier.
 {

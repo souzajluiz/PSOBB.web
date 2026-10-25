@@ -1298,8 +1298,9 @@ export class SlimeAi extends BrainBase {
   }
 
   // A player's attack that does no damage to the slime (ASSUMED the port's
-  // `!landed`, i.e. the exe's no-damage path; the defence roll that resists an
-  // attack is not ported): enters state 11 and returns the motion to play.
+  // `!landed`, i.e. the exe's no-damage path; an enemy's defence is 0, so the
+  // defence roll (formulas.ts defenceResists) never resists it): enters state 11
+  // and returns the motion to play.
   hitNoDamage(): EnemyAiMotion | null {
     const out = this.frame();
     this.pendingHit(out);

@@ -1,5 +1,33 @@
 # Devlog
 
+## 2026-10-25: Enemy defence roll settled: GetEnemyDefense is 0 for every enemy (ROADMAP "where the fight moves the children" leftovers)
+
+**Question:** the ROADMAP's Pofuilly line still lists "the defence roll that resists an attack (`GetEnemyDefense_00773a44`, every enemy: not ported)". Can the exe settle what an enemy's defence is?
+
+**Exe evidence (PsoBB.exe 1.25.13, Ephinea addresses):**
+- `EntityHitEntity_00773350` (dump name; its only `GetEnemyDefense` call is at 0x773a49 from the defence roll at 0x773397). The roll runs only for `entity_index < 0x1000`: `if (def > 0 && get_random_float < def)` then `orl $0x100` and return 0 (resisted). The random number is drawn only when `def > 0` (the `g_Float0 < fVar23` test comes first).
+- `GetEnemyDefense_00773a44`: reads the pointer at +0x324 (the dump's player struct names it `unknown_character_state`, a short*). If it is null, the result is `g_BaseEnemyDefense` (0.0 at 0x00978288). If `short[5] > 0` (+0xa), `min(short[5] * 0.01, 1.0)` (0x00978284 = 0.01, 0x00978280 = 1.0). Checked with `tools/exedata.py read`.
+- The +0x324 writers. The dump names one non-null writer: the player's constructor (0x69618e, `lea edx,[esi+0xea0]` then `mov [esi+0x324], edx`; the player's own state buffer, so a player only). Enemies: the base init `unknown_init_entity` (0x77086d in the disassembly, `mov dword [ebx+0x324], edx` with edx = 0) and two other zero stores (0x40fa58 `mov dword [ecx+0x324], 0`; 0x4df25c `mov word [ecx+0x324], dx` with dx = 0). A scan of the whole `objdump -D -M intel` output for `[reg + 0x324]` stores found no other one. Loads of +0x324 are the player stat readers (0x5d1fc6, 0x5d2140, 0x6a014f, 0x6a02b9, 0x6a2f8d, 0x773a4d, 0x775179, 0x7770a9, 0x77717d).
+- Result: an enemy's +0x324 is null, so its defence is 0 and the roll never resists it. The dump's enemy struct has +0x318 (void), +0x31c (special attack powers) and +0x320 (resists) as pointers; +0x324 is an `undefined` field there, not a stats row.
+
+**Port:**
+- `client/src/combat/formulas.ts`: `enemyDefence(stateRow)` (the function above; enemies pass `null`), `defenceResists(defence, rng)` (the roll; draws the number only above 0). Not wired into `applyEnemyHit`: the call would never resist, so it would be dead code in the hit path.
+- `client/src/combat/enemysplits.ts`: the `hitNoDamage` comment now says the roll never resists an enemy.
+- `tests/combat.test.ts`: the null row is 0 defence, a row value <= 0 is 0, `value * 0.01`, the clamp to 1.0, a zero defence draws no number, the strict `<`, and an enemy's attack is never resisted without a draw.
+- `docs/ROADMAP.md`: the Pofuilly clause is updated (the defence part is settled; the exe's motion 4 and the +0x3f4 readers stay open).
+
+**ASSUMED:**
+- `short[5]` (+0xa) is the stats row's ATA, as in `formats/battleparams.ts`. Only a player's row reaches that branch, so the enemy result does not depend on it.
+- No indirect store (`lea` plus `[reg]`) writes a non-null value to an enemy's +0x324. The scan was by displacement only.
+- Every enemy goes through `unknown_init_entity` (the zeroing), so the field is null from the start.
+
+**Left:**
+- The Pofuilly's exe motion 4 and the stun effect's position (+0x300).
+- +0x3f4's readers in the generic draw.
+- The Morfos arm's frame timing against the layer's animator hook.
+
+**Checks:** `node tests/combat.test.ts` (NEWSERV set): 5859 checks, 0 failures. `node tests/enemysplits.test.ts`: all checks passed. `client` `npx tsc --noEmit -p .` (Node 24): clean. Playwright and Chrome: not run.
+
 ## 2026-10-25: Challenge mode left: the material x5 is ported (stale ROADMAP item); the Scape Doll / dead-player rules traced, no port
 
 **Question:** the ROADMAP's Challenge line still lists "the material x5 / Scape Doll / dead-player rules" as open. Which of them can the exe settle with a unit test now?
