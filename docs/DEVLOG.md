@@ -28,6 +28,26 @@
 - `Enemy_Update_007648dc` (dump 737262): forced icon at `+0xcc` when the entity's `+0xe4` pointer is set; colour 0xffffa24c when the entity is active or its hitbox flag 4 is set, else 0xff909090; scale = the `+0xac` object's float at `+0xc` times `_DAT_0097609c`. The owner of the `+0xe4` object is not settled.
 
 **Checks:** `node tests/minimap.test.ts`: all checks pass (new: `enemyIconRule('DRAGON')`). `cd client && npx tsc --noEmit -p .` (Node 24) clean. Not run in Chrome or Playwright.
+## 2026-10-25: Trap vision: the lock-on gates of the capture trap's cursor (entity level); the ROADMAP's stale open items
+
+**Question:** the ROADMAP "Trap vision (cloaked traps)" line still listed the state-3 hit path as open and "not ported". Is there an exe-settled sub-item left, and which?
+
+**Stale items (corrected):** the 2026-10-23 follow-up 2 entry already settled the state-3 hold: the counter is +0x350 (param4 x 30, clamped 1..60), below 0 the trap's on-interact releases the target (6x2D), and the 6x2C frames 0xffff mean no self timer. The port has it (`CaptureTrap.hold`, `holdCountdown`), so the ROADMAP line is updated.
+
+**What the exe settles (Ghidra dump `tools/refsrc.sh`, Psobb.exe-05112026.c):**
+- `enable_reticle` (dump 575550) calls `check_enemy_is_targetable` (dump 785551) for each enabled targeting record of the four player slots. The function starts with: the player's `character_flags` must have neither `dead` (0x800) nor `took_damage` (0x200); the room rule (a target with `flags & 0x60000000 == 0x20000000` in another room is refused) applies only to that exact flag pattern.
+- `InitializeDerolleTrapEntity_0063ec24` (dump 503244) ORs `0x60040000` into the trap's `+0x30` flags. `0x60000000 & 0x60040000` is `0x40000000`, not `0x20000000`, so the room rule never refuses the trap. The trap is therefore not room-gated for the lock-on.
+
+**What changed:**
+- `client/src/render/traps.ts`: `CAPTURE_TRAP_CHARACTER_FLAGS` (0x60040000), `playerMayTarget(flags)` (dead / took_damage clear), `targetRoomRuleApplies(flags)`. `captureReticleShown(state, inView, localMayTarget = true)` takes the local player's gate.
+- `client/src/render/gamefield.ts`: option `localMayTarget`, read in `captureDraw`; `client/src/render/gameview.ts` passes `!this.combat.damage.dead`.
+- `tests/traps.test.ts` section 9.
+
+**Not ported (still open):** the per-record part of check_enemy_is_targetable: the record's masks (field6 / field7, set per weapon), the weapon geometry (range, the horizontal / vertical cones, the hitbox pass with DisableEntityHitbox), and the map ray test in battle mode. The other players' records are not evaluated: the port's cursor is the local player's only.
+
+**ASSUMED:** the port's `dead` state stands for the dead bit; took_damage (the flinch) has no port flag, so it is not checked.
+
+**Checks:** `cd client && npx tsc --noEmit -p .` (Node 24) clean. `node tests/traps.test.ts` all checks pass (sections 1-9). `node tests/batching.test.ts`, `node tests/fieldhud.test.ts`, `node tests/townfield.test.ts` pass. Not run: Playwright / Chrome.
 
 ## 2026-10-25: Darvant child link: the constant table of the Dark Falz grid
 

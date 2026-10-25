@@ -72,6 +72,8 @@ export interface GameFieldOptions {
   captureTrap?: (e: TrapEvent) => void;
   // The Seabed capture trap's state-1 cursor (render/traps.ts captureReticleShown); null hides it.
   captureReticle?: (pos: { x: number; y: number; z: number } | null) => void;
+  // The local player may be a lock-on target (check_enemy_is_targetable's player test); default true.
+  localMayTarget?: () => boolean;
   // A falling stalactite's hit on the local player (render/fieldobjects.ts FallingStalactite): the damage and the place it fell from.
   fieldHit?: (damage: number, at: { x: number; z: number }) => void;
   // Whether a quest is running (g_QuestStarted): the trade zone bits clear while it runs.
@@ -603,6 +605,7 @@ export class GameField {
     cam.updateMatrixWorld();
     const v = new THREE.Vector3();
     let reticle: { x: number; y: number; z: number } | null = null;
+    const mayTarget = this.opts.localMayTarget?.() ?? true;
     for (const c of this.captures) {
       if (this.objects.isDelayed(c.index)) continue;
       v.set(c.x, c.y, c.z).applyMatrix4(cam.matrixWorldInverse);
@@ -610,7 +613,7 @@ export class GameField {
       const sprung = c.trap.state >= 2;
       this.objects.setCaptureDraw(c.index, captureTrapDraw(c.trap.cloaked, true, inView, sprung));
       if (sprung) this.objects.setCaptureFrame(c.index, c.trap.anim);
-      if (!reticle && captureReticleShown(c.trap.state, inView)) reticle = { x: c.x, y: c.y, z: c.z };
+      if (!reticle && captureReticleShown(c.trap.state, inView, mayTarget)) reticle = { x: c.x, y: c.y, z: c.z };
     }
     this.opts.captureReticle?.(reticle);
   }

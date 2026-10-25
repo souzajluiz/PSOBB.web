@@ -434,13 +434,36 @@ export function withinViewDistance(depth: number, distance = VIEW_DISTANCE): boo
   return depth <= 0 && depth >= -distance;
 }
 
+// The entity-level gates of check_enemy_is_targetable (dump 785551, the lock-on test that enable_reticle
+// (dump 575550) runs for every enabled targeting record of each player slot, 0..3):
+//   - the player's character_flags must have neither dead (0x800) nor took_damage (0x200): VERIFIED
+//     from the decompile. The port has no took_damage bit; its flinch state is ASSUMED to stand for it,
+//     so only the dead state is checked here (combat/playerdamage.ts `dead`).
+//   - the room rule (0x20000000 entities in another room are refused) applies only when the target's
+//     flags & 0x60000000 is exactly 0x20000000. The trap's flags are 0x60040000 (InitializeDerolleTrapEntity_0063ec24
+//     sets `+0x30 |= 0x60040000`, VERIFIED), so the rule does not apply to the trap in any room.
+//   - the record's own masks (field6 / field7 of the targeting record, set per weapon) and the weapon
+//     geometry (range, cones, the hitbox pass in check_enemy_is_targetable) are NOT ported.
+export const CAPTURE_TRAP_CHARACTER_FLAGS = 0x60040000;
+const CHAR_TOOK_DAMAGE = 0x200;
+const CHAR_DEAD = 0x800;
+// check_enemy_is_targetable's player test: not dead and not took_damage.
+export function playerMayTarget(characterFlags: number): boolean {
+  return (characterFlags & (CHAR_DEAD | CHAR_TOOK_DAMAGE)) === 0;
+}
+// The room rule of check_enemy_is_targetable: true when the target is refused in another room.
+export function targetRoomRuleApplies(targetFlags: number): boolean {
+  return (targetFlags & 0x60000000) === 0x20000000;
+}
+
 // The state-1 cursor (DerollePartObjectEnableReticle_0063a3bc calls enable_reticle, dump 575550, before the
 // idle; GetReticlePosition_007a35c8 / RenderReticleModel_007a3764 draw the lock-on cursor, combat/reticle.ts).
 // ASSUMED gate: the exe enables the cursor only for a player's targeting record that passes
-// check_enemy_is_targetable (range, facing, weapon); that check is not ported, so the cursor shows for the
-// revealed trap (state 1) while it is in front of the camera, for the local player.
-export function captureReticleShown(state: number, inView: boolean): boolean {
-  return state === 1 && inView;
+// check_enemy_is_targetable (range, facing, weapon); the entity-level part (playerMayTarget, the room
+// rule) is applied for the local player, the weapon part is not ported, so the cursor shows for the
+// revealed trap (state 1) while it is in front of the camera and the local player is not dead.
+export function captureReticleShown(state: number, inView: boolean, localMayTarget = true): boolean {
+  return state === 1 && inView && localMayTarget;
 }
 
 // What render_capturetrap draws: 'hidden', 'plain' (the normal model) or 'cloak' (the cloak
