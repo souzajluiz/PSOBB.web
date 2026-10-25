@@ -1,5 +1,15 @@
 # Devlog
 
+## 2026-10-25: Barba Ray player attack (0x18): the attack record is MovementData[15], the area hit is the Derolle sweep at radius 120
+
+**Outcome.** `*(root+0x628)` is the movement row 15 (`0x0077a6cc(15)`, the same row as the pools); the hit reads its dword 0 as the float power (fparam1: 250 at normal, Ep2 solo). The area-hit dispatch `0x0051fc9c` calls `g_pDerolleObject`'s vt+0x30 (`EnemyUpdateLogic_00521cf8`, the sweep `0x007b8618` at radius 120 on xz) and the hit callback `0x005221c0` (entity_hit_by_tech group 0, power, then a 20.0 push). State 0x18 is ported on the shared clock (windup 20 frames, slot 0xd, fire at clock 13.0, one hit per player per attack, aura hold ASSUMED 30 frames). Map: `docs/bosses/barbaray-map.md` Pass 15.
+
+**Proven.** The root ctor's `0x0077a6cc(0xf)` store at 0x004af71c; the loader's pointer table (0x0077b462..0x0077b491); the hit's `[[root+0x628]]` read (0x004b669a..); `DispatchSinowberillAttackEffect_0051fc9c` (refsrc 303366); vt+0x30 / +0x34 at 0x00521cf8 / 0x00521cdc (the base vtable 0x00b009a0 from the map object init 0x005219f0); the sweep, the hit list and vt+0x4c (0x005221c0); the knockback 0x00522154; the state's sub-states, sounds 0x3f6 / 0x3f7 and the clock marks 12.0 / 13.0.
+
+**Not proven (ASSUMED in the code):** the aura's state-2 writer (sets the length of sub 2); the attack centre (the leader's target, not FindAndProcessSinowberillTarget); the hitbox overlap (0x007b5e40, sphere only); the 0xb0 & 0x10 hold (taken as set); the attack objects 0x208 / 0x209 and the 0x72c packets.
+
+**Tests.** `node tests/barbaray.test.ts` ALL PASS (the 0x18 block added); `client` `tsc --noEmit` clean; `NEWSERV=... node tests/combat.test.ts` 5859 checks, 0 failures.
+
 ## 2026-10-25: Booma spawn gate is current_target == 1, set by the Booma ctor: every Booma animates
 
 **Outcome.** The spawn handler's "current_target == &g_ChallengeListWindowFlag" test is not a global. It is the integer 1 in the `current_target` slot (enemy +0x398), and the dump's `&g_ChallengeListWindowFlag` is a mis-resolved name for that constant (the same mis-resolution is noted in `client/src/combat/blooddecals.ts`). The Booma constructor writes 1 there on every spawn path, so every Booma takes the animation branch. The port's `spawn: true` is right; the port now also models the exe's else branch (spawn false: sub 2, no motion, not invulnerable, idle on the next tick).

@@ -2763,6 +2763,12 @@ export class CombatView {
           // The spawner (0x004b4e6c): a live count entry makes a Pig Ray.
           if (ev.count !== 0) void this.spawnPigRay(e, ev);
           break;
+        case 'hit':
+          // The player attack's area (0x0051fc9c, barbaray.ts BARBA_ATTACK): each client resolves its own
+          // player, as the shots do (entity_hit_by_tech group 0 with the row's power and the knockback 20).
+          if (ev.clientId !== this.game.selfId) break;
+          this.enemyTechHitsPlayer(e, ev.power, ev.x, ev.z, `E-${e.index.toString(16)} (${e.slot.type})`, ev.knockback);
+          break;
         case 'killed':
           this.barbaKilled(e);
           break;

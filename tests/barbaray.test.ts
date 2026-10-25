@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   BARBA_ANCHORS,
+  BARBA_ATTACK,
   BARBA_CAPTURE_COUNT,
   BARBA_DROP,
   BARBA_DWELL,
@@ -1261,6 +1262,86 @@ for (const side of [0, 2]) {
   check((b.flags & 4) !== 0, 'jump leave: the gate block is set on enter');
   b.applyPhase(0, null);
   check((b.flags & 4) === 0, 'jump leave: event 5 clears the gate block');
+}
+// --- phase 0x18 (0x004b6300, the player attack: windup, fire, area hit, aura hold) ---------------
+{
+  const mv = { fparam1: 250, fparam2: 0, fparam3: 0, fparam4: 0, fparam5: 0, fparam6: 0, iparam: [0, 0, 0, 0, 0, 0] };
+  const b = new BarbaRayAi({ x: 0, z: 0, angle: 0, rng, movement: mv, floor: 0, leader: () => false });
+  b.applyPhase(BARBA_PHASE.attack, null);
+  check((b.flags & 4) === 0 && (b.flags & 0x100) !== 0, 'attack enter: gate open (0x100 set, 4 clear)');
+  eq(b.tFrom, 3, 'attack enter: anchor 3');
+  eq(b.slot, 15, 'attack enter: slot 0xf (beamwait)');
+  b.drain();
+  // The windup: 20 frames (0x734 counts 1..19, the 20th frame ends the sub); the slot becomes 13 then.
+  for (let k = 0; k < BARBA_ATTACK.windup - 1; k++) b.tick([]);
+  eq(b.attackSub, 0, 'attack windup: sub 0 holds for 19 frames');
+  eq(b.slot, 15, 'attack windup: slot still 15 before the 20th frame');
+  b.tick([]);
+  eq(b.attackSub, 1, 'attack windup: the 20th frame ends sub 0');
+  eq(b.slot, 13, 'attack windup: sub 0 end writes slot 0xd (beam_b)');
+  const first = b.drain();
+  check(first.some((e) => e.kind === 'se' && e.id === 0x3f6), 'attack windup: the 0x3f6 sound at the end of sub 0');
+  // Sub 1 waits for the clock (the blend wrap, then 0.3 a tick) to reach 13.0; sub 2 starts there.
+  let fireTick = -1;
+  let fireSe = 0;
+  for (let k = 1; k <= 200 && b.attackSub === 1; k++) {
+    b.tick([]);
+    fireSe += b.drain().filter((e) => e.kind === 'se' && e.id === 0x3f7).length;
+    fireTick = k;
+  }
+  eq(b.attackSub, 2, 'attack fire: sub 1 reaches sub 2 once the clock is 13.0');
+  eq(fireSe, 1, 'attack fire: the 0x3f7 sound once at sub 1 end');
+  check(b.timer === BARBA_ATTACK.fire, `attack fire: the clock is pinned at 13.0 (got ${b.timer})`);
+  check(fireTick > 40 && fireTick < 60, `attack fire: about 44 ticks at 0.3 after the blend wrap (got ${fireTick})`);
+  // Sub 2 holds BARBA_ATTACK.aura frames (ASSUMED), with one area hit on the player inside 120 on xz.
+  // The enter teleports the body to anchor 3, so the players are placed from the body's position.
+  const bx = b.x;
+  const bz = b.z;
+  const far = { clientId: 2, x: bx + 200, z: bz, charClass: 0, dead: false };
+  const near = { clientId: 1, x: bx + 50, z: bz, charClass: 0, dead: false };
+  const corpse = { clientId: 3, x: bx + 10, z: bz, charClass: 0, dead: true };
+  const targets = [near, far, corpse];
+  const hits: Extract<BarbaEvent, { kind: 'hit' }>[] = [];
+  for (let k = 0; k < 200 && b.attackSub !== 4; k++) {
+    b.tick(targets);
+    for (const e of b.drain()) if (e.kind === 'hit') hits.push(e);
+  }
+  eq(b.attackSub, 4, 'attack: sub 4 (done) after sub 2 and sub 3');
+  eq(hits.length, 1, 'attack: one hit over the whole attack (the hit list keeps a player to one)');
+  eq(hits[0]?.clientId ?? -1, 1, 'attack: the hit is on the player at 50 (inside 120), not the far or dead one');
+  eq(hits[0]?.power ?? -1, 250, 'attack: the power is MovementData[15] fparam1');
+  eq(hits[0]?.knockback ?? -1, 20, 'attack: the knockback is 20 (0x009abbb0)');
+  eq(hits[0]?.x ?? -1, bx, 'attack: the point is the body when no target is set (ASSUMED)');
+  // The range is the sweep's dist^2 <= 120^2: a player at 121 is out, at 120 is in.
+  const edge = new BarbaRayAi({ x: 0, z: 0, angle: 0, rng, movement: mv, floor: 0, leader: () => false });
+  edge.applyPhase(BARBA_PHASE.attack, null);
+  edge.attackSub = 2;
+  edge.timer = 13;
+  const ex = edge.x;
+  const ez = edge.z;
+  edge.tick([{ clientId: 4, x: ex + 121, z: ez, charClass: 0, dead: false }, { clientId: 5, x: ex, z: ez + 120, charClass: 0, dead: false }]);
+  const edgeHits = edge.drain().filter((e) => e.kind === 'hit');
+  eq(edgeHits.length, 1, 'attack range: one hit (the player at 120 on z)');
+  eq(edgeHits[0]?.clientId ?? -1, 5, 'attack range: the player at 121 is out');
+  // The point follows the target when it is set (the leader's 6xAA target).
+  const tb = new BarbaRayAi({ x: 0, z: 0, angle: 0, rng, movement: mv, floor: 0, leader: () => false });
+  tb.targetId = 9;
+  tb.applyPhase(BARBA_PHASE.attack, null);
+  const tx = tb.x + 30;
+  const tz = tb.z - 40;
+  const tgt = [{ clientId: 9, x: tx, z: tz, charClass: 0, dead: false }];
+  for (let k = 0; k < BARBA_ATTACK.windup; k++) tb.tick(tgt);
+  eq(tb.attackSub, 1, 'attack target: sub 0 ends on the 20th frame with the target present');
+  tb.drain();
+  for (let k = 0; k < 200 && tb.attackSub !== 2; k++) tb.tick(tgt);
+  const tHit: Extract<BarbaEvent, { kind: 'hit' }>[] = [];
+  for (let k = 0; k < 5; k++) {
+    tb.tick(tgt);
+    for (const e of tb.drain()) if (e.kind === 'hit') tHit.push(e);
+  }
+  eq(tHit.length, 1, 'attack target: the target inside range is hit once');
+  eq(tHit[0]?.x ?? 0, tx, 'attack target: the point is the target (x)');
+  eq(tHit[0]?.z ?? 0, tz, 'attack target: the point is the target (z)');
 }
 void BARBA_PHASE;
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
