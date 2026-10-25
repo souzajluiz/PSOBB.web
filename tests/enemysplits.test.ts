@@ -6,6 +6,7 @@
 import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, PUDDLE_MOTION, SLIME, SlimeAi, SlimeArm, SlimeControl, slimeSplitsOnHit, SlimeSpit, SLIME_MORPH, SPIT } from '../client/src/combat/enemysplits.ts';
 import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
+import { slimeLockOk, slimeRadarOk, slimeStruckOk } from '../client/src/render/combat.ts';
 
 let failures = 0;
 const check = (ok: boolean, what: string) => {
@@ -197,7 +198,7 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
 // --- Pofuilly Slime ------------------------------------------------------------------
 {
   const s = new SlimeAi({ x: 0, z: 0, angle: 0, movement: mv({ fparam1: 12 }), rng: () => 0.5 });
-  check(!s.hidden && s.untargetable && s.invulnerable, 'a puddle is drawn (morph 7) and cannot be hit');
+  check(!s.hidden && s.invulnerable && s.radar, 'a puddle is drawn (morph 7), on the radar, and cannot be hit (box off, 0x597b0c)');
   eq(s.motion, { index: PUDDLE_MOTION.normal, speed: 0.5, loop: true }, 'the puddle pose is DAT_009bfda0[0] = motion 4');
   const rareSlime = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, rare: true, rng: () => 0.5 });
   eq(rareSlime.motion?.index, PUDDLE_MOTION.rare, 'a rare puddle uses DAT_009bfda0[1] = motion 5');
@@ -210,9 +211,10 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   n = 0;
   while (s.state === 'crawl' && n++ < 500) s.tick(near);
   eq(s.state, 'emerge', 'within 50 of the player: it emerges');
-  check(!s.invulnerable, 'emerged: it can be hit');
+  check(s.invulnerable && s.radar, 'emerge: the box is off (0x597dbc sets 0x28), still on the radar');
   for (let i = 0; i < SLIME.morphFrames; i++) s.tick(near);
   eq(s.state, 'search', 'then it searches');
+  check(!s.invulnerable, 'search: the box is on (0x597e7c clears 0x28): it can be hit');
   n = 0;
   while (s.state === 'search' && n++ < 1000) s.tick(near);
   eq(s.state, 'approach', 'a player in the sweep: it approaches');
@@ -571,6 +573,33 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   const fl = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, thrown: true, rng: () => 0.5 });
   fl.hitNoDamage();
   check(fl.lockable === (fl.state === 'stun'), 'a no-damage hit (stun) makes the slime lockable');
+}
+
+// --- Pofuilly Slime: the radar, the lock-on and the hit (the exe's rules) ----------------
+// The radar icon: SinowzoaUpdate (0x00596104) adds it every frame while field_0x38c != 0xd
+// (the death state), whatever the state. The lock-on: enable_reticle runs only while +0x3f4 is
+// set (lockable). The hit: the box is on (the 0x28 bits of the sub-object's +0x18 are clear)
+// in exactly the lockable states (the entries' writes, DEVLOG 2026-10-25 Pofuilly).
+{
+  const LOCK = ['search', 'confused', 'approach', 'spit', 'arm', 'stun'];
+  const ALL = ['puddle', 'rise', 'sink', 'crawl', 'emerge', 'burrow', 'search', 'confused', 'approach', 'spit', 'arm', 'flinch', 'thrown', 'dead', 'stun'];
+  for (const st of ALL) {
+    const sl = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, rng: () => 0.5 });
+    (sl as unknown as { state: string }).state = st;
+    const e = { ai: sl };
+    eq(slimeRadarOk(e), st !== 'dead', `radar in ${st}: every frame but the dead one`);
+    eq(slimeLockOk(e), LOCK.includes(st), `lock-on in ${st}: only through the reticle records (+0x3f4)`);
+    eq(slimeStruckOk(e), LOCK.includes(st), `hit in ${st}: only while the box is on`);
+    eq(sl.invulnerable, !LOCK.includes(st), `invulnerable (box off) in ${st}`);
+  }
+  eq(slimeRadarOk({ ai: null }), true, 'a non-slime enemy is not gated by the slime rules (radar)');
+  eq(slimeLockOk({ ai: null }), true, 'a non-slime enemy is not gated by the slime rules (lock)');
+  eq(slimeStruckOk({ ai: null }), true, 'a non-slime enemy is not gated by the slime rules (hit)');
+  const killed = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, rng: () => 0.5 });
+  killed.onDamage(0);
+  eq(killed.state, 'flinch', 'a hit flinches it');
+  check(!slimeStruckOk({ ai: killed }), 'a flinching slime is not struck');
+  check(slimeRadarOk({ ai: killed }), 'a flinching slime is on the radar');
 }
 
 if (failures) {
