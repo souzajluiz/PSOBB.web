@@ -528,9 +528,22 @@ const BULCLAW_CLAWS = 4;
 //     the halves' bit 0 of the box (+0x384, +0x18); the Pan Arms' hit is ASSUMED (its own box
 //     bits are not traced, see PanArmsAi.invulnerable).
 const isSplitPart = (ai: EnemyBrain | null): boolean => ai instanceof SlimeAi || ai instanceof PanArmsAi || ai instanceof PanHalfAi;
-export const splitRadarOk = (e: { ai: EnemyBrain | null }): boolean => !isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi).radar;
-export const splitLockOk = (e: { ai: EnemyBrain | null }): boolean => !isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi).lockable;
-export const splitStruckOk = (e: { ai: EnemyBrain | null }): boolean => !isSplitPart(e.ai) || !(e.ai as SlimeAi | PanArmsAi | PanHalfAi).invulnerable;
+// Gibbon and Mericarol (combat/enemyfsmep2b.ts), PsoBB.exe: vtable +0x184 (FUN_00520504) calls
+// +0x174 (FUN_0052039c: entity flag 0x4000000 = invulnerable, and 0x2000000 on every hit box, so
+// the box is not struck) and +0x180 (FUN_005204b0: bit 0 of every box off), then sets entity flags
+// 0x4040000. The lock / radar gate reads 0x40000 (radar and lock-on sites of EnemyGetNearestTarget;
+// the same entity-flag family as the minimap), so `untargetable` (the +0x184 states) hides both
+// from the radar, the lock-on and the hit (the hit boxes are off). The other timers call +0x174
+// alone (the Gibbon's back step until its stomp, the Mericarol's TP drain): the boxes are off too,
+// but the struck candidates keep them as before (the invulnerable hit shows its 0; ASSUMED display
+// rule, see applyEnemyHit), and they stay on the radar and lockable.
+const isEp2Hidden = (ai: EnemyBrain | null): boolean => (ai instanceof MericarolAi || ai instanceof GibbonAi) && ai.untargetable;
+export const splitRadarOk = (e: { ai: EnemyBrain | null }): boolean =>
+  (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi).radar) && !isEp2Hidden(e.ai);
+export const splitLockOk = (e: { ai: EnemyBrain | null }): boolean =>
+  (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi).lockable) && !isEp2Hidden(e.ai);
+export const splitStruckOk = (e: { ai: EnemyBrain | null }): boolean =>
+  (!isSplitPart(e.ai) || !(e.ai as SlimeAi | PanArmsAi | PanHalfAi).invulnerable) && !isEp2Hidden(e.ai);
 const techRecordOk = splitLockOk;
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   (e.ai instanceof SlimeControl && e.ai.untargetable) ||
@@ -543,7 +556,7 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   e.ai instanceof SaintMilionAi ||
   (e.ai instanceof SmChildAi && e.ai.untargetable) ||
   (e.ai instanceof SinowAi && e.ai.dormant) ||
-  ((e.ai instanceof MericarolAi || e.ai instanceof GibbonAi || e.ai instanceof GibblesAi) && e.ai.untargetable) ||
+  (e.ai instanceof GibblesAi && e.ai.untargetable) ||
   (e.ai instanceof NanoDragonAi && e.ai.untargetable);
 
 // 6x47 / 6x48 subcommand numbers.
@@ -4872,7 +4885,7 @@ export class CombatView {
   private enemyTargets(self: EnemyRuntime): AiTarget[] {
     const out: AiTarget[] = [];
     for (const o of this.enemies.values()) {
-      if (o === self || o.dead || o.state === 'death' || !o.instance.root.visible || o.ai?.invulnerable || concealed(o)) continue;
+      if (o === self || o.dead || o.state === 'death' || !o.instance.root.visible || o.ai?.invulnerable || concealed(o) || !splitLockOk(o)) continue;
       const p = o.instance.root.position;
       out.push({ clientId: 0x1000 | o.index, x: p.x, z: p.z, charClass: -1, dead: false });
     }

@@ -1,5 +1,30 @@
 # Devlog
 
+## 2026-10-25: Gibbon and Mericarol: radar, lock-on and hit from the exe's entity flags (the generic icon is status-gated)
+
+**Outcome.** The Gibbon and the Mericarol leave `concealed()`; their radar, lock-on and hit go through `splitRadarOk` / `splitLockOk` / `splitStruckOk` in `render/combat.ts`, with the rule the exe sets with `+0x184`. Gibbles stays on `concealed()` (not traced here). The Mericarol and Gibbon body radar is still not proven: the exe code of both families has no radar call of its own that I could find (below), so the baseline icon stays ASSUMED.
+
+**Box and flag writes (proven, Ephinea addresses, Ghidra dump names are community labels).** Vtable slots read from PsoBB.exe with `tools/exedata.py read`, decompiled with `tools/ghidra/decomp.sh`:
+- `+0x184` = FUN_00520504: calls `+0x174` and `+0x180`, then `entity flags |= 0x4040000`.
+- `+0x174` = FUN_0052039c: flags `|= 0x4000000` (invulnerable), and `0x2000000` on every hit box (box +0x18).
+- `+0x180` = FUN_005204b0: bit 0 of every hit box off.
+- `+0x188` = FUN_00520528: calls `+0x178` / `+0x17c`, clears `0x4040000`.
+- So `0x40000` is the radar / lock-on bit (the dump's lock-on / nearest-target code reads it at lines 181204-181932 of `Psobb.exe-05112026.c`; ASSUMED that those are the lock-on sites, not traced by address) and `0x4000000` is invulnerable. The state lists in `enemyfsmep2b.ts` (the `untargetable` getters) are the `+0x184` callers, already traced in the TS comments.
+
+**Mericarol (ctor 0x00572cd2, vtable 0x00b06320).** Its own code (update 0x005730da, body 0x00572068, the ctor) has no `unknown_add_minimap_icon` call. It calls `enable_reticle_` every frame of the alive update. The minimap sites I found in the `0x0057xxxx` range are not Mericarol's: 0x00574792..0x00575a67 holds the Merillia family per the DEVLOG table (Merillia ctor 0x00575e70, states 0x005756e8..0x00575958), and the dump's `Mericarol*` labels on those functions are community names. ASSUMED that the Mericarol body is on the radar through the shared base, untraced (the base functions below do not add one).
+
+**Gibbon (ctor 0x00564a64, vtable 0x00b05750).** No minimap call in its own code; `enable_reticle` in several state frames. ASSUMED as the Mericarol.
+
+**Generic controller `update_enemy_control_object` (0x00787a80), settled.** The icon call (0x00787b37, disassembled) is reached only when `+0xb4` returns 0 (0x00787ae0), so it is the alive path, not a dead branch (the DEVLOG 2026-10-25 "Hidoom" entry said dead; corrected here). Inside, `+0xa0` runs, then the icon, `enable_reticle` and `+0x78` happen when `+0x98` or `+0xa8` or `+0xa4` returns nonzero. Those are timed statuses: `+0x98` FUN_00777d10 (flag 0x4000 / 0x2 timers), `+0xa4` FUN_007780a8 (flag 0x20 timer), `+0xa8` FUN_0077818c (flag 0x4 timer), all for Mericarol's vtable. So ordinary enemies do not get their baseline radar icon from this path: it adds one only while a status timer runs. Proven for the controller; the baseline icon of an ordinary enemy stays in its own family update (ASSUMED for every family).
+
+**Gibbon `+0xb4` ASSUMED.** Gibbon's vtable slot `+0xb4` decompiles to a void setter (FUN_00778be8), which cannot be the alive check, so the Gibbon's controller gate is not settled.
+
+**Predicates (ported).**
+- Radar and lock-on hidden exactly when the `+0x184` states hold (`untargetable`): Mericarol spawn; Gibbon spawn, jump, spot, alert, roar, call. The back step and the TP drain call `+0x174` only: not struck (boxes off) but still on the radar and lockable. The struck candidates keep them as before (the 0 number of an invulnerable hit, `applyEnemyHit`; the box-off rule is proven, whether the exe shows that 0 is ASSUMED).
+- `concealed()` drops MericarolAi and GibbonAi; the enemy target scan (`enemyTargets`) adds `splitLockOk`.
+
+**Tests.** `tests/enemysplits.test.ts` adds the Gibbon / Mericarol state table. `enemysplits`, `combatdepth`, `minimap`, `combat` (NEWSERV set), `enemyfsmep2b` pass; `tsc --noEmit` clean.
+
 ## 2026-10-25: Saint-Milion laser: the draw writes the origin and aim (+0x38 / +0x44), the length is a ramp, 620 is a stand-in
 
 **Outcome.** The 2026-10-21 verdict "no writer of +0x38 / +0x44 in the exe" was wrong: its scan covered the ctor, the base, the spawner, the update and the wall cut, but not the draw. The writers are the laser's render (vtable slot 2) and its draw callback, through pointers the draw passes in. The length is a ramp (+100 an update) cut at the first wall; 620 is not an exe constant. Ported: the ramp, capped at 620 (ASSUMED, the wall stand-in). The 0x8000 sweep stays ASSUMED: its source (the heading from the boss node block) is located, not decoded.

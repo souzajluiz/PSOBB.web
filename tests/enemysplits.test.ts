@@ -7,6 +7,7 @@ import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, type 
 import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 import { splitLockOk, splitRadarOk, splitStruckOk } from '../client/src/render/combat.ts';
+import { GibbonAi, MericarolAi } from '../client/src/combat/enemyfsmep2b.ts';
 
 let failures = 0;
 const check = (ok: boolean, what: string) => {
@@ -714,6 +715,30 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
     eq(h.state, 'mergeWalk', 'still walking after the tick');
     eq(splitStruckOk({ ai: h }), false, 'mergeWalk without the timer flag: the tail clears the box');
   }
+}
+
+// --- Gibbon and Mericarol (the entity flag 0x40000 hides the radar and the lock-on; +0x174 boxes off) ---
+{
+  const at = <T extends object>(cls: new (...a: never[]) => T, state: string, extra: Record<string, unknown> = {}): { ai: T } =>
+    ({ ai: Object.assign(Object.create(cls.prototype) as T, { state, ...extra }) });
+  // Mericarol: spawn is +0x184 (hidden), drain is +0x174 alone (still on the radar).
+  const spawn = at(MericarolAi, 'spawn');
+  eq([splitRadarOk(spawn), splitLockOk(spawn), splitStruckOk(spawn)], [false, false, false], 'Mericarol spawn: off the radar, no lock, no hit');
+  const drain = at(MericarolAi, 'drain');
+  eq([splitRadarOk(drain), splitLockOk(drain), splitStruckOk(drain)], [true, true, true], 'Mericarol TP drain: radar and lock on (+0x174 only), hit as before');
+  eq([splitRadarOk(at(MericarolAi, 'idle')), splitLockOk(at(MericarolAi, 'idle')), splitStruckOk(at(MericarolAi, 'idle'))], [true, true, true], 'Mericarol idle: all on');
+  // Gibbon: jump / spot / alert / roar / call / spawn are +0x184; the back step is +0x174 until its stomp.
+  for (const st of ['spawn', 'jump', 'spot', 'alert', 'roar', 'call']) {
+    const g = at(GibbonAi, st);
+    eq([splitRadarOk(g), splitLockOk(g), splitStruckOk(g)], [false, false, false], `Gibbon ${st}: off the radar, no lock, no hit`);
+  }
+  const stomped = at(GibbonAi, 'backstep', { exposed: true });
+  eq([splitRadarOk(stomped), splitLockOk(stomped), splitStruckOk(stomped)], [true, true, true], 'Gibbon backstep after the stomp: on');
+  const back = at(GibbonAi, 'backstep', { exposed: false });
+  eq([splitRadarOk(back), splitLockOk(back)], [true, true], 'Gibbon backstep before the stomp: radar and lock on (+0x174 only)');
+  eq([splitRadarOk(at(GibbonAi, 'wait')), splitLockOk(at(GibbonAi, 'wait'))], [true, true], 'Gibbon wait: on');
+  // Other families are not gated by the Gibbon / Mericarol rule.
+  eq([splitRadarOk({ ai: null }), splitLockOk({ ai: null }), splitStruckOk({ ai: null })], [true, true, true], 'no brain: all on');
 }
 
 if (failures) {
