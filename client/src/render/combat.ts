@@ -1935,7 +1935,7 @@ export class CombatView {
   // baseline for the ordinary families is the enemy-base slot (classic/minimap.ts
   // baseIconShown: icon unless the entity flags have 0x800 (dead) or 0x40000 (radar
   // hidden, set by +0x184)), called from the family's own update (Mericarol +0x198,
-  // Gibbon +0x188). The port's dead / death / radar / concealed tests read those bits.
+  // Gibbon vtable 0x00b05740 +0x198; classic/minimap.ts ENEMY_RADAR_SOURCE 'slot'). The port's dead / death / radar / concealed tests read those bits.
   // The Booma family adds its icon per state (boomaIconShown), not through the slot:
   // boomaBrainIconShown maps the brain's state to the exe's (spawn 0, idle 1, notice and
   // chase 3, attack and recover 5, dead 8): a spawning Booma (the spawn animation, then
