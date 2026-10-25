@@ -1,5 +1,27 @@
 # Devlog
 
+## 2026-10-25: The beat clock HUD: the layout and timing of RenderChatShortcutMenuTimer are ported (the draw is not wired)
+
+**Question:** where, when and how does the exe draw the beat (the three digits and the sub-beat bar)?
+
+**Exe evidence (Ephinea 1.25.13):**
+- Body: `RenderChatShortcutMenuTimer_0077b5ac` (named dump `src/Psobb.exe-05112026.c` 752482). It draws the beat text (`render_texturejapanese_xvm_font`, 3 digits, `(q) + (q/1000)*-1000`, q = frames / 0xa20), the sub-beat bar (`(frames % 0xa20) * 163 / 2592`, three vertices on one line at y + 18, the middle one swept by the phase timer), and, in the logged_in scene only, a time text. The asm (objdump of PsoBB.exe at 0x0077b5ac) agrees with the constants.
+- Caller: `ChatShortcutMenuWindow_UpdateVisuals_0075855c` (dump 728474), the chat shortcut menu window. Its per-frame counter +0x40 runs 0..150 at full beat alpha, then the beat fades out over 15 frames (`windowAlphas`). The window position is (650, 425) (0x44228000, 0x43d48000), set at counter 150 (+0x2c/+0x30) and 300 (+0x1c/+0x20) from `0x007584e0` and `0x0075851c` (PROVEN for the numbers; the call targets 0x0077bb1c / 0x0077baf8 are not traced).
+- Colours: the alpha byte is `round(255 * clamp(alpha))` in the top byte; the text is 0xffffff below it, the bar 0x00ff00 (asm `or ..., 0xff00`).
+- Constants read from `.data` (exedata.py read): 163 at 0x978488, 2592 at 0x978480, 18 at 0x978470, 0.01 at 0x978484 (phase step), 1 / -1 at 0x978494 / 0x978490 (phase wrap), 0 at 0x978498 (draw threshold), 15 at 0x974184 (fade), 0.5 at 0x97847c, 2 at 0x978474.
+
+**Port:** `client/src/render/beatclock.ts` (pure): `beatDigits`, `beatBarLength`, `beatBarVertices`, `beatTextOrigin`, `alphaByte` and the colours, `advancePhase`, `windowAlphas`, `beatVisible`. `tests/beatclock.test.ts` (38 checks) pins the numbers. Not wired into `render/fieldhud.ts`: the port has no chat shortcut window to host it.
+
+**ASSUMED (not proven):**
+- The 3 digits are zero-padded (the font's digit count argument is 3; the padding is not traced).
+- The text origin is (x + 163, y - 1). The decomp reads the y from the window's param_4, the asm adds it to the y argument; the asm is followed.
+- The bar's left end is x (the decomp adds 163 to x only on the logged_in path; not resolved).
+- The bar's colour sweep (the 0.5 split of the phase timer, 2t and 2(t-0.5)) is not ported: the asm branch is not fully traced.
+- The visibility trigger (the counter reset and when the window is shown) is not traced; the window is not in the port.
+- The time text (elapsed since login, `local_48 - _DAT_00aab214`, `hh:mm`, `99:59` fallback) is not ported.
+
+**Tests:** `node tests/beatclock.test.ts` (38/38), `node tests/beattime.test.ts` (42/42), `node tests/fieldhud.test.ts` (all passed), `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome.
+
 ## 2026-10-25: Revive HP / TP by source: the item's TP restore ported, Reverser and Moon Atomizer already on the exe rule
 
 **Question:** what HP and TP does a revive give, per source? The brief assumed the Reverser and the Moon Atomizer used 1/8 HP and no TP. Traced on the exe (Ephinea 1.25.13).
