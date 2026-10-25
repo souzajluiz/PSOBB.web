@@ -23,7 +23,7 @@ import { parseObjectSets, playerSpawns, roomToWorld } from '../formats/objset.ts
 import { parseObjectSets as parseSetObjects, placeEntities, type PlacedEntity } from '../formats/setdata.ts';
 import { ObjectLayer } from './objectview.ts';
 import { fieldLocomotion, locomotionSlot, LOCOMOTION_FACTOR, PLAYER_MOTION_FILE, PlayerMotions, townMotion, type Locomotion, type MotionRecord } from '../formats/plymotion.ts';
-import { EMOTE_OPCODE, SIT_OPCODE, SIT_SLOT_CHAIR, SIT_SLOT_PLAIN, altEmoteKey, emotePayload, emoteRecord, emoteSlot, sitEndKey, sitPayload } from '../formats/emotes.ts';
+import { EMOTE_OPCODE, SIT_OPCODE, SIT_SLOT_CHAIR, SIT_SLOT_PLAIN, altEmoteKey, emotePayload, emoteRecord, emoteSlot, sitPayload, sitStandsUp } from '../formats/emotes.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import type { SetPositionState } from '../net/game.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
@@ -769,12 +769,17 @@ export class LobbyView {
     const alt = keys.has('alt');
     const sitting = this.emotes.get(me.clientId)?.sit;
     if (sitting) {
-      // handle_input_state_0xab: only the sit's own key ends it (move_stop); the
-      // movement input does not (the exe sends a packet and keeps the state).
+      // handle_input_state_0xab: only the sit's own key ends it; the movement
+      // input does not (the exe sends a packet and keeps the state). The stand-up
+      // is move_stop(dispatch), which sends 6x3E at the logic position: a remote
+      // sitter ends its sit on it.
       const m = this.markers.get(me.clientId);
-      if (alt && edge(sitEndKey(sitting.chair))) {
+      if (sitStandsUp(sitting.chair, alt, edge)) {
         this.emotes.delete(me.clientId);
-        if (m) this.setGait(m, m.gait, true);
+        if (m) {
+          this.setGait(m, m.gait, true);
+          this.lobby.sendStop(m.target.x, m.target.y, m.target.z, m.angle, this.stopState(m.target));
+        }
       }
       return;
     }

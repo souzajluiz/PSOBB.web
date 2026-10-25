@@ -11,6 +11,7 @@ import {
   chatLineSends,
   chatSendValue,
   sitEndKey,
+  sitStandsUp,
   EMOTE_KEYS,
   EMOTE_OPCODE,
   EMOTE_SLOTS,
@@ -27,6 +28,7 @@ import {
 } from '../client/src/formats/emotes.ts';
 import { FIELD_EMOTE_ROWS, FIELD_EMOTE_SLOTS } from '../client/src/formats/plyemotedata.ts';
 import { townMotion } from '../client/src/formats/plymotion.ts';
+import { stopBody } from '../client/src/net/lobby.ts';
 
 let failures = 0;
 const eq = (a: unknown, b: unknown, what: string) => {
@@ -167,6 +169,22 @@ eq(chatSendValue('{f1}{f2}ab'), 0, 'chat value: two tokens: 10 - 8 - 2 = 0 (not 
   const q = new EmoteQueue();
   q.push(parseEmoteKeys('{f1}ab'));
   eq(q.head(), 'f1', 'chat gate: the token still queues when the line is not sent');
+}
+
+// The local stand-up (handle_input_state_0xab, LAB_0069c17e): Alt + the sit's key
+// on its edge ends the sit and sends move_stop (6x3E, dispatch_action_move_stop).
+{
+  const none = () => false;
+  const down = (k: string) => (key: string) => key === k;
+  eq(sitStandsUp(false, true, down('u')), true, 'stand-up: Alt+U ends the plain sit');
+  eq(sitStandsUp(false, true, down('i')), false, 'stand-up: Alt+I does not end the plain sit');
+  eq(sitStandsUp(true, true, down('i')), true, 'stand-up: Alt+I ends the chair sit');
+  eq(sitStandsUp(true, true, down('u')), false, 'stand-up: Alt+U does not end the chair sit');
+  eq(sitStandsUp(false, false, down('u')), false, 'stand-up: U without Alt does not end the sit');
+  eq(sitStandsUp(true, true, none), false, 'stand-up: no edge, no stand-up');
+  const body = stopBody({ x: 1, y: 2, z: 3 }, 0, 4, { guard: true, room: 2 });
+  const sdv = new DataView(body.buffer);
+  eq([body.length, sdv.getUint16(0, true), sdv.getInt16(4, true), sdv.getInt16(6, true), sdv.getFloat32(8, true), sdv.getFloat32(16, true)], [0x14, 1, 4, 2, 1, 3], 'stand-up 6x3E body: guard, floor, room, x, z');
 }
 
 if (failures) {

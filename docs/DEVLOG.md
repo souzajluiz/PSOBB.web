@@ -40,6 +40,22 @@
 **Not done / open:** the NPC's dead source (what sets 0x800 on an NPC player, through the player's HP or the server's relay), the revive (what clears 0x800 and the +0x62 counter after a Resta on a dead NPC).
 
 **Tests:** `node tests/npcai.test.ts` ok (new block: `headChainBranch` cases, the dead NPC's no-send ticks, the town wiring). `npcs`, `questflow`, `quests`, `questmisc`, `questboard` pass with Node 24. `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome, no Playwright.
+## 2026-10-25: sit stand-up sends 6x3E; the emote state's step table (Ghidra, sit and emote)
+
+**What changed:** a local sit that Alt+U (plain) or Alt+I (chair) ends now sends `6x3E` at the sitter's logic position (`render/lobbyview.ts` emoteTick, through the existing `sendStop` / `stopBody`), so remote clients end the sit as they do for a remote stand-up. Before, the port ended the local sit silently, and a remote copy of the sitter stayed seated. `formats/emotes.ts` gets `sitStandsUp(chair, alt, edge)` (the key test, pure).
+
+**Exe (Psobb.exe, `Psobb.exe-05112026.c`):**
+- `HandleInputState0xAB_0069c0c8` (dump 581992), the sit's state 0x18: the key tests are Alt + U when the chair flag 0x10000000 is clear, Alt + I when it is set, each on `was_key_pressed` (the edge). Both jump to `LAB_0069c17e`: `handle_input_state_move_stop(param_1, dispatch)`, which is `dispatch_action_move_stop` (dump 587490), the `6x3E` body (guard, heading, floor, room, xyz). Proven from the code.
+- The same sit handler's other exits: the palette-slot test (`PlayerHasPaletteSlotEquipped_006a7c24`, the same `LAB_0069c17e`), and the chat queue: `ProcessPlayerEmote_0077cec0` (a peek of the queue head, returns the getter's value) equals the getter 0x108 (plain) or 0x10c (chair), then `ShiftEmoteQueue_0077ce20` and the same stand-up. The queue exit is not ported: the town table of `EMOTE_SLOTS` has no key with slot 48 or 49 (checked: the 46 keys map to 6..53 minus 48 / 49), so it cannot fire from chat. The palette exit is not ported (the port's action palette has no sit type, as before).
+- The sit's movement input sends the 0x60 action `~press_switch` (Ghidra's name for byte 0xAF; ASSUMED the heading packet, as DEVLOG 2026-10-23 follow-up 3 has it), and does not stand the player up. The 0xB0 action in the palette branch is the same kind of packet (ASSUMED, not decoded). Neither changes the state in the traced code.
+- The step enum (`input_state_2`, dump 81885): 0 unknown0 (enter), 2 update_movement_speed, 3 **interrupt**, 5 dispatch, 6 end, 7 unknown7, 8 unknown8. `unknown_handle_movement_inputs` (dump 554909) runs the step 3 `interrupt` of the current state. For the emote (state 0x17), step 3 is `HandleEmoteAction0x3fCheck_0069c7bc` (dump 582388): nothing when `unknown_flags_2 & 0x20000000`, else `dispatch_action_0x3f` (the 6x3F position body, dump 583236) when `+0xb0 & 0x10`. So the emote's per-tick interrupt can send a 6x3F. The port does not send it (the bit 0x10 of +0xb0 has no name in the dump; ASSUMED off in the port).
+- The emote's end: the 0x17 dispatcher (`HandleEmoteInputStateDispatcher_0069c7dc`, dump 582404) is the enter (it runs the old state's end, then `SetPlayerInputState(0x17, emote_id)`); the end step 6 is `ResetPlayerEmoteState_006a2898`. The emote's end on a motion's last frame is still the port's rule: no exit by key or by motion is in the emote's own handler (the exits are the state changes made by the other states' handlers, not traced here).
+
+**ASSUMED:**
+- After the stand-up the exe's sitter state: `handle_input_state_move_stop(dispatch)` sends only the 6x3E; no `SetPlayerInputState` is in that path, so the exe's state after the stand-up (0x18 kept, or the move state set by a later step) is not settled. The port ends the sit display, as before.
+- The stop's position is the logic position (`m.target`) and the marker's angle, the same values as the walk's stop (`sendStop` in the view).
+
+**Checks:** `node tests/emotes.test.ts` (stand-up keys: Alt+U / Alt+I by flag, no Alt, no edge; the 6x3E body: guard, floor, room, x, z). `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/motions.test.ts`, `tests/smoothrender.test.ts`, `tests/collision.test.ts` pass. Not run in Chrome or with two clients.
 
 ## 2026-10-25: the near-enemy flag (character_flags 0x100000): the setter is enemy-only, the NPC guard stays clear
 
