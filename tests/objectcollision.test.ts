@@ -428,6 +428,19 @@ check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag
   check(turned.length === 6 && turned[0].emitter.particles[0].pos.join() === '22,9,-16' && turned[1].emitter.particles[0].pos.join() === '23,18,10', 'the rock at yaw pi/2: the emitters start at the rock plus the turned points (22,9,-16) and (23,18,10)');
 }
 
+// Dark Falz's Darvants (set type 0xc8): the grid builds 80 children (ctor 0x0045fbd4, factory
+// 0x0045fb24 called at 0x0044c605); every child takes the constant table 0x009a67c8 (one row:
+// radius 0, flags 0x807a, bit 0 clear), so the row is disabled and a Darvant box never blocks.
+{
+  const darvant = childBoxTable(0xc8, 0);
+  check(darvant !== null && darvant.table === 0x009a67c8, 'Darvant child 0 takes the constant table 0x009a67c8');
+  check(childBoxTable(0xc8, 79)?.table === 0x009a67c8 && childBoxTable(0xc8, 80) === null, 'Darvant children are 0..79 (80 in the grid), none past the count');
+  const row = darvant?.rows[0];
+  check(darvant?.rows.length === 1 && row?.radius === 0 && row?.flags === 0x807a && row?.shape === 0, 'the Darvant row is one sphere of radius 0 with flags 0x807a');
+  check(row !== undefined && (row.flags & 1) === 0 && !boxPairActive(PLAYER_BOX_FLAGS, row.flags), 'the Darvant row is disabled (bit 0 clear): it does not pair with the player');
+  check(childBoxTable(0xc2, 5)?.table === 0x009a512c, 'the Vol Opt monitor child 5 still resolves through its masked variant (5 & 3 = 1)');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exitCode = 1;

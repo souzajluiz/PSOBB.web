@@ -689,12 +689,13 @@ export const ENEMY_COLLISION_LINKS: Readonly<Record<number, readonly EnemyCollis
 export interface CollisionChildLink {
   callee: number; // the child's constructor
   count: number; // children built by the loop
-  mask: number; // the constructor's `and` on the loop counter
+  mask: number; // the constructor's `and` on the loop counter (0: one constant table, variant 0)
   variants: Readonly<Record<number, number>>; // variant -> table VA
 }
 
 export const CHILD_COLLISION_LINKS: Readonly<Record<number, CollisionChildLink>> = {
   0x00c2: { callee: 0x0044161c, count: 24, mask: 3, variants: { 0: 0x009a5100, 1: 0x009a512c, 2: 0x009a5158, 3: 0x009a5184 } },
+  0x00c8: { callee: 0x0045fbd4, count: 80, mask: 0, variants: { 0: 0x009a67c8 } },
 };
 
 // Factory type id -> the box tables its constructor reaches (only types that reach a site).
