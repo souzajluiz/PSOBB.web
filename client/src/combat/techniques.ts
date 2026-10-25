@@ -270,6 +270,16 @@ export function techTookDamageMin(tech: number): number {
   return el === 'fire' || el === 'ice' || el === 'lightning' || el === 'light' ? TOOK_DAMAGE_ANY : TOOK_DAMAGE_NEVER;
 }
 
+// Whether entity_hit_by_tech shows the damage number over an enemy hit. The
+// elemental attack groups call display_floating_text_at_position in their case
+// (Foie 0x00774c61.., Barta, Gibarta, Zonde, Grants, the fixed group), 0 included,
+// and the invulnerable block shows "0" for every group but the support ones.
+// Megid's case has no number call (its spark only; its path goes to 0x00774e08),
+// and the support groups and Ryuker make none (Ryuker never reaches the function).
+export function techHitShowsNumber(tech: number): boolean {
+  return techElement(tech) !== null && tech !== TECH.megid;
+}
+
 // entity_hit_by_tech's damage of an attack technique (not Megid) on an
 // enemy, before rounding.
 export function techDamage(tech: number, level: number, mst: number, charClass: number, resist: TechResist): number {

@@ -27,19 +27,23 @@
 //   if |m| < |current m| (+0x278): nothing happens (a weaker cast neither
 //   replaces nor refreshes a stronger one);
 //   else +0x278 = m, +0x274 = type, +0x27c (frames) =
-//       round((power * 10 + 40) * 30) (0x009780f8, 0x009780e8 = 40, 0x009780e4 = 30)
-//     ATP (+0x2cc) += round(-old * base ATP (+0x2c4)) + round(m * base ATP)
+//       trunc((power * 10 + 40) * 30) (0x009780f8, 0x009780e8 = 40, 0x009780e4 = 30)
+//     ATP (+0x2cc) += trunc(-old * base ATP (+0x2c4)) + trunc(m * base ATP)
 //     ATP spread (+0x2ce) the same with the base spread (+0x2c6)
 // on_deband_zalure_received(type, power) (0x007793c8): the same with
 //   0x009780d8 / 0x009780dc / 0x009780d4 / 0x009780d0 (same values) on
 //   +0x284 (m), +0x280 (type), +0x288 (frames, 0x009780cc = 40,
 //   0x009780c8 = 30) and DFP (+0x2d2) from the base DFP (+0x2ca).
-// ROUND is the x87 fistp in its default mode: round half to even.
+// The rounding is the x87 fistp with the control word | 0xC00 (RC = 11):
+// truncation toward zero, not round-half-even (objdump 0x007792b5..0x00779308,
+// 0x007794a5..0x007794f0). Each term is chopped on its own, and the chops of
+// -old and new telescope to base + trunc(m * base), which is what atp / dfp
+// return. The frames are an integer product, so the chop changes nothing there.
 //
 // Ticks (shifta_jellen_effect_tick 0x007782b4 / deband_zalure_effect_tick
 // 0x00778580, enemy vtable +0xac / +0xb0, per 30 Hz frame; players only on a
-// field, Player_HandleJellenTick_0068ff38): frames -= 1; when it reaches 0 the slot is cleared and the stat goes back
-// (+= round(-m * base)).
+// field, Player_HandleJellenTick_0068ff38): frames -= 1; when it reaches 0 the
+// slot is cleared and the stat goes back (the chop of -m * base).
 //
 // Anti: AntiTech_HandleCreationAction_006dd410 calls entity_hit_by_tech(anti,
 // power, ..., level) and a player's vtable +0xec = Player_ClearStatusEffect
@@ -59,6 +63,12 @@ const f32 = Math.fround;
 export function roundHalfEven(x: number): number {
   const r = Math.round(x);
   return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
+}
+
+// x87 fistp with the control word | 0xC00 (RC = 11): truncation toward zero. The
+// buff code stores its ATP / spread / DFP and frames this way (see the header).
+export function chop(x: number): number {
+  return Math.trunc(x);
 }
 
 export const BUFF_LEVEL_SCALE = f32(1.3); // 0x009780f4 / 0x009780d8
@@ -85,7 +95,7 @@ export function buffMultiplier(group: BuffGroup, power: number): number {
 
 // Duration in 30 Hz frames.
 export function buffFrames(power: number): number {
-  return roundHalfEven((Math.max(0, power) * BUFF_BASE + BUFF_FRAMES_BASE) * BUFF_FRAMES_SCALE);
+  return chop((Math.max(0, power) * BUFF_BASE + BUFF_FRAMES_BASE) * BUFF_FRAMES_SCALE);
 }
 
 interface BuffSlot {
@@ -103,7 +113,7 @@ export function statusIcon(type: number): number {
 
 // The attack (+0x274..+0x27c) and defense (+0x280..+0x288) slots of one
 // entity. Stats are derived from the base values on demand, which equals the
-// client's incremental += round(-old * base) + round(new * base).
+// client's incremental += chop(-old * base) + chop(new * base).
 export class EntityBuffs {
   attack: BuffSlot = empty();
   defense: BuffSlot = empty();
@@ -151,15 +161,15 @@ export class EntityBuffs {
   }
 
   atp(base: number): number {
-    return base + roundHalfEven(base * this.attack.mult);
+    return base + chop(base * this.attack.mult);
   }
 
   atpSpread(base: number): number {
-    return base + roundHalfEven(base * this.attack.mult);
+    return base + chop(base * this.attack.mult);
   }
 
   dfp(base: number): number {
-    return base + roundHalfEven(base * this.defense.mult);
+    return base + chop(base * this.defense.mult);
   }
 
   // The status icons QuickMenuUpdateShiftaStatusIcons_007426d8 shows for the

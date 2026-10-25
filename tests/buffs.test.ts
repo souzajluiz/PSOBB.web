@@ -9,6 +9,7 @@ import {
   antiCures,
   buffFrames,
   buffMultiplier,
+  chop,
   EntityBuffs,
   GROUP,
   remoteTechLevel,
@@ -44,6 +45,34 @@ eq(buffFrames(14), 5400, 'Lv15 lasts 180 s');
 eq(buffFrames(29), 9900, 'Lv30 lasts 330 s');
 eq([roundHalfEven(2.5), roundHalfEven(3.5), roundHalfEven(-2.5), roundHalfEven(-2.6), roundHalfEven(1.4)], [2, 4, -2, -3, 1], 'fistp rounding');
 
+// --- the stat chop: the buff code's fistp runs with the control word | 0xC00 (RC = 11),
+// so ATP / spread / DFP move by trunc(base * m) per term (objdump of
+// on_shifta_jellen_received 0x007792b5..0x00779308 and on_deband_zalure_received
+// 0x007794a5..0x007794f0), not by round-half-even. The stored m is a float.
+eq([chop(2.9), chop(-2.9), chop(-2.6), chop(9.9999994)], [2, -2, -2, 9], 'chop truncates toward zero');
+{
+  const j = new EntityBuffs();
+  j.apply(GROUP.jellen, 0); // -0.09999999404 as stored
+  eq(j.atp(95), 86, 'Jellen Lv1 on ATP 95: trunc(-9.4999994) = -9 (half-even would give 85)');
+  const j2 = new EntityBuffs();
+  j2.apply(GROUP.jellen, 1); // -0.11299999803
+  eq(j2.atp(95), 85, 'Jellen Lv2 on ATP 95: trunc(-10.735) = -10 (half-even would give 84)');
+  const s = new EntityBuffs();
+  s.apply(GROUP.shifta, 0);
+  eq([s.atp(95), s.atpSpread(20)], [104, 21], 'Shifta Lv1: ATP 95 -> 104 (trunc 9.4999994), spread 20 -> 21 (trunc 1.9999999)');
+  const d = new EntityBuffs();
+  d.apply(GROUP.deband, 0);
+  eq(d.dfp(100), 109, 'Deband Lv1 on DFP 100: trunc(9.9999994) = 9, not 10');
+  const z = new EntityBuffs();
+  z.apply(GROUP.zalure, 1);
+  eq(z.dfp(95), 85, 'Zalure Lv2 on DFP 95: trunc(-10.735) = -10');
+  // Two casts telescope: the chops of -old and new leave base + trunc(new * base).
+  const t = new EntityBuffs();
+  t.apply(GROUP.shifta, 0);
+  t.apply(GROUP.shifta, 14);
+  eq(t.atp(95), 121, 'Shifta Lv1 then Lv15 on ATP 95: 95 + trunc(0.282 * 95) = 121, no drift from the first cast');
+}
+
 // --- stacking: a weaker cast neither replaces nor refreshes ---
 {
   const b = new EntityBuffs();
@@ -78,12 +107,13 @@ eq([roundHalfEven(2.5), roundHalfEven(3.5), roundHalfEven(-2.5), roundHalfEven(-
 {
   const b = new EntityBuffs();
   b.apply(GROUP.shifta, 14);
-  eq([b.atp(500), b.atpSpread(20)], [641, 26], 'Shifta Lv15 ATP / spread');
+  // trunc(500 * 0.282) = 140, trunc(20 * 0.282) = 5 (the chop, not the half-even of 141 / 6).
+  eq([b.atp(500), b.atpSpread(20)], [640, 25], 'Shifta Lv15 ATP / spread');
   b.apply(GROUP.zalure, 14);
   eq(b.dfp(100), 72, 'Zalure Lv15 DFP');
   const d = new EntityBuffs();
   d.apply(GROUP.deband, 29);
-  eq(d.dfp(85), 85 + 41, 'Deband Lv30 DFP (85 * 0.477 = 40.5 -> 41)');
+  eq(d.dfp(85), 85 + 40, 'Deband Lv30 DFP (85 * 0.477 = 40.54 -> 40)');
 }
 
 // --- the weapon damage formula with buffs ---
@@ -99,7 +129,7 @@ eq([roundHalfEven(2.5), roundHalfEven(3.5), roundHalfEven(-2.5), roundHalfEven(-
   const sh = new EntityBuffs();
   sh.apply(GROUP.shifta, 14);
   const shifted = { ...hunter, atp: sh.atp(hunter.atp), atpSpread: sh.atpSpread(hunter.atpSpread) };
-  near(rollDamage(shifted, enemy, 0, seq(0, 0.99)).damage, (641 * 0.2 + 10 - 20) * 0.9, 'Shifta Lv15 hits harder');
+  near(rollDamage(shifted, enemy, 0, seq(0, 0.99)).damage, (640 * 0.2 + 10 - 20) * 0.9, 'Shifta Lv15 hits harder');
   const za = new EntityBuffs();
   za.apply(GROUP.zalure, 14);
   near(rollDamage(hunter, { ...enemy, dfp: za.dfp(enemy.dfp) }, 0, seq(0, 0.99)).damage, (100 + 10 - 72 * 0.2) * 0.9, 'Zalure Lv15 enemy takes more');
@@ -109,8 +139,9 @@ eq([roundHalfEven(2.5), roundHalfEven(3.5), roundHalfEven(-2.5), roundHalfEven(-
   const je = new EntityBuffs();
   je.apply(GROUP.jellen, 14);
   const jellened = { ...booma, atp: je.atp(booma.atp), atpSpread: je.atpSpread(booma.atpSpread) };
-  eq([jellened.atp, jellened.atpSpread], [86, 7], 'Jellen Lv15 enemy ATP / spread');
-  near(rollDamage(jellened, me, 0, seq(0, 0.99), 1).damage, 86 * 0.2 + 4 - 6, 'Jellen lowers enemy damage');
+  // trunc(120 * -0.282) = -33, trunc(10 * -0.282) = -2.
+  eq([jellened.atp, jellened.atpSpread], [87, 8], 'Jellen Lv15 enemy ATP / spread');
+  near(rollDamage(jellened, me, 0, seq(0, 0.99), 1).damage, 87 * 0.2 + 4 - 6, 'Jellen lowers enemy damage');
   // Deband on the player.
   const de = new EntityBuffs();
   de.apply(GROUP.deband, 14);

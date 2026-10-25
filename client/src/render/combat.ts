@@ -139,6 +139,7 @@ import {
   techGroup,
   techHitPower,
   techPower,
+  techHitShowsNumber,
   techTookDamageMin,
   type TechniqueData,
   type TechResist,
@@ -402,6 +403,9 @@ interface HitVisual {
   // The total that sets 0x200 for this source (formulas.ts TOOK_DAMAGE_*). Default:
   // the melee / weapon threshold, TOOK_DAMAGE_MIN.
   took?: number;
+  // false: no damage number over the hit (entity_hit_by_tech's Megid: the spark
+  // only). Default: the number, 0 included.
+  number?: boolean;
 }
 
 // Epsilon's body: its cloned materials, their base colours and the last tint
@@ -862,6 +866,9 @@ export class CombatView {
   // The strike being shown landed (its send carries 0x200, 0 damage included):
   // set by applyEnemyHit for the send helpers it dispatches to.
   private hitLanded = false;
+  // The strike being shown has no number (HitVisual.number false): num() is silent
+  // unless the caller forces it (the invulnerable "0"). Set by applyEnemyHit.
+  private hitQuiet = false;
   // The particles on players: hits, blocks, status effects, revives and the
   // dead marker (render/playerfx.ts, combat/playerfx.ts).
   private playerFx: PlayerEffects | null = null;
@@ -7393,6 +7400,18 @@ export class CombatView {
   // it, its reaction, and the kill flow when it died. Shared by weapon hits
   // and techniques (entity_hit_by_tech ends in the same ApplyHitEffects).
   private applyEnemyHit(e: EnemyRuntime, baseFlags: number, damage: number, critical: boolean, what: string, byPlayer = true, fx: HitVisual = {}): void {
+    // The number rule of this one strike (fx.number); the flag is restored after it, so a
+    // direct num() call elsewhere (the Epsilon immune "0") is not silenced by it.
+    const quiet = this.hitQuiet;
+    this.hitQuiet = fx.number === false;
+    try {
+      this.applyEnemyHitRule(e, baseFlags, damage, critical, what, byPlayer, fx);
+    } finally {
+      this.hitQuiet = quiet;
+    }
+  }
+
+  private applyEnemyHitRule(e: EnemyRuntime, baseFlags: number, damage: number, critical: boolean, what: string, byPlayer = true, fx: HitVisual = {}): void {
     const me = this.game.self;
     if (byPlayer && damage >= 1 && !e.ai?.invulnerable) haptic('hit'); // browser vibration (input/haptics.ts)
     this.hitMissed = fx.miss === true;
@@ -7405,7 +7424,7 @@ export class CombatView {
     if (e.ai?.invulnerable) {
       // EntityHitEntity / entity_hit_by_tech: the number 0 and nothing else.
       const ip = e.instance.root.position;
-      this.num(0, false, ip.x, ip.y + 26, ip.z);
+      this.num(0, false, ip.x, ip.y + 26, ip.z, true);
       // Gi Gue's barrier answers a blocked hit with a bomb (combat/enemyfsmep2a.ts).
       if (e.ai instanceof GiGueAi && me && byPlayer) e.ai.blocked(me.clientId);
       // The invulnerable flag: entity_hit_by_tech / the weapon hit show the
@@ -7610,8 +7629,10 @@ export class CombatView {
     );
   }
 
-  // The number or the "MISS" over a hit (combat/hitfx.ts).
-  private num(damage: number, critical: boolean, x: number, y: number, z: number): void {
+  // The number or the "MISS" over a hit (combat/hitfx.ts). Silent for a strike with
+  // HitVisual.number false, unless `always` (the invulnerable "0").
+  private num(damage: number, critical: boolean, x: number, y: number, z: number, always = false): void {
+    if (this.hitQuiet && !always) return;
     if (this.hitMissed) this.overlay?.miss(x, y, z);
     else this.overlay?.damage(damage, critical, x, y, z);
   }
@@ -8490,6 +8511,15 @@ export class CombatView {
   // entity_hit_by_tech(jellen / zalure) on an enemy; the caster's client
   // reports it with 6x0A (vtable +0x130, 0x00787578: unchanged total damage).
   private buffEnemy(e: EnemyRuntime, group: BuffGroup, power: number, what: string, own: boolean): void {
+    // entity_hit_by_tech's invulnerable block (0x00773bf9) takes Jellen and Zalure too (its
+    // exclusions are Resta, Anti, Reverser, Shifta, Deband and the always-zero group): the
+    // "0" and nothing else, no effect and no 6x0A.
+    if ((group === GROUP.jellen || group === GROUP.zalure) && e.ai?.invulnerable) {
+      const p = e.instance.root.position;
+      this.overlay?.damage(0, false, p.x, p.y + 26, p.z);
+      this.opts.log(`${what}E-${e.index.toString(16)} (${e.slot.type}) is invulnerable`);
+      return;
+    }
     if (!e.buffs.apply(group, power)) return;
     const attackSlot = group === GROUP.jellen || group === GROUP.shifta;
     const slot = attackSlot ? e.buffs.attack : e.buffs.defense;
@@ -8566,7 +8596,8 @@ export class CombatView {
       // ASSUMED the floor is not a boss map).
       const chance = megidChance(level, e.resist.edk);
       const kill = this.rng() < chance;
-      this.applyEnemyHit(e, ENEMY_BASE_FLAGS, kill ? e.stats.hp : 0, false, `${name} (${Math.round(chance * 100)}%) `, true, { kind: techHitFx(tech), landed: kill });
+      // The exe shows no number for Megid (its spark only), kill or not: techHitShowsNumber.
+      this.applyEnemyHit(e, ENEMY_BASE_FLAGS, kill ? e.stats.hp : 0, false, `${name} (${Math.round(chance * 100)}%) `, true, { kind: techHitFx(tech), landed: kill, number: techHitShowsNumber(tech) });
       return;
     }
     const damage = techDamage(tech, level, mst, charClass, e.resist);
@@ -8582,7 +8613,11 @@ export class CombatView {
     }
     if (status !== null && !e.dead) this.inflictEnemy(e, status, name);
     const hits = e.ai instanceof SlimeAi ? e.ai.hits : 0;
-    this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, false, `${name} (power ${Math.round(techPower(tech, level, charClass))}) `, true, { kind: techHitFx(tech), took: techTookDamageMin(tech) });
+    this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, false, `${name} (power ${Math.round(techPower(tech, level, charClass))}) `, true, {
+      kind: techHitFx(tech),
+      took: techTookDamageMin(tech),
+      number: techHitShowsNumber(tech),
+    });
     // 0x005987c8: Gibarta / Rabarta (technique group 2) split a Pofuilly Slime.
     if ((tech === TECH.gibarta || tech === TECH.rabarta) && e.ai instanceof SlimeAi && e.ai.hits > hits && !e.dead) void this.splitSlime(e, name);
   }
