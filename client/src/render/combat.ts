@@ -63,6 +63,7 @@ import { PigRayAi, type PigEvent } from '../combat/barbaminion.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, DragonFireball, DRAGON_BODY_BOXES, DRAGON_MOUTH, type DragonEvent } from '../combat/dragon.ts';
 import { GoldDragonAi, GOL_BODY_BOXES, GOL_EXTRA, decodeGolA8, type GolEvent, type GolExtraPlacement } from '../combat/goldragon.ts';
+import { decodeEnemyTargetState } from '../combat/enemystate.ts';
 import { shareMeshResources } from './dispose.ts';
 import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
 import { SPINNER_X, spinnerScale } from '../combat/saintmilion.ts';
@@ -3030,6 +3031,23 @@ export class CombatView {
     e.stats.hp = 0;
     if (this.lockOn === e) this.lockOn = null;
     this.bossKilled(e, x, z, this.dragonLastHit, 'Dragon');
+  }
+
+  // A 6x10 / 6x11 (ApplyEnemyTargetAndState_00423a78 / ..._ConditionalState_00423ac8, combat/enemystate.ts):
+  // the target, the cursor and the state, on every client. The exe sends none, so this applies only what
+  // another client wrote. Only the Dragon and the Gol Dragon are applied: their state numbers are the
+  // exe's (their 6x12 / 6xA8 packets set the same words); the other families' state numbers are not
+  // mapped to their brains, so their packets are logged and not applied.
+  private onEnemyTargetState(body: Uint8Array): void {
+    const m = decodeEnemyTargetState(body);
+    if (!m) return;
+    const e = this.enemies.get(m.entity - 0x1000);
+    if (!e || e.dead) return;
+    if (e.ai instanceof DragonAi || e.ai instanceof GoldDragonAi) {
+      e.ai.applyTargetState(m.phase, m.cursor, m.target, m.sub);
+      return;
+    }
+    this.opts.log(`6x${m.sub.toString(16)}: E-${e.index.toString(16)} (${e.slot.type}) state ${m.phase} not applied (family not mapped)`);
   }
 
   // A 6x12 from the leader (action_dragon 0x00423b00).
@@ -8918,6 +8936,10 @@ export class CombatView {
     }
     if (sub === 0x12) {
       this.onDragonAction(body);
+      return;
+    }
+    if (sub === 0x10 || sub === 0x11) {
+      this.onEnemyTargetState(body);
       return;
     }
     if (sub === 0xa0 || sub === 0x9f) {

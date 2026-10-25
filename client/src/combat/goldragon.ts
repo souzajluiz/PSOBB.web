@@ -21,6 +21,7 @@
 import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
+import { enemyTargetStateSets } from './enemystate.ts';
 import { DragonFireball, DragonTrapezoid, DRAGON_FIRE_IDS, type DragonEmitter } from './dragon.ts';
 import { EnemyShot, PLAYER_RADIUS, type ShotEffect, type ShotLook } from './enemyshots.ts';
 
@@ -684,6 +685,14 @@ export class GoldDragonAi extends BrainBase {
 
   applyRemote(state: number, cursor: number, target: number | null, x: number, z: number): void {
     this.applyPacket(state, cursor, target, x, z);
+  }
+
+  // A 6x10 / 6x11 (the same handlers as the Dragon's, combat/enemystate.ts): the target, the cursor,
+  // then the state (6x11 only on a change). No x / z, no phase 7.
+  applyTargetState(state: number, cursor: number, target: number | null, sub: number): void {
+    this.targetId = target;
+    this.cursor = cursor;
+    if (enemyTargetStateSets(sub, state, this.sid)) this.setState(state);
   }
 
   // The table walk of phase 9 (pickNext): the state the sequence names, and the cursor.
