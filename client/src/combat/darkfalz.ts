@@ -146,17 +146,14 @@ export class Darvant extends DfEntity {
 }
 
 // The box timer a Darvant is created with (exe 0x0045FBD4, the init shared by the ring, the spat
-// and the beam ones): w = the entity index word (+0x1C, "entity_index_small + 4096"), then
-// +0x3B4 = 225 * (2 * (w - 6 * (w / 3)) + 2) by the exe's signed divide (0x0045FDC8..0x0045FDF9),
-// and +0x3B0 = 0. Only w 0, 1 and 2 give a positive start (450, 900, 1350); for w >= 3 (every
-// wire id, 0x1000 + slot) the value is 0 or below, and the first hover tick reloads the timer
-// exactly as a zero start does.
+// and the beam ones): w = the entity index word (+0x1C, "entity_index_small + 4096", read at
+// 0x0045FD65), then +0x3B4 = 225 * (2 * (w % 6) + 2) = 450 * (w % 6 + 1) (0x0045FDC8..0x0045FDF9:
+// the multiply by 0x2AAAAAAB is a signed divide by 6, the rest is w - 6 * (w / 6), then * 225),
+// and +0x3B0 = 0. So the Darvants start staggered at 450, 900, .. 2700 ticks by their id.
 export function darvantBoxStart(w: number): number {
-  const e = 2 * (w - 6 * Math.trunc(w / 3)) + 2;
-  return 225 * e;
+  return 450 * ((w % 6) + 1);
 }
 
-// The cycle of the ring's box (exe 0x0045F25C, the top of the update in states 1 and 2).
 export function darvantBoxStep(d: Darvant): void {
   const t = d.boxTimer - 1;
   if (t < 0) {

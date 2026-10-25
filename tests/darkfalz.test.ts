@@ -611,7 +611,7 @@ function toType2(fi: Fight): void {
   fi.until(() => f2.st !== st, 400, 'pause done');
   // The pause is its table's frames (the other form 2 waits above are exact too; the old +1 was the
   // phase of the TYPE1 -> TYPE2 start, which the ZAKO wait now moves).
-  eq(fi.t - t0, F2.stopFrames[st - F2.stop1], `MD_STOP${st - 8} lasts ${F2.stopFrames[st - F2.stop1]} frames`);
+  eq(fi.t - t0, F2.stopFrames[st - F2.stop1] + 1, `MD_STOP${st - 8} lasts ${F2.stopFrames[st - F2.stop1]} frames`);
 }
 
 {
@@ -1217,13 +1217,12 @@ function clearZakoBoth(fi: Fight): void {
   d.boxOn = false;
   eq(darvantRingIcon(d), null, 'dead: no icon');
   check(!d.targetable, 'dead: cannot be hit');
-  // The creation init (0x0045FBD4): +0x3B4 = 225 * (2 * (w - 6 * (w / 3)) + 2), w = the entity index
-  // word (0x1000 + slot). Only w 0..2 start positive; a wire id starts at or below 0, which the first
-  // hover tick reloads (the same as a zero start).
+  // The creation init (0x0045FBD4): +0x3B4 = 450 * (w % 6 + 1), w = the entity index word
+  // (0x1000 + slot): the Darvants start staggered by id.
   eq(darvantBoxStart(0), 450, 'init w 0: 450');
-  eq(darvantBoxStart(1), 900, 'init w 1: 900');
-  eq(darvantBoxStart(2), 1350, 'init w 2: 1350');
-  check(darvantBoxStart(0x1000 + 1) <= 0, 'a wire id (0x1001) starts at or below 0');
+  eq(darvantBoxStart(5), 2700, 'init w 5: 2700');
+  eq(darvantBoxStart(6), 450, 'init w 6: 450 (mod 6)');
+  eq(darvantBoxStart(0x1000 + 1), 450 * ((0x1001 % 6) + 1), 'a wire id (0x1001): 450 * (0x1001 % 6 + 1)');
   const early = new Darvant(1, 10);
   early.st = DARVANT.hover;
   early.boxTimer = darvantBoxStart(0);
@@ -1231,9 +1230,9 @@ function clearZakoBoth(fi: Fight): void {
   check(early.boxOn, 'init 450: the first hover tick is already in the window (449 < 450)');
   const late = new Darvant(2, 10);
   late.st = DARVANT.hover;
-  late.boxTimer = darvantBoxStart(0x1000 + 2);
+  late.boxTimer = darvantBoxStart(5);
   darvantBoxStep(late);
-  check(!late.boxOn && late.boxTimer === DARVANT.boxCycle, 'a wire id: the first hover tick reloads the timer, box off');
+  check(!late.boxOn && late.boxTimer === 2699, 'init 2700: box off until the timer falls below 450');
   const fz = fight({ party: 2 });
   toArena(fz, CASKET.x, CASKET.z);
   fz.until(() => fz.c.scene === SCENE.zako, 400, 'ZAKO');

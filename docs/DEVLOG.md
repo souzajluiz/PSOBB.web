@@ -27,7 +27,7 @@
 - The beam's class is AF8020 (ctor 0x0045F1D4, factory 0x00460E14), so its box is not the ring's; its box rule is ASSUMED (not traced).
 
 **ASSUMED / open.**
-- Darvant start (proven, see "Timer writers" below): the factory 0x0045FBD4 (shared by the ring, the spat and the beam ones) writes +0x3B0 = 0 and +0x3B4 = 225 * (2 * (w - 6 * (w / 3)) + 2), w = the entity index word (+0x1C, "entity_index_small + 4096", dump struct enemy). Only w 0..2 start positive; every wire id (0x1000 + slot) starts at or below 0, which the first hover tick reloads, so the port's start is exact for them. ASSUMED: the control's wire id is `0x1000 | head.index` (render/combat.ts entityId) and the Darvant's is that + its offset.
+- Darvant start (proven, see "Timer writers" below): the factory 0x0045FBD4 (shared by the ring, the spat and the beam ones) writes +0x3B0 = 0 and +0x3B4 = 450 * (w % 6 + 1) (the multiply by 0x2AAAAAAB at 0x0045FDC8 is a signed divide by 6; 225 * (2 * (w % 6) + 2)), w = the entity index word (+0x1C, "entity_index_small + 4096", dump struct enemy, read at 0x0045FD65). So the Darvants start staggered by id at 450 .. 2700 ticks. ASSUMED: the control's wire id is `0x1000 | head.index` (render/combat.ts entityId) and the Darvant's is that + its offset.
 - Form 2's box rule is written against the port's `blend` (= +0x3F0). The port's dead and waiting states keep the old test.
 - Form 1's box: no DF code writes it, so it is treated as on from creation (the port's `awake` / dead / waitKill rule is unchanged). The 0x200 flag's writers in form 1 are not traced.
 - Spat Darvants and beam Darvants: box rule not traced (the beam's class is not confirmed as 0x00AF7D60). They keep the state rule.
