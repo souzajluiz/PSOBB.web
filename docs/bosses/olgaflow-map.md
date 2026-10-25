@@ -913,3 +913,17 @@ section. Mark: PROVEN unless noted.
   through `this`, and the Olga's per-tick copies through the generic enemy update, FUN_00492a84's callees); (2) if none is
   found, the exe reads stale arena bytes and the port needs a documented choice (zero anchors = no hit, or ASSUMED
   spawn-position anchors); (3) the lancer's and stab's bones remain ASSUMED (15.5, 16.5).
+
+### 17.6 Pass 8 (2026-10-25): exhaustive asm check of the anchor slots (PROVEN; verdict unchanged)
+
+- objdump `-D -M intel` of the Olga code range (0x497000..0x4a2000), every memory operand `[reg + 0x638..0x661]` (with or
+  without index): stores only at 0x49773c (+0x65c) and 0x49775b (+0x658), the Olga1 ctor. Reads of +0x640 / +0x644 /
+  +0x648 / +0x64c / +0x654 only in the tail function (0x495684..0x495800).
+- The address-passing `lea`s: 0x49b13e (+0x638, a Volopt minion in RenderVoloptForm7MinionComponents, not the beast);
+  0x49eee9 (+0x644) and 0x49fa6d / 0x49fb31 (+0x638): the out-slots of CreateParticleEffect (0x50b7a4 / 0x486cd0) in the
+  form-2 minion functions (HandleOlga2MinionTimerState_0049ee9c, HandleOlgaMinionStateSync_0049ef68). So +0x644 / +0x638
+  hold particle-object pointers on the form-2 side, not positions on the form-1 beast.
+- No `rep movs` / `rep stos` and no memcpy / memset call in the range (no whole-object copy).
+- Constants (exedata, PROVEN): 0x00902668 = 10.5, 0x00902664 = 15.0, the tail chunk index at 0x009a6ea8 = 51.
+- Verdict: the tail hit stays NOT PORTED. The beast's +0x640..+0x654 has no decoded writer; the port has no exe anchor
+  to copy. DEVLOG 2026-10-25 "Olga tail anchor, pass 8".
