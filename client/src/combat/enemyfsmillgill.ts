@@ -31,12 +31,21 @@
 //   0x0052f110, +0x94 = 0xb4), particle 3, at the target's spot; then sub 4 recovers 10 frames.
 //   The scythe recovers 30 frames (sub 3) and its hit frame is 30 or 35 (fild of +0x3ac).
 //
+// Resolved this pass (objdump + the refsrc dump, PsoBB.exe):
+//   the tackle's counts: the windup is the int 10 (0x0052f742, sub 1, the kamae); the recovery
+//   (sub 4, after the dash) is int(fparam1) of MovementData row 38 (g_illgill_anim_speeds, the
+//   0x0077a6cc(38) row; the three fistp sites 0x0052f391, 0x0052f6cb, 0x0052f94a, RC = truncate).
+//   The dash's speed comes from the Alignment record (0x009bc4d0 = 0.0) and its travel from the
+//   animation; the port keeps the walk speed times 4.5 (ASSUMED, see tickTackle).
+//   The spawn: the state timer of vtable 0x00b069b0 (InitializeEnemyStateTimer_00576c48 and the
+//   tick 0x00576b18): 42 ticks in float32 (spawnTicks), then the wander (untraced).
+//   The advance (state 1): no exit in its handler; the drop of the target is traced (tickAdvance).
+//
 // ASSUMED (not traced): the transitions into and out of the states other than the attack
 // selection, the walk and turn speeds (the port's MovementData fparam1 and turn 1024 BAMS from the
-// record 0x009bc4cc), the windup and recovery counts of the tackle (its counters are written by a
-// fistp of the animation frame count, not traced), the spawn and advance durations (the spawn
-// waits on the state timer 0x00576c48, not traced), and the player's EIC / ETH / EDK (the port has
-// no resist source for the local player, so they read 0 in render/combat.ts).
+// record 0x009bc4cc), the tackle's acquire probes (SorcererAcquireTarget_00771c8c, always passing),
+// the wander after the spawn and the advance's exit to the chase, and the player's EIC / ETH / EDK
+// (the port has no resist source for the local player, so they read 0 in render/combat.ts).
 
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion, type IllGillSpecial } from './enemyai.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
@@ -82,8 +91,21 @@ export const ILL_GILL = {
   dashSpeed: 4.5,
   dashKnockback: 2,
   dashFrames: 120,
-  windup: 30, // ASSUMED: the count of sub 1 (the exe's +0x3a4-style counter, anim speed row 0)
-  recover: 30, // ASSUMED: the count of sub 4
+  // Tackle windup (sub 1, IllgillUpdateAI_0052f18c): the int 10 stored at 0x0052f742
+  // (mov dword [esi+0x3a4], 0xa) when an acquire probe passes; the kamae (slot 8) plays meanwhile.
+  // The probes (SorcererAcquireTarget_00771c8c) are ASSUMED to pass: their map and line-of-sight
+  // tests are not ported.
+  tackleWindup: 10,
+  // Sub 4 (the dash's end, and the no-dash path) counts int(fparam1) of MovementData row 38, the
+  // exe's g_illgill_anim_speeds (0x0052f391, 0x0052f6cb, 0x0052f94a: fistp with RC = truncate).
+  // The count is set from the movement row in the constructor (recoverFrames).
+  // Spawn (state 0): the state timer of vtable 0x00b069b0 (InitializeEnemyStateTimer_00576c48):
+  // vtable[1](10) sets the step 2.0 / 10 (0x00927260 over the arg), the start is step * -30.0
+  // (0x0092720c), each tick vtable[5] adds the step (0x00576b18) and is done at 2.0 (0x00927234).
+  // Computed in float32 (Math.fround) in the spawn tick; see spawnTicks.
+  timerStep: 2 / 10,
+  timerScale: -30,
+  timerDone: 2,
   // Shadow (state 5): the sub 1 wait (check_entity_animation_elapsed_threshold 10.0).
   snareWait: 10,
   // Sub 2 imposes the web's hold on the target: the flag object's +0x94 = 0xb4 (180 frames),
@@ -103,6 +125,21 @@ const bamsDiff = (a: number, b: number): number => {
   return d > 0x8000 ? 0x10000 - d : d;
 };
 const sq = (v: number): number => v * v;
+// The exe's stores are float32 (fstp dword): every timer step rounds to float32.
+const f32 = (v: number): number => Math.fround(v);
+
+// The spawn's length in ticks: the init tick (sub 0) and the timer ticks (sub 1) until the sum
+// reaches the done value. Exported so the test can check the float32 walk against the port.
+export function spawnTicks(): number {
+  const step = f32(ILL_GILL.timerStep);
+  let t = f32(step * ILL_GILL.timerScale);
+  let n = 1;
+  for (;;) {
+    n++;
+    t = f32(t + step);
+    if (t >= ILL_GILL.timerDone) return n;
+  }
+}
 
 // Sub-states of the attack handlers, named for the handler's phase.
 type Sub = number;
@@ -139,6 +176,9 @@ export class IllGillAi extends BrainBase {
   private hitDone = false; // the scythe's hit (last_footstep_effect_z)
   private tackleHits = new Set<number>(); // +0x3e8..0x3f4: the dash's hit targets
   private dashFrames = 0; // the dash's frame count (state 4 sub 2)
+  private spawnT = 0; // the spawn's state timer (float32, 0x00576c48 family), state 0
+  // The tackle's recovery count (sub 4): int(MovementData row 38 fparam1), see ILL_GILL.
+  private readonly recoverFrames: number;
   private homeX: number;
   private homeZ: number;
   private escaped = false; // flag 0x2000 (the escape below a quarter of its HP)
@@ -154,6 +194,8 @@ export class IllGillAi extends BrainBase {
     this.attacks = opts.attacks.length >= 4 ? opts.attacks : [...opts.attacks, ...Array(4 - opts.attacks.length).fill(null)];
     const f = opts.movement?.fparam1 ?? 0;
     this.speed = f > 0 ? f : 1; // ASSUMED fallback
+    // fistp (truncate) of the row's fparam1 (0x0052f391 and its two copies); no movement row: 0.
+    this.recoverFrames = Math.trunc(opts.movement?.fparam1 ?? 0);
     const ip = opts.movement?.iparam ?? [];
     this.icePower = ((ip[0] ?? 0) << 16) >> 16;
     this.killPower = ((ip[1] ?? 0) << 16) >> 16;
@@ -218,9 +260,11 @@ export class IllGillAi extends BrainBase {
     this.elapsed = 0;
   }
 
-  private turnTo(t: AiTarget): void {
+  // The turn at 1024 BAMS per tick, times a factor (the tackle's turns use fild(1024) * 2.0 for the
+  // aim and windup, and * 4.5 for the dash: IllgillUpdateAI_0052f18c).
+  private turnTo(t: AiTarget, factor = 1): void {
     const want = Math.atan2(t.x - this.x, t.z - this.z);
-    this.angle = turnToward(this.angle, want, ILL_GILL.turn);
+    this.angle = turnToward(this.angle, want, ILL_GILL.turn * factor);
   }
 
   private faces(t: AiTarget, row: number): boolean {
@@ -256,19 +300,8 @@ export class IllGillAi extends BrainBase {
       this.tickDamage(out, t, animationEnded);
       return this.finish(out);
     }
-    if (this.state === 'spawn') {
-      // ASSUMED: the spawn wait lasts one frame (the exe's timer length is not traced).
-      this.state = 'advance';
-      this.setMotion(out, ILL_GILL_ANIM.wait);
-      return this.finish(out);
-    }
-    if (this.state === 'advance') {
-      // The exe's advance state (0x0053044c): ASSUMED to walk on to the chase.
-      this.state = 'chase';
-      this.sub = 0;
-      this.setMotion(out, ILL_GILL_ANIM.walk);
-      return this.finish(out);
-    }
+    if (this.state === 'spawn') return this.tickSpawn(out);
+    if (this.state === 'advance') return this.tickAdvance(out, t, targets);
     if (this.state === 'idle') {
       // State 6: the counter-run idle. Its entry is not traced (ASSUMED), so it only holds still.
       this.setMotion(out, ILL_GILL_ANIM.wait);
@@ -278,6 +311,52 @@ export class IllGillAi extends BrainBase {
     if (this.state === 'scythe') return this.tickScythe(out, t, animationEnded);
     if (this.state === 'snare') return this.tickSnare(out, t, animationEnded);
     if (this.state === 'tackle') return this.tickTackle(out, t);
+    return this.finish(out);
+  }
+
+  // State 0 (0x00530554, the spawn). Sub 0 starts the state timer (the init tick: step * -30.0 in
+  // float32) and the spawn's effects; sub 1 ticks the timer (+ step per tick) and the done tick
+  // (the 41st timer tick, 42 ticks in all: spawnTicks) sets sub 2, the wander. ASSUMED: the wander's
+  // movement is not traced, so it holds one tick and then the advance begins (the exe keeps the
+  // wander until a state request).
+  private tickSpawn(out: AiFrame): AiFrame {
+    if (this.sub === 0) {
+      this.spawnT = f32(f32(ILL_GILL.timerStep) * ILL_GILL.timerScale);
+      this.sub = 1;
+      this.setMotion(out, ILL_GILL_ANIM.wait);
+      return this.finish(out);
+    }
+    if (this.sub === 1) {
+      this.spawnT = f32(this.spawnT + f32(ILL_GILL.timerStep));
+      if (this.spawnT >= ILL_GILL.timerDone) this.sub = 2;
+      this.setMotion(out, ILL_GILL_ANIM.wait);
+      return this.finish(out);
+    }
+    this.state = 'advance';
+    this.sub = 0;
+    this.setMotion(out, ILL_GILL_ANIM.wait);
+    return this.finish(out);
+  }
+
+  // State 1 (0x0053044c, the advance). No timer and no exit of its own: the handler writes no
+  // state. Each tick it holds still (the wait slot; its speed is the Alignment record's float
+  // 0x009bc4d0 = 0.0, times 2.0) and drops the target beyond the sight range from the point one
+  // unit ahead of its home (dist^2 > 400^2). ASSUMED exit: a live player in sight starts the chase
+  // (the exe's state request, which writes +0x32e from outside this handler, is not traced).
+  private tickAdvance(out: AiFrame, t: AiTarget | null, targets: readonly AiTarget[]): AiFrame {
+    this.setMotion(out, ILL_GILL_ANIM.wait);
+    const hx = this.homeX + Math.sin(this.angle);
+    const hz = this.homeZ + Math.cos(this.angle);
+    if (sq(hx - this.x) + sq(hz - this.z) > sq(ILL_GILL.sight)) {
+      this.targetId = null;
+      return this.finish(out);
+    }
+    const n = t ?? nearest(targets, this.x, this.z, ILL_GILL.sight);
+    if (n) {
+      this.targetId = n.clientId;
+      this.state = 'chase';
+      this.sub = 0;
+    }
     return this.finish(out);
   }
 
@@ -430,11 +509,14 @@ export class IllGillAi extends BrainBase {
     return this.finish(out);
   }
 
-  // State 4 (0x0052f18c), the tackle. Sub 0 aims; sub 1 is the stance (kamae) and turns
-  // towards the target, then the dash (sub 2) at the walk speed times 4.5 with a knockback of
-  // 2.0 on each target it reaches once; the dash ends when it is near the target, beyond the
-  // sight range, or after 120 frames; sub 4 recovers and returns to the chase. With no target
-  // the state holds still and shows no icon (the exe's no-target return).
+  // State 4 (0x0052f18c), the tackle. Sub 0 aims (turn at 2048 BAMS per tick) and starts the
+  // windup once the target is in the arc; sub 1 is the stance (kamae) for 10 ticks; sub 2 is the
+  // dash with a knockback of 2.0 on each target it reaches once, ending when it is near the target,
+  // beyond the sight range, or after 120 frames; sub 4 recovers int(fparam1) ticks and then the
+  // port returns to the chase (ASSUMED: the exe clears the target and keeps state 4). The dash's
+  // speed here is the walk speed times 4.5 (ASSUMED: the exe's record gives 0.0 and the travel is
+  // the animation's). With no target the state holds still and shows no icon (the exe's no-target
+  // return).
   private tickTackle(out: AiFrame, t: AiTarget | null): AiFrame {
     if (!t) {
       this.sub = 0;
@@ -442,13 +524,20 @@ export class IllGillAi extends BrainBase {
       return this.finish(out);
     }
     if (this.sub === 0) {
-      this.sub = 1;
-      this.count = ILL_GILL.windup;
-      this.setMotion(out, ILL_GILL_ANIM.kamae);
+      // Aim (sub 0): turn at twice the rate; the windup starts once the target is in the arc
+      // (attacks[3].angle, read after the turn). The exe's two acquire probes are ASSUMED to pass.
+      this.turnTo(t, 2);
+      if (this.faces(t, 3)) {
+        this.sub = 1;
+        this.count = ILL_GILL.tackleWindup;
+        this.setMotion(out, ILL_GILL_ANIM.kamae);
+      } else {
+        this.setMotion(out, ILL_GILL_ANIM.wait);
+      }
       return this.finish(out);
     }
     if (this.sub === 1) {
-      this.turnTo(t);
+      this.turnTo(t, 2);
       this.count--;
       if (this.count < 0) {
         this.sub = 2;
@@ -459,7 +548,7 @@ export class IllGillAi extends BrainBase {
     }
     if (this.sub === 2) {
       this.dashFrames++;
-      this.turnTo(t);
+      this.turnTo(t, ILL_GILL.dashSpeed);
       this.stepToward(t, this.speed * ILL_GILL.dashSpeed);
       const d2 = sq(t.x - this.x) + sq(t.z - this.z);
       if (!this.tackleHits.has(t.clientId) && d2 < sq(this.radius + this.attackOf(3).distanceX)) {
@@ -468,7 +557,7 @@ export class IllGillAi extends BrainBase {
       }
       if (d2 < sq(this.speed * ILL_GILL.dashSpeed + this.radius) || d2 > sq(ILL_GILL.sight) || this.dashFrames > ILL_GILL.dashFrames) {
         this.sub = 4;
-        this.count = ILL_GILL.recover;
+        this.count = this.recoverFrames;
         this.setMotion(out, ILL_GILL_ANIM.wait);
       }
       return this.finish(out);

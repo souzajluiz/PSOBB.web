@@ -4,7 +4,7 @@
 // hit frame, the snare and tackle sequences, and the damage escape below a quarter HP.
 // Run: node tests/enemyfsmillgill.test.ts
 
-import { ILL_GILL, ILL_GILL_ANIM, IllGillAi } from '../client/src/combat/enemyfsmillgill.ts';
+import { ILL_GILL, ILL_GILL_ANIM, IllGillAi, spawnTicks } from '../client/src/combat/enemyfsmillgill.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyAttackData } from '../client/src/formats/battleparams.ts';
 
@@ -20,6 +20,10 @@ const near = (a: number, b: number, what: string, eps = 1e-6) => check(Math.abs(
 const row = (distanceX: number, angle: number): EnemyAttackData => ({ minAtp: 0, maxAtp: 0, minAta: 0, maxAta: 0, distanceX, angle, distanceY: 0 });
 const mv = (fparam1: number) => ({ fparam1, fparam2: 0, fparam3: 0, fparam4: 0, fparam5: 0, fparam6: 0, iparam: [0, 0, 0, 0, 0, 0] });
 const target = (x: number, z: number, clientId = 0): AiTarget => ({ clientId, x, z, charClass: 0, dead: false, angle: 0 });
+// Ticks the spawn (42 ticks) and the advance until the chase: a player in sight wakes it.
+const wake = (ai: IllGillAi, t: AiTarget[]): void => {
+  for (let i = 0; i < 100 && ai.state !== 'chase'; i++) ai.tick(t);
+};
 
 // Four rows: scythe (0), ice (1), snare (2), tackle (3). Rows 0, 1 and 3 face forward only (0 arc);
 // the snare has a half arc. A target at (10, 0) is off the nose: only the snare row is in arc.
@@ -62,8 +66,7 @@ eq([ILL_GILL_ANIM.wait.speed, ILL_GILL_ANIM.walk.speed, ILL_GILL_ANIM.wait.loop,
 function runScythe(roll: number): { variantMotion: number; hitTick: number; hits: number; backTick: number } {
   const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement: mv(1), attacks: frontAttacks, rng: () => roll });
   const t = [target(0, 10)];
-  ai.tick(t); // spawn -> advance
-  ai.tick(t); // advance -> chase
+  wake(ai, t); // the spawn (42 ticks), the advance -> chase
   ai.tick(t); // chase: row 0 in reach -> scythe sub 0
   ai.tick(t); // scythe sub 0 -> sub 2 (the swing, its motion set here)
   const variantMotion = ai.motion?.index ?? -1;
@@ -100,8 +103,7 @@ function runScythe(roll: number): { variantMotion: number; hitTick: number; hits
 {
   const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement: mv(1), attacks: sideAttacks, rng: () => 0.9 });
   const t = [target(10, 0, 7)];
-  ai.tick(t);
-  ai.tick(t);
+  wake(ai, t);
   ai.tick(t); // chase -> snare (row 2)
   eq(ai.state, 'snare', 'side target: the snare state');
   ai.tick(t); // sub 0 -> sub 1 (kage)
@@ -122,8 +124,7 @@ function runScythe(roll: number): { variantMotion: number; hitTick: number; hits
 {
   const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement: mv(1), attacks: [row(10, 0), row(10, 0), row(10, 0), row(10, 0x8000)], rng: () => 0.9 });
   const t = [target(10, 0, 9)];
-  ai.tick(t);
-  ai.tick(t);
+  wake(ai, t);
   ai.tick(t); // chase -> tackle (row 3)
   eq(ai.state, 'tackle', 'side target: the tackle state (row 3)');
   let hits: { kbScale?: number }[] = [];
@@ -168,9 +169,8 @@ function runScythe(roll: number): { variantMotion: number; hitTick: number; hits
     const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement, attacks: frontAttacks, rng: seq(values) });
     ai.level = 12;
     const t = [target(0, 10)];
-    ai.tick(t);
-    ai.tick(t);
-    ai.tick(t);
+    wake(ai, t);
+    ai.tick(t); // chase -> scythe sub 0
     ai.tick(t); // scythe sub 0: the variant is rolled, the swing starts
     let hit: { special?: unknown } | null = null;
     for (let k = 0; k < 40 && !hit; k++) hit = ai.tick(t).hit ?? null;
@@ -188,8 +188,7 @@ function runScythe(roll: number): { variantMotion: number; hitTick: number; hits
 {
   const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement: mv(1), attacks: sideAttacks, rng: () => 0.9 });
   const t = [target(10, 0, 7)];
-  ai.tick(t);
-  ai.tick(t);
+  wake(ai, t);
   ai.tick(t); // chase -> snare (row 2)
   ai.tick(t); // sub 0 -> sub 1 (kage)
   for (let k = 0; k < 10; k++) ai.tick(t); // the 10-frame wait
@@ -207,13 +206,57 @@ function runScythe(roll: number): { variantMotion: number; hitTick: number; hits
   // A target out of the snare's arc at sub 2 is not held.
   const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement: mv(1), attacks: [row(10, 0), row(10, 0), row(10, 0x2000), row(10, 0)], rng: () => 0.9 });
   const t = [target(10, 0, 7)];
-  ai.tick(t);
-  ai.tick(t);
-  ai.tick(t);
+  wake(ai, t);
   ai.tick(t);
   let held = false;
   for (let k = 0; k < 12; k++) if (ai.tick(t).hold) held = true;
   eq(held, false, 'no hold while the target is outside the snare arc');
+}
+
+// --- Spawn: the state timer (vtable 0x00b069b0), float32, 42 ticks; then the advance ----------
+{
+  // Exact arithmetic would finish in 40 steps (-6.0 + 40 * 0.2 = 2.0); float32 needs 41 steps.
+  eq(spawnTicks(), 42, 'spawn: the init tick and 41 timer ticks of +0.2f from -6.0f to 2.0');
+  near(ILL_GILL.timerStep, 0.2, 'the timer step 2.0 / 10 (vtable[1](10), 0x00927260 = 2.0)');
+  eq(ILL_GILL.timerScale, -30, 'the timer start -30 x step (0x0092720c = -30.0)');
+  const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement: mv(1), attacks: frontAttacks, rng: () => 0.9 });
+  const none: AiTarget[] = [];
+  for (let k = 0; k < 42; k++) ai.tick(none);
+  eq(ai.state, 'spawn', 'the spawn holds for 42 ticks (the done tick is the 42nd)');
+  ai.tick(none);
+  eq(ai.state, 'advance', 'the wander (untraced) holds one tick, then the advance');
+  ai.tick(none);
+  eq(ai.state, 'advance', 'the advance has no exit of its own: no player, no chase');
+  eq(ai.motion?.index, ILL_GILL_ANIM.wait.index, 'the advance shows the wait slot (0x0053044c: anim 0)');
+  ai.tick([target(0, 100)]);
+  eq(ai.state, 'chase', 'ASSUMED exit: a player in sight starts the chase');
+}
+{
+  // The advance drops its target beyond 400 from the point one unit ahead of home (dist^2 > 400^2).
+  const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement: mv(1), attacks: frontAttacks, rng: () => 0.9 });
+  ai.z = -500; // away from the home point (0, 0)
+  ai.state = 'advance';
+  ai.targetId = 5;
+  ai.tick([target(0, -500, 5)]);
+  eq([ai.state, ai.targetId], ['advance', null], 'advance: the target beyond the sight range from home is dropped');
+}
+
+// --- Tackle recovery: int(fparam1) of the movement row (2.9 gives 2 ticks) -----------------------
+{
+  const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement: mv(2.9), attacks: [row(10, 0), row(10, 0), row(10, 0), row(10, 0x8000)], rng: () => 0.9 });
+  const t = [target(10, 0, 9)];
+  wake(ai, t);
+  ai.tick(t); // chase -> tackle (row 3)
+  const subOf = () => (ai as unknown as { sub: number }).sub;
+  let k = 0;
+  let sub4At = -1;
+  while (ai.state === 'tackle' && k < 200) {
+    ai.tick(t);
+    k++;
+    if (sub4At < 0 && subOf() === 4) sub4At = k;
+  }
+  eq(ai.state, 'chase', 'tackle: the recovery ends in the chase');
+  eq(k - sub4At, 3, 'tackle recovery: int(2.9) = 2 counted ticks, the chase on the third');
 }
 
 // --- Dead: no radar, the brain does nothing ---------------------------------------------------
