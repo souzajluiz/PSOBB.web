@@ -375,6 +375,17 @@ eq([SHOP_DETAIL.x, SHOP_DETAIL.y, SHOP_DETAIL.w, SHOP_DETAIL.h], [400, 50, 240, 
   eq(shopRow(undrop.data, '', ctx).icon1, 0x36, 'compact row: undroppable tool stays 0x36 (UpdateItemValidationState never writes 0x2a)');
   eq([itemRow(knownSaber, ctx).icon1, shopRow(knownSaber.data, '', ctx).icon1], [0x0c, 0x36], 'equipped saber: inventory 0x0c, compact row 0x36');
   eq([shopRow(unknownSaber().data, '', ctx).icon1, shopRow(wrappedUnknown.data, '', ctx).icon1], [0x36, 0x36], 'untekked saber (class ok): 0x36; wrapped: 0x36 (returns before the icon)');
+  // GetPlayer(+6) null (UIElement_UpdateItemValidationState_0072bab0, dump 694290): the compact row
+  // returns after the wrapped check, so icon 1 keeps the 0x36 that InitializeItemDisplay set, and the
+  // colours are not written. ASSUMED default colours: white name and icon (the row's start). The
+  // untekked, class-blocked weapon (usability 0, weapons[2][0]) is the case the player would change.
+  const blocked = inv('000200008000000000000000 02000100 00000000');
+  const noPlayer: RowContext = { ...ctx, player: false };
+  const withPlayer = shopRow(blocked.data, '', ctx);
+  const without = shopRow(blocked.data, '', noPlayer);
+  eq([withPlayer.icon1, withPlayer.nameColor], [0x13, '#00fffc'], 'untekked class-blocked weapon with the player: icon 0x13, untekked name colour');
+  eq([without.icon1, without.nameColor, without.iconColor], [0x36, '#ffffff', '#ffffff'], 'no player (GetPlayer null): icon stays 0x36, colours unset');
+  eq(shopRow(wrappedUnknown.data, '', noPlayer).icon1, 0x36, 'no player, wrapped: the wrapped return comes first');
   pmt.tools[1] = [];
   pmt.weaponKinds = [];
 }

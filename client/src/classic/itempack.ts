@@ -176,6 +176,10 @@ export interface RowContext {
   // is checked after its stat part is taken off (see equipProblems).
   wornWeapon?: ItemData | null;
   lobby: boolean;
+  // The element's player (GetPlayer_0068d5a8 of the list element's +6 slot). false = no player:
+  // the compact row returns after the wrapped check (UIElement_UpdateItemValidationState_0072bab0,
+  // dump 694290), so its icon 1 stays 0x36 and its colours stay unset. Absent = present.
+  player?: boolean;
 }
 
 // ValidateItemForEquip_005c9e40 (dump 418164): bit 1 = the class cannot use it, 2 / 4 / 8 =

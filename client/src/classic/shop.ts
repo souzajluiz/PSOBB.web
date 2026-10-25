@@ -345,6 +345,8 @@ export function shopRow(item: ItemData, right: string, ctx: RowContext): ItemRow
     iconColor: COLOR.white,
   };
   if (isWrapped(item)) return row;
+  // GetPlayer(+6) null -> return (dump 694290): icon 1 stays 0x36, colours unset.
+  if (ctx.player === false) return row;
   const problems = equipProblems(item, ctx);
   const tekked = isTekked(item);
   if (!tekked && names?.isRare(item)) row.icon1 = 0x19;
