@@ -1,5 +1,29 @@
 # Devlog
 
+## 2026-10-25: 6x48 release sender located and checked; 6x46 state 3 is the NPC takeover
+
+**Outcome.** The exe's `6x48` sender is found: `0x006a031c`, called once from the player's cast state machine at `0x006a01b9`. Its gate, its payload and its TP drop match the port's release (`render/combat.ts` `releaseTechnique`, `net/game.ts` `sendCastTechniqueComplete`). One gap, the release-time map gate, is unreachable in the port (below), so no port code changed. The `6x46` state 3 question is answered: the state is the NPC takeover (`SinowberillChallenge_CheckAndReassignPlayer_007b46f8`), and the port does not model it or NPC melee strikes, so there is no action to port. Test: `tests/tech48.test.ts`.
+
+**6x48, proven (PsoBB.exe, `0x006a0300` area by objdump; the dump has no name for the function).**
+- Caller: the state switch on the state word `+0x330` at `0x006a00ce`. State 2 (`0x006a014c`) waits on the release timer (`+0xc0`); when it has run out the code sets state 3 (`0x006a0192`), and then calls the sender (`0x006a01b9`, with `0x006a01ae` skipping remote copies, `+0x32c == 2`).
+- Sender `0x006a031c`, in order: `call 0x68a3fc` (is_player_in_unsafe_map: `pushl 0x3ec(%ecx)` then `0x00807d8c`, which is `is_map_unsafe` over the hub table `0x0097f1c8` = {0, 15, 18, 45}); zero means no send (the state stays 3, no TP drop). Then the `+0x32c == 2` return (redundant with the caller). Then `+0x330 = 4`.
+- Release: `tp2` (`+0x336`) -= `tp_cost`, floor 0 (`0x006a0387..0x006a039d`); the 6x48 level is the 6x47 level (`unknown_adjust_tech_level` output, `local_4c` = the byte at `4(%esp)`).
+- Body (`0x006a03c4`): `48, 02, u16 player idx (+0x1c), u16 tech (bx), u16 level (byte, low; the high byte 0)`, 8 bytes, no target block, sent through `0x008003e0`.
+- Port check: the body bytes match `buildCastTechniqueComplete` (`48 02 <client id> <tech u16> <level u16>`); the level is `splitLevel(level).sent` (the 6x47 level, at most 14), the same as the exe; the TP floor is the same (`tp < 1 ? 0 : tp`).
+
+**6x48 gap, not reachable in the port.** The exe skips the whole release (no 6x48, no TP drop, no effect) when the map is a field map at the start but a hub at the release. The port sends at release unconditionally. The two agree on every path the port reaches: `castTechnique` refuses a cast outside an unsafe map (`inUnsafeMap`), and `enterFloor` clears `cast` on a floor change, so a cast cannot be live in a hub. No change; the test pins the hub table and the sent body.
+
+**6x46 state 3 (`unknown_flags_invincibility` = `+0x32c` == 3), answered.**
+- The gate in `send_0x60_0x46_attack_end` (`0x00699248`): `+0x32c == 2` needs an unsafe map; `!= 3` runs `update_player_targeting_info`; `== 3` skips it. The send then uses whatever target block the attack info holds (not refreshed). Call site: the damaging frame in `handle_player_attack_animation_damaging_part` (the weapon-group-8 branch, the `call` at `0x006990b0`).
+- The word is written by: the challenge type setter `SinowberillChallengePlayer_SetChallengeType_00686984` (types 0..3 give 1, 4 gives 2, 5 gives 3, 6 gives 6, 7 gives 7); the NPC constructor (7, `.c:552337`); the type-6 constructor (`.c:604477`, `.c:604545`); and `SinowberillChallenge_CheckAndReassignPlayer_007b46f8` (`.c:798808`), which sets 3 on a remote-copy NPC (state 2) of a player who left, when this client is the next slot. It also sets the NPC's leader to this slot and builds the NPC's AI on this client (`SinowberillChallengeBoss_Constructor_007aea10`). So state 3 is the NPC this client has taken over: its melee strikes are made by this client, and its 6x46 skips the targeting check.
+- Port: the takeover is not ported (`quest/npcai.ts` `NPC_FLAG_FOLLOWER` is only the 6x69 command 1 / 2 gate). The port's NPC melee does not send 6x46 at all (`quest/town.ts` `stepNpcHead` only moves the NPC; `sendAttackTargets` has one caller, the local strike). NPC casts send 6x47 / 6x48 (`sendNpcCastTechnique`). Nothing to fix here; the takeover and NPC melee strikes stay open.
+
+**Tests.** `tests/tech48.test.ts`: the release body for Megid at level 16 (`48 02 0700 1200 0e00`, level capped at 14) and its parse; Foie at level 0; the NPC release under its client id (`0x0b`); the 8-byte body with no target block; the hub table {0, 15, 18, 45} and `inUnsafeMap` on Pioneer 2, the Lab and Forest 1. `tests/attack46.test.ts`, `tests/techniques.test.ts`, `tests/combat.test.ts` and `tests/pvp.test.ts` still pass.
+
+**ASSUMED / open.**
+- The NPC takeover (state 3) and its AI owner-side strikes are not ported; the NPC melee `6x46` is not sent.
+- The NPC cast path (`render/combat.ts` `npcCastTechnique`) sends 6x47 and 6x48 back to back; the exe's `HandlePlayerTechCastState_007b2bc0` release gate is not traced here.
+
 ## 2026-10-25: Radar per state for the Dark Gunner; Gillchic and Sinow Gold rows
 
 **Outcome.** The Dark Gunner's radar icon now follows its state, as the Booma's does (`darkGunnerBrainIconShown`, gated in `render/combat.ts` `minimapEnemies`). The Gillchic and Sinow Gold rows of `ENEMY_RADAR_SOURCE` are resolved (both 'own', the port's default behaviour, so no change on the radar). The survey note "no stateful Dark Gunner brain" was wrong: `GunnerAi` (`combat/enemyfsmruins.ts`) has a `state` field, so the mapping is by state, not by default.
