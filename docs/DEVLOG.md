@@ -1,5 +1,23 @@
 # Devlog
 
+## 2026-10-25: Barba Ray's jump (phases 0x11 / 0x12)
+
+**Question:** port the two jump states of Barba Ray (`ProcessPlayerAction4_004b30fc`, dispatched from 0x11 with side 0 and 0x12 with side 2) and check the enter order that pass 8 left ASSUMED.
+
+**Evidence:** the reference dump's `ProcessPlayerAction4_004b30fc` (`src/Psobb.exe-05112026.c`, line 235078) is the readable decompile and names the offsets; `tools/ghidra/decomp.sh 0x004b30fc` cross-checks the event structure. The .data floats are read with `tools/exedata.py read`. The .bss divisors (a47a80..a90) are not in the image as data: objdump of the static init (`0x004b9b28..0x004b9bba`, `mov dword ptr [0xa47a8x], imm`) gives 5.0, 7.0, 12.0, 7.0 and 4.0. Two findings: the enter writes slot 1 and the windup's end writes 7 / 8 (not the other way round); and the keyboard is event 2 (Left `g_KeyboardSharedState[0xe]` sends the followers, Right `[0xc]` the swim).
+
+**Port:** `client/src/combat/barbaray.ts`: `BARBA_JUMP` (the windup, the clock marks 6 / 13 / 20 / 25, the velocities and the divisors), `BarbaRayAi.enterJump`, `jumpFrame` (the sub-states and the motion), `jumpTakeoff` / `jumpApex` / `jumpDescent` / `jumpLand`, `jumpInput` (event 2), `jumpLeader` (the keyboard, or event 9 at slot 9 / 10 when there is no input). `BarbaRayAi.input` carries the leader's keys; `client/src/render/combat.ts` sets it each frame (`barbaInput`, the palette Left and Right channels from `paletteChannelDown`).
+
+**ASSUMED:** the clock resets at the slot 7 / 8 start; the 0xb0 bit 2 wait is clear; `[0xc]` is Right; the keyboard poll is the leader's mode 2 (the mode writers are not decoded), so with keys the table does not step; the sound marks are crossings. Not ported: the landing's camera shake, crate flags, the Galgryphon minion (0x004ac9ac), the volopt frictions, the particles and the 0x201 attack objects.
+
+**Found, not changed:** the static init sets `a47aa0 = 0.195`, `a47a98 = 6 / 0.195` (30.77) and `a47a9c = 18.33`. `BARBA_DROP` (phase 0x0d) uses 0.0, 30.0 and 1.0 as ASSUMED, and `liftZero` is live in its timer step (0.3 - liftZero), so the drop's step would be 0.105 a tick. Pass 8's "dynamic, no value in the image" was wrong for these. Follow-up: check the drop against the exe, then fix `BARBA_DROP`.
+
+**Tests:** `node tests/barbaray.test.ts` ALL PASS (the existing checks and the new jump block: enter on the anchor, the 11-frame windup into slot 7 / 8, the 25 frames to the landing, the 8.5 / 15.0 / landing sounds once each, the keyboard sends for both sides and the follower's silence, the table step at slot 9, the gate clear on leave). `tsc --noEmit -p client` clean.
+
+**Left open:** phase 0x18 (the player attack: targets, the ray cast, the attack sub-entities); dispatch 1 (the intro) and dispatch 2 (the input mode); the 0x0d drop constants above.
+
+## 2026-10-24: PSO V2 download payload (non-BB quest writers)
+
 ## 2026-10-24: PSO V2 download payload (non-BB quest writers)
 
 **Question:** the ROADMAP's last quest-writer item is the PSO V2 encrypted download format of DC v2 / PC / GC quests. What does newserv write, and can the port write the cipher and the payload byte-identical to it?

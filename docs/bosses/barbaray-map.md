@@ -688,7 +688,7 @@ This supersedes the "still open" list of pass 7 for these phases.
 | 0x0d | `HandleSinowberillMovementState_004b7040` | ported | enter: slot 1, `0x6c8 = 3`, teleport 3; event 9 at 0x730 == 3; event 5: `0x6c8 = 1`, gate block clear |
 | 0x0f | `ProcessPlayerVoloptInteractionState2_004b2cd0` (side 0) | ported | enter: `0x6c8 = param`, slot 3; sweep: row i y < row i+1 y, index 4 = `0x906ee4` |
 | 0x10 | same (side 2) | ported | as 0x0f with side 2 |
-| 0x11 / 0x12 | `ProcessPlayerAction4_004b30fc` | open | jump on the animation chain (906e8c..906ea8); event 2 is the keyboard (keys 0xc / 0xe); .bss a47a80..8c |
+| 0x11 / 0x12 | `ProcessPlayerAction4_004b30fc` | ported (pass 9) | enter: slot 1, anchor = side; sub 0 windup 11 frames then slot 7 / 8; the jump on the clock 6 / 13 / 20 / 25; event 2 = the keyboard (Left 0xe, Right 0xc ASSUMED) |
 | 0x17 | `ProcessSinowberillActionState_004B6D08` | ported | enter: slot 0xc, gate open, anchor 3; event 9 at `b8 == 0xf`; 0x3ec at timer 10.0 |
 | 0x18 | `ProcessSinowberillPlayerState_004b6300` | open | targets a player (`FindAndProcessSinowberillTarget_00521324`), map ray cast, attack sub-entities |
 | 0x19 / 0x1a | `ProcessSinowberillAction_004b4684` | ported | enter: slot 0xe, gate open; event 9 at `b8 == 1`; 0x3ed at timer 8.0 |
@@ -715,6 +715,67 @@ are not sent; the attack objects (`UpdateSinowberillAttackPos3`, 0x201) are not 
 draws are not taken; the per-frame sounds use a stride of 1 at the threshold crossing;
 `GetPlayerLocalY` is the body's y.
 
-**Open for the next pass:** 0x11 / 0x12 (the input, the .bss values, particles, the minion), 0x18 (the
-player targets and the attack effects), dispatch 1 (the global game-state flag and the camera),
-dispatch 2 (the input). The attack object (0x201) is the largest unported effect; the port draws none.
+**Open for the next pass:** 0x18 (the player targets and the attack effects), dispatch 1 (the global
+game-state flag and the camera), dispatch 2 (the mode of the input poll, see pass 9). The attack object
+(0x201) is the largest unported effect; the port draws none.
+
+## Pass 9: the jump (0x11 / 0x12, 0x004b30fc), 2026-10-25
+
+Ported in `combat/barbaray.ts` (`BARBA_JUMP`, `BarbaRayAi.jumpFrame` / `jumpLeader` / `jumpInput`), the
+input is `BarbaRayAi.input` (set by `render/combat.ts` for the leader). Tests: `tests/barbaray.test.ts`
+(the jump block). Sources: the reference dump `src/Psobb.exe-05112026.c` (`ProcessPlayerAction4_004b30fc`,
+line 235078; the names there are the reference's, used for the offsets), `tools/ghidra/decomp.sh 0x004b30fc`
+(cross-check), `tools/exedata.py read` for the .data floats, and objdump of the static init
+(`mov dword ptr [0xa47a80..0xa47a90]`, `objdump -d -M intel PsoBB.exe --start-address=0x4b9b28`).
+
+Proven:
+- Dispatch: `0x11` -> `ProcessPlayerAction4_004b30fc(this, event, 0)`, `0x12` -> `(this, event, 2)` (the
+  dispatcher, reference line 232976..232985). The third argument is the side: the anchor (0x6c8, the same
+  word as +0x1b2) and the dir.
+- Enter (event 4): slot `0xb8 = 1` first; the gate block (`0x630 = (0x630 & ~0x100) | 4`); the body to
+  anchor `side` (FUN_004b1e58); z0 = the anchor's z; vz 0; z accel -0.2 (0xbe4ccccd); the sub-state 0.
+  The pass 8 ASSUMED order (7 / 8 at the enter) is wrong: the enter writes 1 and the sub 0 end writes 7 / 8.
+- Event 0, sub 0 (windup): 11 frames (`0x734 + 1 < 11` stores, the 11th frame ends). The end sets dir
+  (`0x74c` = -1 side 0, +1 side 2), slot 7 (r_bite) / 8 (l_bite). The motion (z += vz, vz += accel, clamp -7)
+  runs in subs 0..2.
+- Sub 2 -> 3 at the clock 6.0 (0x906e8c): x0 = x, vx = (100 dir - x) / 7.0 (a8c), z0 = z, accel = vz / -7.0.
+  Sub 3 -> 4 at 13.0 (0x906e98): x0 = 100 dir, vx = (135 dir - 100 dir) / 7.0 (a84), accel = (10.0 - z) * 2.0 / 144
+  (a88 squared). Sub 4 -> 5 at 20.0 (0x906ea4): x0 = 135 dir, vx = (100 dir - 135 dir) / 5.0 (a80), yaw speed
+  -1280 dir / 5.0 (0x906ed0). Sub 5 -> 6 at 25.0 (0x906ea8): the landing.
+- Motion of the post-transition sub: sub 3 x = vx t + x0, z = (0.5 accel t - 7.0) t + z0 (t = clock - 6);
+  sub 4 z = 0.5 accel t^2 + z0 (t = clock - 13), x as sub 3, lift = min(7 * 4 * t, 4.0) (a84 * a90, a90 the cap);
+  sub 5 z = 0.5 accel t^2 + z0 (t = clock - 13), x = vx t + x0 (t = clock - 20), yaw = round(yaw speed * t).
+  The landing frame (clock 25) has no motion, so the last x is 107 dir (sub 5 at t = 24).
+- The constants: .data (exedata) 906e8c 6.0, 906e98 13.0, 906ea4 20.0, 906ea8 25.0, 906e94 100.0, 906ea0 135.0,
+  906e9c 100.0, 906e90 10.0, 906ecc 2.0, 906eb0 -7.0, 906ed0 1280.0, 906eb8 0.5, 906e74 7.0, 906e88 15.0,
+  906e84 17.0 (the attack band, not used), 41080000 = 8.5, 41700000 = 15.0.
+  The .bss (static init 0x004b9b28..0x004b9bba, `mov` immediates): a80 = 5.0, a84 = 7.0, a88 = 12.0,
+  a8c = 7.0, a90 = 4.0 (the reference's `g_SinowberillAttackParams`).
+- Sounds: 0x3ed at the clock 8.5 (sub 3), 0x3ec at 15.0 (sub 2 and on), 0x3ee at the landing.
+- Event 9 (the table step) is gated by slot 9 / 10 in the reference (the reference line 235198). Slot 9 / 10 are
+  the bite loops that r_bite / l_bite chain into, so the table steps once the jump's motion chain has ended.
+- Event 2 (the keyboard, reference line 235148): `g_KeyboardSharedState[0xe]` (Left) set -> send 0x13 (side 0) /
+  0x14 (side 2) with 6xAA; else `[0xc]` set -> 0x15 / 0x16 with 6xA9. The root frame sends event 2 only in the
+  mode that polls the keyboard (the mode writers are not decoded).
+- Event 5: clears the gate block (0x630 & ~4).
+
+ASSUMED (all marked in the code):
+- The clock (+0xc0) starts at the sub 0 end (the slot 7 / 8 start) and counts one a tick from sub 1 on.
+- Sub 1's wait on 0xb0 bit 2 is clear (one tick).
+- `g_KeyboardSharedState[0xc]` is the Right palette key (the Left key is `[0xe]`, the keyconfig comment).
+- Event 2 is the leader's poll: with `BarbaRayAi.input` set, the keys decide and event 9 does not run; without
+  it, event 9 steps the table at slot 9 / 10 (the mode-0 path). The render layer always sets the input for the
+  leader, so the jump waits for a key (the stated behaviour, to check against the exe's mode).
+- The sound marks are crossings (one a frame).
+- Not ported: the camera shake (`unknown_camera_shake_from_enemy_landing_and_jump`), the crate flags
+  (CrateEntity_SetFlag12 / 13, 0x004bff38 / 0x004bff50), the minion (CreateGalgryphonMinionEntity, 0x004ac9ac,
+  a Galgryphon minion, not the Pig Ray), the four volopt frictions on 0x6e4..0x6f0 (ProcessVoloptInteractionFriction),
+  the particles (0x161, 0x448 / 0x454) and the attack objects (0x201, UpdateSinowberillAttackPos3, not spawned,
+  so no random draw).
+
+Correction found in pass 9 (not changed here, a follow-up for the 0x0d drop):
+- The static init (0x004b9b68..0x004b9b88) writes `a47aa0 = 0.195` (0x3e47ae15), `a47a98 = X / 0.195` (the fdiv
+  of the FPU top, 6.0 per the pass 8 table, so 30.77), and `a47a9c = 18.33` (0x4192aaaa). `BARBA_DROP` uses the
+  ASSUMED values 1.0 (a9c), 30.0 (a98) and 0.0 (aa0). The drop reads `liftZero` at its timer step
+  (`timer -= 0.3 - liftZero`), so the drop's timer step is 0.105 a tick, not 0.3, if the static init holds.
+  Pass 8's "dynamic, no value in the image" was wrong for these three.
