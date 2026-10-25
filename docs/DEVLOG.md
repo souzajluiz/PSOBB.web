@@ -1,5 +1,31 @@
 # Devlog
 
+## 2026-10-25: Particle flag 0x100 colour: the exe's base is the instance's zero +0x50, the tint is not applied (ported)
+
+**Question (the HANDOFF item 6 open point).** Does the owner's tint dword (SetId, `ParticleEffectSingleParticle_SetId_00508ee4`, `or 0x100` at +0x2c, dword at +0x4c) reach the particle colour, and what colour math does flag 0x100 select?
+
+**Exe (objdump of PsoBB.exe, VERIFIED; the decompile was not needed for these addresses).**
+- **Callers of SetId (the 8 listed call sites of the 25 xrefs):** the argument is an ARGB colour (alpha in the top byte) in every listed site: 0xff20bf20, 0xffffbf7f, 0xff4dff99 (Anti), 0xffff9999 (Shifta), 0xff337fff (Deband), 0xff3f4f5f, 0xff001a15, 0x60ffffff, and the ring table `0x96d928`.
+- **Spawner (`0x0050f008`, via `0x0050ef80` / `0x00510534`):** the owner's flags word (+0x2c) is pushed, so flag 0x100 reaches the instance's +0x24. The owner's +0x4c is not pushed.
+- **Copy sweep:** every store of +0x4c / +0x50 / +0x54 / +0x58 in the particle module (0x00508300..0x00511800) is a ctor zero (0x005084e4..0x005084f9), an owner ctor / emitter init write (0x00508b68, 0x00509590..0x0050978d, ...), or SetId itself (0x00508ef5). No indexed store to those offsets. The copy-like code outside the module is other classes: the writer at 0x00511e44 (0.5 floats at +0x4c / +0x50) builds vtable 0x00aff71c, and the register copies from +0x4c near 0x00542e4e / 0x0078378c are a keyframe object at +0x44..+0x60. The `rep movsd` at 0x0050d69d copies the 0x98-byte entry template, not an instance. The instance vtable 0x00aff4a8 is referenced only inside 0x00508000..0x00511800.
+- **Update `0x0050dbb8` (type 0), colour (flags2 = `[ebp+0x26]`, loaded at 0x0050dd8f):**
+  - flag 0x100 clear: base = entry `+0x7c` (`fadd [ecx+0x7c]` at 0x0050df8b), slope = entry `+0x6c` (`fmul [ecx+0x6c]` at 0x0050df88). Unchanged.
+  - flag 0x100 set, flags2 bit 0x2 clear: base = instance `+0x50` (`fadd [ebp+0x50]` at 0x0050def5, and at 0x0050e0b4 in the entry-bit-0-clear branch). Result is `t * slope + base`, clamped to 0..1 (0x00920438 = 1.0).
+  - flag 0x100 set, flags2 bit 0x2 set: the constant colour, clamped instance `+0x50 / +0x54 / +0x58` (0x0050de6c..0x0050deeb).
+  - flags2 bit 0x4 with entry bit 0 set: the factor `fmul [ebp+0x4c]` at 0x0050de39 multiplies the value on the FPU stack before the colour.
+- **Ring `0x0050f3fc`:** same rule, `fadd [esi+0x50]` at 0x0050f7b6 (esi = the instance, `mov esi, ecx` at 0x0050f401); the non-tint base is `[ecx+0x7c]` (`ecx` = the entry).
+- **Constructor 0x00508460:** zeroes the instance's +0x4c..+0x58 (0x005084e4..0x005084f9). Nothing writes them afterwards.
+
+**Verdict: VERIFIED for the colour base and the copy, with the open point closed.** In the exe a flag 0x100 particle's colour base is its own +0x50 (zero: the owner's dword never reaches it), so the colour is the slope term alone, `clamp(t * slope)`. The owner's ARGB is not applied. The port therefore no longer multiplies the tint; flag 0x100 is the presence of `ParticleSpawn.tint` / `Emitter.tint` (the value is not read).
+
+**Corrections to the earlier entries.** The flags2 gates are bit `0x2` (constant colour, `test esi,0x2` at 0x0050de66) and bit `0x4` (the factor, `test esi,0x4` at 0x0050de31), not "bit 2" and "bit 4" as written on 2026-10-21 / 2026-10-25.
+
+**Port.** `client/src/classic/particles.ts` `particleShade`: with a tint present the base is 0 and the tint multiply is gone (type 0 and ring). The `Emitter.tint` comment states the rule. `tests/particletint.test.ts` (new, 9 checks): the untinted bases, the tinted slope-only colour, the tint value and tint 0 both selecting the 0x100 path, the ring, the clamp, and the fade unchanged.
+
+**Visible effect (not checked in Chrome).** The tinted supports (Anti green, Shifta, Deband, techlightning hits, the telepipe pipe ring) now start at black and rise with the slope, instead of starting at the entry base tinted. This is the exe's colour, but it has not been seen in a run. ASSUMED / not modelled: the flags2 bit 0x2 constant branch and the bit 0x4 factor (the port has no flags2); both are taken as clear.
+
+**Checks.** `node tests/particletint.test.ts` ALL PASS (new), `particleslope`, `particleorient`, `particlespawn`, `techlightning`, `hitfx`, `telepipe`, `playerfx` pass. `NEWSERV=vendor/newserv node tests/combat.test.ts`: 5859 checks, 0 failures. `client`: `tsc --noEmit -p .` clean (Node 24).
+
 ## 2026-10-25: Dubchic's radar row is 'own' (vtable 0x00b04760); the Dark Gunner's flinch shows its icon
 
 **Outcome.** The DUBCHIC row of `ENEMY_RADAR_SOURCE` moves from 'slot' to 'own'. The Dark Gunner's flinch (exe state 4, 0x00544704) now shows the radar icon in any brain state, so an idle gunner that is hit is drawn while it flinches (`render/combat.ts` `minimapEnemies` passes the 'flinch' brain while the owner's damage state runs). The port's flinch was already a hit reaction (owner damage motion, resumed to hover when the animation ends); this pass adds no new GunnerAi state.

@@ -174,8 +174,9 @@ export interface Emitter {
   orient: Orient | null; // the emitter's object angles (null = none: the velocity is not turned)
   fx: EffectFx;
   acc: number;
-  // ParticleEffectSingleParticle_SetId_00508ee4: a colour override (RGB,
-  // flag 0x100 of the effect). ASSUMED to scale the entry's colour.
+  // ParticleEffectSingleParticle_SetId_00508ee4: the owner's colour (ARGB) and
+  // flag 0x100. Presence selects the 0x100 colour path (base 0, see particleShade);
+  // the value itself is not read by the exe's particle colour.
   tint?: number | undefined;
 }
 
@@ -529,22 +530,28 @@ export class ParticleSystem {
 //   type 0 (update_particle_effect_single_particle, 0x0050dbb8): slope
 //     +0x6c / +0x70 / +0x74 (`fmul [ecx+0x6c]` at 0x0050df88, 0x0050dfbc, 0x0050dfeb);
 //   type 1 ring (ParticleEffectInstance_Update_0050f3fc): slope +0x50 / +0x38 / +0x3c.
-// Both use the bases +0x7c / +0x80 / +0x84 when instance flag 0x100 is clear
-// (0x0050df86 and 0x0050f9c9), whatever effect_nt flag 1 is. The 0x100 path
-// (the tint) takes the particle's own RGB as the base instead (type 0 `fadd
-// [ebp+0x50]` at 0x0050def5, ring `fadd [esi+0x50]` at 0x0050f7b6); the port
-// multiplies the tint in instead (ASSUMED; the exe's instance +0x50..+0x58 is
-// zeroed by its ctor 0x00508460 and no copy of the owner's dword into it was
-// found, see the DEVLOG 2026-10-21 tint entry).
+// Both add the entry bases +0x7c / +0x80 / +0x84 with instance flag 0x100 clear
+// (0x0050df86 and 0x0050f9c9), whatever effect_nt flag 1 is.
+// Flag 0x100 (set by ParticleEffectSingleParticle_SetId_00508ee4 on the owner, the
+// spawner copies it to the instance's +0x24) takes the instance's own +0x50 / +0x54 /
+// +0x58 as the base instead (type 0 `fadd [ebp+0x50]` at 0x0050def5 and 0x0050e0b4;
+// ring `fadd [esi+0x50]` at 0x0050f7b6). The owner's colour dword (SetId stores it at
+// the owner's +0x4c) is never copied into the instance (VERIFIED: the copy sweep over
+// the particle module and the instance vtable xrefs, DEVLOG 2026-10-25 tint entry),
+// and the ctor 0x00508460 zeroes those fields. So the base is 0 and the tint is not
+// applied: a tinted particle's colour is its slope term alone, clamped to 0..1. The
+// factor `fmul [ebp+0x4c]` (0x0050de39, instance flags2 bit 0x4 with entry bit 0 set)
+// and the constant-colour branch (flags2 bit 0x2) are not modelled: the port has no
+// flags2, so both are ASSUMED clear.
 export function particleShade(q: Particle): { fade: number; rgb: [number, number, number] } {
   const d = q.e.entry;
   const t = Math.min(q.age, 1);
   const fade = Math.min(t < d.fade[0] ? t / d.fade[0] : 1, 1 - t < d.fade[1] ? (1 - t) / d.fade[1] : 1);
-  const tint = q.e.tint;
+  const tinted = q.e.tint !== undefined; // instance flag 0x100 (SetId was called on the owner)
   const slope = q.ring ? d.ring.colorSlope : d.colorSlope;
   const rgb = [0, 1, 2].map((i) => {
-    const v = Math.max(0, Math.min(1, t * slope[i]! + d.colorBase[i]!));
-    return tint ? v * (((tint >>> (16 - 8 * i)) & 0xff) / 255) : v;
+    const base = tinted ? 0 : d.colorBase[i]!;
+    return Math.max(0, Math.min(1, t * slope[i]! + base));
   }) as [number, number, number];
   return { fade, rgb };
 }
