@@ -90,6 +90,29 @@ Gate: states 0, 1, 2, 3, 5, 6, 7 always; 4 with a target; 8 and the dead one nev
 **Open (the rest of the Merissa brain):** the transition conditions (EnemyTransitionState_005b5768: the target from GetTargetable 0x00770738, the angle and the distance classes from the 0x009c1dbc / 0x009c1dc0 / 0x009c1dc4 tables, the record family at 0x009c1ac0), the approach and the wander (rows 0 and 1), the attacks (merissa_stab_attack and unknown_merissa_freeze_stab_attack, dump lines 401866 and 401891; their addresses are not traced), the motion step 0x007aa094, and the AI record at +0x3c0.
 
 **Files.** `client/src/combat/enemyfsmmerissa.ts` (new: the table, the mask, the gate function, the vanish step), `tests/enemyfsmmerissa.test.ts` (new, ALL PASS). Nothing else in the port changed. `render/combat.ts` is unchanged.
+## 2026-10-25: collision wiring: the door boxes read their template block; the other formula rows have no creator on a real map
+
+**Outcome.** The four doors 0x46..0x49 (city00 and city02, the only formula row on a real map) now take their box from the generated `DOOR_BOXES`, not from four hand-typed constants (same values). The other eight formula rows and the two child rows have no object or enemy creator on a real map, so the port does not read them yet. Correction to the entry below: 0x006461cf does not read the set record. Its radius and halfX come from the ctor's third argument, a constant template block.
+
+**Correction (PROVEN, objdump of 0x006460d8 and its four callers).** The ctor's stack is `[ebp+8]` = arg1, `[ebp+0xc]` = arg2, `[ebp+0x10]` = arg3. The stack row's block is `this+0xb8 = [ebp+0x10]` (0x00646133..0x00646140), so the row reads `[block+0x0c]` and `[block+0x10]` (0x006461bf..0x006461c8). Each caller pushes a constant block just before the call (the push is the third argument, the call is E8 to 0x006460d8): 0x00646091 (type 0x46, block 0x00935ac4, factory 0x0064607c), 0x00646309 (0x47, block 0x00935a78, wrapper 0x006462d4, called by the factory 0x00646258), 0x00646581 (0x48, block 0x009c7114), 0x006467a5 (0x49, block 0x00935a54). arg2 goes to a virtual call, not to the box. The stack template 0x00935a94 supplies offset 0, shape 1 (0x00935aa8) and flags 0x10003 (0x00935aac = 65539).
+
+**Values (exedata read, PROVEN):** block radius / halfX: 0x46 2 / 25, 0x47 2 / 24, 0x48 50 / 6.5, 0x49 4 / 25. These equal the constants the port used before (`BOX(addr, halfX, halfZ)`), so no behaviour change.
+
+**Creators per formula row** (type table rows `{type, creator, 0x48742400, 0}`, depth 3 for objects; enemy factory trees, depth 5; `CONSTRUCTED_BOXES` now carries `types` and `enemies`; placements counted in `map_*o.dat` / `map_*e.dat`, 0x44 / 0x48-byte records):
+- 0x619759 / 0x635e71 / 0x638261 (heap blocks, types 0x38a / 0x388 / 0x389, creators 0x619604 / 0x635d1c / 0x63810c): zero object placements on any map. Not wired. The writers of this+0x68..0x70 / +0x8c are still untraced.
+- 0x6461cf (types 0x46..0x49): city00 and city02, 4 placements each. Wired (`DOOR_BOXES`).
+- 0x77c197 (type 0x9, creator 0x77bff4): zero object placements (enemy 9 is another set). Not wired. The arg2 +0x24 / +0x28 / +0x2c to set-file mapping is not traced.
+- 0x6f010b: enemy set type 0xd7 (depth 5); zero enemy placements on maps. Not wired. 0x6f0435: no creator found.
+- 0x6de7d0 / 0x6de9d7: no object or enemy creator within the depths above (the parent is reached only by a path the generator does not follow, ASSUMED). Not wired.
+- 0x6ebef1 / 0x7acd78 (constant child rows): no object type in the type table reaches their ctors (0x6ebd58, 0x7acaf8). Not wired.
+
+**Generator** (`tools/gen-collision-boxes.py`): the reach of each creator is computed before the constructed rows are written (`reach`, unchanged for `TYPE_COLLISION_TABLES`); `CONSTRUCTED_BOXES` rows gain `types` and `enemies`; `DOOR_CALLERS` is checked against the bytes before each call (the pushed block must sit within 16 bytes before the E8 to 0x006460d8, and the stack template must be offset 0 / shape 1 / flags 0x10003), and `DOOR_BOXES` is emitted from the exe. Output: 272 sites, 277 tables, 0 unresolved. `collisionboxes.gen.ts` is regenerated, not hand-edited.
+
+**Port.** `client/src/formats/objectmodels.ts`: `doorBox(type)` builds the `ObjectCollision` from `DOOR_BOXES` (address = the block as before, type 1, halfX / halfZ from the block, flags 0x10003); the doors 0x46..0x49 use it. Nothing else changed.
+
+**Scratch.** `colwire_*` scripts under the session scratchpad (type-row scan, placement count); nothing kept in the repo.
+
+**Tests.** `tests/objectcollision.test.ts`: section 8's 0x6461cf check now says arg3; section 9 checks the four door blocks, the types and enemies of the formula rows, and the runtime box from a fake set record of each door type through `objectModelFor` (`node tests/objectcollision.test.ts`: all checks passed). `collision`, `townfield`, `setdata` pass; `NEWSERV=... node tests/combat.test.ts` 5860 checks, 0 failures; `client` `tsc --noEmit` clean (Node 24). Not run in Chrome (no Playwright).
 
 ## 2026-10-25: Olga tail anchor, pass 8: exhaustive asm check of the anchor slots; verdict still NOT PORTED
 
