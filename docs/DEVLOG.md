@@ -1,5 +1,30 @@
 # Devlog
 
+## 2026-10-25: took_damage (0x200) needs a total of 1.0; a 0-damage hit does not flinch
+
+**Outcome.** The exe's flinch gate is the summed hitbox damage of EntityHitEntity_00773350 against 1.0, not 0.0. The dump's decompile at 747689 reads `if (g_Float0 <= local_14)`, but the compare is `fcomps 0x009782b0` (`d8 1d b0 82 97 00`), and 0x009782b0 is `g_Float1` = 1.0 (raw 0x3f800000); `g_Float0` is 0x009782b8 = 0.0 and is used by the defence roll (0x00773355) and the per-hitbox test (0x0077364b). So a hit sets `+0x30 |= 0x200` (took_damage, `orl $0x200` at 0x007738c4) only when its total is at least 1.0, and a total below that is cleared to 0 with 0x100 and no HP lost. Zero-damage melee hits therefore do not set 0x200 and do not reach the flinch hook. The port already flinched on `damage >= 1`; it was wrong on the sub-1 band: a total of 0.5 to 0.99 rounded to 1 HP, and a landed sub-1 hit went out as 0x200 in the 6x0A.
+
+**The exe rule (objdump, re-derived).** Entry 0x007732ba (`pushl %ebp; subl $0x48, %esp`; the dump labels it 0x00773350, which is the GetEnemyDefense call inside).
+- Early out, no flag change, return 0: attacker null or `player_idx == -1`; defender `+0x30 & 0x800` (dead, 0x007732db); `+0x30 & 0x4000000` with `& 0x2000000` clear (maybe-invuln, 0x007732e9 / 0x007732f0; the hit is 0).
+- `try_hit_entity` (dump 557204) returns 0 before EntityHitEntity when the defender's `+0x32c == 2`: no flag.
+- Defence roll for `entity_index < 0x1000` (enemies) and defence > 0 and `rand < defence` (0x00773355 / 0x00773389): `+0x30 |= 0x100`, return 0.
+- Per hitbox with `+0x4000000` set (0x007735fb), the damage is summed in float (0x00773873, `fadds`).
+- After the hitbox loop: total `>= 1.0` (0x00773893 / 0x0077389c `jae 0x007738c1`) sets `0x200` (0x007738c4), deals `ROUND(total)` (`deal_damage`, unless the no-damage state `local_20`), runs the status effects (`ApplyHitEffects_00773ab0`, called at 0x007739b0); total `< 1.0` sets the total to 0 (0x0077389e) and `+0x30 |= 0x100` (0x007738af), return 0.
+- Hitbox count 0: the loop is skipped, 0x100.
+- `try_hit_entity` (dump 557204) and the other callers (`volopt2_hit_by_entity`, `olga2_hit_by_entity`, `epsilon_hit_by_entity`, `MorfosOnHit_00579f98`, `HandleDubwitchAttackCollision_006193f8`) are the per-family hit handlers; they run only on a collision (the `+0x4000000` pending bit).
+
+**Who reads it (verdicts).** The enemy update check is vtable `+0x88` = 0x00777ba4 (`movl 0x30(%ecx),%eax; andl $0x200`), and `EnemyUpdateLoop_0052167c` (0x0052167c; its only caller is `ValidateEnemyTarget_0052164c`, 0x0052164c) calls `+0x100` when it is set, then returns 2:
+- Booma (vtable 0x00b01fc0): `+0x88` = 0x00777ba4; `+0x100` = 0x00618a44, an empty stub. The flag is read and nothing happens: no hook.
+- Dark Gunner (vtable 0x00b03400): `+0x88` = 0x00777ba4; `+0x100` = 0x0054615c (`GalgryphonSubObjectTransitionToState4_0054615c`, dump name): state 4 (the flinch) unless already 4; the state-2 branch goes to a sub-object. Flinches on 0x200.
+- Hildebear (vtable 0x00affb20): `+0x88` = 0x00777ba4; `+0x100` = 0x005a49ec (dump name `AstarothHandleState4Or8Transition_005a49ec`; the name is a community guess): if `+0x32e == 4` it clears the flags, else sets `+0x32e = 8`, `+0xb8 = 6`. Flinches on 0x200.
+- NOT traced: whether these families' update reaches `EnemyUpdateLoop` (ValidateEnemyTarget is in none of the three vtables' first 160 slots), whether something clears `+0x30 & 0x200` (68 `andl $0xfffffdff` sites; the clear is in a per-family path), and the status-only techs.
+
+**Techs are a separate path.** `entity_hit_by_tech` (dump 747782..749367, not EntityHitEntity) sets `took_damage` unconditionally in the fixed-damage and foie branches (dump 747960..747975), so a fixed-damage tech hit with 0 damage does set 0x200. The port's tech path (`techHitEnemy`, `applyEnemyHit` with `landed: kill`) does not model that; left for a follow-up (ASSUMED: not checked against the tech group table).
+
+**The port.** `combat/formulas.ts`: `TOOK_DAMAGE_MIN = 1` and `tookDamage(total, landed)`; `applyDamage` returns 0x100 and deals nothing below it. `render/combat.ts` `applyEnemyHit`: `hitLanded = tookDamage(damage, landed)`, so the 6x0A send and the remote flinch (the `0x200` branch) follow the exe. The generic flinch gate stays `damage >= 1`, which is the same test. Enemy-to-enemy hits use the same test (ASSUMED). Tests: `tests/flinch.test.ts` (new), `tests/combat.test.ts` (the 0-damage assertion is flipped: it was the dump's misread). Checks: flinch, combat (NEWSERV), enemyfsm, enemyfsmruins, combatdepth, buffs, dubwitch, `tsc --noEmit`.
+
+**Scratch.** The exe dump (`objdump -D`) and the vtable/calls scans lived in the session scratchpad (`flinch_*`) and were deleted.
+
 ## 2026-10-25: Dubchic's radar row is 'own' (vtable 0x00b04760); the Dark Gunner's flinch shows its icon
 
 **Outcome.** The DUBCHIC row of `ENEMY_RADAR_SOURCE` moves from 'slot' to 'own'. The Dark Gunner's flinch (exe state 4, 0x00544704) now shows the radar icon in any brain state, so an idle gunner that is hit is drawn while it flinches (`render/combat.ts` `minimapEnemies` passes the 'flinch' brain while the owner's damage state runs). The port's flinch was already a hit reaction (owner damage motion, resumed to hover when the animation ends); this pass adds no new GunnerAi state.
