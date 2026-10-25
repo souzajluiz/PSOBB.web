@@ -1,5 +1,33 @@
 # Devlog
 
+## 2026-10-25: Dark Falz radar and hit boxes: the ring Darvant's box cycle, form 2 at blend 0, form icons ungated
+
+**Outcome.** The Darvant ring's radar and hit now follow its update (box flag +0x3B0, a 2701-tick cycle); form 2's hit box is on only at blend 0; the forms' forced radar icons are no longer gated by state or death (the exe calls them every update). Form 3's hit rule was already the exe's (`to != above`). Form 1, the control, and the spat / beam Darvants keep their old rules, marked ASSUMED below.
+
+**Proven (PsoBB.exe, Ephinea addresses; objdump of the .text, Ghidra `tools/ghidra/decomp.sh`, vtables read with `tools/exedata.py`).**
+- Vtables: control 0x00AF6BD8 (update 0x0044E5FC), Darvant ring 0x00AF7D60 (update 0x0045F25C), spat Darvant 0x00AF7EC0 (update 0x0045FF50), form 1 0x00AF75A0 (update 0x00454838), form 2 0x00AF77E0 (update 0x00457BD4), form 3 0x00AF7A60 (update 0x0045AD6C). Every one of them has +0x88 = FUN_00777BA4 (`entity flags(+0x30) & 0x200`), which is not the box rule.
+- Nothing in the Dark Falz code calls the box helpers 0x0052045C / 0x005204B0 (those are De Rol Le's and the Gibbon's). The DF classes write bit 0 of their box directly: the box object is [entity + 0x39C] for forms 1-3 (collision_box, stride 0x2C, flags at +0x18; form 1 writes the positions at +0x1C) and [entity + 0x38C] for a Darvant.
+- **Darvant ring** (0x0045F25C, the tail after the state dispatch): if state != 3 and +0x3B0 == 0: clear bit 0 of [+0x38C]+0x18 and icon3 at +0x300 (colour 0xFF7F5126, scale 1.0, flag 1, forced). If +0x3B0 != 0: set bit 0, lock refresh (FUN_006946A8), and the plain icon 0x805608 (0xFFFFA24C, range checked). State 3: no icon, no box write. At the top of the update, in states 1 and 2: timer +0x3B4 -= 1; if it went below 0, +0x3B0 = 0 and the timer = 0xA8C; else if it is below 0x1C2, +0x3B0 = 1. The die hook (0x0045F238) sets +0x3B0 = 0. Net: the box is on for 450 of every 2701 ticks in hover and chase; rising, dead: off.
+- **Form 2** (0x00457BD4): icon3 at +0x300 every update (colour 0xFFFFA24C, scale 0x40A00000 = 5.0, flag 1; no state test). Then bit 0 of [+0x39C]+0x18 = (+0x3F0 == 0.0): on at blend 0, off otherwise (0x0090024C = 0.0). The port's `blend` is +0x3F0.
+- **Form 3** (0x0045AD6C): bit 0 off when +0x3A8 == 0x11 (the port's `F3.above`), on otherwise (with the lock refresh). The body's forced icon comes from FUN_0045B64C every update, which returns before it when the prisoner slot is above 3.
+- **Form 1** (0x00454838): four forced icon3 calls (body +0x38, heads +0x440 / +0x458 / +0x470) and the ring, every update, no state test. The table rows (enter 0x00457998.., lead 0x00455714.., all 0x004557F4..) and their helpers do not write any box bit 0; the dead test is entity flag 0x800 (lead 0x004559C0).
+- **Control** (0x0044E5FC): no icon call in its range (0x0044E5FC to 0x0044EB18).
+- **Spat Darvant** (0x0045FF50; its state tails 0x0046013B, 0x00460A02 / 0x00460A8B, 0x00460B15): plain icon 0x805608 when state != 3. No box write in the spat code.
+
+**ASSUMED / open.**
+- The Darvant timer starts at 0 (the ctor 0x0045F160 does not write +0x3B0 / +0x3B4; allocation zeroes them is not traced).
+- Form 2's box rule is written against the port's `blend` (= +0x3F0). The port's dead and waiting states keep the old test.
+- Form 1's box: no DF code writes it, so it is treated as on from creation (the port's `awake` / dead / waitKill rule is unchanged). The 0x200 flag's writers in form 1 are not traced.
+- Spat Darvants and beam Darvants: box rule not traced (the beam's class is not confirmed as 0x00AF7D60). They keep the state rule.
+- The control: its box and entity flags are not traced; it stays concealed.
+
+**Port.**
+- `client/src/combat/darkfalz.ts`: `DARVANT.boxCycle` / `boxOnBelow` / `forcedIconColour`; `Darvant.boxOn` / `boxTimer`; `Darvant.targetable` for a ring is `boxOn` (and not dead or gone); `darvantBoxStep` (the cycle, run in hover and chase); `darvantRingIcon` ('forced' / 'plain' / null); `killDarvant` clears `boxOn`.
+- `client/src/combat/darkfalz2.ts`: `targetable` needs `blend === 0`; `minimapIcons` lists the body's forced 5.0 icon (`F2.bodyIcon`) while the form is there.
+- `client/src/render/combat.ts`: `minimapEnemies` skips the forms 1-3 parts and a ring Darvant that is not 'plain'; `minimapIcons` lists the forced ring icons and no longer gates the form 1 / form 3 icons on death or on `concealed()` (only on the part being drawn).
+- `tests/darkfalz.test.ts`: the cycle (450 on in 2701), the forced / plain / null icon, form 2's hit and body icon, and the Darvant hits now wait for the box window (`clearZako`, the kill loops). The form 2 beam test filters the body icon out of the ball count. The MD_STOP1 check now expects the table's 75 frames (the old +1 was the TYPE1 -> TYPE2 phase, which the longer ZAKO wait moves).
+- Tests: `node tests/darkfalz.test.ts` (pass), `tests/combat.test.ts` (NEWSERV set, 5859 checks pass), `tests/minimap.test.ts` (pass), `darkfalzwarp`, `darkfalzcamera`, `bossrooms`, `objectcollision`, `galgryphonminion`, `setdata` (pass), `npx tsc --noEmit -p client` (clean).
+
 ## 2026-10-25: Xbox (XB) .qst: parse and pack, newserv byte cross-check
 
 `formats/qst.ts` takes `version: 'XB'` (`QstVersion`). newserv's `S_OpenFile_XB_44_A6` (`src/CommandFormats.hh`, 0x50 bytes) is the PC / GC open body plus `xb_filename` (pstring 0x10, ASCII, at 0x38) and `content_meta` (u32 at 0x48, `0x30000000 | quest number`, `Quest.cc` `add_open_file_command_t` XB overload). The header is the 4-byte DC-style one; the write commands are the GC ones (`add_write_file_commands_t` with `bb_alignment` false). `qstVersion` returns `XB` for the first command's size 0x54 (it used to refuse). `packQstFiles(..., xb)` takes `{ xbFilename, contentMeta }` and throws without them; `parseQstFiles` returns them as `xb`. `packQst(..., { version: 'XB', language })` names the Xbox file `quest<N>_<c>.dat` with `c` the lowercase language letter (`JEGFSBTK`, default English), as newserv `VersionedQuest::xb_filename`. XB download files are the PSO V2 payload, as on DC / PC / GC (newserv's decode_qst_data_t applies its DLQ decoder to every A6 file).

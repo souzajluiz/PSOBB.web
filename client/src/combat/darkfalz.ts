@@ -105,6 +105,14 @@ export const DARVANT = {
     [0.86, 0.5],
   ] as readonly (readonly [number, number])[],
   beamRise: 10 / 9,
+  // The ring's hit box cycle (PsoBB.exe UpdateDarvant 0x0045F25C, states 1 and 2): the
+  // timer +0x3B4 counts down a frame; below 0 it is reloaded with 0xA8C and the box goes off,
+  // below 0x1C2 the box is on (+0x3B0 is the flag). ASSUMED: the timer starts at 0.
+  boxCycle: 0xa8c,
+  boxOnBelow: 0x1c2,
+  // The ring's forced radar icon (0x0045F25C tail: colour 0xff7f5126, scale 1.0, flag 1).
+  forcedIconColour: 0xff7f5126,
+  forcedIconScale: 1,
 } as const;
 
 // One Darvant.
@@ -118,14 +126,42 @@ export class Darvant extends DfEntity {
   target = -1;
   timer = 0; // +0x3ac
   clock = 0; // +0x3c0
+  // The ring's hit box flag (+0x3B0, bit 0 of the box at +0x38C is set to it each tick) and its
+  // cycle timer (+0x3B4, see DARVANT.boxCycle). ASSUMED: both start at 0.
+  boxOn = false;
+  boxTimer = 0;
   speed = 0.4;
   born = 0;
   constructor(entity: number, hp: number) {
     super(entity, hp);
   }
+  // A ring's hit box is on only in its window (the lock-on and the hit read bit 0). The spat
+  // and beam ones keep the state rule (ASSUMED: their boxes are not traced).
   get targetable(): boolean {
-    return !this.gone && this.st !== DARVANT.dead && (this.kind === 'spit' || this.st !== DARVANT.rise);
+    if (this.gone || this.st === DARVANT.dead) return false;
+    if (this.kind === 'ring') return this.boxOn;
+    return this.kind === 'spit' || this.st !== DARVANT.rise;
   }
+}
+
+// The cycle of the ring's box (exe 0x0045F25C, the top of the update in states 1 and 2).
+export function darvantBoxStep(d: Darvant): void {
+  const t = d.boxTimer - 1;
+  if (t < 0) {
+    d.boxOn = false;
+    d.boxTimer = DARVANT.boxCycle;
+  } else {
+    d.boxTimer = t;
+    if (t < DARVANT.boxOnBelow) d.boxOn = true;
+  }
+}
+
+// The radar icon of a ring Darvant (the tail of 0x0045F25C): none once dead; the forced
+// icon (0xff7f5126, scale 1, icon3 flag 1) while the box is off; the plain one (0xffffa24c,
+// range checked) while it is on. The exe calls it every live frame, in the rise too.
+export function darvantRingIcon(d: Darvant): 'forced' | 'plain' | null {
+  if (d.gone || d.st === DARVANT.dead) return null;
+  return d.boxOn ? 'plain' : 'forced';
 }
 
 export interface DarkFalzOptions {
@@ -654,6 +690,7 @@ export class DarkFalzAi extends BrainBase implements DfFight {
     this.kills++;
     d.st = DARVANT.dead;
     d.timer = 0;
+    d.boxOn = false; // the die hook sets +0x3B0 = 0 (0x0045F238)
     d.dead = true;
     this.events.push({ kind: 'died', entity: d.entity });
   }
@@ -677,6 +714,7 @@ export class DarkFalzAi extends BrainBase implements DfFight {
   private stepDarvant(d: Darvant): void {
     const row = d.kind === 'spit' ? this.rows.darvantFalz : this.rows.darvant;
     d.clock++;
+    if (d.kind === 'ring' && (d.st === DARVANT.hover || d.st === DARVANT.chase)) darvantBoxStep(d);
     switch (d.st) {
       case DARVANT.rise:
         // State 0 (0x0045F628): up a third of a unit a frame; the beam's ones

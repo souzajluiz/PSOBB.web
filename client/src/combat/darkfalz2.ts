@@ -104,6 +104,7 @@ export const F2 = {
   beamSide: 20, // 0x00900200: a ball's offset from the point
   beamRing: 280, // 0x00A4577C MaxScale: the running point's radius
   beamIcon: 2.5, // icon3 0x40200000, forced
+  bodyIcon: 5, // icon3 0x40A00000 at +0x300 (0x00457BD4), forced
   tenchuFrames: 150,
   stopFrames: [75, 150, 225, 300] as readonly number[],
   recoverFrames: 150,
@@ -187,8 +188,11 @@ export class DfForm2 extends DfEntity {
     this.enter(F2.appear);
   }
 
+  // The body's hit box is on only while the outward blend (+0x3F0) is 0 (PsoBB.exe 0x00457BD4,
+  // the box rule after the state dispatch: +0x3F0 == 0.0 sets bit 0). The dead and wait
+  // states keep the port's rule (ASSUMED: not traced).
   get targetable(): boolean {
-    return this.awake && this.st !== F2.dead && this.st !== F2.waitKill;
+    return this.awake && this.blend === 0 && this.st !== F2.dead && this.st !== F2.waitKill;
   }
 
   // 0x004587D4: the pose from the angle and the outward blend.
@@ -592,10 +596,14 @@ export class DfForm2 extends DfEntity {
     return this.marks;
   }
 
-  // The forced radar icons of the balls thrown on this tick (render/combat.ts
-  // minimapIcons); none outside the beam.
+  // The forced radar icons (render/combat.ts minimapIcons): the body's, every live
+  // frame (0x00457BD4 calls icon3 at +0x300 with 0xffffa24c, scale 5, flag 1, with no
+  // state test), and the balls thrown on this tick (2.5, the beam only).
   minimapIcons(): Icon[] {
-    return this.st === F2.beamL || this.st === F2.beamR ? this.beamIcons : [];
+    const out: Icon[] = [];
+    if (this.awake) out.push({ x: this.x, z: this.z, color: ENEMY_ICON_COLOR, shape: 1, scale: F2.bodyIcon, heading: 0 });
+    if (this.st === F2.beamL || this.st === F2.beamR) out.push(...this.beamIcons);
+    return out;
   }
 
   get shownMarks(): number {
