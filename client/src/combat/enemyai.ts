@@ -376,6 +376,8 @@ export class EnemyAi {
   // animation is played then), 1 while it plays (invulnerable), 2 once its
   // end test passed (the next tick is idle).
   private spawnSub = 0;
+  // The current_target == 1 test of the spawn handler (set by the constructor's spawn option).
+  private spawnAnimation = false;
 
   constructor(opts: {
     x: number;
@@ -388,7 +390,11 @@ export class EnemyAi {
     speeds: EnemySpeeds;
     radius: number;
     wander?: number;
-    // The enemy starts in its spawn state (exe state 0) when the family has one.
+    // The exe's first spawn tick takes the animation branch only when the
+    // current_target slot (+0x398) holds 1. booma_constructor writes that 1
+    // (0x0053621b), so every Booma takes it, floor-load and wave spawns alike.
+    // false = the "no spawn animation" branch: sub-state 2, no motion, not
+    // invulnerable, idle on the next tick. Absent: the brain starts settled in idle.
     spawn?: boolean;
   }) {
     this.x = this.spawnX = opts.x;
@@ -402,10 +408,12 @@ export class EnemyAi {
     this.wander = opts.wander ?? 0;
     this.reach = opts.attack && opts.attack.distanceX > 0 ? opts.attack.distanceX : 0;
     this.reachAngle = ((opts.attack?.angle ?? 0x2000) & 0xffff) * BAMS_TO_RAD;
-    if (opts.spawn && opts.profile.spawn) {
-      // The first tick plays the spawn motion (current is null, so play() emits it).
+    if (opts.profile.spawn && opts.spawn !== undefined) {
+      // Exe state 0. current is null: the first tick plays the spawn motion
+      // (play() emits it), or with spawn false takes the no-animation branch.
       this.state = 'spawn';
       this.current = null;
+      this.spawnAnimation = opts.spawn === true;
     } else {
       this.current = opts.profile.idle;
     }
@@ -587,8 +595,10 @@ export class EnemyAi {
   // end test (field_0xb4 leaves 0x20, the war cry's test too) sets animation 0 and
   // clears the invulnerable flag (sub 2). Sub 2: the next tick is state 1 (idle).
   // The animation's own length is not read: the owner reports the end.
-  // ASSUMED: every spawn takes the animation branch (the handler's "no spawn
-  // animation" branch, taken when the spawn carries no trigger, is not modelled).
+  // The animation branch is taken when current_target (+0x398) is 1 on the first
+  // tick (0x00535ad4 cmp / 0x00535aee). Booma ctor 0x00535f1c writes it at 0x0053621b
+  // and nothing else writes +0x398 in the Booma family before that tick. Else
+  // branch (0x00535ad9): sub 2 with no animation; the state stays 0 until the next tick.
   private tickSpawn(out: AiFrame, animationEnded: boolean): AiFrame {
     const spawn = this.profile.spawn;
     if (!spawn) {
@@ -596,6 +606,11 @@ export class EnemyAi {
       return out;
     }
     if (this.spawnSub === 0) {
+      if (!this.spawnAnimation) {
+        // The else branch: sub 2 now, idle on the next tick, no motion.
+        this.spawnSub = 2;
+        return out;
+      }
       this.spawnSub = 1;
       out.motion = this.play(spawn);
     } else if (this.spawnSub === 1) {

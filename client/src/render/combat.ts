@@ -1439,7 +1439,9 @@ export class CombatView {
           radius,
           // initdata_param2: the e.dat entry's wander radius.
           wander: Math.max(0, head.slot.set.params[1]),
-          // The Booma family's spawn state (the profile has one only for it).
+          // The spawn animation branch: booma_constructor (0x00535f1c) writes the
+          // current_target == 1 test value, so every Booma (floor or wave) animates.
+          // Only the Booma profile has a spawn state.
           spawn: true,
         });
         // The Monest's own states are its spawner (combat/enemyfsm.ts).

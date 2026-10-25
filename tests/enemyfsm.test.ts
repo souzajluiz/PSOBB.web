@@ -841,8 +841,15 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
   hitAfter.onDamage(4);
   eq(hitAfter.state, 'chase', 'a hit after the spawn starts the chase');
 
-  // Without the spawn flag, or a family without a spawn profile, the brain starts idle as before.
-  eq(boomaSpawn(false).state, 'idle', 'no spawn flag: idle');
+  // No current_target == 1 (spawn false): the else branch. The first tick is sub 2 with no motion,
+  // the state stays spawn and nothing is invulnerable; the next tick is idle.
+  const noAnim = boomaSpawn(false);
+  const n0 = noAnim.tick([near]);
+  eq([noAnim.state, n0.motion, noAnim.invulnerable], ['spawn', null, false], 'no spawn animation: the first tick plays nothing');
+  const n1 = noAnim.tick([near]);
+  eq([noAnim.state, n1.motion], ['idle', null], 'no spawn animation: the next tick is idle');
+  // A family without a spawn profile starts idle as before.
+  eq(boomaSpawn(true, AI_PROFILES.TObjEneBeast as EnemyAiProfile).state, 'spawn', 'a Booma starts in the spawn state');
   eq(boomaSpawn(true).invulnerable, false, 'a fresh spawn is not invulnerable before its first tick');
   eq(boomaSpawn(true, AI_PROFILES.TObjEneMoja as EnemyAiProfile).state, 'idle', 'a family without a spawn profile starts idle');
   eq(boomaSpawn(true, AI_PROFILES.TObjEneShark as EnemyAiProfile).state, 'idle', 'the Shark has no spawn state in the port');

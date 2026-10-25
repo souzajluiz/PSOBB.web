@@ -1,5 +1,22 @@
 # Devlog
 
+## 2026-10-25: Booma spawn gate is current_target == 1, set by the Booma ctor: every Booma animates
+
+**Outcome.** The spawn handler's "current_target == &g_ChallengeListWindowFlag" test is not a global. It is the integer 1 in the `current_target` slot (enemy +0x398), and the dump's `&g_ChallengeListWindowFlag` is a mis-resolved name for that constant (the same mis-resolution is noted in `client/src/combat/blooddecals.ts`). The Booma constructor writes 1 there on every spawn path, so every Booma takes the animation branch. The port's `spawn: true` is right; the port now also models the exe's else branch (spawn false: sub 2, no motion, not invulnerable, idle on the next tick).
+
+**Proven (PsoBB.exe, Ephinea addresses; disassembly with `objdump -D -M intel`, the dump's `booma_constructor` matches it line for line).**
+- The test: spawn handler 0x00535a6c, sub 0 at 0x00535a79..0x00535ad7: `cmp dword [esi+0x398], 1` (0x00535ad4) then `je 0x535aee`. The animation branch (0x535aee) sets sub 1, animation_id 0xb, `unknown_set_entity_flags(0xa000000)`, `or [esi+0x30], 0x4000000` (maybe_invuln), sound 0xeb. The else branch (0x535ad9) sets sub 2 and does nothing else; the state stays 0 until the next tick. The end test (0x535a86) writes `[esi+0x398] = 0`, which is the dump's `current_target = 0`.
+- The writer: Booma ctor `booma_constructor` (0x00535f1c, vtable 0x00b01fc0 at 0x00535f68) executes `mov dword [ecx+0x398], 1` at 0x0053621b, before its call to the post-ctor slot +0x150. Ctor-only: the Booma superclass ctor 0x0052b6ec sets ai_state (+0x32e) and sub (+0x330) to 0 and does not touch +0x398.
+- Writers of +0x398 = 1 in the exe (objdump grep of the whole PsoBB.exe, 14 sites). The Booma ctor is one of them (0x0053621b). The others belong to other enemy families (e.g. 0x00512ed4, 0x005517af = the Dimenian state 9 in the dump) and are not traced one by one. None is in the Booma handler set (0x0052a6e4..0x0052b518, 0x0073d160), so none runs between the Booma ctor and its first tick. The Gobooma / Gigobooma share the Booma ctor (`booma_subtype` branch inside it).
+- Floor load and waves use the same constructor. `SpawnMonstersForFloor_00812824` (floor, dump line 830631: the entries with wave 0 or flag 1), `SpawnMonstersBySectionAndWave_00810e54` (dump line 829053) and `unknown_enemy_spawn` (quest wave event; 0x00811188 is the brief's address, dump line 829247) all call `enemy_constructor` from the monster table. After the constructor they set spawn info and call vtable +0x144, which is `restore_enemy_status_ex` (0x007866b8, it calls vtable +0x148 = `restore_enemy_status`, dump line 762033). That writes HP, status flags and buffs, not +0x398. So "present at floor load" and "spawned by a wave event" both animate.
+
+**ASSUMED / open.**
+- Paralysis before the first tick: `unknown_paralysis_effect_tick` (dump line 312117) moves an enemy in state 0 to idle (state 1, clears +0x398, sub 0, clears the flag). A Booma paralysed during its spawn skips the animation. The port has no such path yet (no paralysis on the Booma brain).
+- The animation length is not read (see the entry below); the end is the owner's `animationEnded`.
+- A non-Booma ctor also writes 1 (0x00512ed4, family not named here). The Shark handler (0x00552704) is not checked against the +0x398 test, so this entry does not change the Shark.
+
+**Port.** `client/src/combat/enemyai.ts`: the constructor's `spawn` option is the +0x398 test (`spawnAnimation`); false starts sub 0 with the else branch (one tick in state 0, no motion, not invulnerable); absent keeps the old start-settled-in-idle (unit-test helpers). `client/src/render/combat.ts` passes `spawn: true` (the Booma ctor writes 1 for every Booma). `tests/enemyfsm.test.ts`: the no-animation branch replaces the old "no spawn flag: idle" case.
+
 ## 2026-10-25: Booma brain spawn state (exe state 0): animation 0xb, invulnerable, then idle
 
 **Outcome.** The Booma-substrate brain (combat/enemyai.ts `EnemyAi`) has a `spawn` state. The Booma / Gobooma / Gigobooma profile (`TObjEneBeast`) plays the spawn animation, is invulnerable (`invulnerable` getter, so `applyEnemyHit` shows "0" and does nothing), then goes to idle. The radar gate (`boomaBrainIconShown('spawn')`, exe state 0) hides it during the spawn. The constructor takes `spawn: true` (render/combat.ts passes it for every enemy); families without `profile.spawn` start idle as before.
@@ -12,7 +29,7 @@
 - The Dimenian state 9 (0x005517a0, vtable 0x00b041e0 +0x178) is not a spawn: it sets +0x398 = 1, calls the object at +0x3b0 (vtable +0x10) and sets bit 0x1 of +0x8 when that returns 1. No animation, no icon. The Dimenian's own spawn is 0x005ad51c (the dark portal), which is not decoded here.
 
 **ASSUMED.**
-- Every spawn takes the animation branch. The handler takes it only when `current_target` equals the sentinel `&g_ChallengeListWindowFlag`; otherwise it skips to idle. The sentinel is a shared global label in the dump, so what sets it is not traced.
+- (Resolved in the entry above: the test is `current_target == 1`, written by the Booma ctor, so every Booma animates.)
 - The animation length is not read (frame count of motion 0 not decoded); the end is the owner's `animationEnded`.
 - Gobooma and Gigobooma use the same handler table (ctor 0x00535f1c, same vtable slot as the Booma).
 
