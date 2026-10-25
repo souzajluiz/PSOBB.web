@@ -33,6 +33,7 @@ import {
   type AiTarget,
   type EnemyAiMotion,
   type EnemyBrain,
+  type IllGillSpecial,
 } from '../combat/enemyai.ts';
 import { GoranAi, goranWarpRow } from '../combat/goranai.ts';
 import {
@@ -1317,6 +1318,8 @@ export class CombatView {
           // snare and the tackle), ENEMY_TYPE_PARAMS ILL_GILL.attack.
           const attacks = params && def ? def.attack.map((i) => params.attack(difficulty, i)) : [];
           const ill = new IllGillAi({ ...at, movement, attacks, rng: () => this.rng() });
+          // The stats row's level: the attacker level of the thunder special (get_level, 0x0038).
+          ill.level = params && def ? params.stats(difficulty, def.stats[0]).level : 0;
           ill.health = () => stats.hp / Math.max(1, stats.maxHp);
           ai = ill;
         }
@@ -2320,7 +2323,7 @@ export class CombatView {
       // Epsilon's motion goes to the part of the look that is shown (epsilonView).
       if (r.motion && !(ai instanceof EpsilonAi)) this.playEnemyMotion(e, r.motion);
       if (r.hit && r.hit.clientId >= 0x1000) this.enemyHitsEnemy(e, r.hit.clientId & 0xfff, r.hit.knockback, r.hit.mult);
-      else if (r.hit) this.enemyHitsPlayer(e, r.hit.clientId, r.hit.knockback, r.hit.mult, r.hit.kbScale, r.hit.attack);
+      else if (r.hit) this.enemyHitsPlayer(e, r.hit.clientId, r.hit.knockback, r.hit.mult, r.hit.kbScale, r.hit.attack, r.hit.special);
       if (r.shots)
         for (const s of r.shots) {
           if (s instanceof MorfosBolt) this.morfosMuzzle(e, s);
@@ -6492,9 +6495,46 @@ export class CombatView {
     }
   }
 
+  // The Ill Gill scythe's weapon special on the local player (FUN_007753b4, the player's special
+  // handler: case 7 ice, case 10 thunder, case 0xb insta-kill; the attacker is an enemy, so the
+  // B branch of freeze_activation_check / thunder_special_attack_shock_chance applies). The
+  // player's EIC / ETH / EDK read 0 (ASSUMED: the port keeps no resist block for the local player),
+  // and the status boosts of an enemy attacker are 1.0 / 0 (ASSUMED).
+  // Returns whether the attack's normal hit still lands: false for ice and thunder (the special
+  // is their whole effect, the thunder's own damage aside), true for the insta-kill.
+  private illGillSpecial(e: EnemyRuntime, special: IllGillSpecial, angle: number): boolean {
+    const what = `E-${e.index.toString(16)} (${e.slot.type})`;
+    const killer = 0x1000 | e.index;
+    const resist = 0;
+    // The B branch's chance: resist / -100 + 0.75, floored at 0 (freeze_activation_check 0x007771a0,
+    // thunder_special_attack_shock_chance 0x007770d0). The freeze lands when it beats the roll.
+    const statusChance = Math.max(0, resist / -100 + 0.75);
+    if (special.kind === 'freeze') {
+      if (statusChance > this.rng()) this.inflictStatus(STATUS.freeze, what);
+      else this.opts.log(`${what}: ice missed`);
+      return false;
+    }
+    if (special.kind === 'shock') {
+      // The thunder's damage: (100 - ETH) * 0.002 * (level / (5 - power) + (1 + power) * 20) * 5.
+      const dmg = Math.round(((100 - resist) * 0.002 * (special.level / (5 - special.power) + (1 + special.power) * 20)) * 5);
+      if (dmg >= 1) this.damage.hit(dmg, angle, 0, killer);
+      if (this.rng() < statusChance) this.inflictStatus(STATUS.shock, what);
+      return false;
+    }
+    // The insta-kill's roll: (power - EDK) * 0.01 - 0.5 for a player, against the roll; the boss
+    // areas refuse it. The kill sets the HP to 0.
+    const roll = this.rng();
+    const killChance = (special.power - resist) * 0.01 - 0.5;
+    if (!this.inBossArea() && killChance > roll) {
+      this.opts.log(`${what}: instant kill (${Math.round(killChance * 100)}%)`);
+      this.damage.hit(this.damage.hp, 0, 0, killer);
+    } else this.opts.log(`${what}: instant kill (${Math.round(killChance * 100)}%) missed`);
+    return true;
+  }
+
   // One enemy melee landing on a player: the hit roll and the damage of
   // FUN_00777664 / FUN_007732b8 with the attack's own multiplier.
-  private enemyHitsPlayer(e: EnemyRuntime, clientId: number, knockback: number, mult: number, kbScale?: number, attackRow?: number): void {
+  private enemyHitsPlayer(e: EnemyRuntime, clientId: number, knockback: number, mult: number, kbScale?: number, attackRow?: number, special?: IllGillSpecial | null): void {
     if (clientId !== this.game.selfId) return; // other clients resolve their own hits
     const view = this.view;
     const attacker = attackRow ? this.enemyAttackerRow(e, attackRow) : this.enemyAttackerOf(e);
@@ -6502,6 +6542,11 @@ export class CombatView {
     const from = view.playerPositions().get(clientId);
     const p = e.instance.root.position;
     const stats = this.selfStats();
+    if (special) {
+      const angle = from ? Math.atan2(from.x - p.x, from.z - p.z) : 0;
+      // The freeze and the shock take the place of the normal hit; the insta-kill keeps it.
+      if (!this.illGillSpecial(e, special, angle)) return;
+    }
     // Deband / Zalure move the player's DFP (+0x2d2); a freeze lowers EVP.
     const defender: DefenderStats = { hp: this.damage.hp, maxHp: this.damage.maxHp, evp: this.status.evp(stats.evp), dfp: this.selfBuffs.dfp(stats.dfp) };
     // The generic hit check has no attack-type or combo multiplier for an
