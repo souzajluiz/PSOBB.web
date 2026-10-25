@@ -78,10 +78,11 @@ export function randomlyAdjust(value: number, fraction: number, rnd: number): nu
   return v < 1 ? 1 : v;
 }
 
-// The beast's animation speed value (+0x484 or the tail's +0x488): the BattleParam fparam (a float,
-// rounded) when it is positive, else the exe's 20.
+// The beast's animation speed value (+0x484 .. +0x48c): the BattleParam fparam as an int, when it is positive,
+// else the exe's 20. The exe's int is `fistp` under the x87 control word with RC = 11 (0x0c00 in
+// InitializeOlga1AnimationSpeeds_00497bc8), which truncates toward zero: Math.trunc, not Math.round.
 export function olgaBattlePower(fparam: number): number {
-  const r = Math.round(fparam);
+  const r = Math.trunc(fparam);
   return r > 0 ? r : OLGA_SWORD_WAVE.fallbackPower;
 }
 
@@ -180,4 +181,131 @@ export class OlgaStabObject {
   tick(): void {
     this.age += 1;
   }
+}
+
+// --- Pass 6: the fire lancer (row 22; exe Olga1HandleFireLancerMoveAttack 0x0049876c, the hit
+// CheckOlga1SwordWaveHit_0049592c at 0x0049592c..0x00495fdb, dump line 215247) ---------------------
+//
+// PROVEN from the asm (objdump 0x0049592c..0x00495fdb, and the frame 0x0049876c..0x004987ff):
+// - The window: the state's timer (+0x418) starts at lead + hold + 30 (the enter 0x004994b4 writes +0x414 and
+//   +0x418 = +0x4a4 + +0x4a8 + 0x1e) and counts down a frame. The hit runs on a tick whose timer is in [30, hold]
+//   (`cmp timer, 0x1e; jl` and `cmp timer, +0x4a8; jg`). lead = +0x4a4 and hold = +0x4a8, the BattleParam row 43
+//   iparam5 and iparam6 (0x497d5e..0x497dd7: each is the int when positive, else 90 (0x5a) and 180 (0xb4)).
+// - The progress t (+0x4e4): on a hit tick t = min(t + 1/30, 1) (0x009026ac, 0x00902a90), else t = max(t - 2/15, 0)
+//   (0x009026b0, 0x00902a8c). It is reset to 0 when the state ends (Olga1ResetAttackProgress, 0x00496834). The hit
+//   test needs t != 0 (0x00902acc = 0.0) and the blade's length |B - A| >= 10 (0x00902670; the 3D distance,
+//   0x00836208, with 0x0098a604 = 0.025 as the squared floor).
+// - The blade: m = (A + B) / 2 (0x00902ac8 = 0.5), P1 = m + (A - m) t, P2 = m + (B - m) t, where A = +0x5b0 and
+//   B = +0x5c8 (vec3s of the beast).
+// - The quad: V0 = P1, V1 = P2, V2 = P2 + d, V3 = P1 + d, with d = (-500 sin h, 0, -500 cos h) (0x00902ac4 = -500;
+//   h = the heading +0x60, BAMS, int_sin / int_cos). Only X and Z are used.
+// - The test: for each edge V_i -> V_{i+1} (Y of the edge zeroed) the Y of cross(edge, player - V_i) must keep its sign
+//   across the four edges (a zero is kept: the exe's sign test at 0x00495c02..0x00495c57). A player inside is hit.
+// - The damage: entity_hit_by_tech(player, beast, fixed 0, randomly_adjust(+0x48c, 0.1), NULL, ~foie, -1), the same
+//   call as the sword. +0x48c = BattleParam row 43 fparam4 (field 3), truncated, or 20 (the 0.1 is the immediate
+//   0x3dcccccd at 0x00495c69).
+//
+// ASSUMED (not bound): the anchors A (+0x5b0) and B (+0x5c8). No direct writer of either lies in the Olga range of
+// the asm; +0x5b0 is copied from a player field (0x9a8) in the target snapshot at 0x0049cb46 and the sub-object copy at
+// 0x0049a3e9..0x0049a42e, so its meaning is UNCLEAR. render/combat.ts supplies them (the model's bones, ASSUMED).
+//
+// NOT PORTED: the push-out after the hit (0x00495d80..0x00495f97: the player is moved out of the blade along the
+// blade's direction when its distance to the axis is under half the blade length; it needs Enemygetgroundinfo
+// 0x007b4c58 and SetPlayerPositionAndStealth 0x0048dbf4, neither ported). The beast's orbit during the lancer
+// (SetOlga1AttackPosition3 0x00496f74). The chunks (0x11 / 0x13) and the sounds.
+
+export const OLGA_LANCER = {
+  // The hit runs on a timer in [firstTimer, hold] (exe 0x0049876c: 0x1e and +0x4a8).
+  firstTimer: 0x1e,
+  // The progress t (+0x4e4): f32 steps, see above.
+  progressStep: 0.03333333507180214, // 0x009026ac
+  progressCap: 1, // 0x00902a90
+  progressDecay: -0.13333334028720856, // 0x009026b0
+  progressFloor: 0, // 0x00902a8c
+  // The blade's anchors A and B, as model bones (ASSUMED: the exe's +0x5b0 / +0x5c8 have no decoded writer; the
+  // sword's bone table 0x00902678 = 4, 3, 7, 5 gives the first and the last entry).
+  anchorBones: [4, 5] as const,
+  // The minimum blade length (0x00902670 = 10.0) and the extrusion (0x00902ac4 = -500.0) of the quad.
+  minLength: 10,
+  extrude: -500,
+  // The power: randomly_adjust(+0x48c, 0.1) (0x3dcccccd = 0.1f).
+  powerFraction: 0.1,
+  // The lead (+0x4a4) and the hold (+0x4a8) when the BattleParam field is not positive (0x5a, 0xb4).
+  leadDefault: 90,
+  holdDefault: 180,
+  // The no-hang cap of the timer (the brain's OLGA_TIMER.cap); the exe has no cap, a row this long is not reached.
+  timerCap: 900,
+} as const;
+
+// The lead and the hold of the lancer from BattleParam row 43's iparam5 / iparam6 (exe +0x4a4 / +0x4a8).
+export function olgaLancerLeadHold(iparam: readonly number[] | undefined): { lead: number; hold: number } {
+  const lead = iparam?.[4] ?? 0;
+  const hold = iparam?.[5] ?? 0;
+  return {
+    lead: lead > 0 ? lead : OLGA_LANCER.leadDefault,
+    hold: hold > 0 ? hold : OLGA_LANCER.holdDefault,
+  };
+}
+
+// The progress t after one tick of the lancer frame (exe 0x004967ec on a hit tick, 0x00496810 otherwise).
+// f32 arithmetic (Math.fround) as the exe's fadd / fstp.
+export function olgaLancerProgress(t: number, hitTick: boolean): number {
+  const P = OLGA_LANCER;
+  if (hitTick) return Math.min(Math.fround(t + P.progressStep), P.progressCap);
+  return Math.max(Math.fround(t + P.progressDecay), P.progressFloor);
+}
+
+// The blade's two points on the XZ plane (CheckOlga1SwordWaveHit, the first block): m = (A + B) / 2,
+// P1 = m + (A - m) t (from the middle toward A), P2 = m + (B - m) t (toward B). `t` is the progress.
+export function lancerBlade(A: XYZ, B: XYZ, t: number): { p1: XZ; p2: XZ } {
+  const mx = (A.x + B.x) * 0.5;
+  const mz = (A.z + B.z) * 0.5;
+  return {
+    p1: { x: (A.x - mx) * t + mx, z: (A.z - mz) * t + mz },
+    p2: { x: (B.x - mx) * t + mx, z: (B.z - mz) * t + mz },
+  };
+}
+
+// The lancer's test gate: the blade's anchors are at least `minLength` apart (3D), and the progress is not 0.
+export function lancerGate(A: XYZ, B: XYZ, t: number): boolean {
+  if (t === 0) return false;
+  const dx = B.x - A.x;
+  const dy = B.y - A.y;
+  const dz = B.z - A.z;
+  const sq = dx * dx + dy * dy + dz * dz;
+  // 0x00836208: below 0.025 squared the helper returns 0 (not the length).
+  if (sq < 0.025) return false;
+  return Math.sqrt(sq) >= OLGA_LANCER.minLength;
+}
+
+// The quad V0 = P1, V1 = P2, V2 = P2 + d, V3 = P1 + d with d = (-500 sin h, -500 cos h) on XZ. `heading` is in
+// radians (the brain's angle, the exe's BAMS heading times BAMS_TO_RAD).
+export function lancerQuad(p1: XZ, p2: XZ, heading: number): [XZ, XZ, XZ, XZ] {
+  const dx = OLGA_LANCER.extrude * Math.sin(heading);
+  const dz = OLGA_LANCER.extrude * Math.cos(heading);
+  return [
+    { x: p1.x, z: p1.z },
+    { x: p2.x, z: p2.z },
+    { x: p2.x + dx, z: p2.z + dz },
+    { x: p1.x + dx, z: p1.z + dz },
+  ];
+}
+
+// The quad test (exe 0x00495b5d..0x00495c57): the Y of cross(edge_i, p - V_i) over the four edges must not change
+// sign. A zero before a non-zero is kept (prev == 0 accepts), a positive then <= 0 rejects, a negative then >= 0 rejects.
+export function lancerTouches(p: XZ, quad: readonly XZ[]): boolean {
+  let prev = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = quad[i];
+    const b = quad[(i + 1) & 3];
+    const ex = b.x - a.x;
+    const ez = b.z - a.z;
+    // (edge x (p - a)).y with edge.y = 0: e.z * q.x - e.x * q.z.
+    const cur = ez * (p.x - a.x) - ex * (p.z - a.z);
+    if (i > 0) {
+      if (prev >= 0 ? prev > 0 && cur <= 0 : cur >= 0) return false;
+    }
+    prev = cur;
+  }
+  return true;
 }

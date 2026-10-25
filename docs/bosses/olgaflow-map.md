@@ -780,3 +780,73 @@ launch twice in this pass, so no address was bound through it; the names below a
 
 15.x Follow-up (2026-10-24): the stab constants are decoded from the loads in 0x00495508..0x00495684: plane 0x00902af0 = 0.0, axis threshold 0x00902aec = 150.0, epsilon 0x00902ae8 = 1e-5, ranges 0x0090264c = {15, 20, 25, 50} by g_CurrentDifficulty 0x00a9cd68. The placeholders above (0, 30, 0, 20) are replaced.
 
+
+## 16. Pass 6 (2026-10-25): the fire lancer (row 22)
+
+Sources: the dump `reverse/refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c` (CheckOlga1SwordWaveHit_0049592c
+at line 215247, the frame Olga1HandleFireLancerMoveAttack_0049876c at 217344) and the asm (`objdump -D -M intel` of
+`reverse/refsrc/psobb-client-source/assets/PsoBB.exe`, the code section at 0x401000 is flagged DATA, so `-d` prints
+nothing: use `-D`). Ghidra was not needed for this pass.
+
+### 16.1 The hit body is shared with the sword wave (PROVEN)
+
+- CheckOlga1SwordWaveHit_0049592c (215247) is the body the lancer calls. Its first gate: `t != 0` (0x00902acc = 0.0,
+  the decompile's first test) and `ValidateDoorAnimation_00836208(A, B) >= 0x00902670` (10.0). The port's `lancerGate`.
+- The four points, verified from the stores (asm 0x00495b96..0x00495d04): V0 = P1 (slot +0x54), V1 = P2 (+0x60),
+  V2 = P2 + d (+0x6c, vec3_sum at 0x00495cf4), V3 = P1 + d (+0x78, vec3_sum at 0x00495d04), with P1 = m + (A - m) t,
+  P2 = m + (B - m) t, m = (A + B) / 2 (0x00902ac8 = 0.5), A = +0x5b0..+0x5b8 and B = +0x5c8..+0x5d0 (asm 0x00495b96..0x00495bc8).
+- d = (-500 sin h, 0, -500 cos h): `int_sin(heading)` * 0x00902ac4 (-500) at 215338..215342; the asm calls
+  0x0084e600 (int_sin) and 0x0084e71c (int_cos) at 0x00495cb3 and 0x00495cd5 with `*[0x900aa4]`.
+- The edge test (asm 0x00495d19..0x00495d4f): the edge is V(k+1) - V(k) (vec3_subtract 0x008502dc, the B operand is
+  the slot +0x54 + 12k), and the test point is player - V(k). The cross's Y is `e.z * q.x - e.x * q.z` (edge Y zeroed).
+  Sign rule: `prev` starts at the first edge; a later edge rejects when prev > 0 and cur <= 0, or prev <= 0 and cur >= 0
+  (the decompile's `_DAT_00902acc` branches). This is the port's `lancerTouches`.
+- Damage: `entity_hit_by_tech(player, beast, fixed 0, randomly_adjust(int +0x48c, 0.1), NULL, ~foie, -1)`
+  (215373..215377). The power int is `+0x48c` (= casting info +0x2c under +0x460), the port's `olgaBattlePower`.
+
+### 16.2 The lancer's window and progress (PROVEN from the port's earlier passes, re-read this pass)
+
+- Frame 0x0049876c calls the hit while the timer is in [0x1e, +0x4a8] (`olgaLancerProgress`, `lancerTick`). The timer's
+  start is lead + hold + 0x1e (0x004994b4 writes +0x414 / +0x418); lead = +0x4a4 (BattleParam row 43 iparam5),
+  hold = +0x4a8 (iparam6), exe fallbacks 0x5a / 0xb4 when not positive.
+- The progress t (+0x4e4): +1/30 on a hit tick, capped at 1 (0x009026ac, 0x00902a90); -2/15 on the other ticks, floored
+  at 0 (0x009026b0, 0x00902a8c). Reset to 0 at the state's end (Olga1ResetAttackProgress 0x00496834).
+
+### 16.3 The thresholds (PROVEN, now bound through the init)
+
+- +0x494 and +0x498 are BattleParam row 43 iparam1 and iparam2 (fields 6 and 7), each the int when positive, else 200.
+  `OlgaFlowInit.iparam` carries the row (render/combat.ts passes `params.movement(difficulty, OLGA_ANIM_ROW).iparam`).
+  The earlier constant 200 is now the fallback only.
+
+### 16.4 Port (combat/olgaflowhits.ts pass 6, combat/olgaflowai.ts, render/combat.ts olgaLancer)
+
+- `lancerUpdate` (brain): `lancerTick` and `lancerProgress` per tick; `durationOf(fireLancer)` = lead + hold + 0x1e (capped).
+- `olgaLancer` (render): spawns nothing; reads the anchors, gates, builds the quad, tests the LOCAL player only (each client
+  resolves its own, as the sword does; the exe loops every player with `can_olga_hit_player`: ASSUMED equivalent).
+- `olgaBattlePower` changed from Math.round to Math.trunc: `fistp` under the control word RC = 11 (0x0c00,
+  InitializeOlga1AnimationSpeeds_00497bc8) truncates toward zero (PROVEN from the constant; the store is the int).
+
+### 16.5 ASSUMED (not proven)
+
+- The anchors: the port uses the model's bones 4 and 5 (`OLGA_LANCER.anchorBones`). The exe's A (+0x5b0) and B (+0x5c8)
+  have writers only in copies: 0x0049cd23 (`mov [edi+0x5b0], edx`, the player copy, see section 15.3), 0x0049a5ae
+  (`[ecx+0x5b0]`, sub-object copy) and 0x007a4ee0 (`[ecx+0x5b0]`, not identified). No decoded writer of the Olga
+  beast's own A / B; their meaning is UNCLEAR. The bone choice is a placeholder.
+- The local-player-only test (above).
+- The heading: the exe's BAMS `int_sin` / `int_cos` are the port's radians sin / cos (`ai.angle`).
+
+### 16.6 NOT PORTED (lancer)
+
+- The push-out after a hit (0x00495d80..0x00495f97: the player is moved along the blade when its distance to the axis is
+  under half the blade length; needs Enemygetgroundinfo 0x007b4c58 and SetPlayerPositionAndStealth 0x0048dbf4).
+- The beast's orbit during the lancer (SetOlga1AttackPosition3, 0x00496f74), the chunks (0x11 / 0x13) and the sounds.
+
+### 16.7 The stab and the tail (status after pass 6)
+
+- The stab's hit is PORTED (pass 5, section 15). Its three gate constants and the range array are decoded (section 15.x
+  follow-up): floor plane 0.0 (0x00902af0), axis threshold 150.0 (0x00902aec), epsilon 1e-5 (0x00902ae8), ranges
+  {15, 20, 25, 50} (0x0090264c, by difficulty). The stab's bone pair (tip = bone 4) stays ASSUMED.
+- The tail swipe's hit is STILL OPEN. The anchor +0x640..+0x654 has no store in the Olga code range (0x0049xxxx to
+  0x004a0xxx). Stores to those offsets exist only in other functions: 0x0042a731..0x0042a7bf (six stores), 0x004cb8b2..
+  0x004cb8eb, 0x004c8cba, 0x004c90d9, 0x004c92ae, 0x00423e4a. Their owner is not identified in this pass (ASSUMED: not
+  Olga). Next step: the owner of 0x0042a7bf and 0x004cb8b2 (the function bounds, the caller that passes an Olga beast).

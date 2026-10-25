@@ -73,7 +73,7 @@ import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import { GalgryphonMinionManager } from '../combat/galgryphon.ts';
 import { GalgryphonAi } from '../combat/galgryphonai.ts';
 import { OlgaFlowAi, decodeOlgaA4 } from '../combat/olgaflowai.ts';
-import { OLGA_AREA, OLGA_SWORD_WAVE, OlgaSwordTrail, OlgaStabObject, olgaStabRange, randomlyAdjust, olgaBattlePower, stabGroundPoint, swordWaveTouches, type XYZ } from '../combat/olgaflowhits.ts';
+import { OLGA_AREA, OLGA_LANCER, OLGA_SWORD_WAVE, OlgaSwordTrail, OlgaStabObject, lancerBlade, lancerGate, lancerQuad, lancerTouches, olgaStabRange, randomlyAdjust, olgaBattlePower, stabGroundPoint, swordWaveTouches, type XYZ } from '../combat/olgaflowhits.ts';
 import { galgryphonAttackBurst, GALFX_RING, GALFX_RING_PARTICLES } from '../combat/galgryphonfx.ts';
 import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
 import { DEMO_WARP_PARTS } from '../formats/enemymodels.ts';
@@ -1246,6 +1246,7 @@ export class CombatView {
             maxHp: stats.maxHp,
             leader: () => this.game.selfId === this.game.leaderId,
             frames: this.motionFrames(instance, null),
+            iparam: params ? params.movement(difficulty, OLGA_ANIM_ROW).iparam : undefined,
             rand: () => this.rng(),
           });
         } else if (className === 'TBoss3Volopt') {
@@ -2939,6 +2940,33 @@ export class CombatView {
     st.objs = st.objs.filter((o) => o.alive);
   }
 
+  // The fire lancer (row 22, exe CheckOlga1SwordWaveHit_0049592c; combat/olgaflowhits.ts, pass 6). On the brain's
+  // lancerTick the blade (the anchors A, B: the model's bones, ASSUMED, OLGA_LANCER.anchorBones) is spread by the
+  // progress t, and the local player inside the quad (the blade extruded 500 along the heading) takes the group-0
+  // tech damage with power randomly_adjust(fparam4, 0.1). Each client resolves its own player, as the sword does.
+  private olgaLancer(e: EnemyRuntime, ai: OlgaFlowAi): void {
+    if (!ai.lancerTick || ai.lancerProgress === 0) return;
+    const inst = e.instance;
+    const [ia, ib] = OLGA_LANCER.anchorBones;
+    const ba = inst.nodes?.[0]?.[ia];
+    const bb = inst.nodes?.[0]?.[ib];
+    if (!ba || !bb) return;
+    inst.root.updateWorldMatrix(true, true);
+    const wa = ba.getWorldPosition(new THREE.Vector3());
+    const wb = bb.getWorldPosition(new THREE.Vector3());
+    const A: XYZ = { x: wa.x, y: wa.y, z: wa.z };
+    const B: XYZ = { x: wb.x, y: wb.y, z: wb.z };
+    if (!lancerGate(A, B, ai.lancerProgress)) return;
+    const me = this.view?.playerPositions().get(this.game.selfId);
+    if (!me || this.area !== OLGA_AREA || this.damage.dead) return;
+    const { p1, p2 } = lancerBlade(A, B, ai.lancerProgress);
+    if (!lancerTouches({ x: me.x, z: me.z }, lancerQuad(p1, p2, ai.angle))) return;
+    const ctx = this.difficultyParams;
+    const speed = ctx?.params ? ctx.params.movement(ctx.difficulty, OLGA_ANIM_ROW) : null;
+    const power = randomlyAdjust(olgaBattlePower(speed?.fparam4 ?? 0), OLGA_LANCER.powerFraction, this.rng());
+    this.enemyTechHitsPlayer(e, power, (p1.x + p2.x) / 2, (p1.z + p2.z) / 2, `E-${e.index.toString(16)} (${e.slot.type}) fire lancer`);
+  }
+
   private tickOlga(e: EnemyRuntime, ai: OlgaFlowAi, targets: AiTarget[]): void {
     const inst = e.instance;
     const root = inst.root;
@@ -2948,6 +2976,7 @@ export class CombatView {
     // After the placement, so the sword bone is read at this tick's body (ASSUMED: the pose is last frame's).
     this.olgaSwordWave(e, ai);
     this.olgaSwordStab(e, ai);
+    this.olgaLancer(e, ai);
     const body = r.motion;
     if (body) {
       // The leg model (animator 0 in the spec order) plays the row's leg motion; the others the body's.
