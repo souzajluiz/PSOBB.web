@@ -99,9 +99,7 @@ next command is 8-aligned (newserv `encode_qst_file`). The name is `PSO/<quest n
 else the file name), 23 characters at most. `parseQst` accepts chunks in any order, all-zero chunk indexes (assumed in
 order) and write commands whose size includes the 4 padding bytes. Download quests use the same bodies with A6 (open) and
 A7 (write) instead of 44 / 13: `parseQst` reads them (`download: true`) and `packQst(..., { download: true })` writes them.
-ASSUMED: the BB A6/A7 files are plain PRS, like the 44 / 13 ones (the exe's receive path decompresses them without a
-decrypt). newserv's `decode_qst_data_t` decodes every A6 file as a download payload, BB included, so this assumption is
-open (see Open below).
+The BB A6/A7 files are plain PRS, the same bytes as the 44 / 13 ones (verdict 2026-10-25, see "BB download payload" below).
 
 ### Non-BB `.qst` (DC / PC / GC)
 
@@ -159,10 +157,31 @@ bytes 0..10 with size 0x1234 gives `3412000078563412968aead9bd6536cc604746`. Rou
 The cipher and the payload are checked against newserv's own output in `tests/qstnonbb.test.ts` (the DLQ payload of a
 newserv `encode-qst --download` file decodes with `decodeDownloadQuestData` and re-encodes byte for byte).
 
+### BB download payload (A6 / A7): plain PRS
+
+Question: is a BB download `.qst` payload a PSO V2 DLQ payload (u32 size, u32 seed, V2-encrypted PRS) or plain PRS?
+Verdict: plain PRS, the same bytes as the 44 / 13 files. Evidence:
+- PsoBB.exe `decompress_received_quest_files` (refsrc `src/Psobb.exe-5-10-2026.c`, the function at 0x006d0174 in the
+  notes) runs `prs_decompress` on the received `.bin` and `.dat` with no decrypt. The other BB receive path,
+  `HandleQuestFileHeader` / `receive_quest_chunk`, copies the chunk bytes as they come. The dump has no 0xA6 / 0xA7 case.
+- newserv `create_download_quest` throws `PSOBB does not support download quests` for BB (`Quest.cc`), and
+  `encode-qst --bb --download` fails the same way (checked in `tests/questwrite.test.ts`). No newserv output is a BB A6.
+- newserv's `decode_qst_data_t` treats every A6 file as DLQ, BB included. On a plain-PRS BB A6 file its decoder fails
+  (`backreference offset beyond beginning of output`). That is newserv's assumption; the port does not copy it.
+- Cross-check (`tests/questwrite.test.ts`): newserv's BB 44 `.qst` with the commands relabeled to A6 / A7 parses here
+  as a download whose files are the same PRS streams newserv's own file carries.
+- Caveat: the exe's `LoadAndDecryptAsset_005b9b3c` (refsrc line ~404805) does decrypt a DLQ-shaped block (size, key,
+  V2 PRS), but it is reached from the `QuestManager` state machine (a local QuestVM load path, shuffled and CRC-checked),
+  not from the 44 / 13 or A6 / A7 receive. No A6 receive reaches it in the dump.
+
+`create_download_quest`'s language override: `withBinLanguage(prsBin, version, language)` writes byte 0x10 of the
+decompressed `.bin` (the DC v1/v2, PC and GC / Xbox header's `language`, `Quest.cc` 868) and re-compresses it. `0xFF` is a
+no-op; BB `.bin` files have no language field and are refused. `packQst` writes BB `.bin` files only, so the override
+applies to a DC / PC / GC `.bin` before `packQstFiles`. Tests: `tests/qstnonbb.test.ts`.
+
 Open (not ported):
 - XB `.qst` files (`S_OpenFile_XB_44_A6`: 0x50-byte open body with `xb_filename`, `content_meta` = `0x30000000 | quest number`).
-- `create_download_quest`'s language override of the `.bin` header (`Quest.cc` 868); `packQst` writes the `.bin` as it is.
-- The BB A6 payload: newserv decodes it as a download payload (`decode_qst_data_t`, `BIN_DAT_DLQ`), the port reads it as plain PRS.
+- The DLQ-shaped block in the exe's QuestManager (above): what feeds it and whether a server can send it. Not a `.qst`.
 - `packQst` for a name longer than the field (`base + ".bin"` over 11 characters on BB / PC / GC) now throws; before it was truncated silently.
 - The download-quest menu (the A0 / A5 / A2 side of the lobby) is not part of this writer.
 

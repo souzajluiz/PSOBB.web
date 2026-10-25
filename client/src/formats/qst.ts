@@ -31,8 +31,7 @@
 // same PRS files the server sends (net/quests.ts).
 //
 // Not handled: Xbox (XB) .qst files (their open body has xb_filename and
-// content_meta). The BB download payload is ASSUMED to be plain PRS (see below):
-// newserv decodes every A6 file as a download payload, BB included.
+// content_meta). The BB download payload is plain PRS (see QST_COMMAND_OPEN_FILE_DOWNLOAD).
 
 import { prsDecompress } from './prs.ts';
 import { prsCompressOptimal } from './prscompress.ts';
@@ -45,10 +44,19 @@ export const QST_COMMAND_OPEN_FILE = 0x44;
 export const QST_COMMAND_WRITE_FILE = 0x13;
 // The download-quest pair (the original client's memory-card quests, and the
 // lobby's A6/A7 transfer): the same bodies as 44 / 13. On DC / PC / GC the files
-// are the PSO V2 download payload (psov2.ts); on BB they are ASSUMED to be plain
-// PRS like the 44 / 13 ones (the exe's receive path decompresses them without a
-// decrypt). newserv's decoder would also treat a BB A6 file as a download payload,
-// so that BB assumption is open.
+// are the PSO V2 download payload (psov2.ts). On BB they are plain PRS, the same
+// bytes as 44 / 13. Evidence (2026-10-25):
+//   * PsoBB.exe 0x006d0174 decompress_received_quest_files (refsrc
+//     src/Psobb.exe-5-10-2026.c) runs prs_decompress on the received .bin and
+//     .dat with no decrypt step; the only other BB quest-file receive path,
+//     HandleQuestFileHeader / receive_quest_chunk, stores the bytes as they come.
+//     The exe has no 0xA6 / 0xA7 case of its own.
+//   * newserv refuses to build a BB download .qst (Quest.cc create_download_quest:
+//     "PSOBB does not support download quests"), so no newserv output is a BB A6.
+//   * newserv's decode_qst_data_t applies its DLQ decoder to every A6 file, BB
+//     included; on a plain-PRS BB A6 file that decoder fails ("backreference offset
+//     beyond beginning of output"). That is newserv's assumption, not the client's.
+// The port follows the client: BB A6 / A7 files are plain PRS.
 export const QST_COMMAND_OPEN_FILE_DOWNLOAD = 0xa6;
 export const QST_COMMAND_WRITE_FILE_DOWNLOAD = 0xa7;
 export const QST_CHUNK_SIZE = 0x400;
@@ -332,6 +340,22 @@ export function packQstFiles(files: RawQstFile[], name: string, download = false
     }
   }
   return out;
+}
+
+// The language override of a download .bin (newserv create_download_quest, Quest.cc):
+// the DC v1/v2, PC and GC / Xbox .bin headers keep a language byte at 0x10, and the
+// override writes it before the download is encoded. Takes the PRS .bin, returns the
+// PRS .bin with that byte set (the rest of the decompressed file is unchanged).
+// Language 0xFF (UNKNOWN) changes nothing. BB .bin files have no language field.
+export const QST_LANGUAGE_UNKNOWN = 0xff;
+export function withBinLanguage(prsBin: Uint8Array, version: QstVersion, language: number): Uint8Array {
+  if (version === 'BB') throw new RangeError('qst: a BB .bin has no language field');
+  if (language === QST_LANGUAGE_UNKNOWN) return prsBin;
+  if (!Number.isInteger(language) || language < 0 || language > 7) throw new RangeError(`qst: language ${language} is not 0..7 or 0xFF`);
+  const bin = prsDecompress(prsBin, QST_MAX_DECOMPRESSED);
+  if (bin.length <= 0x10) throw new Error('qst: .bin is too small for a header');
+  bin[0x10] = language;
+  return prsCompressOptimal(bin);
 }
 
 // Packs a quest into a .qst. The .bin and .dat are serialized (questwrite.ts)
