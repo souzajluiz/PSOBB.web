@@ -180,7 +180,18 @@ export function boomaBrainIconShown(brain: string): boolean {
 // gated here (ASSUMED: they add no icon, untraced).
 export const BOOMA_BRAIN_TYPES: ReadonlySet<string> = new Set([
   'BOOMA', 'GOBOOMA', 'GIGOBOOMA', 'EVIL_SHARK', 'PAL_SHARK', 'GUIL_SHARK', 'DIMENIAN', 'LA_DIMENIAN', 'SO_DIMENIAN',
+  // Boota (0x115) and Goran (0x117): the Booma substrate (notes below).
+  'BOOTA', 'ZE_BOOTA', 'BA_BOOTA', 'GORAN', 'PYRO_GORAN', 'GORAN_DETONATOR',
 ]);
+// Boota and Goran: their vtables' slots +0x154 + 4 * state (dumped with tools/exedata.py read, VERIFIED).
+// Boota (0x00b0a680): 0 is its own (0x005a57f4), 11 its own (0x005a6448); 1..5, 7..9 the Booma's
+// handlers; 6 and 10 the empty 0x0061cdb0. Goran (0x00b0af40): 1, 2, 4, 5, 7, 8 the Booma's;
+// 0 0x005ad51c and 9 0x005517a0 and 11 0x005ae3cc are its own; 3 0x005acdb8 and 10 0x005acb78 are
+// its own too. The Booma rule above covers the shared states. Goran state 3 is NOT a plain
+// Booma state: its body calls the Booma's state-3 handler 0x0052afe4 (icon 0x0052b148) from six
+// branches (0x005ace04 .. 0x005acf0c, 0x005ad019), so its icon is shown there (ASSUMED: the
+// brain keeps the icon for notice and chase). Goran state 10 (0x005acb78) adds the icon at
+// 0x005acd6e on every path (the body always reaches it: VERIFIED).
 // The Dark Gunner (vtable 0x00b03400, update 0x00543e8c). Its state word +0x32e picks
 // the handler through the dispatcher 0x005443c4: 0 idle (0x00545a64), 1 active
 // (0x00544fe0), 2 shoot (gunner_shooting_update), 3 a 15-frame timed wait
@@ -325,8 +336,8 @@ export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
   // 5, 7 (the same handlers), so the Booma rule applies there too; its state 3 is 0x005acdb8 (no
   // 0x805608 call in 0x5acdb8..0x5ad51c), its state 0 0x005ad51c (no call), state 9 0x005517a0 (no
   // call in 0x5517a0..0x5518eb), state 10 0x005acb78 (icon at 0x005acd6e, gate not traced).
-  // No port brain for either (no AI_PROFILES or OWN_FSM class: 'BootaFamily', 'GoranFamily'), so the
-  // rule cannot gate the radar yet; no row (default kept).
+  // The port brain (AI_PROFILES BootaFamily / GoranFamily, combat/enemyai.ts) now runs the Booma
+  // rule through BOOMA_BRAIN_TYPES; no row here (default kept).
   DELDEPTH: 'own', GI_GUE: 'own', GIBBLES: 'own', MERILLIA: 'own', MERILTAS: 'own',
   // Sinow Berill (2026-10-25 Episode 4 pass, ex-'forced' row): vtable 0x00b0a120 (ctor 0x0059e01c
   // writes it at 0x0059e0eb; +0x198 0x00520618), its dispatcher SinowberillProcessState_0059eb08

@@ -113,6 +113,10 @@ export interface EnemyAiProfile {
   // animation 0xb, the spawn (unknown_booma_enemy_spawn_handler 0x00535a6c);
   // null / absent = the family has no spawn state in the port.
   spawn?: EnemyAiMotion | null;
+  // The spawn animation branch on the first tick (+0x398 == 1). Absent = the Booma
+  // rule (the constructor writes 1, render/combat.ts); false = the family never sets
+  // it, so the spawn takes the no-animation branch (Boota).
+  spawnGate?: boolean;
   // The timed spawn of the Shark and the Dimenian (no animation): the state timer
   // of the 0x3b0 object, and the sound and particles of sub-state 0. Absent = none.
   spawnTimer?: EnemySpawnTimer | null;
@@ -167,6 +171,35 @@ export const AI_PROFILES: Record<string, EnemyAiProfile> = {
     notice: once(10, 0.8),
     attacks: [once(1, 1), once(2, 1)],
     spawnTimer: { divisor: 10, scale: -20, sound: 0x1d1, effects: [{ id: 0xe6, dy: 30 }] },
+  },
+  // Boota / Ze / Ba (vtable 0x00b0a680, table 0x009c05a0, the speeds read from the
+  // table): 0 stund (10, 0.6, loop), 2 walk (12, 0.5, loop), 3 and 4 the attacks
+  // (1 atackl 0.65, 2 atackr 0.85), 7 the war cry (11 wakeup, 0.8), 11 the appear
+  // (0, 0.5). Its states 1 to 5, 7, 8 are the Booma handlers (the brain is the Booma's,
+  // classic/minimap.ts BOOMA_BRAIN_TYPES). spawnGate false: the first tick reads
+  // +0x398 (0x005a57f4 sub 0), and no code of the family writes 1 there (the base
+  // ctor 0x0052b6ec writes 0), so the appear never plays (VERIFIED, DEVLOG 2026-10-25).
+  // Its own state 0 is then the no-animation branch: idle on the next tick.
+  BootaFamily: {
+    idle: loop(10, 0.6),
+    walk: loop(12, 0.5),
+    notice: once(11, 0.8),
+    attacks: [once(1, 0.65), once(2, 0.85)],
+    spawn: once(0, 0.5),
+    spawnGate: false,
+  },
+  // Goran / Pyro / Detonator (vtable 0x00b0af40, table 0x009c10c0): 0 stund (9, 0.6,
+  // loop), 2 walk (11, 1, loop), 3 and 4 the attacks (1, 2 at 1.0), 7 the war cry
+  // (10 wakeup, 0.8). Slot 11 has no animation (mode 0), and the family never writes
+  // +0x398 = 1, so there is no spawn (the ctor leaves the brain idle). Its states 1, 2,
+  // 4, 5, 7, 8 are the Booma handlers; its own state 3 (0x005acdb8) delegates to the
+  // Booma's state 3 (0x0052afe4) on some paths, and its state 10 (0x005acb78) is not
+  // ported (ASSUMED: the chase and the war cry share the Booma brain's notice / chase).
+  GoranFamily: {
+    idle: loop(9, 0.6),
+    walk: loop(11, 1),
+    notice: once(10, 0.8),
+    attacks: [once(1, 1), once(2, 1)],
   },
   // 0x009bb420 (Hildebear / Hildeblue): 0 (9, 0.5, loop), 2 walk (10, 0.6,
   // loop), 3 (8, 0.7), 4 (5, 0.4), 5 (7, 0.5), 1 is the spawn row (6, 0.7).
@@ -475,7 +508,7 @@ export class EnemyAi {
       // (play() emits it), or with spawn false takes the no-animation branch.
       this.state = 'spawn';
       this.current = null;
-      this.spawnAnimation = opts.spawn === true;
+      this.spawnAnimation = opts.spawn === true && opts.profile.spawnGate !== false;
     } else {
       this.current = opts.profile.idle;
     }

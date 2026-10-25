@@ -598,7 +598,7 @@ for (const t of ['BOOMA', 'GOBOOMA', 'GIGOBOOMA']) eq(radarSourceOf(t), 'booma',
 for (const t of ['EVIL_SHARK', 'PAL_SHARK', 'GUIL_SHARK']) eq(radarSourceOf(t), 'booma', `${t}: states 1-8 are the Booma handlers (vtable 0x00aff860)`);
 // Dimenian / La / So (ctor 0x00551d3c, vtable 0x00b041e0): states 1-8 are the Booma handlers, state 9 differs.
 for (const t of ['DIMENIAN', 'LA_DIMENIAN', 'SO_DIMENIAN']) eq(radarSourceOf(t), 'booma', `${t}: states 1-8 are the Booma handlers (vtable 0x00b041e0)`);
-eq([...BOOMA_BRAIN_TYPES].sort().join(','), ['BOOMA', 'DIMENIAN', 'EVIL_SHARK', 'GIGOBOOMA', 'GOBOOMA', 'GUIL_SHARK', 'LA_DIMENIAN', 'PAL_SHARK', 'SO_DIMENIAN'].join(','), 'the brain-gated families are the Booma-table families');
+eq([...BOOMA_BRAIN_TYPES].sort().join(','), ['BA_BOOTA', 'BOOMA', 'BOOTA', 'DIMENIAN', 'EVIL_SHARK', 'GIGOBOOMA', 'GOBOOMA', 'GORAN', 'GORAN_DETONATOR', 'GUIL_SHARK', 'LA_DIMENIAN', 'PAL_SHARK', 'PYRO_GORAN', 'SO_DIMENIAN', 'ZE_BOOTA'].join(','), 'the brain-gated families are the Booma-table families and Boota / Goran (tests/bootagoran.test.ts)');
 // The shared slot 0x00520618 at +0x198 of the vtable (PROVEN by read, DEVLOG 2026-10-25): Savage Wolf (0x00b00260),
 // Chaos Sorcerer (0x00b09c60), Chaos Bringer (0x00b026e0), Dark Belra (0x00b02280), Canadine (0x00b02be0), Poison Lily
 // and Del Lily (0x00b00fe0). Dubchic is not here: id 0x80 gets vtable 0x00b04760 (slot +0x198 null), see below.
@@ -640,10 +640,10 @@ for (const t of ['SAND_RAPPY_CRATER', 'SAND_RAPPY_DESERT', 'DEL_RAPPY_CRATER', '
   eq(radarSourceOf(t), 'rappy', `${t}: update_rappy 0x005258e0, icon unconditional after the pause gate`);
 }
 // Boota (vtable 0x00b0a680) and Goran (0x00b0af40): the Booma substrate update 0x0052b78c; the Booma's per-state
-// icons apply to their shared states (classic/minimap.ts comments). No row: no port brain yet.
-eq(radarSourceOf('BOOTA'), null, 'Boota: no row (the Booma substrate, no port brain)');
+// icons apply to their shared states (classic/minimap.ts comments). No ENEMY_RADAR_SOURCE row: the Booma rule (BOOMA_BRAIN_TYPES).
+eq(radarSourceOf('BOOTA'), null, 'Boota: no row (the Booma substrate brain)');
 eq(radarSourceOf('CANADINE_NOT_A_TYPE'), null, 'an unknown type has no radar source');
-eq(radarSourceOf('GORAN'), null, 'Goran: no row (the Booma substrate, no port brain)');
+eq(radarSourceOf('GORAN'), null, 'Goran: no row (the Booma substrate brain)');
 eq(Object.keys(ENEMY_RADAR_SOURCE).length, 9 + 8 + 1 + 8 + 1 + 1 + 2 + 12 + 5 + 8 + 13, 'the survey table has 68 enemy rows');
 
 if (failures) {
