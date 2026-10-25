@@ -226,6 +226,7 @@ import { holdCountdown, parseHoldPacket, type PillarTrap, type TrapEvent } from 
 import type { LobbyView } from './lobbyview.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { TickClock } from './smoothrender.ts';
+import { armLocalFromCapture, drawnWorldOrigin } from './morfosnodes.ts';
 
 const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 const pct = (m: number): string => `${m >= 0 ? '+' : ''}${(m * 100).toFixed(1)}%`;
@@ -5054,34 +5055,30 @@ export class CombatView {
   private morfosMuzzle(e: EnemyRuntime, bolt: MorfosBolt): void {
     const node = e.instance.nodes?.[0]?.[MORFOS.muzzleNode];
     if (!node) return;
-    const root = e.instance.root;
-    root.updateMatrixWorld(true);
-    const v = this.morfosVec;
-    node.getWorldPosition(v);
-    bolt.placeAt(v.x, v.y - (root.position.y - e.lift), v.z);
+    // The draw's point (morfosnodes.ts): read before anything refreshes the matrices.
+    const v = drawnWorldOrigin(node, this.morfosVec);
+    bolt.placeAt(v.x, v.y - (e.instance.root.position.y - e.lift), v.z);
   }
 
   private readonly morfosVec = new THREE.Vector3();
+  private readonly morfosCaptured = new THREE.Vector3();
 
   // The arm's place (0x0057cd3c: its +0x38 is the parent's +0x4ac, which the
   // body's draw writes: 0x00579f3c stores the world origin of body node 10
   // (MORFOS.armNode, counted depth first over the body's objects, the body
   // being the enemy's first part) into the parent's +0x4ac while it draws).
-  // The capture happens in the draw, so the arm takes the pose of the previous
-  // frame: morfosView runs before this frame's motion is applied. The arm's
-  // root is the enemy root's child, so the world point goes to the root's
-  // local space; the arm's yaw is the root's (0x0057cc3c / 0x0057cd9c: translate
-  // to the point, turn by the parent's yaw). ASSUMED: the capture reaches the
-  // arm through the same frame order the port uses.
+  // The capture happens in the draw, so the arm takes the pose of the last draw
+  // (morfosnodes.ts: the node's matrixWorld as the last render left it), not this
+  // tick's: the tick runs before the draw, and the body's motion and root are
+  // stepped before the tick. The point goes to the root's local space with the
+  // root's current transform; the arm's yaw is the root's (0x0057cc3c /
+  // 0x0057cd9c). ASSUMED: the arm's first update sees the capture of the last draw
+  // (the sub-entity is created and updated in the same tick as the body).
   private morfosArmPlace(e: EnemyRuntime, arm: THREE.Object3D): void {
     const node = e.instance.nodes?.[0]?.[MORFOS.armNode];
     if (!node) return;
-    const root = e.instance.root;
-    root.updateMatrixWorld(true);
-    const v = this.morfosVec;
-    node.getWorldPosition(v);
-    root.worldToLocal(v);
-    arm.position.copy(v);
+    const captured = drawnWorldOrigin(node, this.morfosCaptured);
+    arm.position.copy(armLocalFromCapture(e.instance.root, captured, this.morfosVec));
   }
 
   private epsilonLook = new Map<EnemyRuntime, number>();

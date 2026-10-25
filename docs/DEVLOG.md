@@ -1,5 +1,37 @@
 # Devlog
 
+## 2026-10-25: Morfos arm: the placement reads the last draw's point (the arm's frame timing settled)
+
+**Question:** the ROADMAP's Morfos line left "the arm's frame timing against the layer's animator hook order" open. Which order does the exe use, and does the port match it?
+
+**Exe evidence (Ghidra `tools/ghidra/decomp.sh`; the dump's names are off here, see below):**
+- `0x0057cd3c` (Ghidra `FUN_0057cd3c`, the arm sub-entity's update): first `FUN_007aa094` (the generic motion step), then, when the parent (+0xfc) is set, the arm's +0x38..+0x40 are copied from the parent's `+0x4ac` (`FUN_0057c7b8` = `param + 0x4ac`) and +0x60 from `FUN_0057c7b4`; then `if (+0xb0 & 0x10) != 0` the dead bit (+8 |= 1). Otherwise the dead bit too.
+- `0x007aa094` (`FUN_007aa094`): mode 3 (play once) at the last frame: `if (frame_count - 1 <= frame)` sets `+0xb0 |= 0x30`, the speed to 0 and steps the frame back by one speed. So the death bit is set in the same step that reaches the last frame, and the frame is not left on the last one (not visible: the arm is dead that tick).
+- `0x0057cd9c` (`FUN_0057cd9c`, the arm's draw): no dead test; it draws through the render helpers while the object is alive.
+- The arm's own motion row, `tools/exedata.py motions 009bef44 4`: slot 0 = mode 3, motion 0 (attack_kabe_arm), speed 0.7, flags 0x4. So the port's `a.play(motion(0), 0.7, false)` is the arm's own table row, not the body's punch row by accident.
+- The capture: `unknown_morfos_render2` (dump line ~364160) sets the vertex target to `this+0x4a0` and registers `ProcessAnimationStep_00579f3c` (0x0082fac4) before `g_RenderNJ`. The callback (`0x00579f3c`) stores the world origin of node 6 (+0x4a0) and node 10 (+0x4ac) during the draw. So the point is captured in the draw, not in the tick.
+- The dump's own names (`MorfosSubEntity_Update_0057ce94`) does not match the Ghidra functions at these addresses: `0x0057ce94` is the tech projectile's update in the dump's text, and the arm's update is at `0x0057cd3c` in the binary. Ghidra wins; the ROADMAP's old `0x0057cd3c` for the update was right.
+
+**Port finding (before this entry):** the port's `morfosArmPlace` and `morfosMuzzle` (render/combat.ts) called `root.updateMatrixWorld(true)` and then read the node's current world point. The frame order is: `viewer.frame()` runs `frameHooks` (the enemy layer's hook steps every animator, the body included), then `onFrame` (the combat update, whose `tickEnemies` at 30 Hz calls `morfosView`), then the draw. So the arm and the muzzle read the pose after this frame's motion, and after a motion switch made in the same tick. The exe reads the pose of the last draw. The comment in `morfosArmPlace` said "the previous frame's pose", but the code did not do that.
+
+**Port change:**
+- `client/src/render/morfosnodes.ts` (new): `drawnWorldOrigin(node, out)` reads `node.matrixWorld` as the last render left it (three refreshes it in `renderer.render`, and nothing in the tick does); `armLocalFromCapture(root, captured, out)` takes that point into the root's current local space (the root's matrices are refreshed after the read).
+- `render/combat.ts`: `morfosArmPlace` and `morfosMuzzle` use them. The arm's place and the bolt's origin are the last draw's point, as the exe's +0x4ac / +0x4a0 are.
+- `tests/morfosnodes.test.ts` (new): the last draw's point is kept when the node moves without a draw; a second read is the same; the arm's place is the captured point in the moved root's space (5 captured, root at 3 -> local 2, not 6 nor 4); a rotated root keeps the arm on the captured world point; a never-drawn node is the identity origin.
+
+**Settled (no change):**
+- The arm's speed 0.7 is the arm's own row (above).
+- The arm dies in the tick its frame reaches the last one: the port's `NodeAnimator` clamps at `count - 1` and `morfosView` checks `a.ended` in the same tick (the check runs after the frame hook's steps). The exe's step-back one speed is not visible (the arm is dead). The generic clamp difference in `NodeAnimator` (ROADMAP, every enemy) is not touched here.
+
+**ASSUMED (not proven):**
+- The arm's first update sees the last draw's point: the sub-entity is created in the body's tick (`0x0057bb5c` sub 0 -> 1) and its first step / copy runs in the same or the next tick. The port plays the arm's motion in the creation tick.
+- While the body is hidden the exe does not draw, so it does not capture; the port's matrices still follow the root. The arm is out only when the body is not hidden (`armOut && !hidden`), so this changes nothing seen.
+- The laser's muzzle (+0x4a0, node 6) is read the same way (the exe's `0x0057d0f4` gets +0x4a0); its own 0x0057d0f4 caller is the body's laser state, traced in the 2026-10-23 entries.
+
+**Left:** the Pofuilly exe motion 4 and the +0x3f4 readers (ROADMAP line); the generic last-frame step-back (`NodeAnimator`, all enemies).
+
+**Checks:** `node tests/morfosnodes.test.ts` (all checks passed), `node tests/enemyfsmep2d.test.ts` (all checks passed), `NEWSERV=.../vendor/newserv node tests/combat.test.ts` (5859 checks, 0 failures), `node tests/enemies.test.ts` (exit 0). `client` `npx tsc --noEmit -p .` (Node 24): clean. Not run in Chrome or Playwright.
+
 ## 2026-10-25: Enemy defence roll settled: GetEnemyDefense is 0 for every enemy (ROADMAP "where the fight moves the children" leftovers)
 
 **Question:** the ROADMAP's Pofuilly line still lists "the defence roll that resists an attack (`GetEnemyDefense_00773a44`, every enemy: not ported)". Can the exe settle what an enemy's defence is?
