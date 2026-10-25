@@ -30,6 +30,7 @@ The executable is never part of this repository: PSOBB_EXE (default
 
 import bisect
 import collections
+import json
 import os
 import re
 import struct
@@ -777,6 +778,10 @@ CHILD_OBJECT_SITES = {
     0x007AE80F: "child 0x108 at this+0x78 of ctor 0x7ae360",
     0x007AECEB: "child 0x108 at this+0x74 of ctor 0x7aea10",
     0x007AEEB9: "child 0x108 at this+0x78 of ctor 0x7aea10",
+    # The 0xac children of the in-object rows (CONSTRUCTED_SITES below holds the same-pattern children): 0x006ebef1
+    # (ctor 0x6ebd58, child at this+0xdc, row this+0xb0), 0x007acd78 (ctor 0x7acaf8, child at this+0x68, row this+0x3c).
+    0x006EBEF1: "0xac child (this+0xdc) of ctor 0x6ebd58; row this+0xb0 is its own constant box",
+    0x007ACD78: "0xac child (this+0x68) of ctor 0x7acaf8; row this+0x3c is its own constant box",
 }
 
 
@@ -795,6 +800,12 @@ INLINE_ROWS = {
     "sphere3": {"offset": [0.0, 0.0, 0.0], "radius": 3.0, "halfX": 0.0, "shape": 0, "flags": 0x10003},
     # Object-embedded record (this+0xac of the 0x108-byte child at this+0x74 / +0x78): sphere r19 at z 5.
     "child19": {"offset": [0.0, 0.0, 5.0], "radius": 19.0, "halfX": 5.0, "shape": 0, "flags": 0x1103},
+    # Child boxes stored as constants by their constructors (DEVLOG 2026-10-25, collision sites: the last two):
+    # 0x006ebd58 writes the row at this+0xb0 (x 0, y 0, z 0, radius 10, halfX 1, shape 0, flags 0x40107) and
+    # inits its 0xac child (this+0xdc) with it; 0x007acaf8 writes the row at this+0x3c (offset 0, radius 5, halfX 1,
+    # shape 1, flags 0x40007, the offset is the constant 0.0 at 0x0097dbd8) and inits its child (this+0x68).
+    "child10_sphere_40107": {"offset": [0.0, 0.0, 0.0], "radius": 10.0, "halfX": 1.0, "shape": 0, "flags": 0x40107},
+    "child5_box_40007": {"offset": [0.0, 0.0, 0.0], "radius": 5.0, "halfX": 1.0, "shape": 1, "flags": 0x40007},
 }
 
 SITE_OVERRIDES = {
@@ -828,6 +839,53 @@ SITE_OVERRIDES = {
     0x007AE80F: {"rows": "child19", "count": 1},
     0x007AECEB: {"rows": "child19", "count": 1},
     0x007AEEB9: {"rows": "child19", "count": 1},
+    0x006EBEF1: {"rows": "child10_sphere_40107", "count": 1},
+    0x007ACD78: {"rows": "child5_box_40007", "count": 1},
+}
+
+# Init sites whose box is written by the constructor at run time from the object's own fields or from its
+# set record, not a constant row (DEVLOG 2026-10-25, collision sites). Not decoded into a table: each entry is
+# the constructed row as formula text, kept in CONSTRUCTED_BOXES. Grammar (exe addresses are the constructor's own
+# arguments and fields): `arg1` = the constructor's first argument (kept at this+0x1c), `arg2` = its second argument
+# (the set record), `this` = the constructed object, `.f32+0xNN` = a float at that offset, `.word+0xNN` / `.dword+0xNN`
+# = an integer. `table` names the block the init reads: `this+0xNN` (in the object), `stack` (a row on the caller's
+# stack, copied from the template 0x00935a94 with its radius and halfX replaced), or `heap` (a fresh 0x2c block
+# from operator new at this+0x33c, zeroed x/y/z by the ctor and then written by a sync function).
+# `owner` is the object the init boxes: `child` (a 0xac object the ctor allocates) or `self`.
+FLAGS_W_D = ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107"
+ROW_SPHERE10_W_D = {"offset": ["0", "0", "0"], "radius": "10", "halfX": "1", "shape": "0", "flags": FLAGS_W_D}
+ROW_BOX5_Z10_W_D = {"offset": ["0", "0", "-10"], "radius": "5", "halfX": "1", "shape": "1", "flags": FLAGS_W_D}
+ROW_STACK_TEMPLATE = {"offset": ["0", "0", "0"], "radius": ".f32+0x0c of arg2", "halfX": ".f32+0x10 of arg2",
+                      "shape": "1", "flags": "0x10003"}
+ROW_RECORD_SIGN = {"offset": ["0", "0", "0"], "radius": ".f32+0x24 of arg2", "halfX": ".f32+0x28 of arg2",
+                   "shape": ".f32+0x2c of arg2 < 0 ? 1 : 0",
+                   "flags": "0x10001 | (abs(.f32+0x2c of arg2) >= 1000 ? 0x100 : 0)"}
+ROW_HEAP_SYNC = {"offset": ["0", "0", "0"],
+                 "radius": ".dword+0x8c of this == 0 ? .f32+0x70 of this : .f32+0x6c of this",
+                 "halfX": ".dword+0x8c of this == 0 ? .f32+0x68 of this : .f32+0x6c of this",
+                 "shape": "1", "flags": "0x18002"}
+CONSTRUCTED_SITES = {
+    # The sphere in an object's row at this+0xbc (ctor 0x6de5f0 at 0x006de7d0; ctor 0x6de7fc at 0x006de9d7): the
+    # child (0xac, parent+0xe8) is inited with it. Flags 0x40007 when the first argument's word +0x1c is >= 4 or its
+    # dword +0x8fc is set (0x006de943..0x006de96e), else 0x40107.
+    0x006DE7D0: {"func": 0x006DE5F0, "owner": "child", "table": "this+0xbc", "count": 1, "row": ROW_SPHERE10_W_D},
+    0x006DE9D7: {"func": 0x006DE7FC, "owner": "child", "table": "this+0xbc", "count": 1, "row": ROW_SPHERE10_W_D},
+    # Type 0xd7 (the dynamic listing reaches 0x006f010b from set type 215). Row at this+0xfc, child at this+0x128
+    # (ctor 0x6efe50, site 0x006f010b; ctor 0x6f0138, site 0x006f0435, the same row).
+    0x006F010B: {"func": 0x006EFE50, "owner": "child", "table": "this+0xfc", "count": 1, "row": ROW_BOX5_Z10_W_D},
+    0x006F0435: {"func": 0x006F0138, "owner": "child", "table": "this+0xfc", "count": 1, "row": ROW_BOX5_Z10_W_D},
+    # The stack row of ctor 0x6460d8 (types 0x46..0x49; the type table names 0x47 for this creator): radius and halfX
+    # from the set record stored at this+0xb8 (= arg2).
+    0x006461CF: {"func": 0x006460D8, "owner": "self", "table": "stack", "count": 1, "row": ROW_STACK_TEMPLATE},
+    # Type 9 (ctor 0x77c070, factory 0x77c000): the row at this+0xac, from the set record arg2 (the same record fields as
+    # the object's +0x38..+0x70 copies). Shape 1 when arg2 +0x2c is negative; flag 0x100 when |arg2 +0x2c| >= 1000.
+    0x0077C197: {"func": 0x0077C070, "owner": "self", "table": "this+0xac", "count": 1, "row": ROW_RECORD_SIGN},
+    # The heap blocks of 0x38a (ctor 0x619680), 0x388 (ctor 0x635d98), 0x389 (ctor 0x638188): the block at this+0x33c is
+    # zeroed in x/y/z, then the sync (this+0x8c == 0: 0x619a84 / 0x63613c / 0x638530; else 0x619a18 / 0x6360d4 / 0x6384d8)
+    # writes radius, halfX, shape 1 and flags 0x18002. ASSUMED: the live box is this block (the init copies it first).
+    0x00619759: {"func": 0x00619680, "owner": "self", "table": "heap", "count": 1, "row": ROW_HEAP_SYNC},
+    0x00635E71: {"func": 0x00635D98, "owner": "self", "table": "heap", "count": 1, "row": ROW_HEAP_SYNC},
+    0x00638261: {"func": 0x00638188, "owner": "self", "table": "heap", "count": 1, "row": ROW_HEAP_SYNC},
 }
 
 
@@ -992,8 +1050,15 @@ def main(argv):
     info = {"text": (TEXT_LO, TEXT_HI)}
     sites = []  # direct: the init call has constant arguments
     dynamic = []
+    constructed = []  # run-time rows of the constructor (CONSTRUCTED_SITES): formula text, no table
+    for s in CONSTRUCTED_SITES:
+        if s not in init_sites or func_of(s) != CONSTRUCTED_SITES[s]["func"]:
+            raise SystemExit(f"CONSTRUCTED_SITES: {s:#x} is not an init call in {CONSTRUCTED_SITES[s]['func']:#x}")
     for s in init_sites:
         f = func_of(s)
+        if s in CONSTRUCTED_SITES:
+            constructed.append({"site": s, **CONSTRUCTED_SITES[s]})
+            continue
         if s in SITE_OVERRIDES:  # resolved by hand (SITE_OVERRIDES); not a dynamic site any more
             sites.append(override_site(s, f, SITE_OVERRIDES[s]))
             continue
@@ -1136,7 +1201,8 @@ def main(argv):
         own_types = {t for t in links if any(has_box(l) and not l["shared"] for l in links[t])}
         any_types = {t for t in links if any(has_box(l) for l in links[t])}
         indexed = sum(1 for s in sites if s["table"] is None)
-        print(f"sites {len(init_sites)} direct {len(sites) - len(wrappers) - indexed} indexed {indexed} "
+        print(f"constructed {len(constructed)} "
+              f"sites {len(init_sites)} direct {len(sites) - len(wrappers) - indexed} indexed {indexed} "
               f"wrappers {len(wrappers)} unresolved {unresolved}")
         print(f"distinct tables {len(tables)} enemy set types {len(links)} own table {len(own_types)} "
               f"shared only {len(any_types - own_types)} none {len(links) - len(any_types)}")
@@ -1154,6 +1220,7 @@ def main(argv):
     lines.append("// that only this type reaches, or that exactly two types reach with a constant helper argument")
     lines.append("// (ASSUMED; shared: only helpers reached by three or more types), the last call when ambiguous.")
     lines.append(f"// {unresolved} init sites are not decoded: their table or count is computed at run time.")
+    lines.append(f"// {len(constructed)} more are built by their constructor at run time (CONSTRUCTED_BOXES: the row as formula text).")
     lines.append("// Indexed sites (table = base + stride * [field], e.g. Booma 0x44) have one row set per variant.")
     lines.append("")
     lines.append("export interface CollisionBoxRow {")
@@ -1220,6 +1287,28 @@ def main(argv):
         table = "null" if s["table"] is None else f"0x{s['table']:08x}"
         variants = variants_text(s["indexed"]["variants"]) if s["table"] is None else "null"
         lines.append(f"  {{ site: 0x{s['site']:08x}, func: 0x{s['func']:08x}, table: {table}, via: {via}, variants: {variants} }},")
+    lines.append("];")
+    lines.append("")
+    lines.append("// Init sites whose box the constructor writes at run time (CONSTRUCTED_SITES in the generator, DEVLOG")
+    lines.append("// 2026-10-25 collision sites). Formula text: arg1 = the constructor's first argument (this+0x1c),")
+    lines.append("// arg2 = its second (the set record), this = the object; `.f32+0xNN of X` a float, `.word` / `.dword` integers.")
+    lines.append("// ASSUMED where the reader is not traced: the heap rows' fields (this+0x68 / +0x6c / +0x70 / +0x8c) come from the set record.")
+    lines.append("export interface ConstructedBox {")
+    lines.append("  site: number;")
+    lines.append("  func: number; // the constructor")
+    lines.append("  owner: 'child' | 'self'; // the object the init boxes (a child: the 0xac object the constructor allocates)")
+    lines.append("  table: string; // where the init reads the row: 'this+0xNN', 'stack' or 'heap'")
+    lines.append("  count: number;")
+    lines.append("  row: { offset: readonly [string, string, string]; radius: string; halfX: string; shape: string; flags: string };")
+    lines.append("}")
+    lines.append("")
+    lines.append("export const CONSTRUCTED_BOXES: readonly ConstructedBox[] = [")
+    for c in constructed:
+        r = c["row"]
+        off = ", ".join(json.dumps(v) for v in r["offset"])
+        lines.append(f"  {{ site: 0x{c['site']:08x}, func: 0x{c['func']:08x}, owner: '{c['owner']}', table: {json.dumps(c['table'])}, "
+                     f"count: {c['count']}, row: {{ offset: [{off}], radius: {json.dumps(r['radius'])}, "
+                     f"halfX: {json.dumps(r['halfX'])}, shape: {json.dumps(r['shape'])}, flags: {json.dumps(r['flags'])} }} }},")
     lines.append("];")
     lines.append("")
     lines.append("// Enemy .dat set type -> its factory links (one per factory; areas where it is used).")

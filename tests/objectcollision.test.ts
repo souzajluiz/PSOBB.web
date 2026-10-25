@@ -16,7 +16,7 @@ import type { MapCollision } from '../client/src/formats/crel.ts';
 import { boxPairActive, CollisionWorld, OBJECT_BOX_FLAGS, PLAYER_BOX_FLAGS, PLAYER_RADIUS, type Obstacle } from '../client/src/render/collision.ts';
 import { collectFieldSolids, dist2xz, FallingStalactite, FieldObjects, rockSwitchFlag, solidObstacle, stalactiteDamage, stalactiteInRange, type FieldSolid } from '../client/src/render/fieldobjects.ts';
 import { spotHitsBody } from '../client/src/net/dropspot.ts';
-import { CHILD_COLLISION_LINKS, COLLISION_SITES, COLLISION_TABLES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
+import { CHILD_COLLISION_LINKS, COLLISION_SITES, COLLISION_TABLES, CONSTRUCTED_BOXES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, isTargetable, slotSetType, slotVariant } from '../client/src/formats/enemyboxes.ts';
 import { rowsAimHeight, rowsRadius } from '../client/src/combat/techfire.ts';
 import { DerolleEmitter, msvcRand, parseDerolleBlock, ROCK_DEBRIS_BLOCK, STALACTITE_DEBRIS_TEMPLATE, yawPoint } from '../client/src/classic/particles.ts';
@@ -554,6 +554,50 @@ check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag
   check(!site(0x00619759) && !site(0x00635e71) && !site(0x00638261), 'the still-unresolved heap-block sites are not in COLLISION_SITES');
   // 0x170 and 0x183: no box. The reverse closure of InitEnemyCollisionBoxes (E8, depth 10) holds neither creator (DEVLOG 2026-10-25).
   check(TYPE_COLLISION_TABLES[0x170] === undefined && TYPE_COLLISION_TABLES[0x183] === undefined, '0x170 (TOBoss4Bird) and 0x183 (__LOBBY_PIGEON__) have no box: no init call in their constructors or in the reverse closure');
+}
+
+// 8. The eleven runtime sites (DEVLOG 2026-10-25 collision sites), all decoded from the constructors' stores (objdump).
+// Two are constant child rows (COLLISION_TABLES, keyed by the site); nine are formula text (CONSTRUCTED_BOXES).
+{
+  const open = [0x00619759, 0x00635e71, 0x00638261, 0x006461cf, 0x006de7d0, 0x006de9d7, 0x006ebef1, 0x006f010b, 0x006f0435, 0x0077c197, 0x007acd78];
+  const site = (va: number) => COLLISION_SITES.find((s) => s.site === va);
+  const built = (va: number) => CONSTRUCTED_BOXES.find((c) => c.site === va);
+  check(open.every((va) => !!site(va) || !!built(va)) && CONSTRUCTED_BOXES.length === 9 && open.length - 2 === CONSTRUCTED_BOXES.length, 'the 11 open sites are covered: 2 constant (COLLISION_SITES) and 9 formula (CONSTRUCTED_BOXES)');
+  // 0x6ebef1 (ctor 0x6ebd58, child at this+0xdc): row this+0xb0 = sphere r10 at the origin, halfX 1, flags 0x40107.
+  // 0x7acd78 (ctor 0x7acaf8, child at this+0x68): row this+0x3c = box r5 at the origin (0.0 at 0x0097dbd8), halfX 1, flags 0x40007.
+  check(site(0x006ebef1)?.table === 0x006ebef1 && site(0x006ebef1)?.func === 0x006ebd58, 'site 0x006ebef1 is the constant row of ctor 0x6ebd58');
+  const r1 = COLLISION_TABLES[0x006ebef1]?.[0];
+  check(!!r1 && r1.shape === 0 && r1.radius === 10 && r1.halfX === 1 && r1.flags === 0x40107 && r1.offset.every((v) => v === 0), '0x6ebef1 is a sphere r10 at the origin, halfX 1, flags 0x40107');
+  check(site(0x007acd78)?.table === 0x007acd78 && site(0x007acd78)?.func === 0x007acaf8, 'site 0x007acd78 is the constant row of ctor 0x7acaf8');
+  const r2 = COLLISION_TABLES[0x007acd78]?.[0];
+  check(!!r2 && r2.shape === 1 && r2.radius === 5 && r2.halfX === 1 && r2.flags === 0x40007 && r2.offset.every((v) => v === 0), '0x7acd78 is a box r5 at the origin, halfX 1, flags 0x40007');
+  // Neither is an enemy's own box: both are child boxes (CHILD_OBJECT_SITES), so no enemy link names their tables.
+  check(Object.values(ENEMY_COLLISION_LINKS).flat().every((l) => l.table !== 0x006ebef1 && l.table !== 0x007acd78), 'the two child rows stay out of the enemy links');
+  // The in-object rows (owner child, the 0xac object the constructor allocates, inited with the parent's row).
+  const childRows: [number, number, string][] = [[0x006de7d0, 0x006de5f0, 'this+0xbc'], [0x006de9d7, 0x006de7fc, 'this+0xbc'], [0x006f010b, 0x006efe50, 'this+0xfc'], [0x006f0435, 0x006f0138, 'this+0xfc']];
+  for (const [va, func, table] of childRows) {
+    const b = built(va);
+    check(!!b && b.func === func && b.owner === 'child' && b.table === table && b.count === 1, `site ${va.toString(16)}: child of ctor ${func.toString(16)}, row ${table}, count 1`);
+  }
+  // The flag rule (0x006de943..0x006de96e, 0x006f0077..0x006f00a2, 0x006f0366..0x006f03cc): word +0x1c of arg1 >= 4 or dword +0x8fc of arg1 set -> 0x40007, else 0x40107.
+  const flagsWD = '.word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107';
+  check([0x006de7d0, 0x006de9d7, 0x006f010b, 0x006f0435].every((va) => built(va)?.row.flags === flagsWD), 'the four in-object rows take the arg1 flag rule (0x40007 / 0x40107)');
+  check(built(0x006f010b)?.row.offset[2] === '-10' && built(0x006f010b)?.row.radius === '5' && built(0x006f010b)?.row.shape === '1', 'site 0x6f010b: box r5 at z -10 (0xc1200000), shape 1');
+  check(built(0x006de7d0)?.row.radius === '10' && built(0x006de7d0)?.row.shape === '0', 'site 0x6de7d0: sphere r10 (0x41200000) at the origin');
+  // 0x6461cf: the stack row from the template 0x00935a94 (flags 0x10003, shape 1), radius and halfX from the set record arg2 (+0x0c, +0x10).
+  const stack = built(0x006461cf);
+  check(stack?.owner === 'self' && stack?.table === 'stack' && stack?.row.radius === '.f32+0x0c of arg2' && stack?.row.halfX === '.f32+0x10 of arg2' && stack?.row.flags === '0x10003', 'site 0x6461cf: stack row, radius / halfX from arg2 +0x0c / +0x10, flags 0x10003');
+  // 0x77c197 (type 9): the row at this+0xac from arg2: radius +0x24, halfX +0x28, shape 1 when +0x2c < 0 (fcomp 0x0097939c), flags 0x10001 | 0x100 when |+0x2c| >= 1000 (0x00979398).
+  const t9 = built(0x0077c197);
+  check(t9?.table === 'this+0xac' && t9?.row.radius === '.f32+0x24 of arg2' && t9?.row.halfX === '.f32+0x28 of arg2', 'site 0x77c197: the row at this+0xac takes radius +0x24 and halfX +0x28 of the set record');
+  check(t9?.row.shape === '.f32+0x2c of arg2 < 0 ? 1 : 0' && t9?.row.flags === '0x10001 | (abs(.f32+0x2c of arg2) >= 1000 ? 0x100 : 0)', 'site 0x77c197: shape by the sign of +0x2c, flag 0x100 from |+0x2c| >= 1000');
+  // The heap blocks (0x38a / 0x388 / 0x389): the sync picks the radius and halfX by this+0x8c (zero: +0x70 / +0x68, else +0x6c both), shape 1, flags 0x18002.
+  const heapRadius = '.dword+0x8c of this == 0 ? .f32+0x70 of this : .f32+0x6c of this';
+  const heapHalf = '.dword+0x8c of this == 0 ? .f32+0x68 of this : .f32+0x6c of this';
+  for (const va of [0x00619759, 0x00635e71, 0x00638261]) {
+    const b = built(va);
+    check(b?.table === 'heap' && b?.row.radius === heapRadius && b?.row.halfX === heapHalf && b?.row.shape === '1' && b?.row.flags === '0x18002', `heap block site ${va.toString(16)}: the sync rule, shape 1, flags 0x18002`);
+  }
 }
 
 if (failures) {
