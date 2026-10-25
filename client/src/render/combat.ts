@@ -67,7 +67,7 @@ import { shareMeshResources } from './dispose.ts';
 import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
 import { SPINNER_X, spinnerScale } from '../combat/saintmilion.ts';
 import { PLAYER_AIM_HEIGHT, PLAYER_RADIUS, TechBolt, type EnemyShot } from '../combat/enemyshots.ts';
-import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
+import { VoloptAi, VoloptCore, VoloptMonitor, VoloptPartAi, VoloptPillar, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import { GalgryphonMinionManager } from '../combat/galgryphon.ts';
@@ -594,16 +594,37 @@ export const radarConcealed = (e: { ai: EnemyBrain | null }): boolean => {
 //   - the body (vtable 0x00af6220, update 0x004442e0): the icon at 0x00444692 is ungated
 //     after the dying test (flag 0x4000 of +0x30), so the body is on the radar from the
 //     moment its root shows (the port shows it once the control stood it up);
-//   - the monitors (update 0x004419d4: icon while flag 0x800 of +0x30 is clear), the pillars
-//     (dispatch 0x00442730: states 2, 4 and 9 add the icon, 0 and 5 do not) and the core
-//     (dispatch 0x0043f17c; state 2 unconditional, states 1, 9 and 10 gated by
-//     DAT_00a447ac >= 0): the state gates are read, the port's own state mapping is not, so
-//     they stay on concealed() (ASSUMED).
+//   - the monitors (update 0x004419d4): the icon call at 0x00441aaa is after the state
+//     dispatch (0x00441bf0, every state) and gated only by flag 0x800 of +0x30 (the wall
+//     loop's SetHitFlag sets it: 0x004415f4 from 0x00441cd1, the inline copy at 0x00441d23).
+//     The port's monitor `broken` is that loop's breakDown, so a broken one is off the radar
+//     and every other one is on it, targetable or not;
+//   - the pillars (dispatch 0x00442730 on +0x32e; the port's pillar `st` is the same number):
+//     states 0 (0x00443b0c) and 5 (0x00442770) have no icon call in their code; states 2
+//     (0x00442ec0, icon at 0x00443563), 4 (0x00442c98, 0x00442d5b) and 9 (0x004428b0,
+//     0x00442986) reach the icon at the end of the handler. ASSUMED: each state's sub-state
+//     (+0x384) paths that return before that tail were not all traced, so a sub-state
+//     that skips it is still shown;
+//   - the core (dispatch 0x0043f17c, jump table 0x008fe0bc; the port's core `st` is the same
+//     number): states 0, 4, 5 and 7 have no icon call (0x0043fcfc, 0x0043f560, 0x0043f52c,
+//     0x0043f458); state 2 has one (0x0043f9d8, in its sub 4 path: not all sub paths traced);
+//     states 1, 9 and 10 gate it on DAT_00a447ac >= 0 (0x0043fccb / 0x00440320 / 0x0043f2ac),
+//     the current monitor id the core writes each tick (0x0043f01a = its monitor lookup), which
+//     is the port's VoloptAi `exposed` (ASSUMED equal: the same tick, the same value).
+//   - the rest (the body's and the rod's cases above) are unchanged.
 export type VoloptRadar = 'always' | 'never' | 'concealed';
 export const voloptRadar = (ai: EnemyBrain | null): VoloptRadar | null => {
   if (ai instanceof VoloptAi) return 'never';
   if (ai instanceof VoloptForm2Ai) return 'always';
   if (ai instanceof VoloptPartAi) {
+    const p = ai.part;
+    if (p instanceof VoloptPillar) return p.st === 2 || p.st === 4 || p.st === 9 ? 'always' : 'never';
+    if (p instanceof VoloptMonitor) return p.broken ? 'never' : 'always';
+    if (p instanceof VoloptCore) {
+      if (p.st === 0 || p.st === 4 || p.st === 5 || p.st === 7) return 'never';
+      if (p.st === 2) return 'always';
+      return ai.owner.exposed >= 0 ? 'always' : 'never';
+    }
     if (ai.part.kind === 'prison') return 'never';
     if (ai.part.kind === 'rod') return ai.part.dead ? 'concealed' : 'always';
     return 'concealed';

@@ -21,8 +21,11 @@ import {
   VO_PILLARS,
   VoloptAi,
   VoloptBolt,
+  VoloptCore,
   VoloptLid,
+  VoloptMonitor,
   VoloptPartAi,
+  VoloptPillar,
   type VoloptEvent,
   type VoloptOptions,
 } from '../client/src/combat/volopt.ts';
@@ -1151,12 +1154,37 @@ function toPhase2(over: Parameters<typeof fight>[0] = {}): Fight {
   const prison = part('prison', true);
   eq(voloptRadar(prison), 'never', 'the prison has no icon call (0x00449e3c)');
   check(radarConcealed({ ai: prison }), 'the prison stays off the radar even while targetable');
-  const mon = part('monitor', true);
-  eq(voloptRadar(mon), 'concealed', 'a monitor keeps the targetable gate (state gate ASSUMED)');
-  check(!radarConcealed({ ai: mon }), 'a targetable monitor is on the radar');
-  check(radarConcealed({ ai: part('monitor', false) }), 'an untargetable monitor is off the radar (ASSUMED)');
-  check(radarConcealed({ ai: part('pillar', false) }), 'an untargetable pillar is off the radar (ASSUMED)');
-  check(radarConcealed({ ai: part('core', false) }), 'an untargetable core is off the radar (ASSUMED)');
+  // Monitors: the icon (0x00441aaa) is after every state and gated only by flag 0x800 of +0x30.
+  const mon = new VoloptMonitor(0, 1, 1, f.c, 0, 0);
+  eq(voloptRadar(new VoloptPartAi(mon, f.c)), 'always', 'a monitor is on the radar in every state (0x800 gate only)');
+  check(!radarConcealed({ ai: new VoloptPartAi(mon, f.c) }), 'an untargetable monitor that is not broken is on the radar');
+  mon.st = 5;
+  check(!radarConcealed({ ai: new VoloptPartAi(mon, f.c) }), 'a fallen monitor (state 5, no 0x800) is still on the radar');
+  mon.breakDown();
+  eq(voloptRadar(new VoloptPartAi(mon, f.c)), 'never', 'a broken monitor (the wall loop set 0x800) is off the radar');
+  check(radarConcealed({ ai: new VoloptPartAi(mon, f.c) }), 'a broken monitor stays off the radar');
+  // Pillars: states 0 and 5 have no icon call; 2, 4 and 9 do (the sub-state paths not traced).
+  const pillar = (st: number) => {
+    const p = new VoloptPillar(0, 1, f.c, 0, 0);
+    p.st = st;
+    return new VoloptPartAi(p, f.c);
+  };
+  for (const st of [0, 5]) check(radarConcealed({ ai: pillar(st) }), `a pillar in state ${st} is off the radar`);
+  for (const st of [2, 4, 9]) check(!radarConcealed({ ai: pillar(st) }), `a pillar in state ${st} is on the radar even untargetable`);
+  // Core: 0, 4, 5 and 7 have no icon call; 2 has one; 1, 9 and 10 gate it on the current monitor (DAT_00a447ac >= 0).
+  const core = (st: number) => {
+    const c = new VoloptCore(1, 120, f.c, 0, 0);
+    c.st = st;
+    return new VoloptPartAi(c, f.c);
+  };
+  for (const st of [0, 4, 5, 7]) check(radarConcealed({ ai: core(st) }), `a core in state ${st} is off the radar`);
+  check(!radarConcealed({ ai: core(2) }), 'a core in state 2 is on the radar');
+  const exposedOff = f.c.exposed;
+  f.c.exposed = -1;
+  for (const st of [1, 9, 10]) check(radarConcealed({ ai: core(st) }), `a core in state ${st} is off the radar with no current monitor`);
+  f.c.exposed = 3;
+  for (const st of [1, 9, 10]) check(!radarConcealed({ ai: core(st) }), `a core in state ${st} is on the radar behind a monitor`);
+  f.c.exposed = exposedOff;
   eq(voloptRadar(f.f2), 'always', 'the body has an icon every live frame (0x00444692, flag 0x4000 only)');
   check(f.f2.untargetable && !f.f2.ready, 'the body is not ready yet and not lockable');
   check(!radarConcealed({ ai: f.f2 }), 'a body that is not ready is on the radar (its root shows once awake)');

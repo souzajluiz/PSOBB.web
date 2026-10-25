@@ -30,8 +30,11 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    "VoloptForm2MinionMapObject" names, and the JP files of the same names, are
    Dark Falz's. Vol Opt's radar per entity is read from the exe (2026-10-25
    DEVLOG): the control and the prison never, the rod and the body always;
-   the monitors, pillars and core still `concealed()`, and Vol Opt's lock and
-   hit gates are ASSUMED (not traced per class). The Dragon, Sinow Beat's mirage and Dark Falz are done
+   the monitors (always, unless broken), pillars (states 2, 4, 9) and core
+   (state gates, `exposed`) are per state from the exe (2026-10-25 DEVLOG,
+   sub-state paths ASSUMED). Vol Opt's lock and hit gates are NOT ported:
+   the writers of `+0x30` / `+0x390` are mapped in the DEVLOG, the idle
+   monitor's `0x2000000` and the pillars' `0x2000800` tests are open. The Dragon, Sinow Beat's mirage and Dark Falz are done
    (2026-10-19; `combat/dragon.ts`, `combat/enemyfsmmines.ts` SinowAi,
    `combat/darkfalz*.ts`; the dump's and the JP tree's "Sinowbeat*" / "Dragon*"
    names around 0x00419214..0x004258ac are all the Dragon, see the DEVLOG).
