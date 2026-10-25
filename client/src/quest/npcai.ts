@@ -283,13 +283,24 @@ export class NpcAttackGate {
 // the leash (+0x40, row k=4) and then the head's run flag 0x8 is set; otherwise a walk start
 // (6x40, SendMoveStart_007b298c), repeated each tick while the flag is clear (the walk start
 // does not set it). The flag is cleared on a tick when the head is not in state 1 (.c:797032).
-// The 6x40 carries a flags word (8 when the NPC's +0x30 has 0x100000, ASSUMED near-enemy; the
-// port sends 0). The send rules and the packet layout are exe-read. The packet's x / z are the
+// The NPC's +0x30 (character_flags) with 0x100000 (in_guard_stance) makes the state-1 send walk-only
+// (.c:797015..797031: SendMoveStart every tick, no run, the head's run flag untouched) and sets the 6x40
+// flags word to 8 (SendMoveStart_007b298c .c:797079). The guard bit's source for an NPC is not in the
+// port (ASSUMED clear). The send rules and the packet layout are exe-read. The packet's x / z are the
 // head's send target (+0xac / +0xb4, quest/npchead.ts NpcHead.sendTarget), as in the exe
 // (SendMoveStart_007b298c, SendMove_007b29f0). The send's distance is from that target to the NPC.
 export const NPC_MOVE_WALK = 0x40; // action_type move_start = 64 (dump enum input_state_1)
 export const NPC_MOVE_RUN = 0x42; // action_type move = 66
 export const NPC_MOVE_STOP_DISTANCE = 1.0; // DAT_0097dd2c (.c:797009)
+// character_flags in_guard_stance (dump enum, value 0x100000) on the NPC's +0x30.
+export const NPC_GUARD_STANCE = 0x100000;
+// The 6x40 flags word when the NPC is in its guard stance (SendMoveStart_007b298c, .c:797079).
+export const NPC_MOVE_FLAG_GUARD = 0x8;
+
+// The 6x40 flags word for a walk start: 8 in the guard stance, else 0.
+export function npcWalkFlags(guard: boolean): number {
+  return guard ? NPC_MOVE_FLAG_GUARD : 0;
+}
 
 export type NpcMoveSend = 'walk' | 'run';
 
@@ -301,9 +312,11 @@ export class NpcMoveSender {
     return this.running;
   }
 
-  // The send for this tick, or null when the target is already reached.
-  tick(dist: number, leash: number): NpcMoveSend | null {
+  // The send for this tick, or null when the target is already reached. In the guard stance
+  // (`guard`, the NPC's 0x100000) only walk starts are sent (.c:797030); the run flag is left as it is.
+  tick(dist: number, leash: number, guard = false): NpcMoveSend | null {
     if (dist <= NPC_MOVE_STOP_DISTANCE) return null;
+    if (guard) return 'walk';
     if (leash < dist) {
       this.running = true;
       return 'run';

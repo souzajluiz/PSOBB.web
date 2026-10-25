@@ -1003,8 +1003,8 @@ export class Game extends Lobby {
   }
 
   // 6x40 (walk) or 6x42 (run) for an NPC player, the owner's AI move (buildNpcMove).
-  sendNpcMove(npcId: number, run: boolean, x: number, z: number): void {
-    this.conn.send(0x60, 0, buildNpcMove(npcId, run, x, z));
+  sendNpcMove(npcId: number, run: boolean, x: number, z: number, flags = 0): void {
+    this.conn.send(0x60, 0, buildNpcMove(npcId, run, x, z, flags));
   }
 
   // 6x0A (G_UpdateEnemyState_6x0A, 0x0C): {entity id 0x1000 | index} {u16
@@ -1447,9 +1447,10 @@ export function buildTechLevelOverride(clientId: number, extra: number): Uint8Ar
 // target; size = 2 + count (SendCastTechPacket_0069a2f0).
 // 6x40 / 6x42 for an NPC player (SinowberillHead_SendMoveStart_007b298c .c:797061 and
 // SendMove_007b29f0 .c:797089): the caster id is the NPC's client id (B +0x8a), then x and z
-// (head +0xac / +0xb4 as f32). 6x40 (16 bytes) ends with a u32 flags word (0 here); 6x42 is
-// 12 bytes. Sent through checked_call_packet0x60_subcommand, so the owner runs the handler too.
-export function buildNpcMove(npcId: number, run: boolean, x: number, z: number): Uint8Array {
+// (head +0xac / +0xb4 as f32). 6x40 (16 bytes) ends with a u32 flags word (8 in the NPC's guard
+// stance, npcWalkFlags); 6x42 is 12 bytes and has no flags. Sent through checked_call_packet0x60_subcommand,
+// so the owner runs the handler too.
+export function buildNpcMove(npcId: number, run: boolean, x: number, z: number, flags = 0): Uint8Array {
   const b = new Uint8Array(run ? 12 : 16);
   const dv = new DataView(b.buffer);
   b[0] = run ? 0x42 : 0x40;
@@ -1457,6 +1458,7 @@ export function buildNpcMove(npcId: number, run: boolean, x: number, z: number):
   dv.setUint16(2, npcId, true);
   dv.setFloat32(4, x, true);
   dv.setFloat32(8, z, true);
+  if (!run) dv.setUint32(12, flags, true);
   return b;
 }
 

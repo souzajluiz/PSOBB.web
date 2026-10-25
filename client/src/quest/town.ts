@@ -51,7 +51,7 @@ import type { GameView } from '../render/gameview.ts';
 import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, inUnsafeMap, toBams } from '../render/playermove.ts';
-import { followPoint, headStatusFlags, NO_LEADER, NpcAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, npcCanCastTech, NPC_TP_ASSUMED } from './npcai.ts';
+import { followPoint, headStatusFlags, NO_LEADER, NpcAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, npcCanCastTech, npcWalkFlags, NPC_TP_ASSUMED } from './npcai.ts';
 import { acquireClosestTargets, HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARGET_HIT, HEAD_OWNER_ACQUIRE, HEAD_STATE_ATTACK, HEAD_STATE_CAST, HEAD_STATE_IDLE, HEAD_STOP_DISTANCE, headProbeEnemies, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
 import { TECH, techTpCost } from '../combat/techniques.ts';
 import { QuestUi } from './questui.ts';
@@ -840,8 +840,10 @@ export class QuestTown {
     }
     // Not in state 1: no send, and the run flag is cleared (2764's flag 0x8 reset).
     let send: 'walk' | 'run' | null = null;
+    // The NPC's guard stance (character_flags 0x100000) is not tracked by the port: ASSUMED clear.
+    const guard = false;
     if (dist === null) sender.reset();
-    else send = sender.tick(dist, head.leash);
+    else send = sender.tick(dist, head.leash, guard);
     const goal = head.sendTarget;
     const wasMoving = p.moving;
     const f = { x: p.position.x, z: p.position.z, heading: toBams(p.angle) };
@@ -856,7 +858,7 @@ export class QuestTown {
     if (moved || wasMoving) this.game.notifyMoved(p);
     // The owner's client sends the NPC's walk / run (6x40 / 6x42 with the NPC's id) at the head's send target
     // (SendMoveStart_007b298c / SendMove_007b29f0).
-    if (send) this.game.sendNpcMove(slot, send === 'run', goal.x, goal.z);
+    if (send) this.game.sendNpcMove(slot, send === 'run', goal.x, goal.z, npcWalkFlags(guard));
   }
 
   // The owner is dead (the local player's dead flag; other players are ASSUMED alive).
