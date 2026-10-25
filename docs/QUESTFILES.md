@@ -101,9 +101,9 @@ order) and write commands whose size includes the 4 padding bytes. Download ques
 A7 (write) instead of 44 / 13: `parseQst` reads them (`download: true`) and `packQst(..., { download: true })` writes them.
 The BB A6/A7 files are plain PRS, the same bytes as the 44 / 13 ones (verdict 2026-10-25, see "BB download payload" below).
 
-### Non-BB `.qst` (DC / PC / GC)
+### Non-BB `.qst` (DC / PC / GC / XB)
 
-`formats/qst.ts` handles four versions, `QstVersion = 'BB' | 'DC' | 'PC' | 'GC'` (XB is refused). The layouts are newserv's
+`formats/qst.ts` handles five versions, `QstVersion = 'BB' | 'DC' | 'PC' | 'GC' | 'XB'`. The layouts are newserv's
 `encode_qst_file`, `add_open_file_command_t` and `add_write_file_commands_t` (`src/Quest.cc`), `S_OpenFile_DC_44_A6`,
 `S_OpenFile_PC_GC_44_A6` and `S_WriteFile_13_A7` (`src/CommandFormats.hh`), and the command headers (`src/PSOProtocol.hh`):
 
@@ -120,17 +120,24 @@ GC file bytes are the download payload (`psov2.ts`, an 8-byte header and the PRS
 open's `file_size` is the payload's size. Online (44 / 13) files are the plain PRS.
 
 ```ts
-packQstFiles(files: RawQstFile[], name: string, download?: boolean, version?: QstVersion): Uint8Array
-  // RawQstFile = { filename, data /* PRS */, seed? /* required for a DC / PC / GC download */ }
-parseQstFiles(bytes: Uint8Array): ParsedQstFiles   // any version: version, name, download, files (seed on DLQ files)
+packQstFiles(files: RawQstFile[], name: string, download?: boolean, version?: QstVersion, xb?: XbMeta): Uint8Array
+  // RawQstFile = { filename, data /* PRS */, seed? /* required for a DC / PC / GC / XB download */ }
+  // XbMeta = { xbFilename, contentMeta } /* required for XB: the open body's xb_filename and content_meta */
+parseQstFiles(bytes: Uint8Array): ParsedQstFiles   // any version: version, name, download, files (seed on DLQ files), xb (XB only)
 qstVersion(bytes: Uint8Array): QstVersion          // from the first command, as newserv's decode_qst_data
 packQst(bin, dat, { version: 'PC', download: true, seeds: { bin, dat } })   // seeds required for a non-BB download
+packQst(bin, dat, { version: 'XB', language: 1 })   // XB: xb_filename "quest<N>_e.dat", content_meta 0x30000000 | N
 ```
+
+XB (newserv `S_OpenFile_XB_44_A6`, `add_open_file_command_t` XB overload): the header is the 4-byte DC-style one, the
+open body is 0x50 bytes (the PC / GC body, then `xb_filename` pstring 0x10 ASCII at 0x38, `content_meta` u32 at 0x48 =
+`0x30000000 | quest number`, 4 unused bytes at 0x4C). The write commands are the GC ones (no BB alignment). An XB
+download's files are the PSO V2 payload, as on DC / PC / GC. Detected by the first command's size 0x54 (`qstVersion`).
 
 `parseQst` (the BB quest parse) refuses non-BB files; use `parseQstFiles` for them. Tests: `tests/qstnonbb.test.ts`.
 Its layout checks read the bytes at newserv's offsets, and with `vendor/newserv/build/newserv` it checks: newserv's
-`encode-qst` output (DC v2, PC, GC; online and download) parses, and our re-pack of newserv's streams and seeds gives its
-file byte for byte; newserv's `decode-qst` reads our download `.qst` and returns our files.
+`encode-qst` output (DC v2, PC, GC, XB; online and download) parses, and our re-pack of newserv's streams and seeds gives its
+file byte for byte (XB included, with its xb_filename and content_meta); newserv's `decode-qst` reads our download `.qst` and returns our files.
 
 ## PSO V2 download payload
 
@@ -179,8 +186,7 @@ decompressed `.bin` (the DC v1/v2, PC and GC / Xbox header's `language`, `Quest.
 no-op; BB `.bin` files have no language field and are refused. `packQst` writes BB `.bin` files only, so the override
 applies to a DC / PC / GC `.bin` before `packQstFiles`. Tests: `tests/qstnonbb.test.ts`.
 
-Open (not ported):
-- XB `.qst` files (`S_OpenFile_XB_44_A6`: 0x50-byte open body with `xb_filename`, `content_meta` = `0x30000000 | quest number`).
+Open (not ported): none of the `.qst` layouts above.
 - The DLQ-shaped block in the exe's QuestManager (above): what feeds it and whether a server can send it. Not a `.qst`.
 - `packQst` for a name longer than the field (`base + ".bin"` over 11 characters on BB / PC / GC) now throws; before it was truncated silently.
 - The download-quest menu (the A0 / A5 / A2 side of the lobby) is not part of this writer.

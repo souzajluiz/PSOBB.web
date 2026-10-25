@@ -21,6 +21,9 @@
 //   PC / GC open (0x38): char name[0x22] ("PSO/<name>") at 0, u16 type at 0x22,
 //                     char filename[0x10] at 0x24, u32 file_size at 0x34
 //   DC open (0x38):   the same with a u8 type at 0x22 and filename[0x11] at 0x23
+//   XB open (0x50):   the PC / GC body (header DC-style, 4 bytes) plus xb_filename[0x10]
+//                     at 0x38 ("quest<N>_<lang>.dat", ASCII) and content_meta u32 at
+//                     0x48 (0x30000000 | quest number), then 4 unused bytes
 //   write (0x414, all versions): char filename[0x10], u8 data[0x400], u32 data_size
 //                     at 0x410
 //
@@ -30,8 +33,10 @@
 // one. The chunks are slices of the stored bytes. The .bin and .dat inside are the
 // same PRS files the server sends (net/quests.ts).
 //
-// Not handled: Xbox (XB) .qst files (their open body has xb_filename and
-// content_meta). The BB download payload is plain PRS (see QST_COMMAND_OPEN_FILE_DOWNLOAD).
+// XB writes the same write commands as GC (no BB alignment). Its download files
+// are the PSO V2 payload, as on DC / PC / GC (newserv decode_qst_data_t applies
+// its DLQ decoder to every A6 file). The BB download payload is plain PRS (see
+// QST_COMMAND_OPEN_FILE_DOWNLOAD).
 
 import { prsDecompress } from './prs.ts';
 import { prsCompressOptimal } from './prscompress.ts';
@@ -61,8 +66,8 @@ export const QST_COMMAND_OPEN_FILE_DOWNLOAD = 0xa6;
 export const QST_COMMAND_WRITE_FILE_DOWNLOAD = 0xa7;
 export const QST_CHUNK_SIZE = 0x400;
 
-// The game versions a .qst is written for. XB is not ported.
-export type QstVersion = 'BB' | 'DC' | 'PC' | 'GC';
+// The game versions a .qst is written for.
+export type QstVersion = 'BB' | 'DC' | 'PC' | 'GC' | 'XB';
 
 interface QstLayout {
   headerSize: number; // 8 on BB, 4 otherwise
@@ -80,8 +85,13 @@ const LAYOUTS: Record<QstVersion, QstLayout> = {
   DC: { headerSize: 4, openBody: 0x38, nameAt: 0, nameMax: 0x22, nameTerminated: false, filenameAt: 0x23, filenameMax: 0x11, align: false },
   PC: { headerSize: 4, openBody: 0x38, nameAt: 0, nameMax: 0x22, nameTerminated: false, filenameAt: 0x24, filenameMax: 0x10, align: false },
   GC: { headerSize: 4, openBody: 0x38, nameAt: 0, nameMax: 0x22, nameTerminated: false, filenameAt: 0x24, filenameMax: 0x10, align: false },
+  XB: { headerSize: 4, openBody: 0x50, nameAt: 0, nameMax: 0x22, nameTerminated: false, filenameAt: 0x24, filenameMax: 0x10, align: false },
 };
 const FILE_SIZE_AT = 0x34; // in the open body, every version
+// XB only: the open body's xb_filename (pstring, 0x10, ASCII) and content_meta (u32).
+const XB_FILENAME_AT = 0x38;
+const XB_FILENAME_MAX = 0x10;
+const XB_CONTENT_META_AT = 0x48;
 const WRITE_BODY = 0x414;
 const WRITE_DATA_SIZE_AT = 0x410; // in the write body
 const WRITE_DATA_AT = 0x10;
@@ -100,6 +110,14 @@ export interface ParsedQstFiles {
   download: boolean; // written with A6 / A7 rather than 44 / 13
   binFilename: string;
   datFilename: string;
+  xb?: XbMeta; // XB only: from the open-file commands
+}
+
+// XB open-file fields (newserv S_OpenFile_XB_44_A6): the Xbox file name and the
+// content_meta word (0x30000000 | quest number).
+export interface XbMeta {
+  xbFilename: string;
+  contentMeta: number;
 }
 
 export interface ParsedQst extends ParsedQstFiles {
@@ -119,6 +137,9 @@ export interface PackQstOptions {
   download?: boolean;
   // The game version of the .qst. Default BB.
   version?: QstVersion;
+  // XB only: the language (0..7, as newserv's Language) that names the Xbox file
+  // "quest<N>_<c>.dat" with c the lowercase language letter. Default 1 (English).
+  language?: number;
   // PSO V2 seeds of the .bin and the .dat payloads of a DC / PC / GC download
   // .qst (required there: newserv picks random ones, this port needs them to be
   // reproducible). Each must be 1..0xFFFFFFFF.
@@ -150,7 +171,7 @@ export function qstVersion(bytes: Uint8Array): QstVersion {
     if (bytes.length < 4 + 0x24) throw new Error('qst: open file command too short');
     return dv.getUint16(4 + 0x22, true) > 3 ? 'DC' : 'GC';
   }
-  if (isOpen(bytes[0]) && dv.getUint16(2, true) === 0x54) throw new Error('qst: Xbox (XB) .qst files are not supported');
+  if (isOpen(bytes[0]) && dv.getUint16(2, true) === 0x54) return 'XB';
   throw new Error('qst: not a Blue Burst, PC, DC or GC quest file');
 }
 
@@ -192,6 +213,7 @@ export function parseQstFiles(bytes: Uint8Array): ParsedQstFiles {
     filename: string;
     name: string;
     size: number;
+    body: number; // offset of the open command's body
     blocks: { index: number; data: Uint8Array }[];
   }
   const pending = new Map<string, Pending>();
@@ -222,6 +244,7 @@ export function parseQstFiles(bytes: Uint8Array): ParsedQstFiles {
         filename,
         name: readCString(bytes, body + layout.nameAt, layout.nameMax).replace(/^PSO\//, ''),
         size: dv.getUint32(body + FILE_SIZE_AT, true),
+        body,
         blocks: [],
       };
       pending.set(filename, p);
@@ -244,6 +267,16 @@ export function parseQstFiles(bytes: Uint8Array): ParsedQstFiles {
   }
 
   const isDownload = download === true;
+  let xb: XbMeta | undefined;
+  if (version === 'XB') {
+    const first = order[0];
+    if (first) {
+      xb = {
+        xbFilename: readCString(bytes, first.body + XB_FILENAME_AT, XB_FILENAME_MAX),
+        contentMeta: dv.getUint32(first.body + XB_CONTENT_META_AT, true),
+      };
+    }
+  }
   const files: QstFile[] = order.map((p) => {
     if (p.size > QST_MAX_COMPRESSED) throw new Error(`qst: ${p.filename} claims ${p.size} bytes`);
     const stored = new Uint8Array(p.size);
@@ -273,6 +306,7 @@ export function parseQstFiles(bytes: Uint8Array): ParsedQstFiles {
     binFilename: binFile.filename,
     datFilename: datFile.filename,
     download: isDownload,
+    ...(xb ? { xb } : {}),
   };
 }
 
@@ -303,8 +337,13 @@ export interface RawQstFile {
 // is "PSO/<name>" (truncated to the version's name field). On a DC / PC / GC
 // download .qst each file's bytes are encoded with PSO V2 (psov2.ts) under its
 // seed; BB writes the PRS bytes as they are.
-export function packQstFiles(files: RawQstFile[], name: string, download = false, version: QstVersion = 'BB'): Uint8Array {
+export function packQstFiles(files: RawQstFile[], name: string, download = false, version: QstVersion = 'BB', xb?: XbMeta): Uint8Array {
   const layout = LAYOUTS[version];
+  if (version === 'XB') {
+    if (!xb) throw new RangeError('qst: an XB .qst needs its xb_filename and content_meta');
+    if (!/^[\x20-\x7e]{1,16}$/.test(xb.xbFilename)) throw new RangeError(`qst: XB file name "${xb.xbFilename}" must be 1..16 printable ASCII characters`);
+    if (!Number.isInteger(xb.contentMeta) || xb.contentMeta < 0 || xb.contentMeta > 0xffffffff) throw new RangeError('qst: XB content_meta is not a u32');
+  }
   const openCmd = download ? QST_COMMAND_OPEN_FILE_DOWNLOAD : QST_COMMAND_OPEN_FILE;
   const writeCmd = download ? QST_COMMAND_WRITE_FILE_DOWNLOAD : QST_COMMAND_WRITE_FILE;
   const entries = files.map((f) => {
@@ -325,6 +364,10 @@ export function packQstFiles(files: RawQstFile[], name: string, download = false
     writeAscii(out, body + layout.nameAt, layout.nameMax, `PSO/${name}`, layout.nameTerminated);
     writeAscii(out, body + layout.filenameAt, layout.filenameMax, e.filename);
     dv.setUint32(body + FILE_SIZE_AT, e.stored.length, true);
+    if (xb) {
+      writeAscii(out, body + XB_FILENAME_AT, XB_FILENAME_MAX, xb.xbFilename, false);
+      dv.setUint32(body + XB_CONTENT_META_AT, xb.contentMeta, true);
+    }
     at += layout.headerSize + layout.openBody;
   }
   for (const e of entries) {
@@ -363,6 +406,8 @@ export function withBinLanguage(prsBin: Uint8Array, version: QstVersion, languag
 export function packQst(bin: QuestBin, dat: QuestDat, opts: PackQstOptions = {}): Uint8Array {
   const version = opts.version ?? 'BB';
   const download = opts.download === true;
+  const language = opts.language ?? 1;
+  if (!Number.isInteger(language) || language < 0 || language > 7) throw new RangeError(`qst: language ${language} is not 0..7`);
   const base = opts.filename ?? `q${bin.header.questNumber}`;
   if (!/^[\x21-\x7e]{1,12}$/.test(base)) throw new Error(`qst: file name "${base}" must be 1..12 printable ASCII characters`);
   const fieldMax = LAYOUTS[version].filenameMax;
@@ -379,5 +424,6 @@ export function packQst(bin: QuestBin, dat: QuestDat, opts: PackQstOptions = {})
     name,
     download,
     version,
+    version === 'XB' ? { xbFilename: `quest${bin.header.questNumber}_${'jegfsbtk'[language]}.dat`, contentMeta: (0x30000000 | bin.header.questNumber) >>> 0 } : undefined,
   );
 }
