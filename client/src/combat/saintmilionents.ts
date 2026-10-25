@@ -390,9 +390,12 @@ export class SmWave extends EnemyShot {
 // stores the current matrix's translation through the pointer (three dword stores at 0x00765c49..0x00765c56). So the aim is
 // origin + length * forward of the render matrix, and the update reads the values the last draw wrote (one draw
 // behind). The update 0x00765d7c never stores them (checked: only reads of +0x38 / +0x44..+0x4c).
-// The render's heading (slot 2) is an atan2 of a vector built from the boss's node block (the ctor's +0x54 is
-// boss+0xe94, its +0x30..+0x38 read by slot 2); the vector op 0x0082eab8 is not decoded, so the sweep's source is
-// ASSUMED (the port's stand-in below).
+// The render's heading (slot 2, 0x00765ed8) is proven (2026-10-25 later, DEVLOG): the vector op 0x0082eab8 is
+// v * M with v = (0, 0, 1) (the caller's lea edx / push order), so the heading is atan2(M[2][0], M[2][2]) of the
+// block M = boss+0xe94 (the matrix slot 0x2a, gated by 0x768964). The draw then rotates the render matrix about Y by
+// that heading (0x0082d8bc, the sin / cos table 0x0098b560 / 0x0098c560) and translates by (0, 0, length): so
+// aim = origin + length * (sin h, 0, cos h), the origin being the block's translation (+0x30..+0x38). The port
+// reads that block's translation and z axis from the last draw (SaintMilionAi.nodes / axes, slot SM_LASER.headingSlot).
 // The length +0x50 is a ramp: +100.0 an update (0x00976100) while child slot 1 is flagged (ASSUMED always), then the
 // wall cut (0x0077fffc) sets it to sqrt of the squared distance to the first wall point (0x007a8c28 / 0x0082dc9c).
 // No wall geometry in the port: the cut is not reproduced, the ramp is capped at SM_LASER.reach (ASSUMED).
@@ -408,8 +411,11 @@ export const SM_LASER = {
   // ASSUMED cap: the exe's length stops at the first wall (no geometry here), so the ramp is capped at the centre
   // arenas' range (SM_ARENAS 3 / 4) as a stand-in. Not an exe constant.
   reach: 620,
-  // ASSUMED: the total turn of the aim over the sweep frames, centred on the boss's heading (half a circle). The exe
-  // has no sweep constant: the turn comes from the node-based heading of the render (see above), not decoded.
+  // The matrix slot of the laser's block (boss+0xe94, gated by 0x768964 with slot 0x2a): the origin and the heading
+  // of the aim come from this node's transform, read by the render each draw. Proven (see above).
+  headingSlot: 0x2a,
+  // ASSUMED fallback, used only when the render has not recorded the node (no model, headless tests): the total
+  // turn of the aim over the sweep frames, centred on the boss's heading (half a circle). Not an exe value.
   sweep: 0x8000,
 } as const;
 

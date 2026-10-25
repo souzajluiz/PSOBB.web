@@ -3525,8 +3525,13 @@ export class CombatView {
         ai.nodes[slot * 3] = v.x;
         ai.nodes[slot * 3 + 1] = v.y;
         ai.nodes[slot * 3 + 2] = v.z;
+        // The node's world +Z (column 2 of the column-major matrix): the laser's heading (SM_LASER.headingSlot).
+        const me = o.matrixWorld.elements;
+        ai.axes[slot * 2] = me[8];
+        ai.axes[slot * 2 + 1] = me[10];
       }
       ai.nodesKnown = true;
+      ai.axesKnown = true;
     }
     for (const ev of ai.events.splice(0)) this.smEvent(e, ai, ev);
     if (r.shots) for (const s of r.shots) this.launchShot(e, s);

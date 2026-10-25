@@ -53,7 +53,8 @@
 //     (0x1b waits 60 more frames);
 //   - the aim of the lasers (states 0x13 / 0x14, see SmLaser and laserAim) is
 //     drawn by the exe (the draw writes the origin and aim; see SM_LASER): the
-//     length is the exe's ramp (capped ASSUMED), the heading a stand-in sweep;
+//     length is the exe's ramp (capped ASSUMED), the origin and heading are the
+//     node 0x2a's (proven), the stand-in sweep only without a render record;
 //     the laser's hit, its life and its sound are; the missiles, the wave, the storm and the sand sonic are
 //     objects of their own (see SmMissile, SmWave, SmStorm and SmSandSonic);
 //   - the order of the players the followers go round and the stream of the
@@ -332,6 +333,9 @@ export class SaintMilionAi extends BrainBase {
   // Node positions the owner recorded: slot -> x, y, z.
   readonly nodes = new Float32Array(SM_NODES.length * 3);
   nodesKnown = false;
+  // Node z axes the owner recorded (the node's world +Z, XZ only): slot -> x, z. The laser's heading (SM_LASER.headingSlot).
+  readonly axes = new Float32Array(SM_NODES.length * 2);
+  axesKnown = false;
   readonly everLeader: boolean;
 
   constructor(opts: SmBossOptions) {
@@ -819,13 +823,20 @@ export class SaintMilionAi extends BrainBase {
     this.pendingShots.push(this.laser);
   }
 
-  // The aim point of update k: the exe's ramp length (laserLength, +100 an update, capped at SM_LASER.reach ASSUMED for
-  // the wall) along the heading. The heading is a stand-in (ASSUMED, see SM_LASER): SM_LASER.sweep (BAMS, centred on
-  // the boss's heading) over the sweep frames; the exe's render heading is not decoded.
-  private laserAim(k: number): { x: number; z: number } {
+  // The aim point of update k (+0x44 = origin + length * forward): the exe's ramp length (laserLength, +100 an update,
+  // capped at SM_LASER.reach ASSUMED for the wall) along the laser node's z axis (the render's heading, proven: the
+  // node's translation is the origin, the XZ direction of its z axis the heading). Without the render's record the
+  // stand-in sweep of SM_LASER (ASSUMED, centred on the boss's heading) is used.
+  laserAim(k: number): { x: number; z: number } {
+    const r = laserLength(k);
+    const o = this.node(SM_LASER.headingSlot);
+    const d = this.nodeAxis(SM_LASER.headingSlot);
+    if (o && d) {
+      const len = Math.hypot(d[0], d[1]);
+      if (len > 1e-9) return { x: o[0] + (d[0] / len) * r, z: o[2] + (d[1] / len) * r };
+    }
     const turn = (k / (SM_LASER.frames - 3) - 0.5) * SM_LASER.sweep * BAMS;
     const a = this.heading * BAMS + turn;
-    const r = laserLength(k);
     return { x: this.x + Math.sin(a) * r, z: this.z + Math.cos(a) * r };
   }
 
@@ -867,6 +878,12 @@ export class SaintMilionAi extends BrainBase {
   node(slot: number): [number, number, number] | null {
     if (!this.nodesKnown) return null;
     return [this.nodes[slot * 3], this.nodes[slot * 3 + 1], this.nodes[slot * 3 + 2]];
+  }
+
+  // The node's z axis in XZ (not normalised), or null before the render has recorded it.
+  nodeAxis(slot: number): [number, number] | null {
+    if (!this.axesKnown) return null;
+    return [this.axes[slot * 2], this.axes[slot * 2 + 1]];
   }
 
   // State 11 enter (0x0076ba68).
