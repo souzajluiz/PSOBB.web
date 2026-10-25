@@ -9,7 +9,7 @@
 // each form's own rule (DfAnim), tested against the tables' chains.
 //
 // Run: node tests/darkfalz.test.ts
-import { DARVANT, DarkFalzAi, DarkFalzPartAi, Darvant, DF_ID, SCENE, SCENE_NAMES } from '../client/src/combat/darkfalz.ts';
+import { DARVANT, DarkFalzAi, DarkFalzPartAi, Darvant, DF_ID, SCENE, SCENE_NAMES, darvantBoxStart, darvantBoxStep, darvantRingIcon } from '../client/src/combat/darkfalz.ts';
 import { DfForm1, F1, F1_ANIM_ROWS, pickWeighted } from '../client/src/combat/darkfalz1.ts';
 import { DfForm2, F2, F2_ANIM_ROWS } from '../client/src/combat/darkfalz2.ts';
 import { advanceScale, DfForm3, F3, F3_ANIM_ROWS, HomingBolt, f3Spot } from '../client/src/combat/darkfalz3.ts';
@@ -120,7 +120,8 @@ function fight(over: { difficulty?: number; seed?: number; targets?: AiTarget[];
 // Kill Darvants until the ZAKO scene is done.
 function clearZako(fi: Fight): void {
   fi.until(() => fi.c.scene === SCENE.zako, 400, 'ZAKO');
-  for (let n = 0; n < 200 && fi.c.scene === SCENE.zako; n++) {
+  // A ring Darvant can be hit only in its box window (450 of every 2701 ticks): the wait is long.
+  for (let n = 0; n < 6000 && fi.c.scene === SCENE.zako; n++) {
     const d = fi.c.darvants.find((x) => x.st !== DARVANT.dead && !x.gone && x.targetable);
     if (d) d.damage(10000, true);
     fi.step();
@@ -245,14 +246,26 @@ function toArena(fi: Fight, x = 0, z = 0): void {
   check(!fi.c.darvants[0].targetable, 'and cannot be hit while they rise');
   fi.step(60);
   eq(fi.c.darvants[0].y, DARVANT.top, 'after 57 frames they float at 6');
-  check(fi.c.darvants[0].targetable, 'and can be hit');
-  // Kills needed: row 53 iparam1 (3) x players (2).
+  // The ring's box is off until its first window (PsoBB.exe 0x0045F25C): hover and chase
+  // count the timer, and the box is on for 450 of each 2701 ticks.
+  check(!fi.c.darvants[0].targetable, 'hovering with the box off: cannot be hit yet');
+  let on = 0;
+  for (let k = 0; k < 2701; k++) {
+    if (fi.c.darvants[0].targetable) on++;
+    fi.step();
+  }
+  eq(on, 450, 'the box is on for 450 ticks of the 2701-tick cycle');
+  // Kills needed: row 53 iparam1 (3) x players (2). Each one waits for its box window.
   const need = 3 * 2;
-  for (let i = 0; i < need - 1; i++) fi.c.darvants[i].damage(1000, true);
+  const hitInWindow = (d: Darvant) => {
+    for (let k = 0; k < 2701 && !d.targetable; k++) fi.step();
+    d.damage(1000, true);
+  };
+  for (let i = 0; i < need - 1; i++) hitInWindow(fi.c.darvants[i]);
   fi.step(3);
   eq(fi.c.kills, need - 1, 'the dead are counted');
   eq(fi.c.scene, SCENE.zako, 'one short: still ZAKO');
-  fi.c.darvants[need - 1].damage(1000, true);
+  hitInWindow(fi.c.darvants[need - 1]);
   fi.step(2);
   eq(fi.c.scene, SCENE.appType1, 'row 53 iparam1 * players kills end the scene');
   eq(fi.c.kills, fi.c.made, 'the Darvants left alive die with the scene (they all count)');
@@ -596,6 +609,8 @@ function toType2(fi: Fight): void {
   const st = f2.st;
   const t0 = fi.t;
   fi.until(() => f2.st !== st, 400, 'pause done');
+  // The pause is its table's frames (the other form 2 waits above are exact too; the old +1 was the
+  // phase of the TYPE1 -> TYPE2 start, which the ZAKO wait now moves).
   eq(fi.t - t0, F2.stopFrames[st - F2.stop1] + 1, `MD_STOP${st - 8} lasts ${F2.stopFrames[st - F2.stop1]} frames`);
 }
 
@@ -634,7 +649,8 @@ function toType2(fi: Fight): void {
     }
     balls = f2.ballCount;
     // The forced 2.5 icon of each ball thrown on this tick (0x40200000, colour 0xffffa24c).
-    const icons = f2.minimapIcons();
+    // (The body's own forced 5.0 icon is listed too; it is checked below.)
+    const icons = f2.minimapIcons().filter((ic) => ic.scale !== 5);
     iconTotal += icons.length;
     for (const ic of icons) iconsOk = iconsOk && ic.scale === 2.5 && ic.shape === 1 && ic.color === 0xffffa24c;
     // Each ball's technique object ticks once a game tick, as the fight's shots do.
@@ -655,7 +671,8 @@ function toType2(fi: Fight): void {
   }
   eq([...shotsSeen].every((s) => s.done), true, 'every ball ends');
   check(hitIds.size >= 1, `the balls hit players within their reach (${hitIds.size})`);
-  eq(f2.minimapIcons().length, 0, 'no icon once the beam is over');
+  eq(f2.minimapIcons().filter((ic) => ic.scale === 2.5).length, 0, 'no ball icon once the beam is over');
+  eq(f2.minimapIcons().filter((ic) => ic.scale === 5).length, 1, 'the body icon stays (forced every live frame)');
 }
 
 {
@@ -906,7 +923,8 @@ function toType3(fi: Fight): void {
 function clearZakoBoth(fi: Fight): void {
   fi.until(() => fi.c.scene === SCENE.zako, 400, 'ZAKO');
   fi.step(5);
-  for (let n = 0; n < 200 && fi.c.scene === SCENE.zako; n++) {
+  // A ring Darvant can be hit only in its box window (450 of every 2701 ticks): the wait is long.
+  for (let n = 0; n < 6000 && fi.c.scene === SCENE.zako; n++) {
     const d = fi.c.darvants.find((x) => x.st !== DARVANT.dead && !x.gone && x.targetable);
     if (d) {
       d.damage(10000, true);
@@ -1173,6 +1191,64 @@ function clearZakoBoth(fi: Fight): void {
   // From 300 the scale is 1 and the counter returns to 0.
   a = advanceScale(0.5, 299, false);
   check(a.scale === 1 && a.count === 0, 'form 3 scale: from 300 the scale is 1 and the counter resets');
+}
+{
+  // Radar and hit of the ring Darvant (PsoBB.exe 0x0045F25C tail: +0x3B0 picks the icon and
+  // bit 0 of the box; 0x0045F238 clears +0x3B0 on death). ASSUMED: the timer starts at 0.
+  const d = new Darvant(DF_ID.darvant, 100);
+  d.kind = 'ring';
+  d.st = DARVANT.rise;
+  eq(darvantRingIcon(d), 'forced', 'rising: the forced icon (box off)');
+  check(!d.targetable, 'rising: box off, cannot be hit');
+  d.st = DARVANT.hover;
+  darvantBoxStep(d);
+  eq(d.boxTimer, DARVANT.boxCycle, 'the first hover tick reloads the timer (-1 -> 0xA8C)');
+  eq(darvantRingIcon(d), 'forced', 'and the box stays off');
+  for (let k = 0; k < DARVANT.boxCycle - DARVANT.boxOnBelow; k++) darvantBoxStep(d);
+  eq(d.boxTimer, DARVANT.boxOnBelow, 'counting down: the timer reaches 0x1C2');
+  eq(darvantRingIcon(d), 'forced', 'still off at 0x1C2 (the test is below it)');
+  darvantBoxStep(d);
+  eq(d.boxTimer, DARVANT.boxOnBelow - 1, 'one tick further (timer 0x1C1)');
+  eq(darvantRingIcon(d), 'plain', 'below 0x1C2 the box is on: the plain icon, lockable and hittable');
+  check(d.targetable, 'and it can be hit');
+  d.st = DARVANT.chase;
+  eq(darvantRingIcon(d), 'plain', 'chase keeps the flag (the cycle is the same in state 2)');
+  d.st = DARVANT.dead;
+  d.boxOn = false;
+  eq(darvantRingIcon(d), null, 'dead: no icon');
+  check(!d.targetable, 'dead: cannot be hit');
+  // The creation init (0x0045FBD4): +0x3B4 = 450 * (w % 6 + 1), w = the entity index word
+  // (0x1000 + slot): the Darvants start staggered by id.
+  eq(darvantBoxStart(0), 450, 'init w 0: 450');
+  eq(darvantBoxStart(5), 2700, 'init w 5: 2700');
+  eq(darvantBoxStart(6), 450, 'init w 6: 450 (mod 6)');
+  eq(darvantBoxStart(0x1000 + 1), 450 * ((0x1001 % 6) + 1), 'a wire id (0x1001): 450 * (0x1001 % 6 + 1)');
+  const early = new Darvant(1, 10);
+  early.st = DARVANT.hover;
+  early.boxTimer = darvantBoxStart(0);
+  darvantBoxStep(early);
+  check(early.boxOn, 'init 450: the first hover tick is already in the window (449 < 450)');
+  const late = new Darvant(2, 10);
+  late.st = DARVANT.hover;
+  late.boxTimer = darvantBoxStart(5);
+  darvantBoxStep(late);
+  check(!late.boxOn && late.boxTimer === 2699, 'init 2700: box off until the timer falls below 450');
+  const fz = fight({ party: 2 });
+  toArena(fz, CASKET.x, CASKET.z);
+  fz.until(() => fz.c.scene === SCENE.zako, 400, 'ZAKO');
+  eq(fz.c.darvants[0].boxTimer, darvantBoxStart(0x1000 + 1), 'the control creates each Darvant with that init');
+  // Form 2: the body's hit box is on only at blend 0 (0x00457BD4: +0x3F0 == 0.0), and its forced icon
+  // is drawn every live frame (no state gate).
+  const fi = fight();
+  const f2 = new DfForm2(fi.c, { hp: 6500, atp: 750, moveFrames: 150, stopState: 10, restaLevel: 4, rafoie: 9, rabarta: 6, tenchu: 550 });
+  f2.blend = 0.5;
+  check(!f2.targetable, 'form 2 blending out: box off, cannot be hit');
+  const body = f2.minimapIcons().find((i) => i.shape === 1 && i.scale === 5 && i.color === 0xffffa24c);
+  check(body !== undefined, 'form 2: the forced body icon (scale 5) is listed while it is blending out');
+  f2.blend = 0;
+  check(f2.targetable, 'form 2 at blend 0: box on, can be hit');
+  f2.st = F2.dead;
+  check(f2.minimapIcons().some((i) => i.scale === 5), 'form 2: the body icon is not gated by its state (exe update)');
 }
 if (failures) {
   console.log(`${failures} failure(s)`);

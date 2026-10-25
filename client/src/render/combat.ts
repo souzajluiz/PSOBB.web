@@ -75,7 +75,7 @@ import { GalgryphonAi } from '../combat/galgryphonai.ts';
 import { OlgaFlowAi, decodeOlgaA4 } from '../combat/olgaflowai.ts';
 import { OLGA_AREA, OLGA_LANCER, OLGA_SWORD_WAVE, OlgaSwordTrail, OlgaStabObject, lancerBlade, lancerGate, lancerQuad, lancerTouches, olgaStabRange, randomlyAdjust, olgaBattlePower, stabGroundPoint, swordWaveTouches, type XYZ } from '../combat/olgaflowhits.ts';
 import { galgryphonAttackBurst, GALFX_RING, GALFX_RING_PARTICLES } from '../combat/galgryphonfx.ts';
-import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
+import { DARVANT, Darvant, DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES, darvantRingIcon } from '../combat/darkfalz.ts';
 import { DEMO_WARP_PARTS } from '../formats/enemymodels.ts';
 import { cameraSourceOf, DARKFALZ_CAMERA_FILE } from '../combat/darkfalzcamera.ts';
 import { parseCameraRel, type CameraRel } from '../formats/cameramotion.ts';
@@ -1386,6 +1386,7 @@ export class CombatView {
             ...at,
             difficulty,
             rows: this.falzRows(params, difficulty),
+            entityId,
             leader: () => this.game.selfId === this.game.leaderId,
             selfId: () => this.game.selfId,
             partySize: () => this.game.players.size,
@@ -1956,8 +1957,12 @@ export class CombatView {
       // a timed status (paralysis, freeze, shock or the hold) adds one in any state (the update's
       // timed-status branch, which skips the dispatcher).
       if (e.slot.type === 'DARK_GUNNER' && e.ai instanceof GunnerAi && !e.status.locked && !darkGunnerBrainIconShown(e.ai.state)) continue;
-      // Dark Falz forms 1 and 3 have their own forced icons (minimapIcons).
-      if (e.ai instanceof DarkFalzPartAi && (e.ai.entity === DF_ID.form3 || e.ai.entity === DF_ID.form1)) continue;
+      // Dark Falz's forms have their own forced icons (minimapIcons); a ring Darvant's plain icon
+      // is in this list only while its box is on (its forced icon is in minimapIcons).
+      if (e.ai instanceof DarkFalzPartAi) {
+        if (e.ai.entity === DF_ID.form1 || e.ai.entity === DF_ID.form2 || e.ai.entity === DF_ID.form3) continue;
+        if (e.ai.part instanceof Darvant && e.ai.part.kind === 'ring' && darvantRingIcon(e.ai.part) !== 'plain') continue;
+      }
       const p = e.instance.root.position;
       // A De Rol Le segment keeps the body's slot type, but its icon is its own (classic/minimap.ts FORCED_ICON_RULES).
       out.push({ x: p.x, z: p.z, type: e.ai instanceof DrlSegmentAi ? 'DE_ROL_LE_BODY' : e.slot.type });
@@ -1967,15 +1972,24 @@ export class CombatView {
 
   // The forced icons of the Dark Falz form 1 body, heads and ring
   // (combat/darkfalz1.ts minimapIcons) and of the form 3 body and its prisoner
-  // trail (combat/darkfalz3.ts minimapIcons), drawn while the part is on the field.
+  // trail (combat/darkfalz3.ts minimapIcons), and each ring Darvant's forced icon
+  // while its box is off (darvantRingIcon). The exe's form icons are not gated by
+  // state or death (the update calls icon3 every frame), so only the part's drawn
+  // flag gates them here.
   minimapIcons(): Icon[] {
     const out: Icon[] = [];
     // One set of icons per form and fight (the parts share their owner).
     const seen = new Set<string>();
     for (const e of this.enemies.values()) {
       if (!(e.ai instanceof DarkFalzPartAi)) continue;
+      if (!e.instance.root.visible) continue;
+      if (e.ai.part instanceof Darvant) {
+        if (e.ai.part.kind !== 'ring' || darvantRingIcon(e.ai.part) !== 'forced') continue;
+        const p = e.instance.root.position;
+        out.push({ x: p.x, z: p.z, color: DARVANT.forcedIconColour, shape: 1, scale: DARVANT.forcedIconScale, heading: 0 });
+        continue;
+      }
       if (e.ai.entity !== DF_ID.form3 && e.ai.entity !== DF_ID.form1) continue;
-      if (e.dead || e.state === 'death' || !e.instance.root.visible || concealed(e)) continue;
       const owner = e.ai.owner;
       if (e.ai.entity === DF_ID.form1) {
         if (seen.has('f1')) continue;

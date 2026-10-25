@@ -223,6 +223,45 @@
 **Checks.** `node tests/weaponspin.test.ts` 39 of 39. `node tests/mechgun.test.ts` 22, 0 failures. `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5859 checks, 0 failures. `cd client && npx tsc --noEmit -p .` (Node 24) clean. Not run in Chrome (no Playwright).
 
 **Open.** The visual of the remote's spin (not checked in a browser); the sincos table's identity and the angle sign; the port's 6x46 sender sends only with targets, so the port's own zero-target bursts are not seen by a receiver (the exe sends them when the reticle is type 2).
+## 2026-10-25: Dark Falz radar and hit boxes: the ring Darvant's box cycle, form 2 at blend 0, form icons ungated
+
+**Outcome.** The Darvant ring's radar and hit now follow its update (box flag +0x3B0, a 2701-tick cycle); form 2's hit box is on only at blend 0; the forms' forced radar icons are no longer gated by state or death (the exe calls them every update). Form 3's hit rule was already the exe's (`to != above`). Form 1, the control, and the spat / beam Darvants keep their old rules, marked ASSUMED below.
+
+**Proven (PsoBB.exe, Ephinea addresses; objdump of the .text, Ghidra `tools/ghidra/decomp.sh`, vtables read with `tools/exedata.py`).**
+- Vtables: control 0x00AF6BD8 (update 0x0044E5FC), Darvant ring 0x00AF7D60 (update 0x0045F25C), spat Darvant 0x00AF7EC0 (update 0x0045FF50), form 1 0x00AF75A0 (update 0x00454838), form 2 0x00AF77E0 (update 0x00457BD4), form 3 0x00AF7A60 (update 0x0045AD6C). Every one of them has +0x88 = FUN_00777BA4 (`entity flags(+0x30) & 0x200`), which is not the box rule.
+- Nothing in the Dark Falz code calls the box helpers 0x0052045C / 0x005204B0 (those are De Rol Le's and the Gibbon's). The DF classes write bit 0 of their box directly: the box object is [entity + 0x39C] for forms 1-3 (collision_box, stride 0x2C, flags at +0x18; form 1 writes the positions at +0x1C) and [entity + 0x38C] for a Darvant.
+- **Darvant ring** (0x0045F25C, the tail after the state dispatch): if state != 3 and +0x3B0 == 0: clear bit 0 of [+0x38C]+0x18 and icon3 at +0x300 (colour 0xFF7F5126, scale 1.0, flag 1, forced). If +0x3B0 != 0: set bit 0, lock refresh (FUN_006946A8), and the plain icon 0x805608 (0xFFFFA24C, range checked). State 3: no icon, no box write. At the top of the update, in states 1 and 2: timer +0x3B4 -= 1; if it went below 0, +0x3B0 = 0 and the timer = 0xA8C; else if it is below 0x1C2, +0x3B0 = 1. The die hook (0x0045F238) sets +0x3B0 = 0. Net: the box is on for 450 of every 2701 ticks in hover and chase; rising, dead: off.
+- **Form 2** (0x00457BD4): icon3 at +0x300 every update (colour 0xFFFFA24C, scale 0x40A00000 = 5.0, flag 1; no state test). Then bit 0 of [+0x39C]+0x18 = (+0x3F0 == 0.0): on at blend 0, off otherwise (0x0090024C = 0.0). The port's `blend` is +0x3F0.
+- **Form 3** (0x0045AD6C): bit 0 off when +0x3A8 == 0x11 (the port's `F3.above`), on otherwise (with the lock refresh). The body's forced icon comes from FUN_0045B64C every update, which returns before it when the prisoner slot is above 3.
+- **Form 1** (0x00454838): four forced icon3 calls (body +0x38, heads +0x440 / +0x458 / +0x470) and the ring, every update, no state test. The table rows (enter 0x00457998.., lead 0x00455714.., all 0x004557F4..) and their helpers do not write any box bit 0; the dead test is entity flag 0x800 (lead 0x004559C0).
+- **Control** (0x0044E5FC): no icon call in its range (0x0044E5FC to 0x0044EB18).
+- **Spat Darvant** (0x0045FF50; its state tails 0x0046013B, 0x00460A02 / 0x00460A8B, 0x00460B15): plain icon 0x805608 when state != 3. No box write in the spat code.
+
+**Timer writers (+0x3B4, objdump of the .text; the coordinator's list).** Only the Darvant's own code is the ring's cycle. The rest of the Dark Falz range belongs to form 3 (its ctor 0x0045E5A0 sets vtable 0x00AF7A60; its table 0x009A6530), where +0x3B4 is `oldFace` and +0x3B0 is `face` (port `DfForm3`):
+- 0x0045C4EA, 0x0045CAC3, 0x0045CED7, 0x0045DF27 (readers): form 3's turn and position code (the angle from `oldFace` / `face`, `FUN_007A900C` / `FUN_007A8C74`).
+- 0x0045D4FC (FUN_0045D4EC): form 3 sets `oldFace` and `face` to the 4-bit slot of its heading (`(0xF800 - yaw) >> 12 & 0xF`).
+- 0x0045E9BF (form 3 ctor FUN_0045E5A0): `oldFace = 0` (eax 0), with `+0x3A8 = +0x3AC = 0x10`.
+- 0x0045EAD8 (FUN_0045EAB0, the packed action unpack): `oldFace = (w >> 15) & 0xF`, `face = (w >> 19) & 0xF`.
+- 0x0045EEC6, 0x0045EF1E (form 3 states that set `to` and `from` to 0x11 = above): `oldFace = face`.
+- 0x0045EF52, 0x0045EF69, 0x0045EFF7: form 3 state functions that store a parameter or a register into `oldFace` (their callers were not traced one by one).
+- Darvant (AF7D60 ring, update 0x0045F25C): 0x0045FDF9 (the factory, init above), 0x0045F2B5 (the cycle's store), 0x0045F5AC (the reset to 0xA8C, with +0x3B0 = 0 at 0x0045F5A2), and the reads 0x0045F2A4 / 0x0045F351 / 0x0045F384 (the cycle and the fade).
+- Spat (AF7EC0, 0x0045FF50) and beam (AF8020, update 0x00460938): no access to +0x3B0 / +0x3B4 at all.
+- Death (0x0045F238): +0x3B0 = 0 only. No writer resets the Darvant timer on a hit or a state change (the rise, the chase entry and the hits do not touch 0x3B4); the only reset is the cycle's own at a negative timer.
+- The beam's class is AF8020 (ctor 0x0045F1D4, factory 0x00460E14), so its box is not the ring's; its box rule is ASSUMED (not traced).
+
+**ASSUMED / open.**
+- Darvant start (proven, see "Timer writers" below): the factory 0x0045FBD4 (shared by the ring, the spat and the beam ones) writes +0x3B0 = 0 and +0x3B4 = 450 * (w % 6 + 1) (the multiply by 0x2AAAAAAB at 0x0045FDC8 is a signed divide by 6; 225 * (2 * (w % 6) + 2)), w = the entity index word (+0x1C, "entity_index_small + 4096", dump struct enemy, read at 0x0045FD65). So the Darvants start staggered by id at 450 .. 2700 ticks. ASSUMED: the control's wire id is `0x1000 | head.index` (render/combat.ts entityId) and the Darvant's is that + its offset.
+- Form 2's box rule is written against the port's `blend` (= +0x3F0). The port's dead and waiting states keep the old test.
+- Form 1's box: no DF code writes it, so it is treated as on from creation (the port's `awake` / dead / waitKill rule is unchanged). The 0x200 flag's writers in form 1 are not traced.
+- Spat Darvants and beam Darvants: box rule not traced (the beam's class is not confirmed as 0x00AF7D60). They keep the state rule.
+- The control: its box and entity flags are not traced; it stays concealed.
+
+**Port.**
+- `client/src/combat/darkfalz.ts`: `DARVANT.boxCycle` / `boxOnBelow` / `forcedIconColour`; `Darvant.boxOn` / `boxTimer`; `Darvant.targetable` for a ring is `boxOn` (and not dead or gone); `darvantBoxStart(w)` (the creation init, `Darvant.boxTimer` is set from `DarkFalzOptions.entityId` + the offset); `darvantBoxStep` (the cycle, run in hover and chase); `darvantRingIcon` ('forced' / 'plain' / null); `killDarvant` clears `boxOn`.
+- `client/src/combat/darkfalz2.ts`: `targetable` needs `blend === 0`; `minimapIcons` lists the body's forced 5.0 icon (`F2.bodyIcon`) while the form is there.
+- `client/src/render/combat.ts`: `minimapEnemies` skips the forms 1-3 parts and a ring Darvant that is not 'plain'; `minimapIcons` lists the forced ring icons and no longer gates the form 1 / form 3 icons on death or on `concealed()` (only on the part being drawn).
+- `tests/darkfalz.test.ts`: the cycle (450 on in 2701), the forced / plain / null icon, form 2's hit and body icon, and the Darvant hits now wait for the box window (`clearZako`, the kill loops). The form 2 beam test filters the body icon out of the ball count. The MD_STOP1 check now expects the table's 75 frames (the old +1 was the TYPE1 -> TYPE2 phase, which the longer ZAKO wait moves).
+- Tests: `node tests/darkfalz.test.ts` (pass), `tests/combat.test.ts` (NEWSERV set, 5859 checks pass), `tests/minimap.test.ts` (pass), `darkfalzwarp`, `darkfalzcamera`, `bossrooms`, `objectcollision`, `galgryphonminion`, `setdata` (pass), `npx tsc --noEmit -p client` (clean).
 
 ## 2026-10-25: Xbox (XB) .qst: parse and pack, newserv byte cross-check
 
