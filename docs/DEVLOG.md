@@ -14,6 +14,20 @@
 **Not changed:** the reveal's state-2 position copy. Disassembled at `0x0062eb29..0x0062eb57` (lldb, `disassemble -F intel`): on a revealed trap (`+0xa4 == 2`) it calls `CheckEnemyTargetability_006945fc` and copies the owner's dwords `+0x33c / +0x340 / +0x344` into the trap's `+0x38 / +0x3c / +0x40` (raw integer moves). The dump's decompile shows these as `(float)` conversions of `unknown_flags_2` etc., which the disassembly does not show. The trap's `+0x38` is the position the range test reads, so the copy would make the trap's position the owner's flag words. Whether those words are a position in the owner struct is UNCLEAR; left open, not ported.
 
 **Checks:** `node tests/battletraps.test.ts` ALL PASS; `node tests/pvp.test.ts` ALL PASS; `node tests/battle.test.ts` ALL PASS; `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5852 checks, 0 failures; `cd client && npx tsc --noEmit -p .` clean. Chrome check not run.
+## 2026-10-25: Minimap: the Dragon's forced 2.0 icon; the Sinow Berill and De Rol Le shell icons traced, not ported
+
+**What changed:** the Dragon (Episode 1 Caves boss, `combat/dragon.ts`) draws its radar icon forced at scale 2.0, as the exe does. Until now it fell to the plain range-checked icon of scale 1 (`ENEMY_ICON_RULE`). `FORCED_ICON_RULES.DRAGON` in `classic/minimap.ts` is the only change; `render/fieldhud.ts` already reads the rule for every enemy.
+
+**Proven (exe, Ephinea dump `reverse/refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, the largest dump):**
+- Line 165532 is `unknown_add_minimap_icon3((vec3f *)&param_1->x, 0xffffa24c, 0x40000000, 1, 1)`: colour 0xffffa24c, scale 2.0, shape 1, flag 1 (forced, no range check). It sits in `OlgaUpdateMainLoop_00423b7c` (the Dragon's per-frame update; the name is a community mislabel, see the header of `combat/dragon.ts`), right after `enable_reticle_`, at the function body's indent, so it runs every frame after both branches (leader and follower).
+- The Dragon's entity type is `DRAGON` (`formats/setdata.ts`: case 0xc0 with a < 0x12).
+
+**Traced, not ported (the owner is not settled, so no rule is added):**
+- Sinow Berill sub-entity icons: `EnableSinowberillVisualIndicators_004b9198` (dump 239865) draws forced 2.0 at `&param_1->x` only when the hitbox's `unknown_flags` bit 0 is set; `UpdateSinowberillPositionAndState_004ba0ac` (dump 240354) forced 1.2 at `&param_1->x`; `UpdatePlayerEntityInBossFight_004cbf68` (dump 247150) and `UpdatePlayerStateInSinowberillFight_004cee30` (dump 249235) forced 2.0. The dump types these as `player`, so the port object each one is is ASSUMED.
+- `handle_derolle_shell_behavior` (dump 176942, icon at 176968): forced 1.2 at `this->x2`. Which De Rol Le entity it is, and whether the port's DE_ROL_LE_BODY segments (combat/derolle.ts, the segment notes say "a radar icon") draw it, is not settled.
+- `Enemy_Update_007648dc` (dump 737262): forced icon at `+0xcc` when the entity's `+0xe4` pointer is set; colour 0xffffa24c when the entity is active or its hitbox flag 4 is set, else 0xff909090; scale = the `+0xac` object's float at `+0xc` times `_DAT_0097609c`. The owner of the `+0xe4` object is not settled.
+
+**Checks:** `node tests/minimap.test.ts`: all checks pass (new: `enemyIconRule('DRAGON')`). `cd client && npx tsc --noEmit -p .` (Node 24) clean. Not run in Chrome or Playwright.
 
 ## 2026-10-25: Darvant child link: the constant table of the Dark Falz grid
 
