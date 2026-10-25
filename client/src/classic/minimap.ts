@@ -315,9 +315,18 @@ export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
   // 0x005603fb in GibblesUpdateLoop 0x00560338, state gates in the port); Merillia (vtable
   // 0x00b066e0, update 0x005755cc, +0x198 0x0057543c, icons at 0x00574792 .. 0x00575a67, the
   // state gates not traced). Merillia's 'Meriltas' shares these vtables (ASSUMED, the factory's
-  // subtype flag is not traced here). Goran: no row (2026-10-25 correction: the icon cited for it,
-  // 0x005b28dd, is inside Zu's update 0x005b27e8; Goran's vtable 0x00b0af40 has its update at
-  // 0x0052b78c (no icon) and +0x198 0x005ad6fc (no direct icon call); no icon proven).
+  // subtype flag is not traced here). Goran: no row (the icon cited for it, 0x005b28dd, is inside
+  // Zu's update 0x005b27e8). The Goran and Boota substrate (2026-10-25 Ep4 pass): both vtables'
+  // +0x4 is the Booma substrate update 0x0052b78c (unknown_booma_enemy_ai: the pause gate, then the
+  // +0x32e switch into the vtable's state slots +0x154 + 4 * state). Boota (0x00b0a680) shares the
+  // Booma's slots for states 1, 2, 3, 4, 5, 7 (0x0052a6e4, 0x0052ad80, 0x0052afe4, 0x0052b1b8,
+  // 0x0052b290, 0x0052b33c), so the Booma rule (BOOMA_ICON_STATES) applies to those; its state 0 is
+  // 0x005a57f4 (no 0x805608 call in 0x5a57f4..0x5a5875). Goran (0x00b0af40) shares states 1, 2, 4,
+  // 5, 7 (the same handlers), so the Booma rule applies there too; its state 3 is 0x005acdb8 (no
+  // 0x805608 call in 0x5acdb8..0x5ad51c), its state 0 0x005ad51c (no call), state 9 0x005517a0 (no
+  // call in 0x5517a0..0x5518eb), state 10 0x005acb78 (icon at 0x005acd6e, gate not traced).
+  // No port brain for either (no AI_PROFILES or OWN_FSM class: 'BootaFamily', 'GoranFamily'), so the
+  // rule cannot gate the radar yet; no row (default kept).
   DELDEPTH: 'own', GI_GUE: 'own', GIBBLES: 'own', MERILLIA: 'own', MERILTAS: 'own',
   // Sinow Berill (2026-10-25 Episode 4 pass, ex-'forced' row): vtable 0x00b0a120 (ctor 0x0059e01c
   // writes it at 0x0059e0eb; +0x198 0x00520618), its dispatcher SinowberillProcessState_0059eb08
@@ -336,16 +345,22 @@ export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
   // Astark (factory 0x005a3d60 writes vtable 0x00b0a420 at 0x005a3e78; update 0x005a1e84, icon
   // 0x005a1f82 unconditional on the alive path, plain scale 1). Sand / Del Rappy (set 0x41, factory
   // 0x00526cc4 -> ctor 0x00526d90 writes vtable 0x00b00da0 at 0x00526dd5; update 0x005258e0, icon
-  // 0x005259dd on the common path, after the state cases; ASSUMED the state cases that jump past it
-  // add none). Merissa A / AA (set 0x112, factory 0x005b6b24 writes vtable 0x00b0b6a0 at 0x005b6c32;
-  // update 0x005b66ec, icon 0x005b67d3, skipped while +0x37c bit 0x8 is set: not ported, no brain).
+  // 0x005259dd on the common path. PROVEN 2026-10-25 (objdump 0x5258e0..0x525ad8, dump name update_rappy):
+  // the only exit before the icon is the pause return (0x5258ff, g_UnknownShouldPauseEnemyAI == 1 ->
+  // 0x525afd); the state switch on +0x32e (0 wander, 1 chase, 2 lunge, 3 recover, 4 0x525b8c, 5
+  // 0x525b08, others) jumps back to 0x52598e in every case, so no state skips the icon. The same
+  // update as the Rag Rappy's 'rappy' row, hence 'rappy'.
+  // Merissa A / AA (set 0x112, factory 0x005b6b24 writes vtable 0x00b0b6a0 at 0x005b6c32;
+  // update 0x005b66ec, icon 0x005b67d3, PROVEN gate: 0x005b67c1 test dl,0x8 (+0x37c bit 0x8) jne
+  // to 0x5b67e1 skips it; not ported, no brain).
   // Zu and Pazuzu (set 0x114, factory 0x005b47b8 -> ctor 0x005b4884 writes vtable 0x00b0b480 at
-  // 0x005b48c6; update 0x005b27e8, icon 0x005b28dd, skipped while +0x390 bit 0x40000 is set: not
-  // ported; ASSUMED Pazuzu shares the Zu vtable, the set type is one for both). Pig Ray (the Barba
+  // 0x005b48c6; update 0x005b27e8, icon 0x005b28dd, PROVEN gate: 0x005b28bc test 0x40000 on
+  // [+0x390] (je to the icon's branch, else jmp past it to 0x5b28e5); not ported, no brain;
+  // ASSUMED Pazuzu shares the Zu vtable, the set type is one for both). Pig Ray (the Barba
   // Ray's minion, ctor 0x004ad95c writes vtable 0x00afa7c0 at 0x004ad9a6; update 0x004addc0) has a
   // forced icon, see FORCED_ICON_RULES.
-  ASTARK: 'own', SAND_RAPPY_CRATER: 'own', SAND_RAPPY_DESERT: 'own', DEL_RAPPY_CRATER: 'own',
-  DEL_RAPPY_DESERT: 'own', MERISSA_A: 'own', MERISSA_AA: 'own', ZU_CRATER: 'own', ZU_DESERT: 'own',
+  ASTARK: 'own', SAND_RAPPY_CRATER: 'rappy', SAND_RAPPY_DESERT: 'rappy', DEL_RAPPY_CRATER: 'rappy',
+  DEL_RAPPY_DESERT: 'rappy', MERISSA_A: 'own', MERISSA_AA: 'own', ZU_CRATER: 'own', ZU_DESERT: 'own',
   PAZUZU_CRATER: 'own', PAZUZU_DESERT: 'own', PIG_RAY: 'own',
   // Ill Gill (factory 0x0052e380 -> ctor 0x0052e44c writes vtable 0x00b01760 at 0x0052e490; update
   // 0x0052e7c0 switches on unknown_ai_state; plain icons (scale 1, colour 0xffffa24c) in states

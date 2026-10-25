@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-10-25: Episode 4 radar gates: Sand / Del Rappy is 'rappy' (PROVEN); Merissa, Zu, Ill Gill, Boota and Goran have no port brain
+
+**Outcome.** One row moves: Sand and Del Rappy (`classic/minimap.ts` ENEMY_RADAR_SOURCE) go from 'own' to 'rappy'. Their vtable 0x00b00da0 has +0x4 = update_rappy 0x005258e0 (the dump's name for it, the same function as the Rag Rappy's 'rappy' row). Its icon (call 0x805608 at 0x005259dd) follows the pause gate only. The earlier note "some state cases jump past it" was wrong: the switch on +0x32e (0 0x525af1, 1 0x525ae5, 2 0x525ad9, 3 0x525987, 4 0x525b8c, 5 0x525b08) jumps back to 0x52598e in every case, which falls into the icon. No behaviour change in the port (the port already draws a live Rappy's icon); `radarSourceOf` only reads 'none'.
+
+**Not gated, and why.** The gates below are PROVEN in the exe, but the port has no brain for those classes (no `AI_PROFILES` or `OWN_FSM` entry for `MerissaA`, `Zu`, `TObjEneIllGill`, `BootaFamily`, `GoranFamily`), so there is no state or flag to gate on. The radar stays on for them, as before.
+
+- Merissa A / AA (vtable 0x00b0b6a0, update 0x005b66ec): the icon at 0x005b67d3 is skipped when `test dl, 0x8` on +0x37c (0x005b67c4 `jne 0x5b67e1`).
+- Zu / Pazuzu (vtable 0x00b0b480, update 0x005b27e8): the icon at 0x005b28dd is skipped when `test eax, 0x40000` on +0x390 is set (0x005b28bc, `je` to the icon's branch, else `jmp 0x5b28e5`).
+- Ill Gill (vtable 0x00b01760, update 0x0052e7c0): not re-derived in this pass; the earlier survey's per-state icon table stands (states 0 to 6 add icons, 7 and 8 none).
+
+**Boota and Goran: the Booma substrate, resolved.** Both vtables have +0x4 = 0x0052b78c, the Booma's `unknown_booma_enemy_ai` (pause gate 0x4f7c84, then the +0x32e switch into the vtable's state slots +0x154 + 4 * state, default +0x17c). Their slots, read from the exe:
+- Boota (0x00b0a680): states 1, 2, 3, 4, 5, 7 are the Booma's own handlers (0x0052a6e4, 0x0052ad80, 0x0052afe4, 0x0052b1b8, 0x0052b290, 0x0052b33c), so `BOOMA_ICON_STATES` applies there. State 0 is 0x005a57f4 (its body, 0x5a57f4..0x5a5875, has no 0x805608 call). State 6 and 10 are the empty 0x0061cdb0, state 8 is 0x0052b518 (no icon), state 9 is 0x0073d160 (not traced).
+- Goran (0x00b0af40): states 1, 2, 4, 5, 7 are the Booma's handlers, so the same rule applies. State 3 is 0x005acdb8 (no 0x805608 call in 0x5acdb8..0x5ad51c), state 0 is 0x005ad51c (no call), state 9 is 0x005517a0 (no call), state 10 is 0x005acb78 (icon at 0x005acd6e, gate not traced).
+- So the earlier "no icon found" for Boota was a search gap, not an absence. The Booma per-state rule now covers them, except Goran's state 3.
+
+**Still open.** The brains: Merissa, Zu, Ill Gill, Boota and Goran need port AI before their gates can apply. Their exe state numbers are in this entry and in the `ENEMY_RADAR_SOURCE` comments.
+
+**Files.** `client/src/classic/minimap.ts` (Sand / Del rows, comments for Merissa, Zu, Boota, Goran); `tests/minimap.test.ts` (Sand / Del 'rappy'; the Boota and Goran rows stay null). `render/combat.ts` is unchanged.
+
+**Tests.** `node tests/minimap.test.ts`, `node tests/enemyfsm.test.ts`, `NEWSERV=... node tests/combat.test.ts` (5859 checks), `cd client && npx tsc --noEmit -p .`.
+
 ## 2026-10-25: Dubchic's radar row is 'own' (vtable 0x00b04760); the Dark Gunner's flinch shows its icon
 
 **Outcome.** The DUBCHIC row of `ENEMY_RADAR_SOURCE` moves from 'slot' to 'own'. The Dark Gunner's flinch (exe state 4, 0x00544704) now shows the radar icon in any brain state, so an idle gunner that is hit is drawn while it flinches (`render/combat.ts` `minimapEnemies` passes the 'flinch' brain while the owner's damage state runs). The port's flinch was already a hit reaction (owner damage motion, resumed to hover when the animation ends); this pass adds no new GunnerAi state.
