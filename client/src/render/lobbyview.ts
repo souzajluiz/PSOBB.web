@@ -29,7 +29,7 @@ import type { SetPositionState } from '../net/game.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator, skeletonNodePosition } from './playeranim.ts';
-import type { WeaponNodeRef } from '../combat/weaponorigin.ts';
+import { HAND_BODY_NODE, type WeaponNodeRef } from '../combat/weaponorigin.ts';
 import { PlayerMover, RAND_MAX_C, fromBams, legSpeed, modifyDirection, rampAxis, remoteStep, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 import { HeldWeaponFiles, type HeldWeapon } from './heldweapon.ts';
@@ -1152,8 +1152,27 @@ export class LobbyView {
 
   // The world point of a gun's attach node of a player (combat/weaponorigin.ts): a weapon
   // walk entry or a body node of the skeleton; false when the player has no model yet.
+  // A weapon node whose walk is pushed from another body node (WeaponNodeRef.base, the Mechgun's
+  // second start): the weapon bone is under the hand, so its point is re-based from the hand's
+  // frame to the base node's frame (the same local walk, pushed from that node).
   weaponOriginOf(clientId: number, ref: WeaponNodeRef, out: { x: number; y: number; z: number }): boolean {
     const m = this.markers.get(clientId);
+    if (ref.part === 'weapon' && ref.base !== undefined && ref.base !== HAND_BODY_NODE) {
+      const bone = m?.weaponBones?.[ref.node];
+      const hand = m?.body?.[HAND_BODY_NODE];
+      const base = m?.body?.[ref.base];
+      if (!bone || !hand || !base) return false;
+      bone.updateWorldMatrix(true, false);
+      hand.updateWorldMatrix(true, false);
+      base.updateWorldMatrix(true, false);
+      const v = new THREE.Vector3();
+      bone.getWorldPosition(v);
+      v.applyMatrix4(hand.matrixWorld.clone().invert()).applyMatrix4(base.matrixWorld);
+      out.x = v.x;
+      out.y = v.y;
+      out.z = v.z;
+      return true;
+    }
     return skeletonNodePosition(ref.part === 'body' ? m?.body : m?.weaponBones, ref.node, out);
   }
 

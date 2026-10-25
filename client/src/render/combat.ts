@@ -135,11 +135,11 @@ import {
   type TechniqueData,
   type TechResist,
 } from '../combat/techniques.ts';
-import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICLE, movedTowards, pelletAllowed, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, rifleHookMuzzle, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
+import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MECHGUN_KIND, MUZZLE_PARTICLE, movedTowards, pelletAllowed, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, RIFLE_HOOK_MUZZLE_ATTACH, rifleHookMuzzle, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, slotSetType, slotVariant, VOLOPT_SET_TYPE } from '../formats/enemyboxes.ts';
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
 import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, type Candidate, type TechTarget } from '../combat/techfire.ts';
-import { gunBulletStart, weaponPositionY, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
+import { gunBulletStart, SECOND_START_BODY_NODE, weaponPositionY, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { STATUS_ICON_BLAST_FIRST } from '../classic/hud.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
@@ -6747,12 +6747,20 @@ export class CombatView {
     // WEAPON_HEIGHT without a skeleton (ASSUMED). The exe's line test uses the player's
     // weapon_position x / z (+0x300 / +0x308), not the start's; the start's x / z are taken from
     // the node here (ASSUMED).
-    const start = gunBulletStart(this.weaponAttach(), from, this.opts.weaponOrigin ?? this.weaponOriginOfSelf(me.clientId), { x: 0, y: 0, z: 0 });
-    // The Rifle's hook muzzle (ExecutePartisanWeaponAttack 0x005fb310) comes before the shot. For
-    // group_idx 8..11 and 13 the callback is 0 and the 'none' branch below gives the one muzzle.
-    if (rifleHookMuzzle(kind, variant) && visual === 'default') this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
+    const origin = this.opts.weaponOrigin ?? this.weaponOriginOfSelf(me.clientId);
+    const attach = this.weaponAttach();
+    const start = gunBulletStart(attach, from, origin, { x: 0, y: 0, z: 0 });
+    // The Mechgun's second call starts at +0x24c, the same walk pushed from body node 0x23 (UpdateWeaponPosition_005e74ec).
+    const secondStart = kind === MECHGUN_KIND ? gunBulletStart(attach, from, origin, { x: 0, y: 0, z: 0 }, SECOND_START_BODY_NODE) : start;
+    // The Rifle's hook muzzle (ExecutePartisanWeaponAttack 0x005fb310) comes before the shot, at
+    // get_weapon_position(item, 1). For group_idx 8..11 and 13 it is the only muzzle of the shot.
+    if (rifleHookMuzzle(kind, variant)) {
+      const muzzle = gunBulletStart(RIFLE_HOOK_MUZZLE_ATTACH, from, origin, { x: 0, y: 0, z: 0 });
+      this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z));
+    }
     let madeBullet = false;
     for (let i = 0; i < pelletCount(kind); i++) {
+      const at = i === 1 && kind === MECHGUN_KIND ? secondStart : start;
       const t = hit[pelletTargetIndex(kind, i)];
       let target: { centre: { x: number; y: number; z: number }; radius: number } | null = null;
       if (t?.enemy) {
@@ -6765,7 +6773,7 @@ export class CombatView {
         if (p) target = { centre: { x: p.x, y: p.y, z: p.z }, radius: 0 };
       }
       const shot: GunShot = planGunShot(
-        start,
+        at,
         { heading: me.angle, angleBams: pelletAngleBams(kind, i), horizontalDistance: range.horizontal },
         target,
         (a, b) => (this.opts.wallBlocks ? this.opts.wallBlocks(a, b) : false),
@@ -6774,15 +6782,16 @@ export class CombatView {
       );
       if (shot.bullet) madeBullet = true;
       if (visual === 'none') {
-        // No callback (0x238 = 0): no trail. The muzzle particle comes from the item's hook, once per trigger (ASSUMED for the Rifle and 0x65 hooks).
-        if (i === 0) this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
+        // No callback (0x238 = 0): no trail. A muzzle comes from the item's hook: the Rifle's is at
+        // node 1 (above), so only the other hooks (ASSUMED for 0x65) get one here, once per trigger.
+        if (i === 0 && !rifleHookMuzzle(kind, variant)) this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
       } else if (trails) {
-        this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
-        trails.spawn(start, shot.end, shot.frames, texture);
+        this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(at.x, at.y, at.z));
+        trails.spawn(at, shot.end, shot.frames, texture);
       } else {
-        this.eggShot(start, shot);
+        this.eggShot(at, shot);
       }
-      if (shot.bullet && t && target) this.gunBullets.push({ entity: t.enemy, player: t.enemy ? -1 : t.player, start, origCentre: target.centre, ticks: shot.frames, attackType, step });
+      if (shot.bullet && t && target) this.gunBullets.push({ entity: t.enemy, player: t.enemy ? -1 : t.player, start: at, origCentre: target.centre, ticks: shot.frames, attackType, step });
     }
   }
 

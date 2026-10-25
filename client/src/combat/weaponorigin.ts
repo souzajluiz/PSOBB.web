@@ -32,27 +32,42 @@ export interface Point {
   z: number;
 }
 
+// The body node the held weapon's walk is pushed from. UpdateItemPosition (dump line 442975)
+// pushes the owner's matrix at index (char)item+0x189 (GetItemField189), and the hand is node 0x30
+// (the default: UpdateWeaponModelPosition_005ec21c sets 0x30 first, and OnEquipItem's table maps
+// index 6 to 48). ASSUMED that the held weapon's +0x189 is 0x30 at the shot.
+export const HAND_BODY_NODE = 0x30;
+// The second start of the Mechgun (+0x24c): UpdateWeaponPosition_005e74ec (dump line 442050)
+// calls item_position_y_set(this, 0x23), which writes the item's +0x189 (struct offset 0x189:
+// the field after field317_0x188), then UpdateItemPosition: the weapon walk is pushed from body
+// node 0x23, not the hand. The same pattern: ApplyItemField189Effect_005e6334(item, 0x23) and
+// UpdateWeaponModelPosition_005ec21c's second position.
+export const SECOND_START_BODY_NODE = 0x23;
+
 // A matrix the origin reads: a node of the weapon model's walk, or a body node (depth-first).
+// For a weapon node, `base` is the body node the walk is pushed from (absent: the hand).
 export interface WeaponNodeRef {
   part: 'weapon' | 'body';
   node: number;
+  base?: number;
 }
 
 // Writes the world point of `ref` into `out`; false when the owner has no such skeleton
 // part (the caller falls back).
 export type WeaponOriginProvider = (ref: WeaponNodeRef, out: Point) => boolean;
 
-// The node an attach index names (get_weapon_position's index handling).
-export function weaponAttachRef(attach: number): WeaponNodeRef {
-  if (attach === -1) return { part: 'body', node: 0x30 };
+// The node an attach index names (get_weapon_position's index handling). `base` (optional) is
+// the body node the weapon walk is pushed from (+0x189); the hand when absent.
+export function weaponAttachRef(attach: number, base?: number): WeaponNodeRef {
+  if (attach === -1) return { part: 'body', node: HAND_BODY_NODE };
   if (attach === -2) return { part: 'body', node: 0x23 };
-  return { part: 'weapon', node: attach };
+  return base === undefined || base === HAND_BODY_NODE ? { part: 'weapon', node: attach } : { part: 'weapon', node: attach, base };
 }
 
 // The bullet start for a gun with `attach` (its ItemPMT byte) at the feet `feet`. Writes and
-// returns `out`.
-export function gunBulletStart(attach: number, feet: Point, origin: WeaponOriginProvider | undefined, out: Point): Point {
-  if (origin && origin(weaponAttachRef(attach), out)) return out;
+// returns `out`. `base`: see weaponAttachRef.
+export function gunBulletStart(attach: number, feet: Point, origin: WeaponOriginProvider | undefined, out: Point, base?: number): Point {
+  if (origin && origin(weaponAttachRef(attach, base), out)) return out;
   out.x = feet.x;
   out.y = feet.y + WEAPON_HEIGHT;
   out.z = feet.z;
