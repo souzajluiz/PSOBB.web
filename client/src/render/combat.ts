@@ -626,6 +626,8 @@ export class CombatView {
   private held = new Set<string>();
   // The movement keys down last frame (the freeze mash counts their new presses).
   private heldMove = new Set<string>();
+  // The keys down this frame (frame's argument), read by the Barba Ray jump (barbaInput).
+  private frameKeys: ReadonlySet<string> = new Set();
   // The stick's flicks (CheckMovementInput_007c11d0's stick branch): a flick is a
   // mash like a new movement key press.
   private stickFlick = new StickFlick();
@@ -1496,6 +1498,7 @@ export class CombatView {
 
   private frame(dt: number, keys: ReadonlySet<string>): void {
     if (this.disposed) return;
+    this.frameKeys = keys;
     const me = this.game.self;
     const view = this.view;
     // The freeze mash (combat/status.ts mash): a movement key newly down this frame,
@@ -1970,7 +1973,10 @@ export class CombatView {
       if (ai instanceof DrlSegmentAi) continue;
       // A Barba Ray part is moved by the body's rows (tickBarbaParts).
       if (ai instanceof BarbaPartAi) continue;
-      if (ai instanceof BarbaRayAi) this.tickBarbaParts(e, ai);
+      if (ai instanceof BarbaRayAi) {
+        this.tickBarbaParts(e, ai);
+        ai.input = this.barbaInput();
+      }
       if (ai instanceof DelbiterAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       if (ai instanceof DubwitchAi) ai.linkedDead = this.dubwitchWake(e);
       if (ai instanceof SinowZoaAi) ai.disrupted = e.status.has(STATUS.freeze) || e.status.has(STATUS.shock);
@@ -2618,6 +2624,15 @@ export class CombatView {
   // The root update's rows (barbaRows) from the body's spine nodes as the last
   // draw left them (render_derolle's capture, the same as De Rol Le's segments),
   // then each part follows its row. Parts show while the body is drawn.
+  // The leader's held Left / Right palette keys for the Barba Ray jump (0x11 / 0x12, event 2).
+  // Left is palette_slots[1] (Tab too), Right palette_slots[2]: keyconfig.ts PALETTE_KEYS.
+  private barbaInput(): { left: boolean; right: boolean } {
+    return {
+      left: paletteChannelDown(this.frameKeys, KEYS.paletteLeft, 1) !== '',
+      right: paletteChannelDown(this.frameKeys, KEYS.paletteRight, 2) !== '',
+    };
+  }
+
   private tickBarbaParts(e: EnemyRuntime, ai: BarbaRayAi): void {
     const parts = this.barbaParts.get(e.index);
     const body = e.instance.nodes?.[0];

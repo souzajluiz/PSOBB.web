@@ -46,6 +46,12 @@ export const BARBA_PART_RADIUS = 50;
 // The motion slots (table 0x009aba20, 16-byte rows, see the map's pass 3).
 // mode 1 loops, 2 plays once and goes on to `next`, 3 plays once and holds
 // (ASSUMED from the chains; the mode meaning is not read from the player).
+// The held palette keys the jump reads (g_KeyboardSharedState[0xe] = Left, [0xc] = Right ASSUMED).
+export interface BarbaInput {
+  readonly left: boolean;
+  readonly right: boolean;
+}
+
 export interface BarbaSlot {
   readonly mode: 1 | 2 | 3;
   readonly next: number;
@@ -346,6 +352,52 @@ export const BARBA_DROP = {
   zDecel: 0.05,
 } as const;
 
+// Phases 0x11 / 0x12 (0x004b30fc, ProcessPlayerAction4; the dispatcher passes side 0 / 2).
+// JP: src/Psobb.exe-05112026.c ProcessPlayerAction4_004b30fc (the names there are the reference's).
+// Enter (event 4): slot 1 (0xb8 = 1), the gate block set (0x630 = (0x630 & ~0x100) | 4), the body to
+// anchor `side` (0x6c8 = 0x1b2 = side, FUN_004b1e58), z0 = the anchor's z, vz = 0, the z accel -0.2.
+// Event 0: sub 0 = 11 frames of windup (z sinks, vz -0.2 a tick, clamp -7), then slot 7 (side 0) or
+// 8 with the clock (+0xc0) from 0; sub 1 waits on 0xb0 bit 2 (ASSUMED clear: one tick); sub 2..5 are
+// the jump, timed by the clock at 6 / 13 / 20 / 25; sub 6 is the landing (0x3ee, 0x630 |= 0x200).
+// Event 2 (the keyboard, ASSUMED the mode-2 poll): palette Left (g_KeyboardSharedState[0xe]) sends
+// 0x13 / 0x14 (6xAA), else Right (index 0xc, ASSUMED) sends 0x15 / 0x16 (6xA9). Event 9 steps the table
+// once the chain is in slot 9 / 10 (r_bite / l_bite chained into the bite loop).
+// Constants: the .data floats from the exe (906e8c.. ; the .bss a47a80..90 from the static init
+// 0x004b9b92..0x004b9bba: movs of 5.0, 7.0, 12.0, 7.0, 4.0 at a80, a84, a88, a8c, a90).
+export const BARBA_JUMP = {
+  windup: 11, // sub 0 ends on the 11th frame (0x734 + 1 < 11 stores)
+  t2: 6.0, // 0x906e8c: sub 2 -> 3 (the clock)
+  t3: 13.0, // 0x906e98: sub 3 -> 4
+  t4: 20.0, // 0x906ea4: sub 4 -> 5
+  t5: 25.0, // 0x906ea8: sub 5 -> 6 (the landing)
+  xStart: 100, // 0x906e94 (x = 100 * dir at the sub 2 -> 3 and 3 -> 4 starts)
+  xMid: 135, // 0x906ea0 (x = 135 * dir: the sub 3 -> 4 target, the sub 4 -> 5 start)
+  xEnd: 100, // 0x906e9c (the sub 4 -> 5 target)
+  zTop: 10.0, // 0x906e90 (the sub 3 -> 4 accel's z target)
+  zGain: 2.0, // 0x906ecc
+  vzFloor: -7.0, // 0x906eb0 (the windup's clamp)
+  vzAccel: -0.2, // enter: 0x75c = 0xbe4ccccd
+  yawSpeed: 1280, // 0x906ed0 (the yaw speed is -yawSpeed * dir / divA, a tick)
+  divA: 5.0, // a47a80 = 5.0 (static init)
+  divB: 7.0, // a47a84 = 7.0
+  divC: 12.0, // a47a88 = 12.0 (squared)
+  divD: 7.0, // a47a8c = 7.0
+  liftCap: 4.0, // a47a90 = 4.0 (g_SinowberillAttackParams)
+  liftK: 7.0 * 4.0, // a84 * a90: the lift's rise a tick (min with the cap)
+  zTerm: 7.0, // 0x906e74 (sub 3's z term)
+  half: 0.5, // 0x906eb8
+  // The sound marks (check_entity_animation_elapsed_threshold, ASSUMED a crossing):
+  seFallMark: 8.5, // 0x41080000: sub 3 plays 0x3ed
+  seAirMark: 15.0, // 0x41700000: sub 2+ plays 0x3ec
+  seLand: 0x3ee, // the landing, play_directional_sound_effect at once
+  seJump: 0x3ed,
+  seAir: 0x3ec,
+} as const;
+
+export function isJumpPhase(phase: number): boolean {
+  return phase === 0x11 || phase === 0x12;
+}
+
 // A velocity-easing record of the exe (InitializeMovementTargetStruct_00434ac4 /
 // _00434afc, NormalizeMovementTarget_00434a3c, Player__ApplyVelocityEasing 0x0042c9a0).
 // Fields in the exe's order: state +0, accel +4, decel +8, max +0xc, v +0x10, dist +0x14,
@@ -530,6 +582,8 @@ export function barbaPartPool(movement: EnemyMovementData | null): number {
 
 export class BarbaRayAi extends BrainBase {
   state = 'phase 1';
+  // The leader's held palette keys for 0x11 / 0x12 (set by the render layer each frame; null = none).
+  input: BarbaInput | null = null;
   readonly floor: number;
   readonly leader: () => boolean;
   // The state (+0x32e) and its motion slot (+0x2e).
@@ -585,6 +639,8 @@ export class BarbaRayAi extends BrainBase {
   f758 = 0;
   f75c = 0;
   f760 = 0;
+  f764 = 0; // the jump's z start (0x764)
+  f768 = 0; // the jump's yaw speed (0x768)
   // The arc's easing (0x00434ac4) from phase 5 / 6 sub 3, reused in place.
   readonly arcEase = new BarbaEase();
   arcStarted = false;
@@ -743,7 +799,7 @@ export class BarbaRayAi extends BrainBase {
         return 3;
       case 0x11:
       case 0x12:
-        return this.side === 0 ? 7 : 8; // ASSUMED: the write of 1 first, then the side (order not traced)
+        return 1; // 0x004b30fc enter writes 0xb8 = 1; the sub 0 end writes 7 / 8 by side (BARBA_JUMP)
       case 0x0d:
         return 1; // 0x004b7040 enter writes 1; the frame writes 4 when the fall's 21 ticks are over
       case 3:
@@ -758,6 +814,26 @@ export class BarbaRayAi extends BrainBase {
       default:
         return null;
     }
+  }
+
+  // 0x004b30fc enter (event 4, side = 0 for 0x11, 2 for 0x12): the body to anchor side (0x6c8 and
+  // 0x1b2 are the same word, so both fields take the side), the gate block set and 0x100 cleared,
+  // z0 = the anchor's z, the z velocity 0 and its accel -0.2, the sub-state 0.
+  private enterJump(side: number): void {
+    this.side = side;
+    this.tFrom = side;
+    this.flags = (this.flags & ~0x100) | 4;
+    this.teleport(side);
+    this.moveSub = 0;
+    this.moveCounter = 0;
+    this.f74c = 0;
+    this.f750 = 0;
+    this.f754 = 0;
+    this.f758 = 0;
+    this.f764 = this.z;
+    this.f75c = BARBA_JUMP.vzAccel;
+    this.f760 = 0;
+    this.f768 = 0;
   }
 
   // Sets the motion slot and the motion the renderer plays.
@@ -798,6 +874,7 @@ export class BarbaRayAi extends BrainBase {
     else if (phase === BARBA_PHASE.volopt0 || phase === BARBA_PHASE.volopt2) this.enterVolopt(phase === BARBA_PHASE.volopt2 ? 2 : 0);
     else if (phase === BARBA_PHASE.wall0 || phase === BARBA_PHASE.wall2) this.enterSwim();
     else if (phase === BARBA_PHASE.arc0 || phase === BARBA_PHASE.arc2) this.enterArc();
+    else if (isJumpPhase(phase)) this.enterJump(phase === 0x12 ? 2 : 0);
     if (phase === 0x28 || phase === 0x29) {
       // The dispatch reads the current anchor (+0x6c8) before the enter writes it.
       const cur = this.tFrom;
@@ -831,6 +908,8 @@ export class BarbaRayAi extends BrainBase {
       this.tFrom = 1;
       this.flags &= ~4;
     }
+    // Event 5 of 0x11 / 0x12 clears the gate block (asm: 0x630 &= ~4).
+    if (isJumpPhase(phase)) this.flags &= ~4;
     if (isBarbaTransition(phase)) this.leaveTransition();
   }
 
@@ -1642,6 +1721,10 @@ export class BarbaRayAi extends BrainBase {
       this.transitionFrame();
       return;
     }
+    if (isJumpPhase(this.phase)) {
+      this.jumpFrame();
+      return;
+    }
     switch (this.phase) {
       case BARBA_PHASE.finale:
         this.finaleFrame();
@@ -1678,6 +1761,152 @@ export class BarbaRayAi extends BrainBase {
       default:
         if (this.phase >= BARBA_PHASE.spawn0 && this.phase <= BARBA_PHASE.spawn2) this.spawnFrame();
     }
+  }
+
+  // --- phases 0x11 / 0x12 (0x004b30fc, see BARBA_JUMP) ----------------------------------------
+
+  // Event 0 (the frame). The clock (+0xc0) counts from the start of the jump motion (ASSUMED: it
+  // resets at the sub 0 end, when slot 7 / 8 starts). The sub transition runs first, then the
+  // sounds and the motion of the post-transition sub (the exe's order).
+  private jumpFrame(): void {
+    const J = BARBA_JUMP;
+    const prev = this.timer;
+    if (this.moveSub >= 1) this.timer += 1; // ASSUMED: one a tick
+    const t = this.timer;
+    const crossed = (mark: number): boolean => prev < mark && mark <= t;
+    switch (this.moveSub) {
+      case 0: {
+        const n = this.moveCounter + 1;
+        if (n < J.windup) {
+          this.moveCounter = n;
+          break;
+        }
+        const side0 = this.tFrom === 0;
+        this.moveCounter = 0;
+        this.moveSub = 1;
+        this.f74c = side0 ? -1 : 1;
+        this.timer = 0; // ASSUMED: the clock starts with the motion
+        this.setSlot(side0 ? 7 : 8);
+        break;
+      }
+      case 1:
+        this.moveSub = 2; // ASSUMED: 0xb0 bit 2 (the wait) is clear
+        break;
+      case 2:
+        if (t >= J.t2) this.jumpTakeoff();
+        break;
+      case 3:
+        if (t >= J.t3) this.jumpApex();
+        break;
+      case 4:
+        if (t >= J.t4) this.jumpDescent();
+        break;
+      case 5:
+        if (t >= J.t5) this.jumpLand();
+        break;
+      default:
+        break;
+    }
+    // The 15.0 mark of the air (sub 2 and on) plays 0x3ec (ASSUMED: a crossing, one a frame).
+    if (this.moveSub >= 2 && crossed(J.seAirMark)) this.events.push({ kind: 'se', id: J.seAir });
+    // The motion of the post-transition sub: sub 0..2 the z fall, 3 the take-off arc, 4 the apex,
+    // 5 the descent with the yaw; 6 is the landing (no motion).
+    const s = this.moveSub;
+    if (s < 3) {
+      let vz = this.f760 + this.f75c;
+      if (vz >= J.vzFloor) {
+        this.f760 = vz;
+      } else {
+        this.f760 = J.vzFloor;
+        vz = J.vzFloor;
+      }
+      this.z += vz;
+    } else if (s === 3) {
+      const u = t - J.t2;
+      this.x = this.f754 * u + this.f750;
+      this.z = (J.half * this.f75c * u - J.zTerm) * u + this.f764;
+      if (crossed(J.seFallMark)) this.events.push({ kind: 'se', id: J.seJump });
+    } else if (s === 4) {
+      const u = t - J.t3;
+      this.z = J.half * this.f75c * u * u + this.f764;
+      this.x = this.f754 * u + this.f750;
+      this.lift = Math.min(J.liftK * u, J.liftCap);
+    } else if (s === 5) {
+      const u = t - J.t4;
+      const v = t - J.t3;
+      this.z = v * J.half * this.f75c * v + this.f764;
+      this.x = this.f754 * u + this.f750;
+      this.yaw = Math.round(u * this.f768);
+    }
+  }
+
+  // Sub 2 -> 3 (the clock at 6.0): x runs from the body to 100 * dir over divD frames, the z accel is
+  // the windup's velocity over -divD, and the z start is the body's z.
+  private jumpTakeoff(): void {
+    const J = BARBA_JUMP;
+    const target = J.xStart * this.f74c;
+    this.moveSub = 3;
+    this.f750 = this.x;
+    this.f758 = 0;
+    this.f754 = (target - this.x) / J.divD;
+    this.f764 = this.z;
+    this.f75c = this.f760 / -J.divD;
+    this.f760 = 0;
+  }
+
+  // Sub 3 -> 4 (the clock at 13.0): x to 135 * dir over divB frames (from 100 * dir), the z accel
+  // (zTop - z) * zGain / divC^2.
+  private jumpApex(): void {
+    const J = BARBA_JUMP;
+    const x0 = J.xStart * this.f74c;
+    this.moveSub = 4;
+    this.f750 = x0;
+    this.f758 = 0;
+    this.f754 = (J.xMid * this.f74c - x0) / J.divB;
+    this.f764 = this.z;
+    this.f75c = ((J.zTop - this.z) * J.zGain) / (J.divC * J.divC);
+    this.f760 = 0;
+  }
+
+  // Sub 4 -> 5 (the clock at 20.0): x from 135 * dir to 100 * dir over divA frames, the yaw speed
+  // -1280 * dir / divA a tick.
+  private jumpDescent(): void {
+    const J = BARBA_JUMP;
+    const x0 = J.xMid * this.f74c;
+    this.moveSub = 5;
+    this.f750 = x0;
+    this.f758 = 0;
+    this.f754 = (J.xEnd * this.f74c - x0) / J.divA;
+    this.f768 = (-J.yawSpeed * this.f74c) / J.divA;
+  }
+
+  // Sub 5 -> 6 (the clock at 25.0): the landing. The sound and the 0x200 flag are ported; the camera
+  // shake, the crate flags, the Galgryphon minion (CreateGalgryphonMinionEntity) and the four
+  // volopt frictions (0x6e4..) are not (ASSUMED no effect here).
+  private jumpLand(): void {
+    this.moveSub = 6;
+    this.events.push({ kind: 'se', id: BARBA_JUMP.seLand });
+    this.flags |= 0x200;
+  }
+
+  // Event 2 (the keyboard): the held Left (g_KeyboardSharedState[0xe]) sends the followers, 0x13 /
+  // 0x14 (6xAA); else the held Right (index 0xc, ASSUMED) sends the swim, 0x15 / 0x16 (6xA9).
+  // The side is the enter's (0x6c8 == 0 picks the first of each pair).
+  private jumpInput(input: BarbaInput): void {
+    const side0 = this.tFrom === 0;
+    if (input.left) this.sendPhase(side0 ? 0x13 : 0x14);
+    else if (input.right) this.sendPhase(side0 ? 0x15 : 0x16);
+  }
+
+  // The leader's step of 0x11 / 0x12. With the keyboard (`input`, the mode-2 poll, ASSUMED) the
+  // keys decide. Without it, event 9 steps the table once the bite chain reaches its loop (slot 9 /
+  // 10, the r_bite / l_bite chains; ASSUMED mode 0).
+  private jumpLeader(): void {
+    if (this.input) {
+      this.jumpInput(this.input);
+      return;
+    }
+    if (this.slot === 9 || this.slot === 10) this.tableLoop();
   }
 
   // Event 9 of the finale (leader only): a kill request sends 0x1d.
@@ -1725,6 +1954,8 @@ export class BarbaRayAi extends BrainBase {
             this.tableLoop();
           }
         }
+      } else if (isJumpPhase(this.phase)) {
+        this.jumpLeader();
       } else if (this.gateOpen) {
         if (this.pace <= 0) {
           this.pace = BARBA_PACE;

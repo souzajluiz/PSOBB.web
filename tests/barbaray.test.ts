@@ -1019,6 +1019,108 @@ for (const phase of [0x19, 0x1a]) {
   eq(b.x, x0, 'dispatch 0: x unchanged');
   eq(b.z, z0, 'dispatch 0: z unchanged');
 }
+// --- phases 0x11 / 0x12 (0x004b30fc, the jump; the leader's keyboard picks the next phase) -----
+for (const phase of [0x11, 0x12]) {
+  const side = phase === 0x11 ? 0 : 2;
+  const dir = side === 0 ? -1 : 1;
+  const tag = `jump ${phase.toString(16)}`;
+  // Enter: slot 1, the body on anchor `side`, the gate block set, the 0x100 cleared.
+  const b = brain({ leader: false });
+  b.applyPhase(phase, null);
+  eq(b.slot, 1, `${tag}: enter writes slot 1`);
+  eq(b.tFrom, side, `${tag}: 0x6c8 = side`);
+  eq(b.x, BARBA_ANCHORS[side]![0], `${tag}: x on anchor ${side}`);
+  eq(b.z, BARBA_ANCHORS[side]![2], `${tag}: z on anchor ${side}`);
+  check((b.flags & 4) !== 0 && (b.flags & 0x100) === 0, `${tag}: gate block set, 0x100 clear`);
+  b.drain();
+  // The windup: 11 frames of sub 0 (the 11th ends it), the z sinks, then slot 7 / 8 and dir.
+  for (let k = 0; k < 10; k++) b.tick([]);
+  eq(b.slot, 1, `${tag}: slot 1 through the 10 windup frames`);
+  const z0 = b.z;
+  b.tick([]);
+  eq(b.slot, side === 0 ? 7 : 8, `${tag}: slot 7 (side 0) / 8 at the 11th frame`);
+  eq(b.f74c, dir, `${tag}: dir ${dir} (the sub 0 end)`);
+  check(b.z < z0 && b.z < BARBA_ANCHORS[side]![2], `${tag}: z sank in the windup`);
+  // The sub-states run on the clock: the take-off at 6, the apex at 13, the descent at 20, the
+  // landing at 25 (no motion on the landing frame). The leader is off, so no step.
+  let ticks = 0;
+  let se: number[] = [];
+  while (b.moveSub < 6 && ticks < 60) {
+    b.tick([]);
+    ticks++;
+    se = se.concat(b.drain().filter((e) => e.kind === 'se').map((e) => (e as Extract<BarbaEvent, { kind: 'se' }>).id));
+  }
+  eq(b.moveSub, 6, `${tag}: the landing (sub 6) is reached`);
+  eq(ticks, 25, `${tag}: 25 frames from slot 7 to the landing (sub 1 on frame 1, the clock 6 / 13 / 20 / 25)`);
+  eq(se.filter((id) => id === 0x3ed).length, 1, `${tag}: 0x3ed once (the 8.5 mark)`);
+  eq(se.filter((id) => id === 0x3ec).length, 1, `${tag}: 0x3ec once (the 15.0 mark)`);
+  eq(se.filter((id) => id === 0x3ee).length, 1, `${tag}: 0x3ee once (the landing)`);
+  check((b.flags & 0x200) !== 0, `${tag}: 0x200 set at the landing`);
+  eq(b.x, 135 * dir + (-7 * dir) * 4, `${tag}: x at the landing frame is 107 * dir (the t = 25 frame has no motion)`);
+  // The descent's yaw: -256 * dir a tick over 4 ticks.
+  eq(b.yaw, Math.round(4 * -256 * dir), `${tag}: yaw at the last descent frame`);
+  eq(b.f750, 135 * dir, `${tag}: the descent (sub 5) starts from 135 * dir`);
+}
+// The keyboard (event 2, the leader): Left sends the followers, Right the swim.
+for (const side of [0, 2]) {
+  for (const [input, want] of [
+    [{ left: true, right: false }, side === 0 ? 0x13 : 0x14],
+    [{ left: false, right: true }, side === 0 ? 0x15 : 0x16],
+    [{ left: true, right: true }, side === 0 ? 0x13 : 0x14],
+  ] as const) {
+    const b = brain({ leader: true });
+    b.applyPhase(side === 0 ? 0x11 : 0x12, null);
+    b.drain();
+    b.input = { ...input };
+    b.tick([]);
+    const s = sends(b.drain());
+    eq(s.length, 1, `jump ${side}: one send for input ${JSON.stringify(input)}`);
+    eq(s[0]?.phase ?? -1, want, `jump ${side}: input ${JSON.stringify(input)} sends ${want.toString(16)}`);
+    eq(b.phase, want, `jump ${side}: the phase is ${want.toString(16)} after the send`);
+  }
+  // Nothing held: no send.
+  const n = brain({ leader: true });
+  n.applyPhase(side === 0 ? 0x11 : 0x12, null);
+  n.drain();
+  n.input = { left: false, right: false };
+  for (let k = 0; k < 30; k++) n.tick([]);
+  eq(sends(n.drain()).length, 0, `jump ${side}: no key, no send`);
+  eq(n.phase, side === 0 ? 0x11 : 0x12, `jump ${side}: stays in the jump`);
+  // A follower never reads the keyboard.
+  const f = brain({ leader: false });
+  f.applyPhase(side === 0 ? 0x11 : 0x12, null);
+  f.drain();
+  f.input = { left: true, right: false };
+  f.tick([]);
+  eq(sends(f.drain()).length, 0, `jump ${side}: a follower sends nothing on a key`);
+}
+// Without the keyboard (ASSUMED mode 0) the leader's event 9 steps the table once the bite chain
+// reaches its loop (slot 9 after r_bite, slot 10 after l_bite).
+{
+  const b = brain({ leader: true });
+  b.applyPhase(0x11, null);
+  b.drain();
+  b.input = null;
+  for (let k = 0; k < 11; k++) b.tick([]);
+  eq(b.slot, 7, 'jump table step: slot 7 after the windup');
+  b.tick([], true);
+  eq(b.slot, 9, 'jump table step: r_bite chains into bite_rloop (slot 9)');
+  b.drain();
+  let sentAt = -1;
+  for (let k = 0; k < 5 && sentAt < 0; k++) {
+    b.tick([]);
+    if (sends(b.drain()).length > 0) sentAt = k;
+  }
+  check(sentAt === 0, `jump table step: the leader steps on the first frame at slot 9 (sent at ${sentAt})`);
+}
+// Event 5: the gate block is cleared when the jump is left.
+{
+  const b = brain({ leader: false });
+  b.applyPhase(0x11, null);
+  check((b.flags & 4) !== 0, 'jump leave: the gate block is set on enter');
+  b.applyPhase(0, null);
+  check((b.flags & 4) === 0, 'jump leave: event 5 clears the gate block');
+}
 void BARBA_PHASE;
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);
