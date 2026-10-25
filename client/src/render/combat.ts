@@ -22,7 +22,7 @@ import { HOTBAR_KEYS, KEYS, PALETTE_KEYS, paletteChannelDown } from '../input/ke
 import { hotbarAction, type HotbarAction } from '../classic/hotbar.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { AttackState, type AttackEvents, burstCount } from '../combat/attack.ts';
-import { facingOf, inWeaponCone, type WeaponReach } from '../combat/weaponaim.ts';
+import { facingOf, inMeleeReach, type MeleeAim, type WeaponReach } from '../combat/weaponaim.ts';
 import {
   AI_PROFILES,
   aiConfig,
@@ -147,7 +147,7 @@ import {
 import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MECHGUN_KIND, MUZZLE_PARTICLE, movedTowards, pelletAllowed, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, RIFLE_HOOK_MUZZLE_ATTACH, rifleHookMuzzle, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, slotSetType, slotVariant, VOLOPT_SET_TYPE } from '../formats/enemyboxes.ts';
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
-import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, type Candidate, type TechTarget } from '../combat/techfire.ts';
+import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { gunBulletStart, SECOND_START_BODY_NODE, weaponPositionY, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { STATUS_ICON_BLAST_FIRST } from '../classic/hud.ts';
@@ -661,7 +661,7 @@ export const voloptRadar = (ai: EnemyBrain | null): VoloptRadar | null => {
 };
 
 // Vol Opt's lock-on (PsoBB.exe enable_reticle_ 0x007aa094, one `calll` per entity handler; the
-// reticle filter is check_enemy_is_targetable 0x007a2b28, which reads the entity's flags at the
+// reticle filter is check_enemy_is_targetable 0x007a2b5c, which reads the entity's flags at the
 // time of the lock). The lock is decided here, apart from the hit: EntityHitEntity 0x00773350 has
 // no lock or reticle test, so a part can be lockable and not struck (concealed() stays the hit).
 // The sites (objdump; the dispatch tables read with tools/exedata.py read; each site's handler
@@ -6909,14 +6909,19 @@ export class CombatView {
 
   // The enemies the weapon reaches from `from` inside its cone around the
   // heading, nearest first. The exe's reticle does this for each enemy
-  // (check_enemy_is_targetable, 0x007a2b28, sorted by
-  // find_targets_for_weapons_and_techs); its first target is the primary one.
+  // (check_enemy_is_targetable, 0x007a2b5c, sorted by
+  // find_targets_for_weapons_and_techs, which keys on the XZ distance to the box centre);
+  // its first target is the primary one. The test is weaponaim.ts inMeleeReach: the reach
+  // with the box radius, the apex (the weapon, or vertical_distance behind it), the horizontal
+  // cone and the elevation cone (no height window).
   private weaponTargets(attackType: AttackType, from: { x: number; y: number; z: number }): EnemyRuntime[] {
     const me = this.game.self;
     if (!me) return [];
     const range = this.weaponRange(attackType);
-    const maxDist = range.horizontal + range.vertical;
-    const halfAngle = range.horizontalHalfAngle * BAMS_TO_RAD;
+    const aim: MeleeAim = { heading: me.angle, horizontal: range.horizontal, vertical: range.vertical, hAngle: range.horizontalHalfAngle, vAngle: range.verticalHalfAngle };
+    // ASSUMED: the weapon point is WEAPON_HEIGHT above the feet (the player's weapon_position
+    // is not traced; the same fallback as the gun's origin, combat/weaponorigin.ts).
+    const weapon = { x: from.x, y: from.y + WEAPON_HEIGHT, z: from.z };
     const targets: EnemyRuntime[] = [];
     for (const e of this.enemies.values()) {
       if (e.dead) continue;
@@ -6924,8 +6929,6 @@ export class CombatView {
       // is hidden by render/waves.ts), so it cannot be hit.
       if (!struckShown(e) || concealed(e) || !splitStruckOk(e)) continue;
       const p = e.instance.root.position;
-      const dx = p.x - from.x;
-      const dz = p.z - from.z;
       // ASSUMED: a box counts from its surface; the Dragon's seven body boxes
       // all sit at its origin, the biggest with radius 15 (combat/dragon.ts
       // DRAGON_BODY_BOXES). Every other enemy keeps the point test.
@@ -6936,12 +6939,14 @@ export class CombatView {
       // A Vol Opt monitor's box is the exe's row for its index (volooptMonitorRows).
       const monitor = this.voloptMonitorRows(e) !== null;
       const reach = e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : e.ai instanceof GoldDragonAi ? GOL_BODY_BOXES.reach : e.ai instanceof BarbaPartAi ? BARBA_PART_RADIUS : seg ? DRL_SEGMENT.radius : monitor || e.ai instanceof SmChildAi ? this.hitRadiusOf(e) : 0;
-      const dist = Math.hypot(dx, dz) - reach;
-      if (dist > maxDist || Math.abs(p.y - from.y) - (seg || monitor ? reach : 0) > 40) continue;
-      if (!inWeaponCone(dx, dz, me.angle, halfAngle)) continue;
+      // ASSUMED: the box centre is the root plus the aim height (aimHeightOf); the Dragon's
+      // boxes sit at its origin.
+      const centre = { x: p.x, y: e.ai instanceof DragonAi || e.ai instanceof GoldDragonAi ? p.y : p.y + this.aimHeightOf(e), z: p.z };
+      if (!inMeleeReach(weapon, aim, centre, reach)) continue;
       targets.push(e);
     }
-    targets.sort((a, b) => a.instance.root.position.distanceToSquared(from) - b.instance.root.position.distanceToSquared(from));
+    const xzSq = (e: EnemyRuntime) => (e.instance.root.position.x - weapon.x) ** 2 + (e.instance.root.position.z - weapon.z) ** 2;
+    targets.sort((a, b) => xzSq(a) - xzSq(b));
     return targets;
   }
 
