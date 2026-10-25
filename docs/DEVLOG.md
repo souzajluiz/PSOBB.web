@@ -1,5 +1,42 @@
 # Devlog
 
+## 2026-10-25: tech hits set took_damage (0x200) by group, not by the 1.0 threshold
+
+**Outcome.** `entity_hit_by_tech` is at 0x00773afc (dump 747782..749367). Its 0x200 writes are seven, all OR'd after the damage step of their group: 0x00773f15 (group 0x15), 0x0077407b (Barta), 0x007746fa (Grants), 0x00774844 (Zonde), 0x00774a42 (Gibarta / Rabarta), 0x00774c61 (Foie), 0x00774d95 (fixed). For those groups 0x200 is set on any landed hit, 0 damage included, so the melee 1.0 rule does not apply. Megid sets it only on its kill (0xa00). The support groups never set it in this function. The port now uses a per-source threshold: `TOOK_DAMAGE_ANY` for the damage groups, `TOOK_DAMAGE_NEVER` for the rest, `TOOK_DAMAGE_MIN` (1.0) for melee and weapons.
+
+**The jump table (PROVEN, `tools/exedata.py read 00977ea0 u 22`, 22 dwords).** The dispatch is `cmp edx, 0x15; ja default (0x774df4); jmp [4*edx + 0x977ea0]` at 0x00773e39..0x00773e46. Entries (group: target): 0 fixed 0x774cc7, 1 Foie 0x774b7d, 2 Gibarta/Rabarta 0x77494a, 3 Zonde 0x774760, 4 Grants 0x774616, 5 Megid 0x77449c, 6 Resta 0x7743df, 7 Anti 0x774399, 8 Reverser 0x774379, 9 Shifta 0x774302, 10 Deband 0x77428b, 11 Jellen 0x774214, 12 Zalure 0x77419d, 13 and 14 default 0x774df4, 15 poison 0x77416e, 16 wolf paralyze 0x77413f, 17 wolf slow 0x774110, 18 confuse 0x7740e1, 19 Barta 0x773f97, 20 always-zero 0x773f73, 21 (0x15, no multiplier) 0x773e48. Group names are the dump's `technique_group` enum (src/Psobb.exe-05112026.c 70350). The header's older case list (battle.h 305..) is not used.
+
+**Gates before the dispatch (PROVEN, objdump; each returns with no flag write).**
+- Episode 2 class mismatch for groups outside 6..10: 0x00773b17..0x00773b3d (`fld 0.0; ret 0x18`).
+- Attacker null, or attacker dead (group not Reverser): 0x00773b73..0x00773b94 (Ep 2) and 0x00773b97..0x00773bbd (other episodes).
+- Invulnerable: `+0x30 & 0x4000000` (0x00773bf9) or the box's `& 0x2000080` (0x00773c0f) → 0x00774e7f, which shows "0" text and returns 0, except groups 6..10 and 20, which skip it (0x00773bc3..0x00773bf0).
+- Resisted (defender index < 0x1000, group 1..5 or 11..12, tech != -1): roll against `call 0x00775170` (0x00773c8a..0x00773cc5); a resist returns 0 at 0x00773cab..0x00773ccb (display text 0x00773a84). Enemies (index >= 0x1000) take no roll.
+
+**Verdicts (PROVEN: the flag write and the path into it).**
+- Fixed (0): `fmul [0x978250]`, ROUND, deal_damage, HP check, then 0x00774d95 `or 0x200` (both the deal path and the no-deal path with 0x2000000 state-2 skip). 0 damage: YES, the flag is set. HP < 1: 0x800 is OR'd at 0x0077500b and joins the same 0x200 write, so death sets 0x200 too.
+- Foie (1): same shape, `100 - efr` (+0x2f6), 0x00774c61. 0 damage YES. Death joins at 0x00774ffd.
+- Gibarta / Rabarta (2): `100 - eic` (+0x2fa), 0x00774a42; the freeze roll (vtbl +0xc8, 0x00774b32) comes after the flag and does not gate it. 0 damage YES.
+- Zonde (3): `100 - eth` (+0x2f8), 0x00774844; the shock is after it. 0 damage YES.
+- Grants (4): `100 - elt` (+0x2fe), 0x007746fa. 0 damage YES.
+- Barta (0x13, 19): `100 - eic`, 0x0077407b. 0 damage YES.
+- Group 0x15 (21): no multiplier, 0x00773f15. 0 damage YES.
+- In all of these the state-2 invulnerable branch (+0x30 & 0x10000000 and +0x32c == 2) stores the rounded total and jumps to 0x00774e04 with no flag (jumps to 0x00774e04: group 21 at 0x00773e89, 19 at 0x00773fd8, 4 at 0x00774657, 3 at 0x007747a1, 2 at 0x0077498b, 1 at 0x00774bbe, 0 at 0x00774d08). NOT set there.
+- Megid (5): the boss-map check `call 0x00807db8` (current_map_is_boss_map). On a boss map, the store-0 path has no flag, unless g_CurrentDifficulty (0x00a9cd68, battle.h 644) is 3 and the entity index at +0x2d8 is at least 0x1000, which takes the normal path (0x00774f8a..0x00774f97). Otherwise the roll `[esp+0x40]` against the damage `[esp+0x4c]`: roll < damage (`jb` at 0x00774564 after `fcomp`) is the kill, `or 0xa00` at 0x007745d1 (0x800 | 0x200). Roll >= damage: store the damage, no flag, no HP. So Megid sets 0x200 only on the kill, 0 damage: NO.
+- Resta (6), Anti (7), Reverser (8), Shifta (9), Deband (10), Jellen (11), Zalure (12): own code has no 0x200 write and no deal_damage call (only vtable hooks: +0x108, +0xd0 / +0xec, +0x11c..+0x130, and the resta heal 0x007773d4). NOT set by this function. ASSUMED: the vtable hooks (e.g. +0x120 .. +0x128) do not write 0x200 on the defender; not traced.
+- Poison (15), wolf paralyze (16), wolf slow (17), confuse (18), always-zero (20): vtable hooks only (+0xb8..+0xc4, +0xe8), no 0x200. NOT set.
+- Ryuker: not routed to this function in the port (no element, not in the damage groups); its exe group was not traced.
+
+**Port (ported in this entry).**
+- `combat/formulas.ts`: `TOOK_DAMAGE_ANY` (0), `TOOK_DAMAGE_NEVER` (Infinity); `tookDamage(total, landed, min = TOOK_DAMAGE_MIN)` and `applyDamage(..., min)`. The melee and weapon default is unchanged.
+- `combat/techniques.ts`: `techTookDamageMin(tech)`: fire, ice, lightning, light (Foie, Gifoie, Rafoie, Barta, Gibarta, Rabarta, Zonde, Gizonde, Razonde, Grants) → ANY; everything else (Megid, support, Jellen, Zalure, Ryuker) → NEVER. Megid keeps its own kill roll (`landed: kill`).
+- `render/combat.ts`: `HitVisual.took`; `applyEnemyHit` takes `fx.took ?? TOOK_DAMAGE_MIN`; `techHitEnemy` passes `took: techTookDamageMin(tech)`. The generic flinch (the `playDamage` branch) now follows `this.hitLanded` (the 0x200 flag), not `damage >= 1`, so a 0-damage Foie hit flinches and a Jellen hit does not.
+
+**Behaviour changes.** A landed Foie / Barta / Gibarta / Zonde / Grants hit at 0 damage (e.g. full elemental resist) now sends 0x200 and flinches (was 0x100). A Jellen or Zalure hit on an enemy, and the other support groups, send 0x100 and deal no HP (the exe's support groups deal none; the number is still shown: OPEN, the port shows a number the exe does not). Megid is unchanged.
+
+**Open.** The support groups' damage number on enemies (exe shows none; the port shows `techDamage`). Ryuker's group. The vtable hooks of the support groups (their 0x200 writes, if any, are not traced). The `damage >= 1` tests that gate the Monest, Dragon and Gunner hooks were left as they were.
+
+**Tests.** `tests/flinch.test.ts` (tech section: the group verdicts, 0-damage landed, resisted, missed, support never, Megid kill / non-kill); `node tests/flinch.test.ts`, `techniques`, `enemyfsm`, `combatdepth`, `NEWSERV=... node tests/combat.test.ts`, `cd client && npx tsc --noEmit -p .` (exit 0). Not run in Chrome.
+
 ## 2026-10-25: Vol Opt lock-on read from the reticle filter; the monitors have no lock-on caller; no port change
 
 **Outcome.** The reticle's candidate filter is `check_enemy_is_targetable` (exe 0x007a2b28, a function start; dump 785953), not `FUN_007714cc` (that is the AI's nearest-target search, used by enemy AIs such as Darvant and the Vol Opt core's own searches). The filter reads, per player and per weapon record: the record's three masks (field4 box include, field5 box exclude, field6 entity include, field7 entity exclude), the entity's `+0x30` flags, the box bits, the distance and cone tests and, in battle mode, a map ray test. Lock-on is therefore not "box bit 0 only". The Vol Opt facts below follow from that. Verdicts: the monitors are never a lock-on target (no `enable_reticle_` caller in their code); the prison and the control are never (same); the core, the pillars and the rod have per-state lock calls; the body is not mapped by state. Lock and hit gates are NOT changed in the port: the struck test shares `concealed()` with the lock test, so a lock-only change needs the hit path traced first.

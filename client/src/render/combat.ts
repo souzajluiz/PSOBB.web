@@ -104,6 +104,7 @@ import {
   applyDamage,
   enemyDefender,
   FLAG_DEAD,
+  TOOK_DAMAGE_MIN,
   playerAttacker,
   FLAG_BIG_HIT,
   FLAG_HIT,
@@ -137,6 +138,7 @@ import {
   techGroup,
   techHitPower,
   techPower,
+  techTookDamageMin,
   type TechniqueData,
   type TechResist,
 } from '../combat/techniques.ts';
@@ -396,6 +398,9 @@ interface HitVisual {
   // The hit roll passed (0x200, took_damage), 0 damage included. Default: not
   // a miss. A caller with its own roll (a confusion or a Megid kill) sets it.
   landed?: boolean;
+  // The total that sets 0x200 for this source (formulas.ts TOOK_DAMAGE_*). Default:
+  // the melee / weapon threshold, TOOK_DAMAGE_MIN.
+  took?: number;
 }
 
 // Epsilon's body: its cloned materials, their base colours and the last tint
@@ -7322,8 +7327,10 @@ export class CombatView {
     this.hitMissed = fx.miss === true;
     const landed = fx.landed ?? fx.miss !== true;
     // 0x200 (took_damage) needs the total at 1.0 or more (EntityHitEntity 0x007738c4): a landed
-    // roll that rounds to a sub-1 total is 0x100 here, and the flinch below follows it.
-    this.hitLanded = tookDamage(damage, landed);
+    // roll that rounds to a sub-1 total is 0x100 here, and the flinch below follows it. A technique
+    // group passes its own threshold (fx.took, entity_hit_by_tech's groups).
+    const took = fx.took ?? TOOK_DAMAGE_MIN;
+    this.hitLanded = tookDamage(damage, landed, took);
     if (e.ai?.invulnerable) {
       // EntityHitEntity / entity_hit_by_tech: the number 0 and nothing else.
       const ip = e.instance.root.position;
@@ -7471,7 +7478,7 @@ export class CombatView {
       this.opts.log(`${what}hit the Gal Gryphon for ${Math.round(damage)}: ${e.stats.hp}/${e.stats.maxHp}`);
       return;
     }
-    let flags = baseFlags | applyDamage(e.stats, damage, landed);
+    let flags = baseFlags | applyDamage(e.stats, damage, landed, took);
     if (flags & FLAG_DEAD && e.ai instanceof DubchicAi && e.ai.revive()) {
       // State 5's revive branch: the Dubchic falls, lies there and gets up
       // with full HP; mark_enemy_as_dead (6x76, the drop and EXP requests)
@@ -7526,7 +7533,7 @@ export class CombatView {
       // A Mothmant's landed hit (its vtable 0x100 = 0x00589ab0): the flinch (6),
       // from any state, unless the status lock skips the hit (EnemyUpdateLoop 0x158).
       if (damage >= 1 && !e.status.locked) e.ai.flinch();
-    } else if (damage >= 1 && !groupStun && !e.status.locked && !e.ai?.superArmor && (e.ai?.flinches?.(damage, e.stats.maxHp) ?? true)) this.playDamage(e);
+    } else if (this.hitLanded && !groupStun && !e.status.locked && !e.ai?.superArmor && (e.ai?.flinches?.(damage, e.stats.maxHp) ?? true)) this.playDamage(e);
     this.opts.log(
       `${what}hit E-${e.index.toString(16)} (${e.slot.type}) for ${Math.round(damage)}: ${e.stats.hp}/${e.stats.maxHp} HP${flags & FLAG_DEAD ? ' (dead)' : ''}`,
     );
@@ -8504,7 +8511,7 @@ export class CombatView {
     }
     if (status !== null && !e.dead) this.inflictEnemy(e, status, name);
     const hits = e.ai instanceof SlimeAi ? e.ai.hits : 0;
-    this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, false, `${name} (power ${Math.round(techPower(tech, level, charClass))}) `, true, { kind: techHitFx(tech) });
+    this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, false, `${name} (power ${Math.round(techPower(tech, level, charClass))}) `, true, { kind: techHitFx(tech), took: techTookDamageMin(tech) });
     // 0x005987c8: Gibarta / Rabarta (technique group 2) split a Pofuilly Slime.
     if ((tech === TECH.gibarta || tech === TECH.rabarta) && e.ai instanceof SlimeAi && e.ai.hits > hits && !e.dead) void this.splitSlime(e, name);
   }
