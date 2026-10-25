@@ -36,7 +36,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    (mouth, head and feet places, the model's own root height; the tail's nodes
    and both hit box sets are done, 2026-10-20), the flame / fireball particles
    (they have no model), the pad-controlled dragon states, the ground follower's dust, and the Ultimate-only Sinow state
-   0x10. Left on Dark Falz: the cutscene objects and camera, the technique
+   0x10. Left on Dark Falz: the cutscene objects and the camera (the five live scenes' pivots are wired, 2026-10-25; the view is not yet checked in Chrome), the technique
    objects' own flight, Ultimate's Rico scene, the players' push-out of form
    1's body.
 3. Classic game list and quest loading screen are done (2026-10-19; the

@@ -64,24 +64,34 @@
 //   [0x00A44D64] + 0x60 (BAMS); the fallback (0x44E34D) is BSS 0x00A44D9C with yaw 0.
 // - DIE TYPE3 (0x450FC4, caller 0x44DFC7): pivot = [0x00A44D5C] + 0x38, yaw = [0x00A44D5C] + 0x60;
 //   fallback BSS 0x00A44D88 with yaw 0 (0x44E07D).
-// - DIE TYPE2 (0x44FA8C, caller 0x44E1F9): pivot = the brain's +0x3A4 (computed at 0x44E1A3..0x44E1CC
-//   from [0x00A44D60] and a constant at 0x00A44D98; the exact formula is UNCLEAR), yaw = [0x00A44D60] + 0x60,
-//   stored to the brain's +0x3B0 (0x44E1D6).
+// - DIE TYPE2 (0x44FA8C, caller 0x44E1F9): pivot = the brain's +0x3A4 (the 75-unit formula below, read
+//   in the exe at 0x44E14E..0x44E1CC), yaw = [0x00A44D60] + 0x60, stored to the brain's +0x3B0 (0x44E1D6).
+//   [0x00A44D60] is form 2 (the serpent, see the Z note below).
 // - GET RING (0x44FFD8, caller 0x44E108) and DEMO_WARP2 (0x45072C, caller 0x44E0D0): pivot =
 //   the brain's +0x3A4 and yaw = the brain's +0x3B0 (the args at the call). Their brain values
-//   are the DIE TYPE2 ones only if that state ran before (UNCLEAR).
+//   are the DIE TYPE2 ones: the scene table reaches 10 and 11 from DIE TYPE2 only (ASSUMED: no other writer of
+//   the brain's +0x3A4 / +0x3B0 on that path; the Vol Opt functions that write +0x3B0 are area 0x0D's).
 // So the static source has two constant scenes (DEMO_WARP0, the Dark Falz object); every other
 // scene's pivot and yaw come from live entity pointers ([0xA44D5C], [0xA44D64], [0xA44D60]) or the
-// brain: no view is produced for them (cameraSourceOf returns null).
+// brain. The port feeds them through LiveCameraInputs (the poses captured at the scene enters,
+// captureCameraLive); without them cameraSourceOf returns null for those five.
+//
+// The entity identities (2026-10-25, Ghidra + objdump): the three store sites and their creators
+// (ports: form 1 = Y, form 2 = Z, form 3 = X):
+// - X [0x00A44D5C] = create 0x0045E4F0 (form 3, vtable 0x00AF7A60, the dump's g_pVoloptEntity).
+// - Y [0x00A44D64] = create 0x00457000 (form 1, vtable 0x00AF75A0, stored at 0x0044E450, the
+//   dump's g_pVoloptEntityForm2 name is a community label, not a form 2).
+// - Z [0x00A44D60] = create 0x00459820 (0x47C bytes, stored at 0x0044D8B0 by FUN_0044D7A8), whose
+//   ctor 0x004598D0 writes vtable 0x00AF77E0 = form 2 (the serpent). The port's header citing
+//   "create 0x00457E7C" for form 2 is wrong: 0x00457E7C is an update helper, not the creator.
 //
 // ASSUMED: mode 5 is the boss camera (nothing in the exe names it; the mode table entry 5 is
 // FUN_004d665c's object, DAT_00a48a00[5] = DAT_00a48a14). The entity layout (+0x38 position, +0x60
 // BAMS yaw) is taken from the field of the pivot use, not from the entity's own code.
-// UNCLEAR: the time unit (frames or ticks), the 0x0044EC14 object's scene, the brain's +0x3A4 /
-// +0x3B0 values, and the 0x100 channel: it is NOT a time: the APP TYPE2 object copies its pivot
+// UNCLEAR: the time unit (frames or ticks), the 0x0044EC14 object's scene, and the 0x100 channel: it is NOT a time: the APP TYPE2 object copies its pivot
 // (param 2) to its own +0x100 and its yaw (param 3) to +0x10C; FUN_004d681c reads them from there.
 
-import type { Vec3 } from './darkfalzcommon.ts';
+import { SCENE, type Vec3 } from './darkfalzcommon.ts';
 import { sampleCameraMotion, type CameraRel } from '../formats/cameramotion.ts';
 
 // The mode every cutscene object pushes (0x004D31F4 with 5).
@@ -324,6 +334,8 @@ export interface EntityPose {
   yaw: number;
 }
 
+export type EntityPoseSource = { x: number; y: number; z: number; yaw: number } | null | undefined;
+
 // The live inputs of the five scenes whose pivot is not constant. Each field is null when the
 // entity is gone (the exe then uses a fallback this port does not model, see cameraSourceOf).
 export interface LiveCameraInputs {
@@ -331,7 +343,7 @@ export interface LiveCameraInputs {
   form1?: EntityPose | null;
   // [0x00A44D5C] (create 0x0045E4F0, the Form 3 object): DIE TYPE3's pivot is its pos, yaw its +0x60.
   form3?: EntityPose | null;
-  // [0x00A44D60] (create 0x00459820, the enemy of 0x47C bytes): the source of the brain's DIE TYPE2 pivot.
+  // [0x00A44D60] (create 0x00459820, ctor 0x004598D0, vtable 0x00AF77E0 = form 2): the source of the brain's DIE TYPE2 pivot.
   dieType2Source?: EntityPose | null;
   // The brain's +0x3A4 / +0x3B0 as the last DIE TYPE2 setup (0x0044E120) left them: GET RING and
   // DEMO_WARP2 take these. Use brainPivotOf(dieType2Source) at that setup.
@@ -359,6 +371,33 @@ export function brainPivotOf(source: EntityPose | null | undefined): { pivot: Ve
     pivot: [x - DIE_TYPE2_PIVOT_DISTANCE * ux, 0, z - DIE_TYPE2_PIVOT_DISTANCE * uz],
     yaw: source.yaw,
   };
+}
+
+// The pose of a form as the scene enters read it: the port's form position (x, y, z) and its BAMS yaw.
+// The exe reads the same fields at +0x38..+0x40 and +0x60 (see the header); null for a form that is gone.
+export function poseOf(f: { x: number; y: number; z: number; yaw: number } | null | undefined): EntityPose | null {
+  return f ? { pos: [f.x, f.y, f.z], yaw: f.yaw } : null;
+}
+
+// The live inputs as the scene enters capture them. The exe's enter functions read the entity
+// pointer (and the brain) and then clear it, so the pose is the one at the enter, not later:
+// - APP TYPE2 (0x0044E2F4, scene 7): [0x00A44D64] = form 1 is read, then cleared.
+// - DIE TYPE2 (0x0044E120, scene 9): [0x00A44D60] = form 2 is read into the brain's +0x3A4 / +0x3B0
+//   (brainPivotOf), then cleared; GET RING and DEMO_WARP2 later read the brain as it stands.
+// - DIE TYPE3 (0x0044DF90 / 0x0044DFB2, scene 14): [0x00A44D5C] = form 3 is read, then cleared.
+// Other scenes leave the snapshot as it is. `forms` are the port's form objects before the enter drops them.
+export function captureCameraLive(
+  live: LiveCameraInputs,
+  scene: number,
+  forms: { form1: EntityPoseSource; form2: EntityPoseSource; form3: EntityPoseSource },
+): LiveCameraInputs {
+  if (scene === SCENE.appType2) return { ...live, form1: poseOf(forms.form1) };
+  if (scene === SCENE.dieType2) {
+    const dieType2Source = poseOf(forms.form2);
+    return { ...live, dieType2Source, brain: brainPivotOf(dieType2Source) };
+  }
+  if (scene === SCENE.dieType3) return { ...live, form3: poseOf(forms.form3) };
+  return live;
 }
 
 // The camera source for a loaded camera file (formats/cameramotion.ts). The constant pivots are

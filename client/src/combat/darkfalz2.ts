@@ -1,6 +1,7 @@
 // Dark Falz form 2 (PsoBB.exe, Ephinea 1.25.13): the serpent that circles the
-// arena below the floor (create 0x00457E7C, ctor 0x00457E7C+, update
-// 0x00457BD4, vtable 0x00AF77E0; battle row 55). See combat/darkfalzcommon.ts
+// arena below the floor (create 0x00459820, ctor 0x004598D0 which writes vtable
+// 0x00AF77E0, update 0x00457BD4; battle row 55; 2026-10-25, the old create 0x00457E7C
+// is an update helper). See combat/darkfalzcommon.ts
 // for the sources and the sync, combat/darkfalz1.ts for the shape of the state
 // machine; the table is 0x009A6280 (stride 0x14: name, animation id, enter,
 // lead, all).

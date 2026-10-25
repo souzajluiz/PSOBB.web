@@ -71,10 +71,14 @@ worktrees are left.
    warpTo(14) call `classicGame.view.placePlayer(selfId, -9860, y, -240, 0)` (or walk),
    then watch `combat.bossCameraView()` and take screenshots. This was being run when the
    day ended; it was reverted, untested.
-2. **Dark Falz camera, the five live scenes** (APP TYPE2, DIE TYPE2 / TYPE3, GET RING,
-   DEMO_WARP2): their pivots / yaws come from live entities ([0x00A44D5C..64]+0x38 / +0x60)
-   and brain +0x3A4 / +0x3B0 (formula at 0x0044E1A3..CC not read). `cameraSourceOf`
-   returns null for them. See DEVLOG "Dark Falz camera: scene pivots" (end of file).
+2. **Dark Falz camera, the five live scenes: WIRED 2026-10-25** (DEVLOG "2026-10-25: Dark
+   Falz camera: the five live pivots wired"). The brain formula (0x0044E14E..1D9) is read: the
+   DIE TYPE2 pivot is Z minus 75 along Z's XZ unit. Identities: X = form 3 (create 0x45E4F0),
+   Y = form 1 (0x457000), Z = form 2 (0x459820, ctor 0x4598D0). `darkfalz.ts` captures the poses
+   at the APP TYPE2 / DIE TYPE2 / DIE TYPE3 enters (`captureCameraLive`), and `combat.ts` passes
+   them to `cameraSourceOf`. Still open: the view is not yet checked in Chrome; form 1's y is
+   the port's 0 (ASSUMED); the entity +0x60 / +0x38 layout is ASSUMED equal to the port's yaw / x / z
+   fields; the BSS fallbacks 0x00A44D9C / 0x00A44D88 (missing form 1 / form 3) are not read.
 3. **Saint-Milion laser in Chrome: DONE** (DEVLOG "2026-10-22: Saint-Milion laser in
    Chrome"). `ep4-battle-smoke.spec.ts` passes: the laser shot and its 0x6f8 loop are seen.
    Cause of the old failure: the spec sent 6xDC with `sendEpisode4BossAction` (network
