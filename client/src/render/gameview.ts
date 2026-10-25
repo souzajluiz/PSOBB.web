@@ -177,6 +177,8 @@ export class GameView {
       captureTrap: (ev) => this.combat.captureTrapEvent(ev),
       fieldHit: (damage, at) => this.combat.fieldObjectHit(damage, at),
       captureReticle: (pos) => this.combat.setCaptureReticle(pos),
+      // playerMayTarget (render/traps.ts): dead is the port's stand-in for the dead flag.
+      localMayTarget: () => !this.combat.damage.dead,
     });
     this.items = new GameItems(game, { ...character, log });
     // Join sync (net/joinsync.ts): when we lead and a player joins, the

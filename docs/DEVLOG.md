@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-10-25: Trap vision: the lock-on gates of the capture trap's cursor (entity level); the ROADMAP's stale open items
+
+**Question:** the ROADMAP "Trap vision (cloaked traps)" line still listed the state-3 hit path as open and "not ported". Is there an exe-settled sub-item left, and which?
+
+**Stale items (corrected):** the 2026-10-23 follow-up 2 entry already settled the state-3 hold: the counter is +0x350 (param4 x 30, clamped 1..60), below 0 the trap's on-interact releases the target (6x2D), and the 6x2C frames 0xffff mean no self timer. The port has it (`CaptureTrap.hold`, `holdCountdown`), so the ROADMAP line is updated.
+
+**What the exe settles (Ghidra dump `tools/refsrc.sh`, Psobb.exe-05112026.c):**
+- `enable_reticle` (dump 575550) calls `check_enemy_is_targetable` (dump 785551) for each enabled targeting record of the four player slots. The function starts with: the player's `character_flags` must have neither `dead` (0x800) nor `took_damage` (0x200); the room rule (a target with `flags & 0x60000000 == 0x20000000` in another room is refused) applies only to that exact flag pattern.
+- `InitializeDerolleTrapEntity_0063ec24` (dump 503244) ORs `0x60040000` into the trap's `+0x30` flags. `0x60000000 & 0x60040000` is `0x40000000`, not `0x20000000`, so the room rule never refuses the trap. The trap is therefore not room-gated for the lock-on.
+
+**What changed:**
+- `client/src/render/traps.ts`: `CAPTURE_TRAP_CHARACTER_FLAGS` (0x60040000), `playerMayTarget(flags)` (dead / took_damage clear), `targetRoomRuleApplies(flags)`. `captureReticleShown(state, inView, localMayTarget = true)` takes the local player's gate.
+- `client/src/render/gamefield.ts`: option `localMayTarget`, read in `captureDraw`; `client/src/render/gameview.ts` passes `!this.combat.damage.dead`.
+- `tests/traps.test.ts` section 9.
+
+**Not ported (still open):** the per-record part of check_enemy_is_targetable: the record's masks (field6 / field7, set per weapon), the weapon geometry (range, the horizontal / vertical cones, the hitbox pass with DisableEntityHitbox), and the map ray test in battle mode. The other players' records are not evaluated: the port's cursor is the local player's only.
+
+**ASSUMED:** the port's `dead` state stands for the dead bit; took_damage (the flinch) has no port flag, so it is not checked.
+
+**Checks:** `cd client && npx tsc --noEmit -p .` (Node 24) clean. `node tests/traps.test.ts` all checks pass (sections 1-9). `node tests/batching.test.ts`, `node tests/fieldhud.test.ts`, `node tests/townfield.test.ts` pass. Not run: Playwright / Chrome.
+
 ## 2026-10-25: Darvant child link: the constant table of the Dark Falz grid
 
 **What changed:** `tools/gen-collision-boxes.py` has a second loop-child list, `CHILD_CONST_CALLERS`, for a constructor whose box table is one constant (no index, no mask). Dark Falz's Darvants (set type 0xc8) are the entry. The generator regenerates `client/src/formats/collisionboxes.gen.ts` with `CHILD_COLLISION_LINKS[0x00c8] = { callee: 0x0045fbd4, count: 80, mask: 0, variants: { 0: 0x009a67c8 } }`. `childBoxTable(0xc8, k)` now returns the row set for each Darvant `k` in 0..79 (`mask 0`: every child takes variant 0). No runtime code reads it yet; the Darvant is not drawn or hit through this table.

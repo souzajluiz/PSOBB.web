@@ -14,8 +14,11 @@
 // Run: node tests/traps.test.ts
 import {
   CAPTURE_RADIUS,
+  CAPTURE_TRAP_CHARACTER_FLAGS,
   type CapturePlayer,
   CaptureTrap,
+  playerMayTarget,
+  targetRoomRuleApplies,
   captureSound,
   captureSpeed,
   captureTrapCloaked,
@@ -358,6 +361,14 @@ const run = (t: PillarTrap, n: number, players: TrapPlayer[], self = 0, area = 6
   check(reticleTrap.state === 1 && captureReticleShown(reticleTrap.state, true), 'reticle: a revealed trap with nobody in range shows the cursor');
   reticleTrap.frame({ slots: none, room: 0, players: [at(0, 10, 0)], selfId: 0, springFrames: 1 });
   check(reticleTrap.state === 2 && !captureReticleShown(reticleTrap.state, true), 'reticle: a player in range springs the trap and hides the cursor');
+
+  // Section 9: check_enemy_is_targetable's entity-level gates (ported part; the weapon records are not).
+  check(playerMayTarget(0) && playerMayTarget(0x10) && !playerMayTarget(0x800) && !playerMayTarget(0x200), 'targetable: a player with no dead / took_damage flag may target');
+  check(!playerMayTarget(0x800 | 0x10) && !playerMayTarget(0x200 | 0x1), 'targetable: dead or took_damage refuses the lock-on');
+  check(CAPTURE_TRAP_CHARACTER_FLAGS === 0x60040000, 'targetable: the trap carries 0x60040000 from its init');
+  check(!targetRoomRuleApplies(CAPTURE_TRAP_CHARACTER_FLAGS), 'targetable: the room rule does not apply to the trap (0x40000000 is set, not 0x20000000)');
+  check(targetRoomRuleApplies(0x20000000) && !targetRoomRuleApplies(0x60000000), 'targetable: the room rule applies to 0x20000000 alone only');
+  check(captureReticleShown(1, true, playerMayTarget(0)) && !captureReticleShown(1, true, playerMayTarget(0x800)), 'reticle: a dead local player gets no cursor from a revealed trap');
 }
 
 console.log(failures ? `${failures} failures` : 'traps: all checks passed');
