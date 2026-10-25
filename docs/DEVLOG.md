@@ -1,5 +1,31 @@
 # Devlog
 
+## 2026-10-25: Spawn-state enemies (Gee, Sinow Spigell, Merillia) in the exe: no hit, no port change
+
+**Question:** can an enemy still in its spawn / emerge state (not yet activated) be hit, damaged or targeted by the player in the exe? The 10-25 Episode 2 chain watch saw `applyEnemyHit` with 9999 leave `spawn`-state enemies alive.
+
+**Verdict:** the port matches the exe. No code change. The chain stall is the e2e's kill target, not a damage rule: the enemies of a wave that has not started do not exist yet, and a built spawn-state enemy takes no damage.
+
+**Exe evidence** (`refsrc` dump `src/Psobb.exe-05112026.c`, values with `tools/exedata.py`):
+- Activation (the wave event). `unknown_enemy_spawn` (0x00811188, dump .c:829247) is the only constructor call for a set entry. It runs for the (section, wave) the wave event asks for, and it skips an entry whose `flags & 10` is set (built or dead). Before its wave runs, a set entry has no enemy object: nothing to target, hit or lock on. The port's `render/waves.ts` `step` and `render/gamefield.ts` `setupWaves` (`hideAll`, then `setVisible` on spawn) model this.
+- Spawn state invulnerability. Gee's vtable is 0x00b051c0 (factory `CreateSinowberillInstance_0055c974`, dump .c:343896; the dump's Sinowberill names are community labels). Vtable +0x184 (0x00b05344 -> 0x00520504) sets `character_flags` 0x4040000 (`maybe_invuln` 0x4000000 plus 0x40000) and calls +0x174 / +0x180. The flags word is `unknown_entity_type_flags` at enemy +0x30 (`character_flags` enum, dump .c:70177: `maybe_invuln=67108864`, `dead=2048`).
+- Damage gate. `EntityHitEntity_00773350` (dump .c:747464) returns 0 for an enemy with `dead`, and for one with `maybe_invuln` unless 0x2000000 is also set (.c:747501..747513). The only text shown is the "0" of the invulnerable hit.
+- Hit boxes. `SetEnemyInvulnerableAndImmune_0053fdf0` (.c:325790) clears the collision box flags (`|= 0x28` on the box at enemy +0xa4 +0x18). The port's comment (`enemyfsmep2a.ts` `invulnerable`, "the hit boxes are off while it spawns") cites the same rule.
+
+**Port:**
+- `combat/enemyfsmep2a.ts` `GeeAi.invulnerable` is true in `spawn`, `rise` and `drop` (matches the 0x4040000 write). `applyEnemyHit` (`render/combat.ts` ~7089) returns the "0" text for `e.ai.invulnerable` and changes nothing, so 9999 does nothing to a spawn-state Gee.
+- Targeting (`concealed()`, render/combat.ts ~513) does not list Gee, Merillia or the Sinow Spigell's spawn. An unbuilt enemy is hidden and `tickEnemies` skips it (`!e.instance.root.visible`), which is the exe's "no object yet".
+- Merillia and Sinow Spigell: the same rule is assumed (their spawn states are the port's `invulnerable` getter; not re-traced here).
+
+**Why the chain stalls (the 10-25 e2e):** the kill ran on enemies of a link whose wave had not started. Those enemies are not built, so they are hidden and never tick (the 10-24 entry: a Gee leaves `spawn` on its 4th tick, `GeeAi.frameOf`, so one that stays in `spawn` never ticked). A 9999 kill on them is correct to do nothing. The chain needs its predecessor's enemies dead first (quest_event_handler state 1 -> 2), so the e2e must trigger the activation: kill the predecessor link, then wait for the next link's `waitBuilt` before its kill. The e2e's `waitBuilt` wait must cover that activation, not only the kill.
+
+**ASSUMED / not traced:**
+- That Gee's spawn enter calls vtable +0x184 (the 0x4040000 write). The port's comment cites it, and the dump's only other 0x184 call sites in this range are death and Sinowbeat code. The enter itself was not found by name.
+- Whether the exe shows the "0" text for a hit on a spawn-state enemy whose hit boxes are off (the port shows it, via `invulnerable`). A box-off enemy may take no hit at all.
+- Merillia and Sinow Spigell spawn states: same rule, not read per family.
+
+**Checks:** no code changed. `cd client && npx tsc --noEmit -p .` exit 0. `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5852 checks, 0 failures (Node 24). Not run in Chrome, no Playwright.
+
 ## 2026-10-25: NPC attack AI: the guard stance's walk-only send and the 6x40 flags word
 
 **Question:** the ROADMAP's "NPC players' attack AI" line left open the 6x40 flags word and the 0x100000 gate of the state-1 send. What does the exe do with the NPC's guard stance there?
