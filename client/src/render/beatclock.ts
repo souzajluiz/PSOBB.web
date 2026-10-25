@@ -8,11 +8,16 @@
 // 0x978474 = 2, 0x97847c = 0.5, 0x97846c = 0x978478 = 255. The window position 650 x 425 is 0x44228000 and
 // 0x43d48000 (set at 0x0075851c and 0x007584eb).
 //
-// Where it is drawn: only from the chat shortcut menu window's update (the window singleton
-// g_pChatShortcutMenuInstance, 0x00a9acf0 is a pointer read in 0x0075854c). Its visibility trigger is
-// ASSUMED: the counter +0x40 runs 0..0x96 (150 frames) with the beat at full alpha, then fades out in
-// 15 frames. The position is set at counter 0x96 (+0x2c/+0x30) and 0x12c (+0x1c/+0x20).
-// The port does not draw it yet (the window is not in the port's field HUD).
+// Where it is drawn (proven, 2026-10-25 pass): the window is ChatShortcutMenuWindow, constructed at
+// 0x0075836c (dump 728406) from ChallengeMenuObject_CreateSubmenuWindow_00733428 (dump 700518): the
+// submenu of the field's player menu object (ChallengeMenuObject_Constructor_00731bec, dump 699284,
+// made by unknown_handle_ui_target_window 0x0071a9c3 from update_player_menu_, dump 682107 / 682135).
+// Its per-frame update is 0x00758480 (vtable slot 1, see stepBeatWindow below) and its draw is
+// 0x0075854c -> ChatShortcutMenuWindow_UpdateVisuals_0075855c, through the list window's callback.
+// The chat shortcut menu entry (symbol_chat_menu, the 0x0075882c class, dump 728581) is a different window.
+// The visibility gate of the player menu object is ASSUMED beyond these calls; the port draws the beat
+// from render/fieldhud.ts while no menu is open.
+//
 import { beatFromFrames, FRAMES_PER_BEAT } from '../combat/beattime.ts';
 
 export const BEAT_DIGITS = 3; // render_texturejapanese_xvm_font(..., 3)
@@ -108,4 +113,82 @@ export function windowAlphas(counter: number): { beat: number; time: number } {
 // The beat draws only at a positive alpha (0x978498 = 0: RenderChatShortcutMenuTimer's first test).
 export function beatVisible(alpha: number): boolean {
   return alpha > 0;
+}
+
+// The window's per-frame update (PsoBB.exe 0x00758480, the vtable's update slot 1; dump
+// ChatShortcutMenuWindow_UpdateVisuals_0075855c beside it). Proven from the asm:
+//   - x (+0x1c) eases toward its target (+0x24) by 0.1 each frame (0x974194 = 0.1):
+//     x += (target - x) * 0.1. The target is GetSceneTimerValue + 616 (0x974188 and 0x974198 =
+//     616, set in the constructor 0x0075836c and at counter 300); GetSceneTimerValue is -220 in
+//     logged_in (0x978458) and -163 elsewhere (0x97845c), so the target is 396 in logged_in.
+//   - y (+0x20) stays 425: it starts at 425 and its target (+0x28) is always 425.
+//   - the counter (+0x40) advances only in logged_in (0x7a61a4 returns the scene, compared with 0xb).
+//     At 300 (0x12c) it snaps x to 650 and resets the target, then stores counter 1 (the reset to 0
+//     and the +1); so the cycle is 1..300. The beat's alpha is windowAlphas(counter).beat.
+// The easing runs in every scene; the counter steps only in logged_in. The window's x is the
+// position the draw uses (ChatShortcutMenuWindow_UpdateVisuals passes +0x1c / +0x20).
+export const WINDOW_EASE = 0.1; // 0x974194
+export const WINDOW_TARGET_OFFSET = 616; // 0x974188 / 0x974198
+export const WINDOW_CYCLE_AT = 0x12c; // 300: the snap and the counter reset
+export const SCENE_TIMER_LOGGED_IN = -220; // 0x978458
+export const SCENE_TIMER_OTHER = -163; // 0x97845c
+
+export interface BeatWindow {
+  x: number;
+  y: number;
+  target: number;
+  counter: number;
+}
+
+// The constructor 0x0075836c: x = 650, y = 425, target = GetSceneTimerValue + 616, counter 0.
+export function newBeatWindow(loggedIn: boolean): BeatWindow {
+  const scene = loggedIn ? SCENE_TIMER_LOGGED_IN : SCENE_TIMER_OTHER;
+  return { x: WINDOW_X, y: WINDOW_Y, target: scene + WINDOW_TARGET_OFFSET, counter: 0 };
+}
+
+// One frame of the window's update. The easing always runs; the counter only in logged_in, where
+// the target at the wrap is the logged_in scene timer (-220 + 616 = 396).
+export function stepBeatWindow(w: BeatWindow, loggedIn: boolean): BeatWindow {
+  const x = w.x + (w.target - w.x) * WINDOW_EASE;
+  if (!loggedIn) return { x, y: w.y, target: w.target, counter: w.counter };
+  if (w.counter === WINDOW_CYCLE_AT) {
+    return { x: WINDOW_X, y: w.y, target: SCENE_TIMER_LOGGED_IN + WINDOW_TARGET_OFFSET, counter: 1 };
+  }
+  return { x, y: w.y, target: w.target, counter: w.counter + 1 };
+}
+
+// The sub-beat bar's 0.5 split (asm 0x0077b77e..0x0077b7e7, the phase timer g_UIPhaseTimer at
+// 0x00a9b1ec): the colour byte is the phase's triangle wave, 2t up to 0.5 and 2(1 - t) after it,
+// scaled by 255 (the 0x978478 push, ASSUMED to be this multiplier) and truncated to the low byte.
+export const SPLIT_AT = 0.5; // 0x97847c
+export const SPLIT_SCALE = 2; // 0x978474
+export function barSweepByte(phase: number): number {
+  const v = phase <= SPLIT_AT ? phase * SPLIT_SCALE : (1 - phase) * SPLIT_SCALE;
+  return Math.trunc(v * COLOR_SCALE) & 0xff;
+}
+
+// The draw of one frame of the beat (RenderChatShortcutMenuTimer_0077b5ac). Null when the beat is
+// hidden (alpha <= 0). The text is the three digits; the bar is the 163-px sub-beat length at
+// y + 18, drawn from the left end x to x + len. The sweep byte is computed but its use in the exe
+// (the OR into the vertex word at +4) is ASSUMED, so the caller does not draw it.
+export interface BeatClockDraw {
+  text: string;
+  textOrigin: Point;
+  textArgb: number;
+  bar: { x0: number; x1: number; y: number; argb: number };
+  sweep: number;
+}
+
+export function beatClockDraw(w: BeatWindow, frames: number, phase: number): BeatClockDraw | null {
+  const { beat } = windowAlphas(w.counter);
+  if (!beatVisible(beat)) return null;
+  const digits = beatDigits(frames);
+  const v = beatBarVertices(w.x, w.y, frames, phase);
+  return {
+    text: digits.text,
+    textOrigin: beatTextOrigin(w.x, w.y),
+    textArgb: beatTextColor(beat),
+    bar: { x0: v[2].x, x1: v[0].x, y: v[0].y, argb: beatBarColor(beat) },
+    sweep: barSweepByte(phase),
+  };
 }

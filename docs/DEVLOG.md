@@ -1,5 +1,27 @@
 # Devlog
 
+## 2026-10-25: The beat clock window: the owner is the field player menu's submenu, the window eases and cycles, and the HUD draws it
+
+**Question:** what opens the window that owns the beat clock (ChatShortcutMenuWindow_UpdateVisuals_0075855c), and what do the callees 0x0077bb1c and 0x0077baf8 do?
+
+**Exe evidence (Ephinea 1.25.13; dump `src/Psobb.exe-05112026.c`, asm by objdump of PsoBB.exe):**
+- Owner: the window is built at 0x0075836c (dump 728406, vtable 0x00b42928) by `ChallengeMenuObject_CreateSubmenuWindow_00733428` (dump 700518), the submenu of the field player menu object. That object is made by `unknown_handle_ui_target_window` (0x0071a9c3, dump 682107), called from `update_player_menu_` (dump 681990). PROVEN for the call chain; the exact gate of that menu is ASSUMED. The chat shortcut menu entry (`symbol_chat_menu`, the 0x0075882c class, dump 728581) is a different window and is not the beat's owner.
+- Per-frame update: 0x00758480 (vtable slot 1). It eases x (+0x1c) toward +0x24 by 0.1 per frame (0x974194 = 0.1). +0x24 = GetSceneTimerValue + 616 (0x974188 and 0x974198 = 616). GetSceneTimerValue (0x0077baf8) is -220 in logged_in (0x978458) and -163 elsewhere (0x97845c). So the beat window does not sit at 650: it starts at 650 and eases to 396 in logged_in. At counter 300 it snaps x back to 650.
+- The counter (+0x40) steps only in logged_in: 0x7a61a4 returns the scene global (0xaab384) and the code compares it with 0xb (logged_in). It runs 1..300. At 150 (0x96) it sets the time text's target (+0x2c/+0x30 = 650/425, +0x34 = GetPhaseTimerDuration + 616). At 300 (0x12c) it snaps x to 650, resets the target and stores 1 (the reset to 0, then +1).
+- y (+0x20) is 425: it starts at 425 and its target (+0x28) is always 425.
+- 0x0077baf8 (GetSceneTimerValue) is called from the constructor (0x7583cc) and the update (0x75852a). 0x0077bb1c (GetPhaseTimerDuration) is called from the update at 0x7584f9 (counter 150): the time text's target, from the width of the phase string (BuildPhaseTimerString_0077ba70) and a constant at 0x978454 (the time text is not ported).
+- Bar colour sweep (asm 0x0077b6fc..0x0077b8a1): the phase timer g_UIPhaseTimer (0x00a9b1ec, +0.01 per drawn frame, wrap at 1) feeds a byte: 2t up to 0.5 (0x97847c; 0x978474 = 2), 2(1 - t) after it, times 255 (the 0x978478 push; the multiplier is ASSUMED). The byte is OR-ed as (b << 16 | b) into a word at +4 of the struct at [esp+0x58]. What that word is in the renderer is ASSUMED, so the port computes the byte (`barSweepByte`) and does not draw it.
+
+**Port:** `client/src/render/beatclock.ts`: `newBeatWindow`, `stepBeatWindow` (the ease and the counter cycle), `barSweepByte` (the 0.5 split), `beatClockDraw` (text, bar, alpha). `client/src/render/fieldhud.ts` owns the window (stepped at the 30 Hz frame), draws the digits with `drawGameText` (the port font) and the bar as a 1-px rect at y + 18, and advances the phase only on a drawn frame (as the exe does). The beat's frames come from `beatFrames(clockOf(now), phaseTimerBase())`. The earlier note (window fixed at 650, not wired) is corrected: x eases.
+
+**ASSUMED (not proven):**
+- The HUD gate: the port draws while no menu is open and no counter is up. The exe gate is the player menu object (see above).
+- The bar is a 1-px rect in the port; the exe draws a three-vertex line strip whose colour sweep is not drawn.
+- The beat text origin (x + 163, y - 1) and the digit padding (carried from the earlier entry).
+- The time text (elapsed since login) is not ported.
+
+**Tests:** `node tests/beatclock.test.ts` (60/60: the window ease and cycle, the sweep, the draw ops), `node tests/beattime.test.ts` (42/42), `node tests/fieldhud.test.ts` (all passed), `node tests/lobbymain.test.ts` (ALL PASS), `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome.
+
 ## 2026-10-25: The beat clock HUD: the layout and timing of RenderChatShortcutMenuTimer are ported (the draw is not wired)
 
 **Question:** where, when and how does the exe draw the beat (the three digits and the sub-beat bar)?
