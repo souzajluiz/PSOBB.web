@@ -54,6 +54,27 @@
 **Not surveyed in this pass (no row, default kept).** Ill Gill (no vtable found from its factory 0x0052e380; own icon calls in its handlers 0x0052ea00, 0x0052eb3c, 0x0052ebc0, 0x0052f18c, 0x0052fb78). Recon (vtable 0x00b08100, +0x198 slot, update 0x0058a3d4; its slot call is in `SinowberillResetGlobalState_0058a1dc`, not in the update, so no row). Sinow Berill / Spigell: vtable 0x00b0a120 (DEVLOG 2026-10-25 earlier, ctor 0x0059e0a4), +0x198 slot, the slot call 0x0059ec5a in the dispatcher 0x0059eb08. ASSUMED. The port's FORCED_ICON_RULES SINOW_BERILL (2.0, from update 0x004addc0) belongs to vtable 0x00afa7c0, whose +0x198 is not the slot: that forced rule's family attribution is ASSUMED wrong. Not changed here (a forced icon is a per-type rule). Ep4: Astark, Satellite Lizard, Yowie, Merissa A / AA, Girtablulu, Zu, Pazuzu, Boota (vtable 0x00b0a680, +0x198 0x0061cdb0 = placeholder), Sand and Del Rappy. No vtable pass done for these.
 
 **Tests.** `tests/minimap.test.ts`: 12 'slot' and 8 'own' checks, the table length 50. `minimap`, `enemysplits`, `combat` (NEWSERV) and `tsc --noEmit` pass.
+## 2026-10-25: 6x46 is sent on every strike, zero targets included
+
+**Outcome.** A strike that hits nothing now sends `6x46` with count 0 (8 bytes: `46 02 <client id> 00000000`). The port used to send nothing, so a remote player's Mechgun spin (driven from the sender's `6x46` on the receive side) stopped on a miss. Port change: `client/src/render/combat.ts` `resolveHit` sends `sendAttackTargets` before the gun / melee split, unconditionally.
+
+**Proven (PsoBB.exe; `Psobb.exe-05112026.c` dump, `headers/network.h` 6x46 notes).**
+- Send: `send_0x60_0x46_attack_end` (0x00699248, dump 579610), called from `handle_player_attack_animation_damaging_part` (0x006990b0) at each damaging-frame crossing (dump 579550 / 579574 / 579589).
+- Gate, in order: state `unknown_flags_invincibility` == 2 returns unless in an unsafe map, and the defensive recheck returns on 2 again, so state 2 never sends. Then `(state != 3 && update_player_targeting_info() == 0)` returns, so state 3 skips the targeting check. Then `unknown_is_player_invisible` returns when set.
+- `update_player_targeting_info` (0x006a3004, dump 588704) returns `&this->target_count` (non-null) iff the player has `unk1` and the palette-slot targeting entry has `reticle_type1 == 2`. It returns 0 otherwise. The target count is not in the gate.
+- Reticle type 2 is the equipped-weapon branch of `unknown_update_equipment_properties_from_pmt` (dump 784800 area: `reticle_color_type == 2` reads `get_weapon_pmt_data`).
+- Body: `{46, size_dwords = count + 2, client id, u32 count, TargetEntry[count]}`, count clamped to 0..10 for the size only. Zero targets: size 2, 8 bytes.
+
+**Newserv.** `ReceiveSubcommands.cc` 6x46 (`forward_subcommand_with_entity_targets_transcode_and_track_hits_t`) accepts count 0 (0 <= min(size - 2, 10)); `ProxyCommands.cc` blocks only a count above the bound. Zero entries: no hits to record, so the forward is the whole effect.
+
+**6x47 / 6x48.** No target gate shared with 6x46. `SendCastTechPacket_0069a2f0` (dump 580532) sends `cast_tech` (6x47) after the cast eligibility check, with the target count as data. The release (6x48, `launch_tech`, enum 72) is sent on the release frame; the port sends it unconditionally (`sendCastTechniqueComplete`). The exe's 6x48 sender is not located by name in the dump (not traced further); the port's technique send is already ungated, so no change.
+
+**Tests.** `tests/attack46.test.ts`: zero-target body bytes and parse back; one and two targets; a 12-target list cut to 10 with size 12. The real `Lobby.prototype.sendSubcommand` frames the body.
+
+**ASSUMED / open.**
+- State 3 (`unknown_flags_invincibility == 3`) sends `6x46` without refreshing the targeting block, so the exe would ship the previous strike's targets. The port has no state-3 flag, so this is not modelled.
+- Special strikes (`attackType 2`) are sent like weapon strikes. The exe's special path is not traced to a separate palette slot.
+- `tests/magfeed.test.ts` fails in a worktree without `vendor/newserv` tables (it reads `ROOT/vendor`); unrelated to this change.
 
 ## 2026-10-25: Episode 1 bosses: the Dragon's lock and hit are the entrance's box bit 0; De Rol Le's shell segments are on the radar with their box off
 
