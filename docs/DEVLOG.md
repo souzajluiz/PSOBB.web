@@ -1,5 +1,27 @@
 # Devlog
 
+## 2026-10-25: Vol Opt's radar per state: pillars, monitors and core read from the exe; lock and hit writers mapped, not ported
+
+**Outcome.** The pillars, monitors and core leave `concealed()` for the exe's per-state icon gates. The port's state numbers are the exe's `+0x32e` values (checked against the dispatch tables, not just the comments). Lock and hit are unchanged; this pass only mapped their writers.
+
+**Proven (PsoBB.exe, `objdump -D`; the JP and dump names are not used for addresses).**
+- Pillar dispatch `0x00442730` on `+0x32e`: states 0 (`0x00443b0c`), 2 (`0x00442ec0`), 4 (`0x00442c98`), 5 (`0x00442770`), 9 (`0x004428b0`). The icon call `0x00805608` sits in the handlers for 2 (`0x00443563`), 4 (`0x00442d5b`) and 9 (`0x00442986`). None in 0 or 5 (no icon in their ranges, no jump into a tail).
+- Monitor update `0x004419d4`: the icon at `0x00441aaa` comes after the state dispatch `0x00441bf0` (states 0, 1, 4, 5) and is gated only by `+0x30 & 0x800` (`0x00441a73`, `0x00441ab5`). Early exit only on the pause test `0x004f7c84`.
+- Core dispatch `0x0043f17c` (jump table `0x008fe0bc`): states 0 (`0x0043fcfc`), 1 (`0x0043fb90`), 2 (`0x0043f6c8`), 4 (`0x0043f560`), 5 (`0x0043f52c`), 7 (`0x0043f458`), 9 (`0x00440298`), 10 (`0x0043f1c8`). Icons at `0x0043f2c2` (10), `0x0043f9d8` (2), `0x0043fce1` (1), `0x00440336` (9). States 0, 4, 5, 7 have none. States 1, 9, 10 test `DAT_00a447ac >= 0` (`0x0043fccb`, `0x00440320`, `0x0043f2ac`); the core writes that variable each tick from its monitor lookup (`0x0043f01a`), which is the port's `VoloptAi.exposed`.
+- Monitor flag writers (exe VAs): `VoloptMonitorSetHitFlag` is `0x004415f4` (sets `+0x390 |= 0x40000`, `+0x30 |= 0x800`, then vtable `+0x104`); called from `0x00441cd1` in the wall loop, with an inline copy at `0x00441d14..0x00441d29`. The JP name `FUN_004416fc` is the same function at a different address in the JP tree. The `0x800` clear (`and 0xfffff7ff`) is not in any Vol Opt function (the other sites are other entities), so a broken monitor keeps `0x800`. `0x40000` is cleared at `0x00441e3f` (state 1, sub 0: the activate step). `0x2000000` is set with `0x40000` at `0x00441e75` (state 0, sub 0: `or 0x2040000`, after `0x00441e68`) and cleared at `0x00441e5f` (sub -1).
+- The core's monitor pick `0x0043fd3c` (the port's `exposed`) returns -1 when the picked monitor's `+0x30` has `0x800` (`test edx, 0x800` at `0x0043fe11`). So a broken monitor is never the exposed one, which is the port's `exposedMonitor(monitorUp)` rule.
+- Pillar flag writers in its own code: `0x40000` set at `0x004427e6` (state 5), `0x004428ea` (state 9, `or 0x4040000`), `0x00442f16` / `0x00442f40` (state 2). `0x800` cleared at `0x00442813` (state 5). `0x2000800` tested at `0x0044309a`, `0x004430fc`, `0x0044316a` (state 2 handler).
+
+**Port.**
+- `client/src/render/combat.ts` `voloptRadar`: pillar `st` 2, 4, 9 always; 0, 5 never. Monitor: always unless `broken` (the wall loop's breakDown is the `0x800` set). Core: 0, 4, 5, 7 never; 2 always; 1, 9, 10 `exposed >= 0`. Prison, rod, body, control unchanged.
+- `tests/volopt.test.ts`: the radar block covers each state, the broken monitor, and the core's exposed gate.
+
+**ASSUMED / open.**
+- Pillar and core state 2 sub-states: the icon is at the end of each handler, reached through the sub-state dispatch (`+0x384`). Some sub-states return before that tail. Those paths were not all traced, so a sub-state that skips the icon is still drawn.
+- Monitor `broken` as the exe's `0x800`: the port's `breakDown` is the wall loop's effect (both branches read; the loop's exact count conditions were not re-checked). The core's pick (`0x0043fd3c`, see above) reads the same bit, which supports the mapping.
+- Lock and hit are NOT ported. Open: the monitor's `0x2000000` (idle sub 0 blocks the nearest-target search, which needs `flags & 0x2000800 == 0`); the port's targetable does not model it. The pillar and core writers above are listed but not mapped to the port's `targetable`. The `0x4000000` / `0x40000` readers in the body and prison code (`0x00444554`, `0x00446e95`, `0x00448bdd..0x00448cd0`) were not traced.
+- The `0x4040000` pair in the monitor's `0x00441b43` / `0x00441b4d` (vtable `+0xe4`) was not traced.
+
 ## 2026-10-25: Episode 1 bosses: the Dragon's lock and hit are the entrance's box bit 0; De Rol Le's shell segments are on the radar with their box off
 
 **Outcome.** Dragon lock and hit: `concealed()` (`untargetable` = the entrance, sid 0x1d) is now PROVEN, not ASSUMED. Nothing changed in the code path, only the comments and a test. The earlier note that the update clears box bit 0 when the cursor is below 0x32 was wrong: that clear is bit 26 (see below). De Rol Le: the shell segments' forced radar icon has no box gate, so the port now shows a segment on the radar with its box off (`radarConcealed`). The body was already right (its icon is unconditional). Port change: `client/src/render/combat.ts` `radarConcealed` drops `DrlSegmentAi`.
