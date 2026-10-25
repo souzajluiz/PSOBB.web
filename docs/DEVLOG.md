@@ -31,6 +31,32 @@
 **Left:** the Pofuilly exe motion 4 and the +0x3f4 readers (ROADMAP line); the generic last-frame step-back (`NodeAnimator`, all enemies).
 
 **Checks:** `node tests/morfosnodes.test.ts` (all checks passed), `node tests/enemyfsmep2d.test.ts` (all checks passed), `NEWSERV=.../vendor/newserv node tests/combat.test.ts` (5859 checks, 0 failures), `node tests/enemies.test.ts` (exit 0). `client` `npx tsc --noEmit -p .` (Node 24): clean. Not run in Chrome or Playwright.
+## 2026-10-25: Scape Doll: the exe's drop-check items, the use-up, and the revive packets (Ephinea 1.25.13)
+
+**Question:** after `HandleDropItemAction_006923dc` finds the item, what does the exe do to the player? The port's revive (HP 1/8, 6x4F, invulnerability 300, motion) was ASSUMED. What are the other two drop-check triples?
+
+**Exe evidence (Ephinea PsoBB.exe at `~/Downloads/psobb-client/PsoBB.exe`; the dump `Psobb.exe-05112026.c` agrees with it at the addresses below, checked by `objdump -D -M intel`. The `assets/PsoBB.exe` copy in the JP reference is a different build: its addresses are shifted, so it was not used):**
+- `unknown_dead_player_return_to_p2_related` (0x006920ac, dump 573511..573527): the 0x92c bit 2 is cleared, then `HandleDropItemAction` runs first. When it returns 1 the routine returns at once (573528..573530): no 6x4E, no return to Pioneer 2, no revive call. The helper's fade-end callback is this routine (`unknown_create_dead_helper_object`, dump 582626..582627, passes 0x6920ac to the helper's constructor).
+- `HandleDropItemAction` (0x006923dc, disasm 0x6923dc..0x692480): skipped when `[player+0x32c] == 2`. `CheckForDropItemInInventory` (0x0069248c) returns the found item pointer in EAX (the dump loses the return value; the disasm shows `test eax,eax` after the call). Then `unknown_get_item_from_inventory_slot_maybe` (0x006a60dc), `Player_DisableMovement` (0x0068fd74), `[player+0x92c] |= 4` (the disasm `or edx, 4` at 0x69241c), `player_is_in_lobby` (0x0068fb8c, skipped in a lobby), then the 6x29 send `[29, 03, player_idx u16, instance_id, 01]` (disasm 0x692457..0x692474; the size byte 03 and amount 1 are literal), `Player_ValidateAndUnequipWeapon` (0x0068dd44), return 1.
+- So any of the three items is used up, not only the Scape Doll. The death flags then say "revived by an automatic revival item" (newserv CommandFormats 6x70 `death_flags`, bit 4 = 0x4): the exe's bit 4 is the same flag.
+- The triples: `[3, 9, 0]` Scape Doll (`030900`); `[0, 0x0D, 3]` **Phoenix Claw** (`000D03` in newserv `system/tables/names-v4.json`); `[1, 2, 0x52]` **Ragol Ring** (`010252`; QuestScript's wrap rule calls it out, and CommandFormats 6x70 names it an automatic revival item beside the Scape Doll).
+- The revive packets are sent by `dispatch_action_0x4f` (0x0069da2c, disasm). When `[0x92c] & 4` is set (a revival item was used): `dispatch_action_0x31` (0x00688f70: `[31, 01, client_id]`, skipped when `[+0x32c] == 2`), then `IsSeabedTuriganeChallengeEligible` and `UpdateSeabedTuriganeChallengeState` if eligible. When the bit is clear: `dispatch_action_0xa1` (0x006903fc: `[A1, 01, client_id]`) instead. Its tail (0x0069da73..0x0069da88) sends the 6x4F: `[4F, 01, client_id]`.
+- `dispatch_action_0x4f` runs from the dead state's interrupt: `HandleDeadStateInterrupt_0069e34c` (dump 584116) calls `handle_input_state_0x4f(this, 5)` when `[+0x30] & 0x800 == 0`. The link from the fade's end to that interrupt is not traced.
+- The state change: `ForceExitSpecialState_0069db5c` (0x0069db5c, dump 583620..583730, tail): `invuln_frames = 300`, `SetPlayerInputState(0x12, -1)` (the revive state), `flags_b0 = (flags_b0 & ~4) | 1`, the revive particle entity when the map is safe. It is reached from `handle_input_state_0x4f(this, 0)` (phase 0 of state 0x12); the chain that enters phase 0 is not traced.
+- HP: `PlayerRestoreHealthAndTP_0068fddc` (0x0068fddc, dump 571426): in an unsafe map outside a battle (quest not started, invuln != 3) HP = `max_hp1 / 2`; otherwise HP = `max_hp1`; TP = `max_tp2`. It is called from `Player_ResumeMovement_0069046c` (0x0069046c) and `PlayerResetDeadState_0068fdc8`. Whether the revive goes through it is not traced: the 1/8 stays ASSUMED.
+
+**Port:**
+- `client/src/combat/playerdamage.ts`: the fade's end uses any drop-check item (`findDropCheckItem`), not only the Scape Doll: 6x29, then `revive()` (state `reviving`, invulnerability `INVULN_TICKS_REVIVE` = 300 (exe, ForceExitSpecialState tail), 6x4F). `DROP_CHECK_ITEMS` comments name the three items. The 6x31 is not sent by the port (ASSUMED: it comes from the dead state's interrupt in the exe).
+- `tests/scapedoll.test.ts`: the non-doll triple revives (6x29 once, 6x4F once, no 6x4E); the invulnerability is checked against 300; the HP 13 check is marked ASSUMED (1/8).
+- `docs/ROADMAP.md`: the Scape Doll clause is updated.
+
+**ASSUMED / open:**
+- The HP after the revive (the port: 1/8 of max). The exe formula found (`PlayerRestoreHealthAndTP_0068fddc`: max/2 in an unsafe map, else full) is not proven to apply here.
+- The timing: the exe sends 6x31 then 6x4F from the dead state's interrupt (`HandleDeadStateInterrupt`, `[+0x30] & 0x800`), the port sends 6x4F at the fade's end. The 6x31 is not sent by the port at all.
+- The revive motion (the port's `revive` rows) and the state's entry chain (phase 0 of state 0x12).
+- Whether the 6x31 handler on the receiving side restores HP (not traced).
+
+**Checks:** `node tests/scapedoll.test.ts` (28 checks), `node tests/returnprompt.test.ts` (62/62), `node tests/combatdepth.test.ts` (836, 0 failures), `NEWSERV=<main>/vendor/newserv node tests/combat.test.ts` (5859, 0 failures), `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24) clean. Not run in Chrome.
 
 ## 2026-10-25: Enemy defence roll settled: GetEnemyDefense is 0 for every enemy (ROADMAP "where the fight moves the children" leftovers)
 
