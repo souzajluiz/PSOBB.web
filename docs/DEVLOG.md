@@ -21,6 +21,28 @@
 - The time text (elapsed since login) is not ported.
 
 **Tests:** `node tests/beatclock.test.ts` (60/60: the window ease and cycle, the sweep, the draw ops), `node tests/beattime.test.ts` (42/42), `node tests/fieldhud.test.ts` (all passed), `node tests/lobbymain.test.ts` (ALL PASS), `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome.
+## 2026-10-25: Pan Arms radar and lock-on: the exe's update rule and the entries' lock flag (+0x3e4); the hit is still ASSUMED
+
+**Question:** the Pofuilly slime now follows the exe's radar, reticle and box rules. Pan Arms (and Hidoom / Migium) still used the generic `concealed()` rule. What does the exe do?
+
+**Exe evidence (Ephinea 1.25.13; dump `src/Psobb.exe-05112026.c`, names are community labels, addresses are the proof; `objdump -D -M intel` on `~/Downloads/psobb-client/PsoBB.exe`):**
+- The per-frame update is `DerolleUpdateStateTransition_00580b2c` (vtable slot +4 of the Pan Arms vtable 0x00b07860). After the state's transition it reads the lock flag `+0x3e4` and the state `state_maybe` (+0x37c):
+  - `enable_reticle` runs while `state != 0` and `+0x3e4 != 0`. **Proven** (the code).
+  - the radar icon `unknown_add_minimap_icon` runs while `state != 0` and (`+0x3e4 != 0` and `state != 4`, or `state == 1`). **Proven** (the code). State 4 is ASSUMED to be the death: its entry `DerolleHandleState4_00582d60` runs the death clean-up.
+- The flag `+0x3e4` is written only by the state entries (objdump of 0x580000..0x58a000, every `[reg+0x3e4]` write): 0 (init 0x583de4) = 1 and 2 (init 0x583cf8) = 1 (the dump's `DerolleInit`), 10 (split, init 0x583720) = 0, 11 (merge, init 0x583648) = 0, 12 (init 0x5835ac, not in the dump: `objdump` only) = 1. The other entries keep it (sticky). **Proven.**
+- The Pan Arms family never calls `SetEnemyInvulnerableAndImmune_0053fdf0` (no `call 0x53fdf0` in that range), so the box 0x28 rule of the slime does not apply. The family writes bit 0 of the sub-object at `+0x398` (+0x18) cleared in states 1, 2, 9, 10, 11, 12, and `0x8000000` in state 1, and the `+0x384` box bit 0 in the hit states. The reader of those bits is not traced. **The hit is ASSUMED**: the port keeps its old rule (invulnerable in buried, emerge, splitting, split, merge).
+- The Hidoom / Migium halves run the same Derolle code with their own vtable (`g_HidoomMigium_vtbl`, `init_hidoom_migium_bp`, dump line 370715). Their state numbers and the vtable's update slot are not traced. **ASSUMED**: the halves keep `concealed()` (hidden = untargetable).
+
+**Port:**
+- `client/src/combat/enemysplits.ts`: `PanArmsAi.lockable` (the flag, set by `enter`: emerge and rejoin on, split and merge off, the rest sticky, a new Pan Arms starts off: ASSUMED), `radar` (buried, or lockable and not dead), `lockOn` (= lockable). `untargetable` and `invulnerable` keep the old hit rule (ASSUMED).
+- `client/src/render/combat.ts`: `slimeRadarOk`, `slimeLockOk`, `slimeStruckOk` are now `splitRadarOk`, `splitLockOk`, `splitStruckOk` and read the Pan Arms too. `concealed()` no longer lists `PanArmsAi`; it still lists `PanHalfAi` and `SlimeControl`.
+- `tests/enemysplits.test.ts`: the Pan Arms radar / reticle / hit per state (both flag values, 11 states), the entries' flag sequence, and the wrappers.
+
+**Still on `concealed()` (not checked one by one, except where noted):** Vol Opt (`VoloptAi`, `VoloptPartAi`, `VoloptForm2Ai`, `DragonAi`), `GoldDragonAi`, `DubwitchAi`, `DarkFalzAi` / `DarkFalzPartAi`, `DrlSegmentAi`, `BarbaPartAi`, `SaintMilionAi`, `SmChildAi`, `MericarolAi` / `GibbonAi` / `GibblesAi`, and `PanHalfAi` (Hidoom / Migium) and `SlimeControl` (the slime control object). Their exe rules are not traced in this entry.
+
+**Not proven / ASSUMED:** the hit of the Pan Arms (the reader of `+0x398` / `+0x384` bit 0); the Pan Arms' initial lock flag; the state 4 = death; the halves' states and update slot; the `+0x30` bit `0x2000000` that the Pan Arms entry writes when `+0x3e4 == 0` (its reader in the target code is not traced); the lock-on target list itself (only the reticle gate is proven).
+
+**Checks:** `cd client && npx tsc --noEmit -p .` clean (Node 24). `node tests/enemysplits.test.ts` all checks passed. `tests/combat.test.ts` (5859 checks, with `NEWSERV` set to the main checkout's vendor build), `combatdepth`, `minimap`, `enemyfsmcaves`, `enemystatus` pass. Not run in Chrome.
 
 ## 2026-10-25: The beat clock HUD: the layout and timing of RenderChatShortcutMenuTimer are ported (the draw is not wired)
 

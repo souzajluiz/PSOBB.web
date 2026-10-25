@@ -3,10 +3,10 @@
 // and Resta, merge); the Pofuilly Slime's puddle / rise / crawl cycle, its
 // spit and arm, its flinch, and the control's four-slot budget.
 // Run: node tests/enemysplits.test.ts
-import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, PUDDLE_MOTION, SLIME, SlimeAi, SlimeArm, SlimeControl, slimeSplitsOnHit, SlimeSpit, SLIME_MORPH, SPIT } from '../client/src/combat/enemysplits.ts';
+import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, type PanState, PUDDLE_MOTION, SLIME, SlimeAi, SlimeArm, SlimeControl, slimeSplitsOnHit, SlimeSpit, SLIME_MORPH, SPIT } from '../client/src/combat/enemysplits.ts';
 import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
-import { slimeLockOk, slimeRadarOk, slimeStruckOk } from '../client/src/render/combat.ts';
+import { splitLockOk, splitRadarOk, splitStruckOk } from '../client/src/render/combat.ts';
 
 let failures = 0;
 const check = (ok: boolean, what: string) => {
@@ -551,6 +551,56 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   check(Math.abs(t.x - 1) < 1e-9 && Math.abs(t.z) < 1e-9, `the copy moves along (sin, cos) of its heading: ${t.x}, ${t.z}`);
 }
 
+// --- Pan Arms: the radar, the lock-on and the hit, per state ----------------------------
+// DerolleUpdateStateTransition (PsoBB.exe 0x00580b2c, Ephinea 1.25.13): the radar icon while
+// the state is nonzero and (+0x3e4 set and state != 4, or state 1); enable_reticle while
+// +0x3e4 is set. +0x3e4 is written by the entries of 2 (emerge, 0x583cf8) and 12 (rejoin,
+// 0x5835ac) as 1, and of 10 (split, 0x583720) and 11 (merge, 0x583648) as 0; the other
+// entries keep it. The exe's state 4 is ASSUMED to be the death. The hit is NOT proven (the
+// family never calls SetEnemyInvulnerableAndImmune): the port's old rule stays, ASSUMED.
+{
+  const ALL: PanState[] = ['buried', 'emerge', 'walk', 'shock', 'bolt', 'spin', 'splitting', 'split', 'merge', 'rejoin', 'dead'];
+  const out = {} as AiFrame;
+  const fresh = (s: PanState, lockable: boolean) => {
+    const pan = new PanArmsAi({ x: 0, z: 0, angle: 0, movement: null, rng: () => 0.5 });
+    (pan as unknown as { state: PanState }).state = s;
+    pan.lockable = lockable;
+    return pan;
+  };
+  // Per state, the flag the entry leaves: a fresh sticky value (true and false) is checked
+  // by the radar and the reticle rules.
+  for (const s of ALL) {
+    for (const lk of [true, false]) {
+      const pan = fresh(s, lk);
+      const radar = s === 'buried' || (lk && s !== 'dead');
+      eq(pan.radar, radar, `Pan Arms radar in ${s} (lock flag ${lk})`);
+      eq(pan.lockOn, lk, `Pan Arms reticle in ${s} (lock flag ${lk}): enable_reticle only while +0x3e4 is set`);
+      eq(splitRadarOk({ ai: pan }), radar, `splitRadarOk in ${s} (lock flag ${lk})`);
+      eq(splitLockOk({ ai: pan }), lk, `splitLockOk in ${s} (lock flag ${lk})`);
+      eq(splitStruckOk({ ai: pan }), !pan.invulnerable, `splitStruckOk in ${s} (lock flag ${lk}): the ASSUMED hit rule`);
+    }
+  }
+  // The entries: emerge and rejoin set the flag, split and merge clear it, the rest keep it.
+  const pan = new PanArmsAi({ x: 0, z: 0, angle: 0, movement: null, rng: () => 0.5 });
+  const enter = (s: PanState) => (pan as unknown as { enter(o: AiFrame, s: PanState): void }).enter(out, s);
+  eq(pan.lockable, false, 'a new Pan Arms is not lockable (ASSUMED: the ctor is not traced)');
+  enter('emerge');
+  eq([pan.lockable, pan.radar], [true, true], 'emerge: lockable and on the radar');
+  for (const s of ['walk', 'shock', 'bolt', 'spin', 'splitting'] as PanState[]) {
+    enter(s);
+    eq([pan.lockable, pan.radar], [true, true], `${s}: the flag is kept (sticky), on the radar`);
+  }
+  enter('split');
+  eq([pan.lockable, pan.radar, pan.lockOn], [false, false, false], 'split: the flag is cleared, off the radar, not locked on');
+  enter('merge');
+  eq([pan.lockable, pan.radar], [false, false], 'merge: the flag stays clear, off the radar');
+  enter('rejoin');
+  eq([pan.lockable, pan.radar, pan.lockOn], [true, true, true], 'rejoin: the flag is set again, on the radar, locked on');
+  enter('buried');
+  eq([pan.lockable, pan.radar], [true, true], 'buried after a rejoin walk keeps the flag and the radar');
+  eq(splitStruckOk({ ai: pan }), false, 'buried: not struck (the ASSUMED hit rule: the box is off)');
+}
+
 // --- Pofuilly Slime's +0x3f4 (lockable) and the stun motion (animation 4) ----------------
 // The entries write +0x3f4 = 1 in states 6..11 and 0 in 0..5, 12, 13, 14 (PsoBB.exe
 // 0x597e7c .. 0x5987c8). SinowzoaUpdate calls enable_reticle only while it is nonzero, so
@@ -587,19 +637,19 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
     const sl = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, rng: () => 0.5 });
     (sl as unknown as { state: string }).state = st;
     const e = { ai: sl };
-    eq(slimeRadarOk(e), st !== 'dead', `radar in ${st}: every frame but the dead one`);
-    eq(slimeLockOk(e), LOCK.includes(st), `lock-on in ${st}: only through the reticle records (+0x3f4)`);
-    eq(slimeStruckOk(e), LOCK.includes(st), `hit in ${st}: only while the box is on`);
+    eq(splitRadarOk(e), st !== 'dead', `radar in ${st}: every frame but the dead one`);
+    eq(splitLockOk(e), LOCK.includes(st), `lock-on in ${st}: only through the reticle records (+0x3f4)`);
+    eq(splitStruckOk(e), LOCK.includes(st), `hit in ${st}: only while the box is on`);
     eq(sl.invulnerable, !LOCK.includes(st), `invulnerable (box off) in ${st}`);
   }
-  eq(slimeRadarOk({ ai: null }), true, 'a non-slime enemy is not gated by the slime rules (radar)');
-  eq(slimeLockOk({ ai: null }), true, 'a non-slime enemy is not gated by the slime rules (lock)');
-  eq(slimeStruckOk({ ai: null }), true, 'a non-slime enemy is not gated by the slime rules (hit)');
+  eq(splitRadarOk({ ai: null }), true, 'a non-slime enemy is not gated by the slime rules (radar)');
+  eq(splitLockOk({ ai: null }), true, 'a non-slime enemy is not gated by the slime rules (lock)');
+  eq(splitStruckOk({ ai: null }), true, 'a non-slime enemy is not gated by the slime rules (hit)');
   const killed = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, rng: () => 0.5 });
   killed.onDamage(0);
   eq(killed.state, 'flinch', 'a hit flinches it');
-  check(!slimeStruckOk({ ai: killed }), 'a flinching slime is not struck');
-  check(slimeRadarOk({ ai: killed }), 'a flinching slime is on the radar');
+  check(!splitStruckOk({ ai: killed }), 'a flinching slime is not struck');
+  check(splitRadarOk({ ai: killed }), 'a flinching slime is on the radar');
 }
 
 if (failures) {
