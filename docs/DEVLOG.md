@@ -1,5 +1,23 @@
 # Devlog
 
+## 2026-10-25: Plot Falz 0xca / Sinow Berill 0xcb: the indirect call is a stub, the 0xcb table was a misread E8
+
+**What changed:** `tools/gen-collision-boxes.py` has two generator fixes. (1) `e8_calls` reads the direct calls from objdump, not from a raw `E8` byte scan: the scan matched 14,883 `E8` bytes that sit inside other instructions (0x004accd0 is the byte before the call at 0x004accd1; its "target" 0x004cb480 is the bytes after the opcode). Those false edges fed the call graph. (2) `global_ptr_calls`: a `mov abs, %reg` followed by `call *%reg` takes its target from the exe's .data (the Plot Falz constructor's `call eax`). The regenerated `client/src/formats/collisionboxes.gen.ts` loses the 0xcb row (table 0x009ac120 through 0x004cb480, depth 5, was a misread) and gains/changes a few links the aligned calls now give (0x45 table 0x009c4344 at depth 1, 0x65 table 0x009bf3e4 at depth 1 instead of 0x009bf60c at depth 3, 0x116 ambiguous, and several types lose a false deep table). Sites: 247 (unchanged count), 246 tables, 27 unresolved (unchanged).
+
+**Proven (exe, `~/Downloads/psobb-client/PsoBB.exe`, objdump):**
+- 0xca: the Plot Falz constructor 0x0048d814 calls `call eax` at 0x0048dada with eax = [0x009a6c64] (`mov 0x9a6c64, %eax` at 0x0048dad1). The global is the state table: 9 rows of 5 dwords (stride 0x14, rows 0x009a6c64 .. 0x009a6d18). Row s: +0 = enter function, +4 = exit function (0 in all rows), +8 / +0xc / +0x10 are the others. The only code refs to 0x009a6c64 are the three reads 0x0048d718, 0x0048dad1 and 0x0048dbd2 (no store).
+- Target of the constructor's call: 0x0048f30c (row 0, enter of state 0): `xor eax,eax; mov [ecx+0x3d8],eax; mov [ecx+0x3d4],eax; ret`. It writes two words and no box. So the constructor's indirect init adds no box.
+- 0xcb: the factory 0x004af5b8 is `CreateSinowberillEntity_004af5b8` in the reference dump (its constructor `barbaray_constructor`, 0x004af634, uses the ep1 DeRolLe / ep2 BarbaRay / ep4 Dorphon battle params; the set type name is the dump's, not checked against the port's names). Its call chain to 0x004cb480 (`InitializeDragonEntity_004cb480`) in the old generator was 0x004b9ff0 -> 0x004ba1b8 -> 0x004acc98 -> 0x004cb480, and the last hop was the misread at 0x004accd0. The real direct calls to 0x004cb480 are only 0x004cb45e (in `AllocateEntity_004cb404`) and 0x004cedf1 (in the 0x004cede4 wrapper). No path from 0xcb's factory reaches either. The constructor calls `ConstructEntityHitbox_007b9ccc` (0x007b9ccc, the hitbox setup, not the collision init); its box is not found.
+
+**ASSUMED:**
+- 0xca has no own box: the state handlers (rows 1..8) reach init sites only in wide depth-4 trees (200 to 300 functions), so no link is claimed. Not traced per state.
+- 0xcb has no table: ASSUMED from the missing chain, not from a full walk of the barbaray constructor.
+- The global table 0x009a6c64 is static (no store in the exe): `global_ptr_calls` reads it from the file.
+
+**Not done:** the 27 unresolved init sites (table or count computed at run time) are unchanged; none was proven in this pass.
+
+**Checks:** `node tests/objectcollision.test.ts`, `collision`, `townfield`, `combatdepth`, `volopt`, `darkfalz`, `dragon` pass under Node 24. `client/node_modules/typescript/bin/tsc --noEmit -p client` clean. Not run in Chrome or Playwright.
+
 ## 2026-10-25: Saint-Milion laser: the draw writes the origin and aim (+0x38 / +0x44), the length is a ramp, 620 is a stand-in
 
 **Outcome.** The 2026-10-21 verdict "no writer of +0x38 / +0x44 in the exe" was wrong: its scan covered the ctor, the base, the spawner, the update and the wall cut, but not the draw. The writers are the laser's render (vtable slot 2) and its draw callback, through pointers the draw passes in. The length is a ramp (+100 an update) cut at the first wall; 620 is not an exe constant. Ported: the ramp, capped at 620 (ASSUMED, the wall stand-in). The 0x8000 sweep stays ASSUMED: its source (the heading from the boss node block) is located, not decoded.
