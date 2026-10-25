@@ -17,9 +17,12 @@ import {
   techData,
   techDamage,
   techGroup,
+  techHitShowsNumber,
   techPower,
+  techTookDamageMin,
   techTpCost,
 } from '../client/src/combat/techniques.ts';
+import { TOOK_DAMAGE_NEVER } from '../client/src/combat/formulas.ts';
 import {
   buildCastTechnique,
   buildCastTechniqueComplete,
@@ -157,6 +160,20 @@ eq([releaseFrame(0, 0), releaseFrame(1, 0), releaseFrame(2, 0), releaseFrame(0, 
   eq(techGroup(TECH.grants), 4, 'Grants is group 4');
   eq(techGroup(TECH.megid), 5, 'Megid is group 5');
   eq(techGroup(TECH.resta), 0, 'a support technique has no attack group');
+}
+
+// The damage number over an enemy hit (entity_hit_by_tech's case calls of
+// display_floating_text_at_position): the elemental attack groups show it, 0 included;
+// Megid shows none (its case has no number call); the support techniques and Ryuker none.
+{
+  const shows = [TECH.foie, TECH.gifoie, TECH.rafoie, TECH.barta, TECH.gibarta, TECH.rabarta, TECH.zonde, TECH.gizonde, TECH.razonde, TECH.grants];
+  eq(shows.map(techHitShowsNumber).every((x) => x), true, 'the elemental attack groups show the number');
+  eq(techHitShowsNumber(TECH.megid), false, 'Megid shows no number (its spark only)');
+  const quiet = [TECH.deband, TECH.jellen, TECH.zalure, TECH.shifta, TECH.ryuker, TECH.resta, TECH.anti, TECH.reverser];
+  eq(quiet.map(techHitShowsNumber).some((x) => x), false, 'the support techniques and Ryuker show no number');
+  // Ryuker never reaches enemies: no 6x47 target list, and the caster's client only opens the pipe
+  // (unknown_cast_tech case ryuker; the other clients break out, no entity_hit_by_tech).
+  eq([targetListKind(TECH.ryuker), techTookDamageMin(TECH.ryuker)], ['none', TOOK_DAMAGE_NEVER], 'Ryuker: no target list, no 0x200 group');
 }
 
 if (failures) {
