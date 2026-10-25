@@ -526,8 +526,10 @@ const BULCLAW_CLAWS = 4;
 //     +0x3f4 for the slime, +0x3e4 for the Pan Arms, +0x38c for the halves;
 //   - the hit only while the box is on: the slime's 0x28 bits (SetEnemyInvulnerableAndImmune);
 //     the halves' bit 0 of the box (+0x384, +0x18); the Pan Arms' hit is ASSUMED (its own box
-//     bits are not traced, see PanArmsAi.invulnerable).
-const isSplitPart = (ai: EnemyBrain | null): boolean => ai instanceof SlimeAi || ai instanceof PanArmsAi || ai instanceof PanHalfAi;
+//     bits are not traced, see PanArmsAi.invulnerable);
+// Gibbles (GibblesAi, the per-state gates of enemyfsmep2a.ts setGate / enterBox): the icon
+// and the reticle of the handler's frame, and bit 0 of its box as the hit (`hittable`).
+const isSplitPart = (ai: EnemyBrain | null): boolean => ai instanceof SlimeAi || ai instanceof PanArmsAi || ai instanceof PanHalfAi || ai instanceof GibblesAi;
 // Gibbon and Mericarol (combat/enemyfsmep2b.ts), PsoBB.exe: vtable +0x184 (FUN_00520504) calls
 // +0x174 (FUN_0052039c: entity flag 0x4000000 = invulnerable, and 0x2000000 on every hit box, so
 // the box is not struck) and +0x180 (FUN_005204b0: bit 0 of every box off), then sets entity flags
@@ -539,11 +541,14 @@ const isSplitPart = (ai: EnemyBrain | null): boolean => ai instanceof SlimeAi ||
 // rule, see applyEnemyHit), and they stay on the radar and lockable.
 const isEp2Hidden = (ai: EnemyBrain | null): boolean => (ai instanceof MericarolAi || ai instanceof GibbonAi) && ai.untargetable;
 export const splitRadarOk = (e: { ai: EnemyBrain | null }): boolean =>
-  (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi).radar) && !isEp2Hidden(e.ai);
+  (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi | GibblesAi).radar) && !isEp2Hidden(e.ai);
 export const splitLockOk = (e: { ai: EnemyBrain | null }): boolean =>
-  (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi).lockable) && !isEp2Hidden(e.ai);
-export const splitStruckOk = (e: { ai: EnemyBrain | null }): boolean =>
-  (!isSplitPart(e.ai) || !(e.ai as SlimeAi | PanArmsAi | PanHalfAi).invulnerable) && !isEp2Hidden(e.ai);
+  (!isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi | GibblesAi).lockable) && !isEp2Hidden(e.ai);
+export const splitStruckOk = (e: { ai: EnemyBrain | null }): boolean => {
+  if (isEp2Hidden(e.ai)) return false;
+  if (e.ai instanceof GibblesAi) return e.ai.hittable;
+  return !isSplitPart(e.ai) || !(e.ai as SlimeAi | PanArmsAi | PanHalfAi).invulnerable;
+};
 const techRecordOk = splitLockOk;
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   (e.ai instanceof SlimeControl && e.ai.untargetable) ||
@@ -556,7 +561,6 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   e.ai instanceof SaintMilionAi ||
   (e.ai instanceof SmChildAi && e.ai.untargetable) ||
   (e.ai instanceof SinowAi && e.ai.dormant) ||
-  (e.ai instanceof GibblesAi && e.ai.untargetable) ||
   (e.ai instanceof NanoDragonAi && e.ai.untargetable);
 
 // 6x47 / 6x48 subcommand numbers.

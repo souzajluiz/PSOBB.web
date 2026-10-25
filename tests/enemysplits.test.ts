@@ -8,6 +8,7 @@ import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 import { splitLockOk, splitRadarOk, splitStruckOk } from '../client/src/render/combat.ts';
 import { GibbonAi, MericarolAi } from '../client/src/combat/enemyfsmep2b.ts';
+import { GibblesAi, type GibblesState } from '../client/src/combat/enemyfsmep2a.ts';
 
 let failures = 0;
 const check = (ok: boolean, what: string) => {
@@ -739,6 +740,39 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   eq([splitRadarOk(at(GibbonAi, 'wait')), splitLockOk(at(GibbonAi, 'wait'))], [true, true], 'Gibbon wait: on');
   // Other families are not gated by the Gibbon / Mericarol rule.
   eq([splitRadarOk({ ai: null }), splitLockOk({ ai: null }), splitStruckOk({ ai: null })], [true, true, true], 'no brain: all on');
+}
+
+// Gibbles through the same predicates (render/combat.ts splitRadarOk / splitLockOk / splitStruckOk):
+// the icon, the reticle and the box bit of each state (enemyfsmep2a.ts setGate / enterBox).
+{
+  const gib = (state: GibblesState, box: boolean, targetId: number | null) => {
+    const g = new GibblesAi({ x: 0, z: 0, angle: 0, params: [0, 0, 0, 0], attacks: [], movement: null, rng: () => 0.9 });
+    g.state = state;
+    Object.assign(g as unknown as { busy: boolean; boxOn: boolean; targetId: number | null }, { busy: true, boxOn: box, targetId });
+    g.tick([{ clientId: 0, x: 0, z: 100, charClass: 0, dead: false, angle: 0 }], false);
+    return { ai: g };
+  };
+  const rows: Array<[GibblesState, boolean, boolean, boolean]> = [
+    // state, radar, lock, struck (the box after the handler ran: dormant and arrive clear it, the others keep or set it)
+    ['dormant', false, false, false],
+    ['arrive', true, true, false],
+    ['approach', true, true, true],
+    ['combo', true, true, true],
+    ['rage', true, true, true],
+    ['guard', true, true, true],
+    ['stagger', true, true, true],
+  ];
+  for (const [s, radar, lock, struck] of rows) {
+    const e = gib(s, true, 0);
+    eq([splitRadarOk(e), splitLockOk(e), splitStruckOk(e)], [radar, lock, struck], `Gibbles ${s}: radar / lock-on / hit (exe 0-8)`);
+  }
+  const off = gib('combo', false, 0);
+  eq(splitStruckOk(off), true, 'Gibbles combo: the entry sets the box, so it is struck');
+  const noTarget = gib('approach', false, null);
+  eq([splitRadarOk(noTarget), splitLockOk(noTarget)], [false, false], 'Gibbles approach without a target: no radar, no lock-on (exe 3 gate)');
+  const dead = new GibblesAi({ x: 0, z: 0, angle: 0, params: [0, 0, 0, 0], attacks: [], movement: null, rng: () => 0.9 });
+  dead.kill();
+  eq([splitRadarOk({ ai: dead }), splitLockOk({ ai: dead })], [false, true], 'Gibbles death: no radar, lock-on in the windup');
 }
 
 if (failures) {
