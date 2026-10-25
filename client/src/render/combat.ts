@@ -82,7 +82,7 @@ import { parseCameraRel, type CameraRel } from '../formats/cameramotion.ts';
 import { F1_ANIM_ROWS } from '../combat/darkfalz1.ts';
 import { F2_ANIM_ROWS } from '../combat/darkfalz2.ts';
 import { F3_ANIM_ROWS } from '../combat/darkfalz3.ts';
-import { BOOMA_BRAIN_TYPES, boomaBrainIconShown, radarSourceOf, type Icon } from '../classic/minimap.ts';
+import { BOOMA_BRAIN_TYPES, boomaBrainIconShown, darkGunnerBrainIconShown, radarSourceOf, type Icon } from '../classic/minimap.ts';
 import type { DfEvent, DfRow, DfRows } from '../combat/darkfalzcommon.ts';
 import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
@@ -1952,6 +1952,10 @@ export class CombatView {
       if (e.ai instanceof ClawAi && e.ai.hidden) continue;
       // A timed spawn (Shark, Dimenian) keeps its radar icon: the spec's trace found no change in the spawn.
       if (BOOMA_BRAIN_TYPES.has(e.slot.type) && e.ai instanceof EnemyAi && !(e.ai.timedSpawn && e.ai.state === 'spawn') && !boomaBrainIconShown(e.ai.state)) continue;
+      // The Dark Gunner's icon follows its state (classic/minimap.ts DARK_GUNNER_BRAIN_EXE_STATE);
+      // a timed status (paralysis, freeze, shock or the hold) adds one in any state (the update's
+      // timed-status branch, which skips the dispatcher).
+      if (e.slot.type === 'DARK_GUNNER' && e.ai instanceof GunnerAi && !e.status.locked && !darkGunnerBrainIconShown(e.ai.state)) continue;
       // Dark Falz forms 1 and 3 have their own forced icons (minimapIcons).
       if (e.ai instanceof DarkFalzPartAi && (e.ai.entity === DF_ID.form3 || e.ai.entity === DF_ID.form1)) continue;
       const p = e.instance.root.position;

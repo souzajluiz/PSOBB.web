@@ -1,5 +1,31 @@
 # Devlog
 
+## 2026-10-25: Radar per state for the Dark Gunner; Gillchic and Sinow Gold rows
+
+**Outcome.** The Dark Gunner's radar icon now follows its state, as the Booma's does (`darkGunnerBrainIconShown`, gated in `render/combat.ts` `minimapEnemies`). The Gillchic and Sinow Gold rows of `ENEMY_RADAR_SOURCE` are resolved (both 'own', the port's default behaviour, so no change on the radar). The survey note "no stateful Dark Gunner brain" was wrong: `GunnerAi` (`combat/enemyfsmruins.ts`) has a `state` field, so the mapping is by state, not by default.
+
+**Dark Gunner, the exe's state word (+0x32e) to the handler and the icon.** Dispatcher 0x005443c4 (dump 328620), the update 0x00543e8c (vtable 0x00b03400, slot +0x04, read from the exe).
+- 0 idle (0x00545a64): no icon. Proven: the body returns early or sets its counter; no icon call. Dormant (flag 0x10000) and idle both stay in 0.
+- 1 active (0x00544fe0): icon. Proven: no `return` before the icon call at dump 329544.
+- 2 shoot (`gunner_shooting_update`): icon. Proven: icon at 329150, no early return.
+- 3 timed wait (0x005448e0, 15 frames from the ctor's +0x344 = 0xf, then SetAnimationTo1): icon. Proven for the handler; the writer of state 3 is not in the dump, and no port state maps to it (ASSUMED unreached).
+- 4 flinch (0x00544704): icon. Proven: icon at 328895 on every path.
+- 5 death (0x00544634): no icon. Proven: no icon call.
+- 6 stun (0x00544518): icon. Proven: icon at 328764 on every path.
+- 8 home (0x00544410): no icon. Proven: no icon call; it calls SetAnimationBasedOnDistance (0x005444cc), which writes 0 (idle) within the threshold and 8 otherwise.
+- The update's timed-status branch (dump 328612): when +0x98, +0xa4 or +0xa8 returns nonzero, the dispatcher is skipped and the icon is added, whatever the state. +0x98 = 0x00546240 (unknown_handle_paralysis_effect), +0xa4 = 0x00546254 (frozen_effect_tick), +0xa8 = 0x0077818c (shock: flag 0x4, counter +0x270; disassembled). PROVEN. The pause gate (g_UnknownShouldPauseEnemyAI, dump 328442) returns before any icon: not modelled.
+
+**Port mapping** (`DARK_GUNNER_BRAIN_EXE_STATE`): dormant and idle = 0; drop, hover, turn, dash = 1 (ASSUMED the port's split follows the exe's sub-phases inside handler 1); shoot = 2; stun = 6; home = 8; dead = 5. The radar test is `e.status.locked` (paralysis, freeze, shock or hold; the port's version of the timed-status branch) or the state's icon. ASSUMED: the hold (0x4000) counts with the timed status, as `EnemyStatus.locked` does.
+
+**Open.** The flinch (exe 4) has no port state: the port keeps the gunner in its state through a hit, so an idle gunner that is hit does not show the flinch icon the exe would (ASSUMED). State 3's writer is not found.
+
+**Gillchic and Sinow Gold.**
+- Gillchic: `gilchic_constructor` (dump 339822, the ctor at 0x00556600) writes vtable 0x00b04760 at 0x005566b9 (objdump). Its slot +0x198 is null, so no shared slot. Its update 0x005548f0 (dump name `RappyAIUpdateLoop_005548f0`, dump 338581) calls the icon unconditionally at dump 338624 (the pause gate only). Row 'own'. PROVEN for the vtable and the call.
+- Dubchic: the same ctor writes the same vtable 0x00b04760 for param6 = 0, so the DUBCHIC row ('slot', vtables 0x00b04a40 / 0x00b04cc0) is in doubt. OPEN: re-check which vtable the Dubchic actually gets (ASSUMED 0x00b04760 shared; not changed here).
+- Sinow Gold: no own ctor. Subtype 1 of `sinowbeat_constructor` (`set_sinowbeat_subtype`, dump 374960: model and subtype only). Row 'own', ASSUMED the Sinow Beat's icon path.
+
+**Tests.** `tests/minimap.test.ts` (Dark Gunner states and brain mapping, the 'gunner' row, Gillchic and Sinow Gold rows): ok. `tests/enemyfsm.test.ts`: ok. `NEWSERV=.../vendor/newserv node tests/combat.test.ts`: 5859 checks, 0 failures. `tsc --noEmit -p client`: clean. Not run in Chrome (no Playwright).
+
 ## 2026-10-25: Episode 1 bosses: the Dragon's lock and hit are the entrance's box bit 0; De Rol Le's shell segments are on the radar with their box off
 
 **Outcome.** Dragon lock and hit: `concealed()` (`untargetable` = the entrance, sid 0x1d) is now PROVEN, not ASSUMED. Nothing changed in the code path, only the comments and a test. The earlier note that the update clears box bit 0 when the cursor is below 0x32 was wrong: that clear is bit 26 (see below). De Rol Le: the shell segments' forced radar icon has no box gate, so the port now shows a segment on the radar with its box off (`radarConcealed`). The body was already right (its icon is unconditional). Port change: `client/src/render/combat.ts` `radarConcealed` drops `DrlSegmentAi`.
