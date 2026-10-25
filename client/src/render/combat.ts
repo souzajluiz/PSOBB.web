@@ -779,6 +779,7 @@ export class CombatView {
         this.showSoul(this.game.selfId, true);
         this.opts.onRevivable?.();
       },
+      sendRevivalItemUsed: () => this.game.sendRevivalItemUsed(),
       sendRevived: () => {
         this.game.sendPlayerRevived();
         this.showSoul(this.game.selfId, false);
