@@ -57,6 +57,7 @@ import { DISABLED, drawListWindow, drawWindowTitle, INSET, listKey, listWindowHe
 import { wipeElement, WindowAnim, withElementWipe, withWindowAnim } from './windowanim.ts';
 import { ICON_UV, isWrapped, itemRow, type ItemPackTextures, type ItemRow, type RowContext } from './itempack.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
+import { ICON_H, ICON_W, photonPictureUv, type PaletteTextures } from './palette.ts';
 import {
   magPhotonRows,
   magStatRows,
@@ -411,7 +412,7 @@ export class MagMenu {
   }
 
   // `wipe`: the leaf's opening animation (FieldMenu's leafAnim): the elements of each window are revealed by its wipe.
-  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, extra = 0, wipe?: WindowAnim): void {
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures & { palette?: PaletteTextures }, extra = 0, wipe?: WindowAnim): void {
     const rc = this.env.rowContext();
     const L = MAG_LIST;
     const cx = L.x + INSET;
@@ -473,7 +474,7 @@ export class MagMenu {
     const mag = this.mags[this.cursor];
     if (mag) this.drawStatus(ctx, skin, mag);
     if (this.picture) ctx.drawImage(this.picture, MAG_PICTURE.x, MAG_PICTURE.y); // entry 0xC (native size: ASSUMED)
-    if (this.state === 'photon' || this.photonAnim.visible) this.drawPhotonList(ctx, skin);
+    if (this.state === 'photon' || this.photonAnim.visible) this.drawPhotonList(ctx, skin, tex.palette?.icons[5] ?? null);
     if (this.state === 'photon' || this.photonInfoAnim.visible) this.drawPhotonInfo(ctx, skin);
     if (this.state === 'pb' || this.pbAnim.visible) {
       const w = gameTextWidth(this.pbLine) + 2 * INSET;
@@ -509,9 +510,11 @@ export class MagMenu {
   }
 
   // The photon list (entry 0xA): the mag's blast rows (a blank row is empty), the cursor bar on
-  // its row. The row's text is the blast's name (group 9), an ASSUMED stand-in for the exe's
-  // picture of the blast (itemdetail.ts photonRowArgs).
-  private drawPhotonList(ctx: CanvasRenderingContext2D, skin: WindowSkin): void {
+  // its row. A blast row is the blast's picture: texture 5 at table 0x009f1600[blast] (ICON_W x
+  // ICON_H texels, palette.ts photonPictureUv). The picture's size on screen is ASSUMED to be the
+  // row's height at the picture's aspect (the element's own size is not decoded). Without the
+  // texture the row shows the blast's name (group 9), the stand-in of the first port.
+  private drawPhotonList(ctx: CanvasRenderingContext2D, skin: WindowSkin, blasts: CanvasImageSource | null): void {
     const P = MAG_PHOTON_LIST;
     const a = this.photonAnim;
     const h = 3 * ROW + 2 * INSET;
@@ -525,7 +528,11 @@ export class MagMenu {
         magPhotonRows(this.cursorBlasts()).forEach((blast, i) => {
           if (blast === null) return;
           const y = P.y + INSET + i * ROW;
-          wipeElement(ctx, x, y, ROW, () => drawGameText(ctx, this.env.text(9, blast), x, y, '#ffffff'));
+          const uv = photonPictureUv(blast);
+          if (blasts && uv) {
+            const pw = (ICON_W * ROW) / ICON_H;
+            wipeElement(ctx, x, y, ROW, () => ctx.drawImage(blasts, uv[0], uv[1], ICON_W, ICON_H, x, y, pw, ROW));
+          } else wipeElement(ctx, x, y, ROW, () => drawGameText(ctx, this.env.text(9, blast), x, y, '#ffffff'));
         });
       });
     });
