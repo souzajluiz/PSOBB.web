@@ -354,8 +354,11 @@ export const BARBA_DROP = {
   attackB: 6 / 0.195, // a47a98 = 6.0 / a47aa0 (PROVEN, static init 0x004b9b72; float32 30.769229)
   liftZero: 0.195, // a47aa0 = 0x3e47ae15 (PROVEN, static init 0x004b9b68)
   z0: 300,
-  // The clock's stride in the drop (+0xc8), ASSUMED 0.3 (see playerAnimate and the map's Pass 12).
-  clockStride: 0.3,
+  // The clock's strides (+0xc8, map Pass 13, PROVEN chain): the fall runs in slot 1 (row speed 0.6);
+  // sub 0 -> 1 writes slot 4, whose blend (StartNpc type 4) wraps at the clock 1.0 to clock 0 and
+  // stride 0.3 (row 4 speed, static init 0x004b9c14).
+  fallStride: 0.6,
+  dropStride: 0.3,
   zTarget: 500,
   zMaxRise: 7,
   zAccel: 0.2,
@@ -642,6 +645,10 @@ export class BarbaRayAi extends BrainBase {
   private voloptSub = 0;
   // The animation clock's stride in effect (+0xc8, see playerAnimate).
   private animStride = 0;
+  // The blend into slot 4 (Player__StartNpcAnimation's type 4, asm 0x007a9a6c): blendWait = the
+  // id changed and the next Player__Animate starts it; blendOn = the wrap (clock 1.0) is pending.
+  private blendWait = false;
+  private blendOn = false;
   private voloptKind = 0;
   private followSpeed = 0;
   f744 = 0;
@@ -1296,23 +1303,34 @@ export class BarbaRayAi extends BrainBase {
     this.f750 = 0;
     this.f754 = 0;
     this.f758 = 0;
-    // The enter writes no +0xc0 (PROVEN: no store in 0x004b7040 event 4). ASSUMED: the stride in
-    // effect is the entering slot's (1, 0.6); the exe's stale stride is not traced.
-    this.animStride = BARBA_DROP.clockStride;
+    // The enter writes no +0xc0 (PROVEN: no store in 0x004b7040 event 4). The stride in effect is
+    // slot 1's (0.6): the chain that reached slot 1 blended into it. The clock's phase is the loop's
+    // (not traced): the blend's wrap at sub 0 -> 1 resets it, so the phase does not matter.
+    this.animStride = BARBA_DROP.fallStride;
+    this.blendWait = false;
+    this.blendOn = false;
   }
 
-  // The animation clock: +0xc0 = current_animation_elapsed (PROVEN: NJM_UpdateAnimation(+0xf8, +0xc0)).
-  // Player__Animate (refsrc Psobb.exe-05112026.c line 791218) is called first by the drop's event 0
-  // (line 238386, `param_1 == 0`): +0xc0 += the stride (+0xc8, PROVEN field), unless the hold 0x40 of
-  // +0xb0 (PROVEN in Player__Animate; ASSUMED clear here). The stride is written by Enemy__InitAnimation
-  // (the row speed, table 0x009aba20 +8: PROVEN, the Barba ctor stores 0x009aba20 at +0xd8, and the static
-  // init writes slots 0 / 1 / 3 / 4 / 5 as 0.7 / 0.6 / 0.4 / 0.3 / 0.5), by the sType 1 / 3 / 4 paths, and
-  // NOT by the drop (no +0xc8 store in 0x004b7040). Player__StartNpcAnimation's else branch writes +0xcc,
-  // not +0xc8, so a slot change does not change the stride. ASSUMED: the stride in effect in the drop is
-  // 0.3 (BARBA_DROP.clockStride): the one value that makes the sub 2 / lift constants exact (see the
-  // map's Pass 12). The exe's stale +0xc8 is not traced.
+  // The animation clock: +0xc0 = current_animation_elapsed (PROVEN). Player__Animate (refsrc
+  // Psobb.exe-05112026.c line 791218; objdump 0x007aa094) runs first in the drop's event 0 (line 238386):
+  //   1. +0xc0 += +0xc8 (the stride);
+  //   2. the id check (+0xb8 != +0xba, CheckAnimationId 0x007a9970): StartNpc, which for the sub 0 -> 1
+  //      change (slot 1 -> slot 4, both flags 0, old slot not 0) takes the BLEND branch (0x007a9a6c:
+  //      +0xb0 |= 6, type 4), so the type 4 step below runs in the same call;
+  //   3. type 4 (0x007aa369): when 1.0 <= +0xc0 (0x97d97c), +0xc0 = 0 (0x97d978 = 0.0), +0xc8 = the row 4
+  //      speed (0.3, 0x009aba68 from the static init 0x004b9c14), type 2, flags &= ~4 (sub 1's wait ends).
+  // ASSUMED: the blend branch is taken (+0xb0 bits 0x1 / 0x80 are clear: no writer in the Barba's code).
   private playerAnimate(): void {
     this.timer += this.animStride;
+    if (this.blendWait) {
+      this.blendWait = false;
+      this.blendOn = true;
+    }
+    if (this.blendOn && this.timer >= 1.0) {
+      this.timer = 0;
+      this.animStride = BARBA_DROP.dropStride;
+      this.blendOn = false;
+    }
   }
 
   // Event 0 of 0x0d (asm 0x004b7040 param 0): Player__Animate first, then the sub-states.
@@ -1324,13 +1342,15 @@ export class BarbaRayAi extends BrainBase {
       if (this.moveCounter > BARBA_DROP.fallWait) {
         this.moveSub = 1;
         this.setSlot(4);
+        this.blendWait = true; // the id change; Player__Animate starts the blend next tick
       }
       this.f754 = Math.max(this.f754 - BARBA_DROP.vyStep, BARBA_DROP.vyMin);
       this.z += this.f754;
       return;
     }
     if (this.moveSub === 1) {
-      this.moveSub = 2;
+      // asm 0x004b7040 sub 1: 0xb0 bit 4 (the blend's flag) clear -> sub 2 (the wrap ends the blend).
+      if (!this.blendOn && !this.blendWait) this.moveSub = 2;
       return;
     }
     if (this.moveSub !== 2) return; // 3: done (the leader's table step)
