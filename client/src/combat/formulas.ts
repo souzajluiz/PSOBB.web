@@ -84,6 +84,28 @@ export function rollHit(attacker: AttackerStats, defender: DefenderStats, attack
   return p > 0 && rng() <= p;
 }
 
+// GetEnemyDefense_00773a44 (its only caller is EntityHitEntity_00773350, the
+// defence roll at 0x773397). The defender's +0x324 pointer is read as a short
+// row; short [5] (+0xa) > 0 gives min(value * 0.01, 1.0) (0x00978284, 0x00978280),
+// else the base 0.0 (0x00978288). ASSUMED: short [5] is the row's ATA field.
+// Every enemy passes null: its +0x324 is zeroed by the base init (0x0077086d,
+// unknown_init_entity) and the exe has no other store of a non-null value there
+// (scan of the disassembly for [reg + 0x324] stores; ASSUMED no indirect store).
+// So the roll never resists an enemy's attack.
+export const ENEMY_DEFENSE_SCALE = 0.01; // 0x00978284
+export const ENEMY_DEFENSE_MAX = 1.0; // 0x00978280
+export function enemyDefence(stateRow: { short5: number } | null): number {
+  if (!stateRow || stateRow.short5 <= 0) return 0;
+  return Math.min(stateRow.short5 * ENEMY_DEFENSE_SCALE, ENEMY_DEFENSE_MAX);
+}
+
+// The defence roll of EntityHitEntity_00773350 (0x773397): the attack is
+// resisted when the defence is > 0 and get_random_float < defence. The random
+// number is drawn only when the defence is > 0.
+export function defenceResists(defence: number, rng: Rng): boolean {
+  return defence > 0 && rng() < defence;
+}
+
 export interface DamageResult {
   damage: number; // total before rounding (>= 1 means the hit landed)
   shown: number; // round(damage), the number above the enemy
