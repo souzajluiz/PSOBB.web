@@ -1,16 +1,18 @@
-// Non-BB .qst files (formats/qst.ts): the DC / PC / GC open-file and write-file
-// commands, online (44 / 13) and download (A6 / A7, PSO V2 payload).
+// Non-BB .qst files (formats/qst.ts): the DC / PC / GC / XB open-file and
+// write-file commands, online (44 / 13) and download (A6 / A7, PSO V2 payload).
 //
-// The layout is newserv's: encode_qst_file, add_open_file_command_t and
-// add_write_file_commands_t (src/Quest.cc) with S_OpenFile_DC_44_A6,
-// S_OpenFile_PC_GC_44_A6, S_WriteFile_13_A7 (src/CommandFormats.hh) and the
-// command headers of src/PSOProtocol.hh. The layout checks below read the bytes
-// at those offsets, not our own writer's view of them.
+// The layout is newserv's: encode_qst_file, add_open_file_command_t (the XB
+// overload with S_OpenFile_XB_44_A6, 0x50 bytes) and add_write_file_commands_t
+// (src/Quest.cc) with S_OpenFile_DC_44_A6, S_OpenFile_PC_GC_44_A6,
+// S_OpenFile_XB_44_A6, S_WriteFile_13_A7 (src/CommandFormats.hh) and the command
+// headers of src/PSOProtocol.hh. The layout checks below read the bytes at those
+// offsets, not our own writer's view of them.
 //
 // With the newserv binary (vendor/newserv/build/newserv; NEWSERV overrides the
 // checkout) it also checks:
-//   * our parse of newserv's encode-qst output (DC v2, PC, GC; online and download)
-//     and our re-pack of the same compressed streams and seeds give its bytes;
+//   * our parse of newserv's encode-qst output (DC v2, PC, GC, XB; online and
+//     download) and our re-pack of the same compressed streams and seeds give its
+//     bytes;
 //   * newserv's decode-qst reads our download .qst and returns our files.
 //
 // Run: node tests/qstnonbb.test.ts
@@ -23,6 +25,9 @@ import { prsDecompress } from '../client/src/formats/prs.ts';
 import { prsCompress } from '../client/src/formats/prscompress.ts';
 import { decodeDownloadQuestData, DLQ_HEADER_SIZE, psoV2Crypt } from '../client/src/formats/psov2.ts';
 import { packQst, packQstFiles, parseQstFiles, qstVersion, withBinLanguage, type QstVersion } from '../client/src/formats/qst.ts';
+import { parseQuestBin } from '../client/src/formats/questbin.ts';
+import { parseQuestDat } from '../client/src/formats/questdat.ts';
+import { serializeQuestBin, serializeQuestDat } from '../client/src/formats/questwrite.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MAIN_ROOT = (() => {
@@ -84,7 +89,9 @@ const concat = (...parts: Uint8Array[]): Uint8Array => {
   return out;
 };
 
-const VERSIONS: QstVersion[] = ['DC', 'PC', 'GC', 'BB'];
+const VERSIONS: QstVersion[] = ['DC', 'PC', 'GC', 'XB', 'BB'];
+// XB's open-file body (newserv S_OpenFile_XB_44_A6): the xb_filename and content_meta.
+const XB_META = { xbFilename: 'quest9_e.dat', contentMeta: 0x30000009 };
 
 // 1. Layout against newserv's structs.
 for (const version of VERSIONS) {
@@ -101,11 +108,12 @@ for (const version of VERSIONS) {
       'Test',
       download,
       version,
+      version === 'XB' ? XB_META : undefined,
     );
 
     const nonBB = version !== 'BB';
     const headerSize = nonBB ? 4 : 8;
-    const openTotal = headerSize + (nonBB ? 0x38 : 0x50);
+    const openTotal = headerSize + (version === 'BB' || version === 'XB' ? 0x50 : 0x38);
     const nameAt = nonBB ? 0 : 0x38;
     const filenameAt = version === 'DC' ? 0x23 : 0x24;
     const writeTotal = headerSize + 0x414 + (nonBB ? 0 : 4); // BB pads each write to 8 bytes
@@ -129,6 +137,12 @@ for (const version of VERSIONS) {
       check(cstr(bytes, at + headerSize + nameAt, nonBB ? 0x22 : 0x18) === 'PSO/Test', `${tag}: name ${i}`);
       check(cstr(bytes, at + headerSize + filenameAt, 0x10) === (i ? 'q9.dat' : 'q9.bin'), `${tag}: file name ${i}`);
       check(u32(bytes, at + headerSize + 0x34) === (i ? storedDat : storedBin), `${tag}: file size ${i}`);
+      if (version === 'XB') {
+        const body = at + headerSize;
+        check(cstr(bytes, body + 0x38, 0x10) === XB_META.xbFilename, `${tag}: xb_filename ${i}`);
+        check(u32(bytes, body + 0x48) === XB_META.contentMeta, `${tag}: content_meta ${i}`);
+        check(bytes.subarray(body + 0x4c, body + 0x50).every((b) => b === 0), `${tag}: XB unused bytes ${i}`);
+      }
     }
 
     // Write commands: size, command, flag (chunk index within its file), data size.
@@ -182,6 +196,8 @@ for (const version of VERSIONS) {
     check(back.version === version, `${tag}: parsed version ${back.version}`);
     check(back.download === download, `${tag}: parsed download flag`);
     check(back.name === 'Test', `${tag}: parsed name "${back.name}"`);
+    if (version === 'XB') check(back.xb?.xbFilename === XB_META.xbFilename && back.xb?.contentMeta === XB_META.contentMeta, `${tag}: parsed XB meta`);
+    else check(back.xb === undefined, `${tag}: no XB meta on ${version}`);
     check(back.files.map((f) => f.filename).join(',') === 'q9.bin,q9.dat', `${tag}: file order`);
     check(same(back.files[0]!.compressed, bin) && same(back.files[1]!.compressed, dat), `${tag}: PRS streams round trip`);
     check(same(back.files[0]!.data, prsDecompress(bin)) && same(back.files[1]!.data, prsDecompress(dat)), `${tag}: decompressed files round trip`);
@@ -200,13 +216,15 @@ for (const version of VERSIONS) {
   check(qstVersion(packQstFiles(files(64), 'x', false, 'GC')) === 'GC', 'GC detected (type field 0)');
   check(qstVersion(packQstFiles(files(64), 'x', false, 'PC')) === 'PC', 'PC detected');
   check(qstVersion(packQstFiles(files(64), 'x', false, 'BB')) === 'BB', 'BB detected');
-  let xbMsg = '';
+  check(qstVersion(packQstFiles(files(64), 'x', false, 'XB', XB_META)) === 'XB', 'XB detected from its 0x54-byte open file');
+  check(qstVersion(Uint8Array.from([0xa6, 0, 0x54, 0, 0, 0, 0, 0])) === 'XB', 'XB detected from an A6 open file');
+  let xbNeedsMeta = false;
   try {
-    qstVersion(Uint8Array.from([0x44, 0, 0x54, 0, 0, 0, 0, 0]));
+    packQstFiles(files(8), 'x', false, 'XB');
   } catch (e) {
-    xbMsg = (e as Error).message;
+    xbNeedsMeta = e instanceof RangeError;
   }
-  check(/XB/.test(xbMsg), `XB refused (${xbMsg})`);
+  check(xbNeedsMeta, 'an XB .qst without xb_filename / content_meta throws');
   let needsSeed = false;
   try {
     packQstFiles([{ filename: 'a.bin', data: prsCompress(synthetic(8)) }], 'x', true, 'PC');
@@ -265,6 +283,38 @@ for (const version of VERSIONS) {
   check(tooLong, 'packQst: a 12-character base does not fit the PC name field with ".bin"');
 }
 
+// 4a. packQst for XB (language 3 = F): the xb_filename is "quest<N>_<language letter>.dat" and
+// content_meta is 0x30000000 | N (newserv VersionedQuest::encode_qst); the parse gives them back.
+{
+  const binPath = join(NEWSERV ?? '', 'system/quests/events/q146-bb-e.bin');
+  const datPath = join(NEWSERV ?? '', 'system/quests/events/q146-bb.dat');
+  if (NEWSERV && existsSync(binPath) && existsSync(datPath)) {
+    const bin = parseQuestBin(prsDecompress(new Uint8Array(readFileSync(binPath))));
+    const dat = parseQuestDat(prsDecompress(new Uint8Array(readFileSync(datPath))));
+    const n = bin.header.questNumber;
+    for (const download of [false, true]) {
+      const seeds = { bin: 0x01020304, dat: 0x05060708 };
+      const bytes = packQst(bin, dat, { version: 'XB', language: 3, download, seeds, filename: 'q146', name: 'Xb' });
+      const back = parseQstFiles(bytes);
+      const tag = `packQst XB ${download ? 'download' : 'online'}`;
+      check(back.version === 'XB' && back.download === download, `${tag}: version ${back.version}`);
+      check(back.xb?.xbFilename === `quest${n}_f.dat` && back.xb?.contentMeta === ((0x30000000 | n) >>> 0), `${tag}: xb meta ${JSON.stringify(back.xb)}`);
+      check(back.name === 'Xb' && back.files.map((f) => f.filename).join(',') === 'q146.bin,q146.dat', `${tag}: names`);
+      check(same(back.files[0]!.data, serializeQuestBin(bin)), `${tag}: .bin decompresses to the serialized quest`);
+      check(same(back.files[1]!.data, serializeQuestDat(dat)), `${tag}: .dat decompresses to the serialized quest`);
+    }
+    let badLang = false;
+    try {
+      packQst(bin, dat, { version: 'XB', language: 8 });
+    } catch (e) {
+      badLang = e instanceof RangeError;
+    }
+    check(badLang, 'packQst XB: language 8 is refused');
+  } else {
+    console.log('SKIP packQst XB check (no newserv events/q146-bb-e.bin)');
+  }
+}
+
 // 4b. The download .bin language override (newserv create_download_quest): byte 0x10
 // of the decompressed .bin on DC v1/v2, PC and GC; nothing else changes. 0xFF is a
 // no-op, BB has no field.
@@ -302,6 +352,7 @@ if (NEWSERV && NEWSERV_BIN) {
     ['DC', '--dc-v2', 'q052-dc-e.bin', 'q052-dc.dat'],
     ['PC', '--pc', 'q052-pc-e.bin', 'q052-pc.dat'],
     ['GC', '--gc', 'q072-gc-e.bin', 'q072-gc.dat'],
+    ['XB', '--xb', 'q000-xb-e.bin', 'q000-xb.dat'],
   ];
   const ns = (...args: string[]): void => {
     execFileSync(NEWSERV_BIN, args, { cwd: work, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -324,6 +375,7 @@ if (NEWSERV && NEWSERV_BIN) {
           parsed.name,
           download,
           version,
+          parsed.xb,
         );
         check(same(ours, theirs), `${tag}: our re-pack differs from newserv's file (${ours.length} vs ${theirs.length} bytes)`);
       }
@@ -333,7 +385,7 @@ if (NEWSERV && NEWSERV_BIN) {
         { filename: `${stem}.dat`, data: prsCompress(prsDecompress(new Uint8Array(readFileSync(join(work, `${stem}.dat`))))), seed: 0x1badcafe },
       ];
       const ourQst = join(work, `${stem}-ours.qst`);
-      writeFileSync(ourQst, packQstFiles(ourFiles, 'Cross', true, version));
+      writeFileSync(ourQst, packQstFiles(ourFiles, 'Cross', true, version, version === 'XB' ? XB_META : undefined));
       ns('decode-qst', ourQst);
       for (const f of ourFiles) {
         const decodedPath = `${ourQst}-${f.filename}`;
@@ -350,7 +402,7 @@ if (NEWSERV && NEWSERV_BIN) {
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
-  console.log('newserv cross-check: DC / PC / GC, online and download');
+  console.log('newserv cross-check: DC / PC / GC / XB, online and download');
 } else {
   console.log('SKIP newserv cross-check (no newserv build with system/quests)');
 }

@@ -1,5 +1,11 @@
 # Devlog
 
+## 2026-10-25: Xbox (XB) .qst: parse and pack, newserv byte cross-check
+
+`formats/qst.ts` takes `version: 'XB'` (`QstVersion`). newserv's `S_OpenFile_XB_44_A6` (`src/CommandFormats.hh`, 0x50 bytes) is the PC / GC open body plus `xb_filename` (pstring 0x10, ASCII, at 0x38) and `content_meta` (u32 at 0x48, `0x30000000 | quest number`, `Quest.cc` `add_open_file_command_t` XB overload). The header is the 4-byte DC-style one; the write commands are the GC ones (`add_write_file_commands_t` with `bb_alignment` false). `qstVersion` returns `XB` for the first command's size 0x54 (it used to refuse). `packQstFiles(..., xb)` takes `{ xbFilename, contentMeta }` and throws without them; `parseQstFiles` returns them as `xb`. `packQst(..., { version: 'XB', language })` names the Xbox file `quest<N>_<c>.dat` with `c` the lowercase language letter (`JEGFSBTK`, default English), as newserv `VersionedQuest::xb_filename`. XB download files are the PSO V2 payload, as on DC / PC / GC (newserv's decode_qst_data_t applies its DLQ decoder to every A6 file).
+
+Evidence: `tests/qstnonbb.test.ts` checks the XB layout offsets and the unused bytes, round-trips XB online and download, and with `newserv encode-qst --xb` (`q000-xb-e.bin`) our parse and re-pack of its streams, seeds and xb meta give its bytes; newserv's `decode-qst` reads our XB download and returns our files. No XB-specific exe evidence was taken (the Xbox client is not in the reference set).
+
 ## 2026-10-25: Booma spawn gate is current_target == 1, set by the Booma ctor: every Booma animates
 
 **Outcome.** The spawn handler's "current_target == &g_ChallengeListWindowFlag" test is not a global. It is the integer 1 in the `current_target` slot (enemy +0x398), and the dump's `&g_ChallengeListWindowFlag` is a mis-resolved name for that constant (the same mis-resolution is noted in `client/src/combat/blooddecals.ts`). The Booma constructor writes 1 there on every spawn path, so every Booma takes the animation branch. The port's `spawn: true` is right; the port now also models the exe's else branch (spawn false: sub 2, no motion, not invulnerable, idle on the next tick).
