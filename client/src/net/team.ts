@@ -462,14 +462,35 @@ export class TeamClient {
 
 // --- Team invite (Home menu > Team > Invite, 0x29) and Point Regist (0x2d) -------------------
 //
-// Invite is a peer message, not a team command. The inviter sends the 6xC1 subcommand with the
-// 0x62 relay to the picked player (ChallengeMenuWindow_Process_0074c964 state 3 -> FUN_00800464 ->
-// FUN_007d3fcc): a 0x5C-byte body (size word 0x17 dwords) with +0 0xC1, +1 0x17, +2 the sender's
-// client id (ASSUMED, the 6x header convention), +4 u32 guild card (newserv's guild_card_number;
-// the exe copies the window's +0x20, ASSUMED the picked player's card), +8 u32 action (0 = invite),
-// +0xC the inviter's name (24 UTF-16 units), +0x3C the team name (16 units). newserv relays 6xC1 as
-// it is (ReceiveSubcommands.cc forward_subcommand). The invitee answers with 6xC2 (the 0x60 table
-// entry 0xC2 = 0x0078be84): +4 the accepter's card, +8 the action (2 = accept, other = declined).
+// Invite is a peer message, not a team command. The 6xC1 INVITE is built inline by the Invite
+// window's state 3 (exe 0x0074d0e3, the send after the lobby card match at 0x0074ce43); it does
+// not copy any global. Layout (0x5C bytes, size word 0x17 dwords; relayed by 0x62 to the picked
+// client id: 0x00800464 -> 0x007d3fcc, body size = buffer[1] * 4):
+//   +0 u8 0xC1, +1 u8 0x17, +2 u16 NOT written by the exe (stack garbage; ours sends the sender id),
+//   +4 u32 the window's +0x20 (ASSUMED the card the menu sends; not proven to be the picked player's),
+//   +8 u32 action 0 = invite (the exe's withdraw is 1: 0x0074c7fd, header + action 1 only),
+//   +0xC inviter name, 0x18 UTF-16 units (0x006936b4 result, ASSUMED the local player's name),
+//   +0x3C team name, 0x10 units (copied max 0xF units from the global string 0x00a9ab78, ASSUMED).
+// newserv's G_TeamInvitationAction_BB_6xC1_6xC2_6xCD_6xCE (CommandFormats.hh 5855) is the same
+// shape with action "0 or 1 for 6xC1", so no conflict on the 6xC1 layout.
+//
+// The receiver of 6xC1 is 0x0078bc44 (the 0x60 table row C1 at file 0x0060ed04, ASSUMED from the
+// 8-byte row stride to the C2 row at 0x0060ed0c). Action 1 sets 0x00a9c8c4 = 1
+// (withdrawn). Action 0 passes a gate (0x007917b8); when it accepts, 0x0078bddf copies the body
+// (+4..+0x5B) into the global 0x00a9c8c0 (58 bytes) and sets 0x00a98474 |= 0x10 (invite pending).
+// When the gate refuses, the exe answers itself with a 6xC2 built as: +4 0, +8 4, name and team
+// copied from the packet (ASSUMED reading, the copy is not fully traced).
+//
+// The 6xC2 ANSWER as sent by the invitee (the 0x74c970 function writes 0xC2 at its frame +8, not
+// 0xC1; the global-copy senders 0x0074ca78 and 0x00717754 are answers): +4 = the global's first dword
+// (the invite's +4, the invitee's card), +8 = literal 4, +0xC..+0x5B = the global's +8..+0x57.
+// Other C2 senders (0x00722230 family, ~10 sites) copy the global unchanged, so +8 is the stored
+// action. The answer receiver 0x0078be84 (the 0x60 row C2): action == 2 copies the body (+4..+0x5B)
+// into the global 0x00a9c8c0 and sets 0x00a98474 |= 0x20 (accepted); any other action stores
+// 0x00a9c8c4 = action and the name at 0x00a9c8c8 (declined). CONFLICT: the invitee-side literal is 4,
+// the receiver accepts only 2. ASSUMED that the accept answer is sent by a path not yet traced;
+// the code keeps 2 = accept (TEAM_INVITE_ACCEPT), the receiver's proven check.
+//
 // On accept the inviter sends 03EA with that card (FUN_007f323c) and waits for 04EA (the flag).
 //
 // Point Regist (0x2d) sends 6xCC: [0xCC, 3, sender id (u16 at +2), item id u32, amount u32]

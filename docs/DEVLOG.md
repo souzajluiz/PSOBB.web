@@ -1,5 +1,23 @@
 # Devlog
 
+## 2026-10-25: Team invite layout: the 6xC1 invite is built inline, the global-copy sender is the 6xC2 answer
+
+**Question:** the Team Invite port (0x29) was to copy the global 0x00a9c8c0 into the 6xC1 body with +8 = 4. Is that the invite layout?
+
+**Exe evidence (`objdump -D -M intel`, `tools/exedata.py`):**
+- The global-copy sender at 0x0074ca78 (state 8 of the Invite window, 0x0074c964) writes `0xC2` and `0x17` at the frame's +8/+9 at function entry (0x0074c970), so the packet it sends is a 6xC2, not a 6xC1. The same holds for 0x00717754. The premise was wrong: the global is the answer's body. Its copy goes to buffer +4..+0x5B, then +8 = literal 4, and the relay is 0x00800464 with the target word at window+0x28.
+- The 6xC1 invite is built inline by state 3 (0x0074cddf -> card match at 0x0074ce43 -> 0x0074d0e3): +0 C1, +1 0x17, +4 window+0x20, +8 = 0, +0xC name (0x18 units), +0x3C team name (0xF units from 0x00a9ab78). The global is not used. The TS `inviteSubcommand` already has this layout (size 0x5C), so no code change was needed there.
+- Withdraw: 0x0074c7b8 sends C1 with +8 = 1 and leaves +4 unwritten.
+- The 6xC1 receiver is 0x0078bc44 (C1 row, ASSUMED from the table stride). Action 1 sets 0x00a9c8c4; action 0 with the gate (0x007917b8) copies +4..+0x5B into 0x00a9c8c0 and sets flag 0x10.
+- The 6xC2 receiver 0x0078be84 copies the body into the global only when action == 2 and sets flag 0x20. The invitee-side senders write action 4. CONFLICT, ASSUMED: the accept path is not traced.
+- newserv's struct (CommandFormats.hh 5855) agrees with the 6xC1 layout ("0 or 1 for 6xC1") and says "2 (or not 2) for 6xC2".
+
+**Changed:** `client/src/net/team.ts` comment block only. No behaviour change. The TS 6xC1 test in `tests/team.test.ts` already covers the layout.
+
+**Checks:** `npx tsc --noEmit -p .` clean; teammenu, homeleaves, team, lobbymenu, lobbymain, fieldhud pass.
+
+**Open:** the 6xC1 +4 source (window+0x20) and the name source 0x006936b4 are ASSUMED. The exe's invitee accept value (2 vs the literal 4) is unresolved.
+
 ## 2026-10-25: Morfos arm: the placement reads the last draw's point (the arm's frame timing settled)
 
 **Question:** the ROADMAP's Morfos line left "the arm's frame timing against the layer's animator hook order" open. Which order does the exe use, and does the port match it?
