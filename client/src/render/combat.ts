@@ -227,6 +227,7 @@ import type { EnemyInstance, EnemyLayer } from './enemyview.ts';
 import type { NodeAnimator } from './enemymodel.ts';
 import { holdCountdown, parseHoldPacket, type PillarTrap, type TrapEvent } from './traps.ts';
 import type { LobbyView } from './lobbyview.ts';
+import { burstSpinsOnReceipt } from './weaponspin.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { TickClock } from './smoothrender.ts';
 import { armLocalFromCapture, drawnWorldOrigin } from './morfosnodes.ts';
@@ -8955,7 +8956,11 @@ export class CombatView {
       this.remoteAttack(a.clientId, a.step, a.angle);
       return;
     }
-    if (sub === 0x46) this.onRemoteStrikeTargets(clientId, body);
+    if (sub === 0x46) {
+      // The sender's burst on this client (burstSpinsOnReceipt): its Mechgun barrel turns, whatever the target count.
+      if (burstSpinsOnReceipt(clientId, this.game.selfId, inUnsafeMap(this.area))) this.view?.addWeaponSpinBurst(clientId);
+      this.onRemoteStrikeTargets(clientId, body);
+    }
     if (sub === 0x0a) {
       const s = parseEnemyState(body);
       if (!s) return;
