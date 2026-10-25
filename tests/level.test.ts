@@ -34,7 +34,9 @@ import {
   StatusWindow,
 } from '../client/src/classic/hud.ts';
 import { parseNewservJson } from './lib/newservjson.ts';
-import { LEVEL_UP_COLOR, LEVEL_UP_LIGHT_FRAMES, LEVEL_UP_LIGHT_HALF, LEVEL_UP_PARTICLE, LevelUpLight, lightScale } from '../client/src/render/levelupfx.ts';
+import { LEVEL_UP_COLOR, LEVEL_UP_LIGHT_FRAMES, LEVEL_UP_LIGHT_HALF, LEVEL_UP_PARTICLE, LEVEL_UP_SPEC, LevelUpLight, lightScale } from '../client/src/render/levelupfx.ts';
+import { CAST_LIGHT_AMBIENT, castLightColor, castLightFrames } from '../client/src/combat/techlightning.ts';
+import { TECH } from '../client/src/combat/techniques.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const NEWSERV = process.env.NEWSERV ?? join(ROOT, 'vendor/newserv');
@@ -327,6 +329,36 @@ const tex = { panel: { name: 'panel' }, icons: { name: 'icons' }, font: { name: 
   const tall = new MessageLines(fixed);
   tall.add('aaaa bbbb cccc dddd eeee ffff');
   check(tall.lines[0].rows.length === 2 && tall.lines[0].height === 34, 'two rows: 14 + 6 + 14');
+}
+
+{
+  // The cast light (TechniqueEffectObject_Constructor_006eb618 through
+  // update_lighting_of_particle_effect_on_player): frames charge + 0x32 + cast,
+  // fade length frames * 0.5 (g_ParticleLightFadeOutScale 0.5 at 0x0096dacc),
+  // the cast colour held for the first round(fVar1) frames, then 10% a frame
+  // back to the player's own; the diffuse target is the area's diffuse at the
+  // cast, the ambient target 0.35. Foie: a = 1, r = 1, g = 0.5, b = 0 (exe
+  // 0x3f800000 / 0x3f000000 / 0 at the case 0 / 2 colour block).
+  check(JSON.stringify(castLightColor(TECH.foie)) === JSON.stringify([1, 0.5, 0]), 'Foie cast colour (a 1, r 1, g 0.5, b 0)');
+  check(JSON.stringify(castLightColor(TECH.rabarta)) === JSON.stringify([0.3, 0.7, 1]), 'Rabarta cast colour');
+  check(JSON.stringify(castLightColor(TECH.megid)) === JSON.stringify([0.6, 0.2, 0.7]), 'Megid cast colour');
+  check(JSON.stringify(castLightColor(TECH.zonde)) === JSON.stringify([1, 1, 0.3]), 'Zonde cast colour');
+  check(CAST_LIGHT_AMBIENT === 0.35 && castLightFrames(30, 10) === 30 + 0x32 + 10, 'ambient 0.35, frames charge + 0x32 + cast');
+  check(LEVEL_UP_SPEC.frames === 10 && LEVEL_UP_SPEC.ambient === 1, 'the level-up spec is unchanged');
+
+  // 31 frames: fVar1 = 15.5, the first half is round(15.5) = 16 frames.
+  const primary = { diffuse: 0.6, ambient: 0.4 };
+  const cast = new LevelUpLight({ frames: 31, color: [0.3, 0.7, 1], diffuse: 0.6, ambient: CAST_LIGHT_AMBIENT });
+  const st = [];
+  while (!cast.done) st.push(cast.tick(primary));
+  check(st.length === 32, `frames 0..31 (${st.length})`);
+  check(Math.abs(st[0].ambient - 0.4) < 1e-9, 'frame 0: the area ambient');
+  check(Math.abs(st[8].ambient - (0.4 + (0.35 - 0.4) * 8 / 15.5)) < 1e-9, 'frame 8: 8 / 15.5 of the way to 0.35');
+  check(Math.abs(st[15].ambient - (0.4 + (0.35 - 0.4) * 15 / 15.5)) < 1e-9, 'frame 15 still in the first half');
+  check(Math.abs(st[16].ambient - (0.35 + (0.4 - 0.35) * 0.5 / 15.5)) < 1e-9 && st[15].color.join() === [0.3, 0.7, 1].join(), 'frame 16: the ramp back; the colour held through frame 15');
+  check(Math.abs(st[31].ambient - (0.35 + (0.4 - 0.35) * 15.5 / 15.5)) < 1e-9 && Math.abs(st[31].diffuse - 0.6) < 1e-9, 'frame 31: the area light again');
+  check(Math.abs(st[16].color[0] - (0.3 + (1 - 0.3) * 0.1)) < 1e-9, 'colour moves 10% toward the player (own white) from frame 16');
+  check(st.every((x) => Math.abs(x.diffuse - 0.6) < 1e-9), 'diffuse target = area diffuse: unchanged');
 }
 
 console.log(`${checks - failures}/${checks} checks passed`);

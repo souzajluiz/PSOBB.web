@@ -55,30 +55,62 @@ export interface LightState {
   color: [number, number, number];
 }
 
-// update_lighting_of_particle_effect_on_player's light, frame by frame.
+// The shape of update_lighting_of_particle_effect_on_player's light: the frame
+// count, the colour (held for the first half, then 10% a frame back to the
+// player's own) and the two intensity targets. The cast light
+// (TechniqueEffectObject_Constructor_006eb618) is the same object with its own
+// numbers: frames charge + 0x32 + cast, the cast colour, diffuse target = the
+// area's diffuse (param_7 is g_PrimaryLightEntry's), ambient target 0.35.
+export interface LightSpec {
+  frames: number;
+  color: readonly [number, number, number];
+  diffuse: number;
+  ambient: number;
+}
+
+export const LEVEL_UP_SPEC: LightSpec = {
+  frames: LEVEL_UP_LIGHT_FRAMES,
+  color: LEVEL_UP_COLOR,
+  diffuse: LEVEL_UP_DIFFUSE,
+  ambient: LEVEL_UP_AMBIENT,
+};
+
+// update_lighting_of_particle_effect_on_player's light, frame by frame. The
+// fade is `fVar1 = frames * g_ParticleLightFadeOutScale` (0.5, 0x0096dacc): the
+// first half runs while frame < round(fVar1), the ramps divide by fVar1 itself.
 export class LevelUpLight {
   frame = 0;
-  private color: [number, number, number] = [...LEVEL_UP_COLOR];
+  private color: [number, number, number];
+  private readonly spec: LightSpec;
+  private readonly half: number;
+  private readonly span: number;
+
+  constructor(spec: LightSpec = LEVEL_UP_SPEC) {
+    this.spec = spec;
+    this.color = [...spec.color];
+    this.span = spec.frames * 0.5;
+    this.half = Math.round(this.span);
+  }
 
   get done(): boolean {
-    return this.frame > LEVEL_UP_LIGHT_FRAMES;
+    return this.frame > this.spec.frames;
   }
 
   // The player's light for this frame, from the area's primary light, then
   // one frame on.
   tick(primary: { diffuse: number; ambient: number }, own: readonly [number, number, number] = [1, 1, 1]): LightState {
     const i = this.frame;
-    const half = LEVEL_UP_LIGHT_HALF;
+    const { diffuse: dTarget, ambient: aTarget } = this.spec;
     let diffuse: number;
     let ambient: number;
-    if (i < half) {
-      const t = i / half;
-      diffuse = t * (LEVEL_UP_DIFFUSE - primary.diffuse) + primary.diffuse;
-      ambient = t * (LEVEL_UP_AMBIENT - primary.ambient) + primary.ambient;
+    if (i < this.half) {
+      const t = i / this.span;
+      diffuse = t * (dTarget - primary.diffuse) + primary.diffuse;
+      ambient = t * (aTarget - primary.ambient) + primary.ambient;
     } else {
-      const t = (i - half) / half;
-      diffuse = t * (primary.diffuse - LEVEL_UP_DIFFUSE) + LEVEL_UP_DIFFUSE;
-      ambient = t * (primary.ambient - LEVEL_UP_AMBIENT) + LEVEL_UP_AMBIENT;
+      const t = (i - this.span) / this.span;
+      diffuse = t * (primary.diffuse - dTarget) + dTarget;
+      ambient = t * (primary.ambient - aTarget) + aTarget;
       this.color = this.color.map((c, k) => c + (own[k] - c) * 0.1) as [number, number, number];
     }
     this.frame++;
@@ -182,13 +214,21 @@ export class LevelUpEffects {
     this.bursts.push({ clientId, particles, anchor: at.clone(), group, sprites: [] });
   }
 
-  private startLight(clientId: number): void {
+  // InstantiateTechniqueEffect_006e104c's cast light on the caster (the cast
+  // colour, `frames` = charge + 0x32 + cast, ambient 0.35; the diffuse target is
+  // the area's diffuse at the cast). ASSUMED: one light a player at a time, the
+  // newer one replaces the older (the exe keeps one definition per slot).
+  castLight(clientId: number, color: readonly [number, number, number], frames: number, ambient: number): void {
+    this.startLight(clientId, { frames, color, diffuse: this.host.primary().diffuse, ambient });
+  }
+
+  private startLight(clientId: number, spec: LightSpec = LEVEL_UP_SPEC): void {
     const old = this.glows.find((g) => g.clientId === clientId);
     if (old) this.endGlow(old);
     this.glows = this.glows.filter((g) => g !== old);
     const saved = new Map<THREE.MeshLambertMaterial, THREE.Color>();
     for (const m of this.host.litMaterials(clientId)) saved.set(m, m.color.clone());
-    this.glows.push({ clientId, light: new LevelUpLight(), saved });
+    this.glows.push({ clientId, light: new LevelUpLight(spec), saved });
   }
 
   private endGlow(g: Glow): void {

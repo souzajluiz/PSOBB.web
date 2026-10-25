@@ -39,6 +39,22 @@
 **Left:** the weapon group id of each player and the group -> record table (then port the cast point as the body node 35 or 48 through `weaponAttachRef` / the skeleton provider, replacing `WEAPON_HEIGHT` for the techniques); the Gibbon's Megid aim point; the Hildebear's attack cast (a separate port).
 
 **Checks:** none run (no code changed).
+## 2026-10-25: Cast light on the caster; the telepipe light closed (no light in the exe)
+
+**What changed.** The caster's cast light is drawn now: the light object of InstantiateTechniqueEffect_006e104c (TechniqueEffectObject_Constructor_006eb618) moves the caster's light toward the technique's colour and back. It reuses the level-up light's stand-in (`render/levelupfx.ts`: the player's lit materials scaled, `LightSpec` with the frame count, colour, diffuse and ambient targets). `combat/techlightning.ts` gets `castLightColor`, `castLightFrames` (charge + 0x32 + cast) and `CAST_LIGHT_AMBIENT` (0.35). Wired at the local cast start (`render/combat.ts`, the same place as the charge sound). The telepipe's light is settled: the exe has no light for the pipe (the 2026-10-23 entry), so nothing is ported and the ROADMAP item is closed.
+
+**Exe evidence** (named dump `refsrc/.../Psobb.exe-05112026.c`, values with `tools/exedata.py read`):
+- The colour block of each case in InstantiateTechniqueEffect_006e104c (line 642166 ff.): the constructor gets `&local_184`-style float arrays. `set_light_definition_for_entity` (line 773861) reads color[0] as diffuse_a and color[1..3] as r, g, b, so the array is {a, r, g, b}. Decoded: Foie / Gifoie / Rafoie (0, 1, 2) {1, 1, 0.5, 0}; Barta / Gibarta (3, 4) {1, 1, 1, 1}; Rabarta (5) {1, 0.3, 0.7, 1}; the Zonde family (6..8) {1, 1, 1, 0.3}; Grants (9) and Resta / Anti / Reverser (0xf..0x11) {1, 1, 1, 1}; Deband / Jellen / Zalure / Ryuker (10, 0xb, 0xc, 0xe) {1, 0.3, 0.9, 1}; Shifta (0xd) {1, 0.9, 0.3, 1}; Megid (0x12) {1, 0.6, 0.2, 0.7}. The existing `CAST_LIGHT` table matches these values; only its comment said {r, g, b, a} and is corrected.
+- The constructor (line 649056): +0x1c = the frames (charge + 0x32 + cast), +0x24 = the colour, +0x34 = the direction (0, -1, 0), +0x50 = 0.1 (the direction's turn), +0x58 = 0.35 (0x3eb33333, ambient target), +0x5c = g_PrimaryLightEntry's diffuse (the diffuse target), +0x54 = the caster, its slot at the caster's +0x1c.
+- `update_lighting_of_particle_effect_on_player` (line 649108): fVar1 = frames * g_ParticleLightFadeOutScale (0.5, `0x0096dacc`); while the counter < round(fVar1) the intensities go from the area's to the targets by counter / fVar1 and the colour is held; after that they go back by (counter - fVar1) / fVar1 and the colour moves 10% a frame to the entity's own; the object is done when the counter passes the frames. The level-up light is the same code with frames 10, colour (1, 0.8, 0.63), ambient target 1.0 (unchanged, `tests/level.test.ts`).
+
+**ASSUMED:**
+- Remote casts: the port lights the local player's cast only (the cast start is local). The exe's state machine (ProcessHeavySpecialAttackState) also runs for other players; their light was not traced.
+- One light per player: a newer cast or level-up replaces the older glow of that player (the exe keeps one light definition per slot; the replacement order is not traced).
+- The entity's own colour and direction (the phase 2 target) are the port's white default, as for the level-up light; the direction is not drawn (the web client has one scene light, as before).
+- Stand-in rendering: the same material scale as the level-up light (ASSUMED, see `render/levelupfx.ts`).
+
+**Checks:** `node tests/level.test.ts` (74/74: the cast colours by tech, frames 31 with round(15.5) = 16 and the ramps divided by 15.5, the colour held through frame 15, 10% back from frame 16, the level-up spec unchanged); `node tests/techlightning.test.ts` (all checks passed, the Foie cast colour added); `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` (5852 checks, 0 failures); `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome.
 
 ## 2026-10-25: Non-BB download `.qst` writer (DC / PC / GC command structs)
 

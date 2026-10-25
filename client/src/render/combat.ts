@@ -208,7 +208,7 @@ import { FieldParticles } from './hitfx.ts';
 import { TechFire } from './techfire.ts';
 import { bulletTextureIndex, GunTracers, loadGunBulletModels } from './guntracer.ts';
 import { TechEffects, TechObjects, ownsTechnique, type TechWorld } from './techlightning.ts';
-import { CAST_HEIGHT, CHARGE_SE, CHARGE_SE_PADDING, GizondeStrike, GrantsStrike, MEGID_WALL_MASK, MegidOrb, PlainBolt, SE, specialStart, SPECIAL_ID, TechShot, type FxSound, type Vec3 as TechVec3, type WallHit } from '../combat/techlightning.ts';
+import { CAST_HEIGHT, CAST_LIGHT_AMBIENT, castLightColor, castLightFrames, CHARGE_SE, CHARGE_SE_PADDING, GizondeStrike, GrantsStrike, MEGID_WALL_MASK, MegidOrb, PlainBolt, SE, specialStart, SPECIAL_ID, TechShot, type FxSound, type Vec3 as TechVec3, type WallHit } from '../combat/techlightning.ts';
 import { setModelOpacity } from './hitmodels.ts';
 import { DeathRun, deathPlanFor, mothmantDeathPlan, type DeathActions, type DeathPoint } from '../combat/deathfx.ts';
 import { Dissolve, ICE_DEFAULT_RADIUS, iceRadius } from '../combat/hitmodels.ts';
@@ -7589,6 +7589,8 @@ export class CombatView {
       this.playSe(chargeSe);
       this.chargeSe = { id: chargeSe, ticks: data.charge + CHARGE_SE_PADDING + data.cast };
     }
+    // The cast light on the caster (the same call, ASSUMED for the local player only).
+    this.levelUpFx?.castLight(me.clientId, castLightColor(tech), castLightFrames(data.charge, data.cast), CAST_LIGHT_AMBIENT);
     return true;
   }
 
