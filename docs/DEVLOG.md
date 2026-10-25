@@ -1,5 +1,37 @@
 # Devlog
 
+## 2026-10-25: Team invite, the inviter's messages: FUN_0079317c is the unitxt group 11 getter, and the Invite window shows its texts
+
+**Question:** the inviter's Invite window (ChallengeMenuWindow_Process_0074c964) logged its outcomes as "not identified". What does FUN_0079317c read, which texts does each outcome show, and where?
+
+**Exe evidence (`objdump -D -M intel` on PsoBB.exe, `tools/exedata.py read / xref / calls`, the Ghidra dump names):**
+- **FUN_0079317c is `unitxt_get_group_11_String`** (dump name, the same as the port's charcreate_text.ts comment): `mov eax,[esp+4]; edx=[0xa9cd50] (unitxt); ecx=[edx+0x2c]; ret ecx[eax]`. Proven. The DEVLOG's earlier "per-file strings, not unitxt" was wrong: the texts are unitxt_j.prs group 11 (`parseUnitxt`, index = the id).
+- Its siblings at 0x792fe8..0x79317c read the other groups of the same table (+0x30 meseta, +0x3c group 15, ...). The table is loaded by LoadLanguageAssets_00793300 (unitxt_j.prs and the others).
+- Window dispatch: jump table 0x00973a00 (state byte +0x1c), states 0..10 at 0x74cf79, 0x74cf79, 0x74cee1, 0x74cddf, 0x74cd68, 0x74ccb3, 0x74cc78, 0x74cb44, 0x74ca57, 0x74c9e8, 0x74c999.
+- The text ids are pushed in the window (`objdump`, grep of the function's pushes): 0x14c (state 3, after the 6xC1), 0x14d / 0x14f (state 5, declined), 0x150 (state 7, joined), 0x152 / 0x153 (state 9, team full), 0x153 (state 8, failed), 0x182..0x185 (only behind `CreateItemObject_006dc358 == 3`). **0x006dc358 is a stub `xor eax,eax; ret`** (proven), so the 0x182..0x185 branches are dead for the inviter; 0x154, 0x155 are not pushed in the window.
+- Message box: `get_gui_position(0x8a)` (0x73ec50) = table 0x00972390 = (419, 256) (proven: 0x00971f40 + 8 * 0x8a), the constants 206.0 / 180.0 stored for the box (0x74d008 / 0x74ce5f) are its size (ASSUMED: the ctor's float* argument is read as the size). Rows: `ListWindowObject_AddItem` (0x0073ae38, dump: appends one row).
+- Idle: state 2 counts +0x2c one per frame and compares with `DAT_00973a48` = 300.0 (proven); past 300 it goes to state 8 (the failed text). The exe has no other timeout on the inviter side; the invitee's 900-frame timeout is the 0x155 text (invitee only).
+- Joined: 6xC1 sent at state 3 (0x74d0e3), 6xC2 answer 2 -> 03EA (0x7f323c) -> 04EA (state 6: 0 -> 7, 5 -> 9, other -> 8).
+- Declined (3): state 5 -> the box. Other 6xC2 answers and absent cards: state 8 (0x153), with a 6xC2 action 4 relay (0x800464).
+
+**Texts (unitxt_j.prs group 11, read with charcreate_text.ts `parseUnitxt`):** 0x14c "Now inviting %s.\nPlease wait for a response."; 0x14d "%s"; 0x14e "Team [%s]."; 0x14f " has declined to join"; 0x150 "has agreed to join"; 0x151 "belongs to"; 0x152 "Team [%s] is already full."; 0x153 "Invitation failed."; 0x154 "Could not join."; 0x155 "Invitation cancelled."; 0x182 "%s has agreed to join\n [%s]." (dead for the inviter); 0x183..0x185 likewise.
+
+**Changed:**
+- `client/src/classic/teammenu.ts` `TeamInviteWindow`: the message box (`TEAM_INVITE_MESSAGE_POS` 419/256, 206 x 180) after the list: the sent text while the answer is awaited, then the outcome (declined: 0x14d with the invitee's name; joined: 0x150; full: 0x152 with the own team; failed / absent / idle: 0x153). `tick()` (the 300-frame idle count); a decide key closes the message. `drawTextBox` is shared with the invitee's answer window.
+- `client/src/classic/main.ts`: the 6xC2 answer 3 is `declined`; any other answer is `failed` (state 8). `teamName` for 0x152.
+- `client/src/classic/homeleaves.ts`: `teamInvite.tick()` per frame; `teamName` in the host.
+- `tests/teammenu.test.ts`: the message texts per outcome (sent while waiting, declined, joined, full, failed, absent), the idle 300/301 frames, the decide key; `tests/homeleaves.test.ts`: a declined answer now stays on the message until the decide key.
+
+**Not proven / ASSUMED:**
+- The fragments: the exe's second fragment (0x14e / 0x14f / 0x151 / 0x153 after a `wcsncat` onto `[esp+0x7c]`) is not an AddItem row: ASSUMED from the buffer layout (the first buffer is the row). So the joined row is "has agreed to join" with no name, and the declined row is the name only. Not run in the exe; this is the reading of the decompiled buffers, a visible check is still needed.
+- The team-log composite (0x7f32ac on the object at 0xaab284) is not ported (the team log window is not the Invite box).
+- The box size (206 x 180) and the list's hidden state while the message is up (the port hides the list; the exe may keep it).
+- The idle-path relay (6xC2 action 4 to the target word 0xffff) is not sent (ASSUMED no effect).
+- The message's dismiss key (decide, ASSUMED as in the other message boxes); `CreateItemObject_006dc358` is the stub, so its dead branches are not ported.
+- Not drawn in Chrome (no Playwright).
+
+**Checks:** `client/node_modules` symlink to the main checkout (removed before commit). `cd client && npx tsc --noEmit -p .` clean (Node 24). `node tests/team.test.ts` ALL PASS; `node tests/teammenu.test.ts` ALL PASS (214 checks, the inviter's message block new); `node tests/homeleaves.test.ts` all pass.
+
 ## 2026-10-25: The beat clock HUD: the layout and timing of RenderChatShortcutMenuTimer are ported (the draw is not wired)
 
 **Question:** where, when and how does the exe draw the beat (the three digits and the sub-beat bar)?

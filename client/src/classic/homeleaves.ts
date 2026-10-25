@@ -202,7 +202,7 @@ export class HomeLeaves {
         const invite = team?.invite;
         if (!team || !nearby || !invite) return false;
         this.teamInvite = new TeamInviteWindow(
-          { nearby: () => nearby.call(team), invite: (gc) => invite.call(team, gc) },
+          { nearby: () => nearby.call(team), invite: (gc) => invite.call(team, gc), teamName: () => team.teamName?.() ?? '' },
           (i) => text(11, i),
         );
         this.teamInvite.show();
@@ -234,6 +234,7 @@ export class HomeLeaves {
   // The windows' own clocks (the Team Member List's search and meet timers).
   tick(): void {
     this.tickInvite();
+    this.teamInvite?.tick();
     // The Invite window closes itself when the invitee's answer comes (its promise), so the owner's menu gets the keys back here.
     if (this.teamInvite && !this.teamInvite.open) {
       this.teamInvite = null;

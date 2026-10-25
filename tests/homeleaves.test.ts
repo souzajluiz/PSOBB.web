@@ -93,7 +93,9 @@ invLeaves.key(key('Enter'));
 check(invites.length === 1 && invites[0] === 7 && invLeaves.open === true, 'Enter on the row invites that card; the menu waits');
 await flush();
 invLeaves.tick();
-check(invLeaves.open === false && invClosed === 1, 'the answer closes Invite, and the owner gets its keys back once');
+check(invLeaves.open === true && invClosed === 0, 'the declined answer shows its message; Invite stays open');
+invLeaves.key(key('Enter'));
+check(invLeaves.open === false && invClosed === 1, 'Enter on the message closes Invite, and the owner gets its keys back once');
 
 const pointed: number[][] = [];
 const ptTeam = {
