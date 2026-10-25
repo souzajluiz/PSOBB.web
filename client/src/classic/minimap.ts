@@ -183,18 +183,44 @@ export const BOOMA_BRAIN_TYPES: ReadonlySet<string> = new Set([
 // 0x00520618 holds 0x198 of the vtable, or 0x188 for Gibbon). 'booma': the Booma
 // table, icon per state. 'slot': the shared enemy-base slot (baseIconShown).
 // 'rappy': unconditional in the alive update (update_rappy, dump 308039).
-// 'unsurveyed': the vtable holds no slot and the family's own icon calls were not
-// traced; the port keeps the default (alive and visible).
-export type RadarSource = 'booma' | 'slot' | 'rappy' | 'unsurveyed';
+// 'own': the family's own icon call (unknown_add_minimap_icon 0x00805608, or a
+// sibling), with no 0x40800 test on its path; the port keeps the default (alive and
+// visible, concealed() for the families that list it). ASSUMED the update identity
+// where noted in the table comments below.
+// 'none': no radar icon at all (Garanz: no slot and no icon call, E8 scan of
+// 0x56f8b8..0x571000, DEVLOG 2026-10-25 Garanz).
+// 'gated': an own icon behind an exe flag, which the port applies (Claw: +0x390 bit
+// 0x10000000 hides the icon; ClawAi.hidden).
+// 'unsurveyed': no vtable or update found; the port keeps the default.
+// Dark Gunner's icon is per state (dispatcher 0x005443c4 on +0x32e: states 1, 2, 3,
+// 4, 6 add it; 0, 5, 8 do not) and its update adds one only in a timed-status branch;
+// the port has no brain for it, so it stays 'own' (default), ASSUMED.
+export type RadarSource = 'booma' | 'slot' | 'rappy' | 'own' | 'none' | 'gated' | 'unsurveyed';
 export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
   BOOMA: 'booma', GOBOOMA: 'booma', GIGOBOOMA: 'booma',
   EVIL_SHARK: 'booma', PAL_SHARK: 'booma', GUIL_SHARK: 'booma',
   DIMENIAN: 'booma', LA_DIMENIAN: 'booma', SO_DIMENIAN: 'booma',
   SAVAGE_WOLF: 'slot', CHAOS_SORCERER: 'slot', CHAOS_BRINGER: 'slot', DARK_BELRA: 'slot',
+  // Canadine (vtable 0x00b02be0, slot +0x198, update calls it at 0x00541d99), Poison Lily
+  // and Del Lily (vtable 0x00b00fe0, slot at +0x198, update 0x00529754 calls it at 0x005297c1,
+  // gated by the pause only), Dubchic (vtable 0x00b04a40 / 0x00b04cc0, slot at +0x198;
+  // the extra pause gate FUN_004f7c84 is ASSUMED to change nothing here).
+  CANADINE: 'slot', POISON_LILY: 'slot', DEL_LILY: 'slot', DUBCHIC: 'slot',
   RAPPY: 'rappy',
-  HILDEBEAR: 'unsurveyed', GRASS_ASSASSIN: 'unsurveyed', NANO_DRAGON: 'unsurveyed',
-  DUBCHIC: 'unsurveyed', GILLCHIC: 'unsurveyed', GARANZ: 'unsurveyed', DELSABER: 'unsurveyed',
-  DARK_GUNNER: 'unsurveyed', BULCLAW: 'unsurveyed', CLAW: 'unsurveyed',
+  // Own icon, no 0x40800 test: Hildebear (0x00affb20, icon at 0x0051360a), Grass Assassin
+  // (0x00b00b60, unconditional at the end of each state), Delsaber (0x00b03fa0 / 0x00b041e0,
+  // call at 0x00551692), Bulclaw (0x00b01b40, 0x00531e77), Dark Gunner (see above),
+  // Nano Dragon (0x00b074e0, gate word +0x390 bit 0x40000; the port's concealed() already
+  // reads its untargetable), Nar Lily and Sinow Beat (sibling 0x008056b0, state and +0x398
+  // gates; family attribution of the update 0x00606e34 ASSUMED).
+  HILDEBEAR: 'own', GRASS_ASSASSIN: 'own', NANO_DRAGON: 'own', DELSABER: 'own',
+  BULCLAW: 'own', DARK_GUNNER: 'own', NAR_LILY: 'own', SINOW_BEAT: 'own',
+  // Garanz: no icon.
+  GARANZ: 'none',
+  // Claw: +0x390 bit 0x10000000 hides the icon (ASSUMED the port's ClawAi.hidden is that bit).
+  CLAW: 'gated',
+  // Gillchic (vtable not found) and Sinow Gold (no ctor in the type table): default kept.
+  GILLCHIC: 'unsurveyed', SINOW_GOLD: 'unsurveyed',
 };
 export function radarSourceOf(type: string): RadarSource | null {
   return ENEMY_RADAR_SOURCE[type] ?? null;
