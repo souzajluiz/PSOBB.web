@@ -35,8 +35,8 @@
 // selection, the walk and turn speeds (the port's MovementData fparam1 and turn 1024 BAMS from the
 // record 0x009bc4cc), the windup and recovery counts of the tackle (its counters are written by a
 // fistp of the animation frame count, not traced), the spawn and advance durations (the spawn
-// waits on the state timer 0x00576c48, not traced), and the player's EIC / ETH / EDK (the port has
-// no resist source for the local player, so they read 0 in render/combat.ts).
+// waits on the state timer 0x00576c48, not traced), and the player's EIC / ETH / EDK (the local
+// player's resists, combat/playerresist.ts, read in render/combat.ts illGillSpecial).
 
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion, type IllGillSpecial } from './enemyai.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';

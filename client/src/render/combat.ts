@@ -124,6 +124,7 @@ import {
   type DefenderStats,
 } from '../combat/formulas.ts';
 import { defaultSetContext, wornEquipment, type SetContext } from '../combat/playerstats.ts';
+import { classBaseElements, playerElements, statusChanceFromResist, type PlayerElements } from '../combat/playerresist.ts';
 import { liveBeatTime } from '../combat/beattime.ts';
 import { readItemData, type ItemData } from '../formats/itemnames.ts';
 import {
@@ -6503,25 +6504,27 @@ export class CombatView {
   // The Ill Gill scythe's weapon special on the local player (FUN_007753b4, the player's special
   // handler: case 7 ice, case 10 thunder, case 0xb insta-kill; the attacker is an enemy, so the
   // B branch of freeze_activation_check / thunder_special_attack_shock_chance applies). The
-  // player's EIC / ETH / EDK read 0 (ASSUMED: the port keeps no resist block for the local player),
-  // and the status boosts of an enemy attacker are 1.0 / 0 (ASSUMED).
+  // resists are the player's own (playerresist.ts): ice reads EIC (+0x2fa, 0x007771fc), thunder
+  // reads ETH (+0x2f8, 0x00777115 for the chance and 0x007759c1 for the damage), insta-kill reads
+  // EDK (+0x2fc, 0x007758c5). The status boosts of an enemy attacker are 1.0 / 0 (ASSUMED).
   // Returns whether the attack's normal hit still lands: false for ice and thunder (the special
   // is their whole effect, the thunder's own damage aside), true for the insta-kill.
   private illGillSpecial(e: EnemyRuntime, special: IllGillSpecial, angle: number): boolean {
     const what = `E-${e.index.toString(16)} (${e.slot.type})`;
     const killer = 0x1000 | e.index;
-    const resist = 0;
+    const el = this.selfElements();
     // The B branch's chance: resist / -100 + 0.75, floored at 0 (freeze_activation_check 0x007771a0,
     // thunder_special_attack_shock_chance 0x007770d0). The freeze lands when it beats the roll.
-    const statusChance = Math.max(0, resist / -100 + 0.75);
     if (special.kind === 'freeze') {
+      const statusChance = statusChanceFromResist(el.eic);
       if (statusChance > this.rng()) this.inflictStatus(STATUS.freeze, what);
       else this.opts.log(`${what}: ice missed`);
       return false;
     }
     if (special.kind === 'shock') {
+      const statusChance = statusChanceFromResist(el.eth);
       // The thunder's damage: (100 - ETH) * 0.002 * (level / (5 - power) + (1 + power) * 20) * 5.
-      const dmg = Math.round(((100 - resist) * 0.002 * (special.level / (5 - special.power) + (1 + special.power) * 20)) * 5);
+      const dmg = Math.round(((100 - el.eth) * 0.002 * (special.level / (5 - special.power) + (1 + special.power) * 20)) * 5);
       if (dmg >= 1) this.damage.hit(dmg, angle, 0, killer);
       if (this.rng() < statusChance) this.inflictStatus(STATUS.shock, what);
       return false;
@@ -6529,7 +6532,7 @@ export class CombatView {
     // The insta-kill's roll: (power - EDK) * 0.01 - 0.5 for a player, against the roll; the boss
     // areas refuse it. The kill sets the HP to 0.
     const roll = this.rng();
-    const killChance = (special.power - resist) * 0.01 - 0.5;
+    const killChance = (special.power - el.edk) * 0.01 - 0.5;
     if (!this.inBossArea() && killChance > roll) {
       this.opts.log(`${what}: instant kill (${Math.round(killChance * 100)}%)`);
       this.damage.hit(this.damage.hp, 0, 0, killer);
@@ -6923,6 +6926,15 @@ export class CombatView {
       if (flags & 8) worn.push(readItemData(inv, o + 8));
     }
     return defaultSetContext(wornEquipment(worn), beat);
+  }
+
+  // The local player's elemental resists from the worn equipment (combat/playerresist.ts). Zero
+  // until the ItemPMT has loaded (no item stats to read before it).
+  private selfElements(): PlayerElements {
+    const pmt = this.loadedItemPmt;
+    if (!pmt) return classBaseElements(0);
+    const ctx = this.liveSetContext();
+    return playerElements(ctx.worn, pmt, ctx);
   }
 
   // The first equipped item whose data1 matches (the equip flag 8 of the same two sources).

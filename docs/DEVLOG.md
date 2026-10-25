@@ -1,5 +1,30 @@
 # Devlog
 
+## 2026-10-25: Player elemental resists (EFR / EIC / ETH / ELT / EDK)
+
+**Question.** The Ill Gill specials on the local player assumed EIC / ETH / EDK = 0. Where does the exe keep the player's elemental resists, what fills them, and what reads them?
+
+**Answer.** `combat/playerresist.ts` (new), used by `render/combat.ts` `illGillSpecial` (through `selfElements`). `tests/playerresist.test.ts`.
+
+**PROVEN (dump `src/Psobb.exe-05112026.c`, objdump, tools/exedata.py).**
+- Two copies. The resist block (`battleparams_resists`, 0x20 bytes) is at player +0x320, a pointer. Shorts: [0] EVP mod (+0x0), EFR (+0x2), EIC (+0x4), ETH (+0x6), ELT (+0x8), EDK (+0xa); dword +0x1c DFP mod (struct at dump line 1510).
+- The live copy the battle code reads is at player +0x2f6 EFR, +0x2f8 ETH, +0x2fa EIC, +0x2fc EDK, +0x2fe ELT. `unknown_set_total_stats` (dump 745936, no address in the dump name) copies the block into them (lines 746027..746031). Callers: LoadPlayerEntityBattleParams (577154), apply_base_stats (572401), Player_UpdateStatsAndTP (557343).
+- The class base is `GetPlayerClassData_006acc80` (dump 599045) = `DAT_009688e0 + class * 0x20`. That table is all zero in PsoBB.exe (192 shorts read, none set) and its only code reference is that read. Base = 0 for every class.
+- Armour (`ApplyWeaponStats_005d4840`, dump 426949) and shield (`ApplyWeaponStatsVariant_005d4774`, dump 426913) add the pmt's signed bytes to the block: EFR = 0x15, EIC = 0x17, ETH = 0x16, ELT = 0x19, EDK = 0x18 (the decompile's `mst_req+1`, `ata_req+1`, `ata_req`, `mst+1`, `mst` of `pmt_weapon_bb_t`; `mst_req` at 0x14, `ata_req` 0x16, `mst` 0x18). `port formats/itempmt.ts` already reads these bytes at the same offsets.
+- Unit (`ApplyItemStatBonuses_005d41a0`, dump 426690): pmt stat 9 EFR, 10 EIC, 11 ETH, 12 ELT, 13 EDK, 14 all five; value = pmt amount + the item's bytes 6..7 (16-bit wrap).
+- Colored ring (`colored_ring_matching_boosts`, dump 427069): a shield with group_idx 0x53..0x82, case k = (idx - 0x53) & 7 = 7 adds barrier * 10 to all five (weight `local_14[7]` = 10).
+- Mag (`ApplyItemStatBonuses_005d3fa4`, dump 426621): ATP / MST / ATA / DFP of the stat block only. No element.
+- Clamp (`Player_ApplyStatModifications_0068c5c0`, dump 557408): a delta that makes a short negative leaves 0; a rise stops at 0x7fff.
+- Readers in `FUN_007753b4` (the player's special handler, 0x007753b4): EFR 0x775b47 (fire case), ETH 0x7759c1 (thunder damage), EDK 0x7758c5 (insta-kill). Inside `thunder_special_attack_shock_chance` (0x007770d0): ETH at 0x777115. Inside `freeze_activation_check` (0x007771a0): EIC at 0x7771fc. The B branch (enemy attacker, player defender) is taken by both chances; `chance = max(0, R / -100 + 0.75)` (floor at 0.0, constants 0x009781b0..0x009781b8 and 0x009781cc..0x009781d4, read with exedata). Success is `roll < chance`.
+
+**ASSUMED / NOT PORTED.**
+- The live block is the sum of the worn items, applied in slot order (armour, shield, units), each step clamped. The exe's equip path (`ApplyItemStatsToPlayer_005d1f0c`, dump 425101, calls `Player_ApplyStatModifications`) and the refresh (`unknown_set_total_stats`) were read, but the exact order of the clamp across a re-equip is not traced.
+- Set bonuses: `handle_item_set_bonus` (dump 427136) is not ported for elementals. `playerstats.ts` says some branches (weapon 0xc5 / 0xac, armour 0x9b, shield 0x9b / 0x93) write resist [1..5], but in the dump those branches index `param_4`, which is the stat block (ApplyEquipmentBonuses' 5th argument). That header claim is unverified. Left as is.
+- The enemy techniques that hit the player: `enemyTechHitsPlayer` (render/combat.ts) still uses the group-0 formula with no element resist. The header notes (battle.h, not re-read in the exe here) say entity_hit_by_tech reads the same +0x2f6 family for any defender, so the element resist should apply there too. Not changed here: the port's group-0 claim for enemy-cast Foie / Zonde is not re-verified in this session.
+- Status code (`combat/status.ts`) takes no resist; the status chances are only in the special path.
+
+**Verdict.** With no resist item worn the values stay 0, so the port's behaviour is unchanged for a bare character (the freeze / shock chance is 0.75 and the insta-kill is power - 0 as before). A character wearing a unit with EIC, ETH or EDK now gets the exe's chance.
+
 ## 2026-10-25: Merissa A / AA, part 3: the brain (OWN_FSM 'MerissaA') and the radar gate
 
 **Question.** Give Merissa A / AA a brain so it moves, attacks, takes damage and dies, and gate its radar icon on the exe's +0x37c bit 0x8.
