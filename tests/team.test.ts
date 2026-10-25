@@ -7,8 +7,15 @@ import {
   crossRankingPacket,
   disbandPacket,
   exchangeTeamPointsPayload,
+  INVITE_ANSWER_FRAMES,
+  inviteAnswerSubcommand,
+  InviteAnswerPrompt,
   inviteSubcommand,
+  inviteTarget,
   parseInviteAnswer,
+  TEAM_INVITE_ACCEPT,
+  TEAM_INVITE_DECLINE,
+  TEAM_INVITE_TIMEOUT,
   inTeam,
   memberListPacket,
   memberRowLabel,
@@ -216,6 +223,50 @@ function membershipBytes(): Uint8Array {
   const pts = exchangeTeamPointsPayload(0x100, 3);
   const pv = new DataView(pts.buffer);
   check('6xCC payload: item id then amount (u32 each, 8 bytes)', pts.length === 8 && pv.getUint32(0, true) === 0x100 && pv.getUint32(4, true) === 3);
+}
+
+// Team Invite answer (the invitee's 6xC2): the exe's values are Yes 2, No / cancel 3, the 900-frame
+// timeout 4 (and the refuse paths 4); only 2 is an accept at the receiver 0x0078be84.
+{
+  check('answer values: accept 2, decline 3, timeout 4', TEAM_INVITE_ACCEPT === 2 && TEAM_INVITE_DECLINE === 3 && TEAM_INVITE_TIMEOUT === 4);
+  const invite = inviteSubcommand({ selfId: 2, guildCard: 0x1234, name: 'Ann', teamName: 'Reds' });
+  const yes = inviteAnswerSubcommand({ invite, ownCard: 0x9999, ownName: 'Bo', action: TEAM_INVITE_ACCEPT });
+  const dv = new DataView(yes.buffer);
+  check('6xC2 answer: 0x5C bytes, 0xC2 sub, size word 0x17', yes.length === 0x5c && yes[0] === 0xc2 && yes[1] === 0x17);
+  check('6xC2 answer: own card at +4, action 2 at +8', dv.getUint32(4, true) === 0x9999 && dv.getUint32(8, true) === 2);
+  check('6xC2 answer: own name at +0xC (16 units), team name kept at +0x3C', dv.getUint16(0x0c, true) === 0x42 && dv.getUint16(0x3c, true) === 0x52);
+  check('6xC2 answer: the relay target is the invite +4 word', inviteTarget(invite) === 0x1234);
+  check('6xC2 answer round trip: parseInviteAnswer reads the own card and 2', JSON.stringify(parseInviteAnswer(yes)) === JSON.stringify({ guildCard: 0x9999, action: 2 }));
+  const no = inviteAnswerSubcommand({ invite, ownCard: 0x9999, ownName: 'Bo', action: TEAM_INVITE_DECLINE });
+  check('6xC2 decline: action 3, not an accept', parseInviteAnswer(no).action === 3);
+
+  const run = (steps: (p: InviteAnswerPrompt) => void) => {
+    const p = new InviteAnswerPrompt();
+    steps(p);
+    return p.action;
+  };
+  check('prompt: No on the first list declines (3)', run((p) => p.choose(false)) === 3);
+  check('prompt: Yes, dismiss the notice, Yes on the second list accepts (2)', run((p) => { p.choose(true); p.dismissNotice(); p.choose(true); }) === 2);
+  check('prompt: Yes, notice, No on the second list declines (3)', run((p) => { p.choose(true); p.dismissNotice(); p.choose(false); }) === 3);
+  check('prompt: cancel on the second list declines (3)', run((p) => { p.choose(true); p.dismissNotice(); p.cancel(); }) === 3);
+  check('prompt: a notice key before the notice is shown does nothing (no answer yet)', run((p) => { p.dismissNotice(); }) === null);
+  check('prompt: the second list only answers after the notice', run((p) => { p.choose(true); p.choose(true); }) === null);
+  {
+    const p = new InviteAnswerPrompt();
+    for (let i = 0; i < INVITE_ANSWER_FRAMES - 1; i++) p.tick();
+    check('prompt: no time-out before 900 frames', p.action === null);
+    p.tick();
+    check('prompt: the 900th frame of the first list times out (4)', p.action === TEAM_INVITE_TIMEOUT);
+    p.choose(true);
+    check('prompt: a finished prompt keeps its answer', p.action === TEAM_INVITE_TIMEOUT && p.phase === 'done');
+  }
+  {
+    const p = new InviteAnswerPrompt();
+    p.choose(true);
+    p.dismissNotice();
+    for (let i = 0; i < INVITE_ANSWER_FRAMES; i++) p.tick();
+    check('prompt: the second list times out too (4)', p.action === TEAM_INVITE_TIMEOUT);
+  }
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
