@@ -156,6 +156,66 @@ function runScythe(roll: number): { variantMotion: number; hitTick: number; hits
   eq(ai.state, 'chase', 'the damage motion ends into the chase (ASSUMED)');
 }
 
+// --- Scythe variant: two rolls (first > 0.35, then <= 0.5 is thunder), the specials' payloads ---
+{
+  const seq = (values: number[]) => {
+    let i = 0;
+    return () => values[i++ % values.length];
+  };
+  // movement row 38 (BattleParamEntry_lab_on, difficulty 0): iparam1 1 (ice / thunder), iparam2 100.
+  const movement = { fparam1: 10, fparam2: 1, fparam3: 0, fparam4: 0, fparam5: 0, fparam6: 0, iparam: [1, 100, 0, 0, 0, 0] };
+  const variantOf = (values: number[]): { variant: number; special: unknown } => {
+    const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement, attacks: frontAttacks, rng: seq(values) });
+    ai.level = 12;
+    const t = [target(0, 10)];
+    ai.tick(t);
+    ai.tick(t);
+    ai.tick(t);
+    ai.tick(t); // scythe sub 0: the variant is rolled, the swing starts
+    let hit: { special?: unknown } | null = null;
+    for (let k = 0; k < 40 && !hit; k++) hit = ai.tick(t).hit ?? null;
+    return { variant: (ai as unknown as { variant: number }).variant, special: hit?.special };
+  };
+  eq(variantOf([0.4, 0.3]).variant, 2, 'roll 0.4 then 0.3: thunder (second roll at most 0.5)');
+  eq(variantOf([0.4, 0.9]).variant, 1, 'roll 0.4 then 0.9: ice');
+  eq(variantOf([0.35, 0.9]).variant, 3, 'roll 0.35 is not above 0.35: the insta-kill (one roll)');
+  eq(variantOf([0.4, 0.3]).special, { kind: 'shock', power: 1, level: 12 }, 'thunder hit carries shock, the iparam1 power, the level');
+  eq(variantOf([0.4, 0.9]).special, { kind: 'freeze', power: 1, level: 12 }, 'ice hit carries freeze with the iparam1 power');
+  eq(variantOf([0.1]).special, { kind: 'kill', power: 100, level: 12 }, 'insta-kill hit carries kill with the iparam2 power');
+}
+
+// --- Snare hold: 180 frames on the target in the arc, then 10 frames of recovery -----------------
+{
+  const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement: mv(1), attacks: sideAttacks, rng: () => 0.9 });
+  const t = [target(10, 0, 7)];
+  ai.tick(t);
+  ai.tick(t);
+  ai.tick(t); // chase -> snare (row 2)
+  ai.tick(t); // sub 0 -> sub 1 (kage)
+  for (let k = 0; k < 10; k++) ai.tick(t); // the 10-frame wait
+  const out = ai.tick(t); // sub 2: the web on the target in the arc
+  eq(out.hold, { clientId: 7, frames: 180, particle: 3, x: 10, z: 0, radius2: 0 }, 'the web: 180 frames, particle 3, the target spot');
+  let frames = 0;
+  while (ai.state === 'snare' && frames < 40) {
+    ai.tick(t);
+    frames++;
+  }
+  eq(ai.state, 'chase', 'the snare returns to the chase');
+  eq(frames, 11, 'sub 4 recovers for 10 frames (the counter at 10, the chase on the 11th)');
+}
+{
+  // A target out of the snare's arc at sub 2 is not held.
+  const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement: mv(1), attacks: [row(10, 0), row(10, 0), row(10, 0x2000), row(10, 0)], rng: () => 0.9 });
+  const t = [target(10, 0, 7)];
+  ai.tick(t);
+  ai.tick(t);
+  ai.tick(t);
+  ai.tick(t);
+  let held = false;
+  for (let k = 0; k < 12; k++) if (ai.tick(t).hold) held = true;
+  eq(held, false, 'no hold while the target is outside the snare arc');
+}
+
 // --- Dead: no radar, the brain does nothing ---------------------------------------------------
 {
   const ai = new IllGillAi({ x: 0, z: 0, angle: 0, movement: mv(1), attacks: frontAttacks, rng: () => 0.9 });

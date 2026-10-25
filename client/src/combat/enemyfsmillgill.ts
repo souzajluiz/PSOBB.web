@@ -19,13 +19,26 @@
 // the tail of states 0 to 3, 5, 6 and 7 unconditionally, and in state 4 only with a target (its
 // no-target path returns at 0x0052fb75 before the call). State 8 has no icon. See `radar`.
 //
+// Resolved from the exe (this pass, Ephinea 1.25.13 dump + objdump):
+//   the scythe's variant (0x0052fb78 sub 0): roll 1 > 0.35 (0x0092259c), then roll 2 <= 0.5
+//   (0x00922598) gives thunder, else ice; roll 1 <= 0.35 gives the instant kill. The power of the
+//   specials is the movement row's iparam (the battle params row 38, fparam1 / iparam1 / iparam2
+//   at +0x00 / +0x18 / +0x1c): iparam1 for ice and thunder, iparam2 for the insta-kill. The
+//   effects run on the player in its special handler (FUN_007753b4, the player's vtable +0x64):
+//   ice = freeze roll only (no damage), thunder = its damage then the shock roll, insta-kill =
+//   the kill roll then the attack's normal hit. See render/combat.ts (illGillSpecial).
+//   The snare (sub 2): the target in the arc gets the 6x2C hold of 180 frames (flag object
+//   0x0052f110, +0x94 = 0xb4), particle 3, at the target's spot; then sub 4 recovers 10 frames.
+//   The scythe recovers 30 frames (sub 3) and its hit frame is 30 or 35 (fild of +0x3ac).
+//
 // ASSUMED (not traced): the transitions into and out of the states other than the attack
 // selection, the walk and turn speeds (the port's MovementData fparam1 and turn 1024 BAMS from the
-// record 0x009bc4cc), the windup and recovery counts of the tackle and the snare, the ice /
-// thunder / insta-kill status effects (only their animation and timing), and the snare's
-// 180-frame flag object (0x0053114c -> 0x0069375c), which the port does not apply.
+// record 0x009bc4cc), the windup and recovery counts of the tackle (its counters are written by a
+// fistp of the animation frame count, not traced), the spawn and advance durations (the spawn
+// waits on the state timer 0x00576c48, not traced), and the player's EIC / ETH / EDK (the port has
+// no resist source for the local player, so they read 0 in render/combat.ts).
 
-import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
+import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion, type IllGillSpecial } from './enemyai.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, PLAYER_RADIUS, loop, nearest, once, turnToward } from './enemyfsm.ts';
 
@@ -54,9 +67,10 @@ export const ILL_GILL = {
   // 0x00922540 float -1.0 + the target's radius; 0x00922544 float 10.0 with no hitbox.
   reachBase: -1,
   reachNoBox: 10,
-  // 0x0092259c 0.35 / 0x00922598 0.5: the scythe's variant roll (state 3 sub 0).
+  // 0x0092259c 0.35 / 0x00922598 0.5: the scythe's variant roll (state 3 sub 0): roll 1 above
+  // 0.35 is an ice / thunder swing (roll 2 at most 0.5 is thunder), else the insta-kill.
   scytheInstantBelow: 0.35,
-  scytheIceBelow: 0.5,
+  scytheThunderBelow: 0.5,
   // Hit frames (motion frames): 30 (ice, thunder) and 35 (instant kill), the counts stored in
   // +0x3a4-style fields as 4.2039e-44 (30) and 4.90454e-44 (35).
   scytheHit: 30,
@@ -72,6 +86,12 @@ export const ILL_GILL = {
   recover: 30, // ASSUMED: the count of sub 4
   // Shadow (state 5): the sub 1 wait (check_entity_animation_elapsed_threshold 10.0).
   snareWait: 10,
+  // Sub 2 imposes the web's hold on the target: the flag object's +0x94 = 0xb4 (180 frames),
+  // particle 3 (the arg of HandleHardAttackAction_0069375c), then sub 4 recovers for 10 frames
+  // (the float 1.4013e-44 is the int 10 in the frame counter +0x3a4).
+  snareHold: 180,
+  snareParticle: 3,
+  snareRecover: 10,
   // Sub 0 of the snare / scythe and the chase turn towards a target within the attack's
   // max_y_angle (attacks[n].angle, out of 0x10000).
 } as const;
@@ -118,20 +138,37 @@ export class IllGillAi extends BrainBase {
   private hitFrame = 0; // the scythe's hit frame (30 or 35)
   private hitDone = false; // the scythe's hit (last_footstep_effect_z)
   private tackleHits = new Set<number>(); // +0x3e8..0x3f4: the dash's hit targets
-  private snared = new Set<number>(); // the snare's targets (+0x3e8..)
   private dashFrames = 0; // the dash's frame count (state 4 sub 2)
   private homeX: number;
   private homeZ: number;
   private escaped = false; // flag 0x2000 (the escape below a quarter of its HP)
+  // The scythe's specials: the movement row's iparam1 (ice / thunder power) and iparam2 (insta-kill
+  // power), read as shorts (g_illgill_anim_speeds + 0x18 / + 0x1c).
+  private readonly icePower: number;
+  private readonly killPower: number;
+  // The enemy's level (the thunder damage's attacker level); set by the owner from the stats row.
+  level = 0;
 
   constructor(opts: { x: number; z: number; angle: number; movement: EnemyMovementData | null; attacks: readonly EnemyAttackData[]; rng?: () => number }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
     this.attacks = opts.attacks.length >= 4 ? opts.attacks : [...opts.attacks, ...Array(4 - opts.attacks.length).fill(null)];
     const f = opts.movement?.fparam1 ?? 0;
     this.speed = f > 0 ? f : 1; // ASSUMED fallback
+    const ip = opts.movement?.iparam ?? [];
+    this.icePower = ((ip[0] ?? 0) << 16) >> 16;
+    this.killPower = ((ip[1] ?? 0) << 16) >> 16;
     this.homeX = opts.x;
     this.homeZ = opts.z;
     this.current = ILL_GILL_ANIM.wait;
+  }
+
+  // The weapon special of the scythe's variant (IllgillHandleCombatState_0052fb78 sub 2): 1 ice,
+  // 2 thunder, 3 insta-kill.
+  private scytheSpecial(): IllGillSpecial | null {
+    if (this.variant === 1) return { kind: 'freeze', power: this.icePower, level: this.level };
+    if (this.variant === 2) return { kind: 'shock', power: this.icePower, level: this.level };
+    if (this.variant === 3) return { kind: 'kill', power: this.killPower, level: this.level };
+    return null;
   }
 
   // The minimap icon (0x00805608) of the state's tail. States 0 to 3, 5, 6 and 7 always; state 4
@@ -307,8 +344,9 @@ export class IllGillAi extends BrainBase {
       }
       this.turnTo(t);
       if (this.faces(t, 0)) {
-        const roll = this.rng();
-        this.variant = roll > ILL_GILL.scytheInstantBelow ? (roll <= ILL_GILL.scytheIceBelow ? 2 : 1) : 3;
+        // Two rolls (0x0052fb78): the first above 0.35 then the second at most 0.5 is thunder.
+        const first = this.rng();
+        this.variant = first > ILL_GILL.scytheInstantBelow ? (this.rng() <= ILL_GILL.scytheThunderBelow ? 2 : 1) : 3;
         this.hitFrame = this.variant === 3 ? ILL_GILL.scytheHitInstant : ILL_GILL.scytheHit;
         this.hitDone = false;
         this.sub = 2;
@@ -321,7 +359,7 @@ export class IllGillAi extends BrainBase {
     if (this.sub === 2) {
       if (!this.hitDone && this.elapsed >= this.hitFrame) {
         this.hitDone = true;
-        if (t && this.reachHit(t, 0)) out.hit = { clientId: t.clientId, knockback: 0, mult: 1, kbScale: 1 };
+        if (t && this.reachHit(t, 0)) out.hit = { clientId: t.clientId, knockback: 0, mult: 1, kbScale: 1, special: this.scytheSpecial() };
       }
       if (animationEnded) {
         this.sub = 3;
@@ -348,8 +386,8 @@ export class IllGillAi extends BrainBase {
 
   // State 5 (0x0052ebc0), the shadow snare. Sub 0 turns to the target and, within the arc of
   // attack 2, shows the shadow (kage) and goes to sub 1; sub 1 waits 10 frames then sub 2 (the
-  // snare); sub 2 takes the target into the snare (its 180-frame flag object is not ported) and
-  // sub 4 returns to the chase after the recovery (ASSUMED count).
+  // snare); sub 2 takes the target into the snare (the hold of 180 frames, when it is in the arc)
+  // and sub 4 returns to the chase after the 10-frame recovery (exe: the 1.4013e-44 counter).
   private tickSnare(out: AiFrame, t: AiTarget | null, animationEnded: boolean): AiFrame {
     void animationEnded;
     if (!t) {
@@ -374,16 +412,18 @@ export class IllGillAi extends BrainBase {
       }
     } else if (this.sub === 2) {
       this.turnTo(t);
-      if (this.faces(t, 2)) this.snared.add(t.clientId);
+      // The web: a target still in the arc gets the 180-frame hold (the 6x2C of the flag object).
+      if (this.faces(t, 2)) {
+        out.hold = { clientId: t.clientId, frames: ILL_GILL.snareHold, particle: ILL_GILL.snareParticle, x: t.x, z: t.z, radius2: 0 };
+      }
       this.sub = 4;
-      this.count = ILL_GILL.recover;
+      this.count = ILL_GILL.snareRecover;
       this.setMotion(out, ILL_GILL_ANIM.wait);
     } else {
       this.count--;
       if (this.count < 0) {
         this.state = 'chase';
         this.sub = 0;
-        this.snared.clear();
         this.setMotion(out, ILL_GILL_ANIM.walk);
       }
     }

@@ -364,6 +364,16 @@ export interface AiTarget {
   attacking?: boolean;
 }
 
+// A weapon special carried by an attack (Ill Gill's scythe, IllgillHandleCombatState_0052fb78):
+// freeze = ice (no damage), shock = thunder (its damage, then the shock roll), kill = insta-kill
+// (the kill roll, then the attack's own hit). power = the movement row's iparam (short), level =
+// the enemy's level (the thunder damage).
+export interface IllGillSpecial {
+  kind: 'freeze' | 'shock' | 'kill';
+  power: number;
+  level: number;
+}
+
 // What the owner must do after a tick.
 export interface AiFrame {
   motion: EnemyAiMotion | null; // play this motion (only when it changed)
@@ -374,7 +384,9 @@ export interface AiFrame {
   // try_hit_entity returned) instead of the fixed `knockback` (Grass Assassin).
   // attack: another AttackData row of the enemy (the index into its
   // ENEMY_TYPE_PARAMS attack list: the Delsaber's jump and slash).
-  hit: { clientId: number; knockback: number; mult: number; kbScale?: number; attack?: number } | null;
+  // special: the attack's weapon special (Ill Gill's scythe: ice = freeze, thunder = shock, insta-kill),
+  // resolved on the player by render/combat.ts (enemyHitsPlayer); power = the battle params' iparam.
+  hit: { clientId: number; knockback: number; mult: number; kbScale?: number; attack?: number; special?: IllGillSpecial | null } | null;
   // Per-family FSMs (combat/enemyfsm.ts): a status effect landing on a player
   // without damage (Poison Lily's scream), a projectile to launch, and the
   // height of the model above the ground (Savage Wolf's leap).
