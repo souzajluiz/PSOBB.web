@@ -1,5 +1,33 @@
 # Devlog
 
+## 2026-10-25: Merissa A / AA, part 3: the brain (OWN_FSM 'MerissaA') and the radar gate
+
+**Question.** Give Merissa A / AA a brain so it moves, attacks, takes damage and dies, and gate its radar icon on the exe's +0x37c bit 0x8.
+
+**Answer.** `MerissaAi` in `combat/enemyfsmmerissa.ts`, registered as OWN_FSM 'MerissaA' in `render/combat.ts` (the variant is set param6 & 1, +0x380). The radar is `MerissaAi.radar` (bit 0x8 of its flags word), read by `splitRadarOk` in `minimapEnemies`. Tests: `tests/enemyfsmmerissa.test.ts`.
+
+**PROVEN (objdump 0x005b53dc..0x005b5618, tools/exedata.py).**
+- Row 0 handler (0x005b53dc): the float +0x39c ramps toward 1.0 (`v = T + (1 - T) * 0.25`, stored while v <= 0.99, else 1.0; constants 0x0092b078 = 0.25, 0x0092b07c = 0.99). The ctor writes +0x39c = 1.0, so the ramp is not reached from the spawn. When T >= 1.0 the countdown runs: +0xc0 -= +0xc8 each frame, and the transition fires when the result is <= 0.0 (0x0092b080). The countdown's start values are not set by the ctor (ASSUMED 30 frames in the port).
+- Row 0 to 1 transition: clears 0x40000 on +0x30, `andl $-0xf` on +0x37c and ORs row 1's mask, sets +0x398 = 0, +0x39c = 1.0, +0x332 = old state, +0x32e = 1, +0x330 = 0, calls EnemySetStateFlag with row 1's flag arg (2), motion = row 1's motion word (1) into +0xb8, then calls the OUTGOING row's hook (0x9c1a34 = row 0 +0x10).
+- Row 1 handler (0x005b54cc): acquires a target with range 250 (0x00a749f0, through 0x005b55bc, with the confusion bit 0x10 path). With a target and 0x00786584 non-zero it goes to state 2 with row 2's flag, motion and mask, and calls the outgoing row's hook (0x9c1a48 = row 1 +0x10). Without a target, or when 0x00786584 is zero, it stays. It has no movement: the Merissa stands still until a player is inside 250.
+- Motion table 0x009c1980 (8 slots, `tools/exedata.py motions 009c1980 8`): slot 0 = archive motion 8 (held, 0.5, the ctor's vanish), slot 1 = 16 (loop, 0.5, wait), slot 2 = 7 (loop, 1, walk), slot 3 = 3 (held, 2), slot 4 = 15 (held, 0), slot 5 = 2 (held, 0.5), slot 6 = 6 (held, 0), slot 7 = 4 (held, 0.5, flags 0x80000000). The row motions 0, 1, 2, 6, 7 are these slot numbers.
+- The hook rule: both traced transitions call the outgoing state's hook, not the incoming one. The earlier note (2 to 3 calls row 2's hook) agrees.
+- The ctor: +0x37c = 0, then row 0's mask 0x4; +0x398 = 0; +0x39c = 1.0; +0x3c4 = 0; state 0.
+
+**ASSUMED (the port brain).**
+- Chase (state 2, 0x005b5618 not decoded): walks at MovementData fparam1 (fallback 1), turns at 1024 BAMS (Ill Gill's rate), drops its target beyond 250.
+- Attacks (state 4): the gates and rolls are PROVEN (`pickAttack`: near record A at dist^2 < 1600 and angle < 10 degrees, freeze roll 1 in 3 with +0x37c |= 0x10, else far record C at dist^2 < 10000 and angle < 60 degrees with the 1 in 10 roll). The target flag 0x20 is taken as absent (AiTarget has no +0x30 word). The timeline is ASSUMED: chase until the record's start (10), one hit in the window (the Ill Gill melee hit: knockback 0, mult 1), recovery 15 frames after the window end. Slots: stab 3, freeze 5, B / C 4. The B gate (records 2 / 3) is not modelled.
+- Damage (state 3, 0x005b5f3c): ASSUMED to be the flinch. A hit in idle or chase enters it, holds motion slot 6 for 15 frames, then the chase (or the idle with no target).
+- Death (state 5, hook on_merissa_dead): `kill()` sets row 5's mask (0x2). The death sequence stays in deathfx.ts.
+- Vanish (state 6, mask 0x8, the sub-entity 0x005b6328): the countdown arithmetic is PROVEN (`merissaVanishStep`), but nothing in the port starts it. `startVanish()` exists for the tests. ASSUMED that the exe runs it after the death.
+- The outgoing hooks are not ported (the hook functions 0x005b51dc, 0x005b51e8 and the rest are not named or decoded).
+
+**Radar.** `minimapEnemies` skips the icon when `splitRadarOk` is false; the Merissa's gate is `e.ai.radar` (bit 0x8). In the live game the bit is only set by `startVanish()`, which nothing calls, so the icon stays on as before, except for the owner's dead-hiding.
+
+**Checks.** `node tests/enemyfsmmerissa.test.ts` (all pass, brain checks added), `enemyfsmillgill`, `enemyfsm`, `minimap`, `combatdepth`, `NEWSERV=... node tests/combat.test.ts` (5860 checks), `npx tsc --noEmit -p client`.
+
+**Open.** Decode the row 2 (0x005b5618) chase and the row 3 handler (0x005b5f3c, the flinch or not), the row 4 callbacks (0x005b6384, 0x005b64fc, 0x005b667c, 0x005b63e4), the B gate, the caller of 0x005b6328 (the vanish trigger), and the countdown's start values (+0xc0, +0xc8).
+
 ## 2026-10-25: Merissa A / AA, part 2: the attack records and the near / far rolls; no brain yet
 
 **Question.** What do the transition 0x005b5768's gates and the 40-byte records at 0x009c1ac0 decide, and which attack is which?
