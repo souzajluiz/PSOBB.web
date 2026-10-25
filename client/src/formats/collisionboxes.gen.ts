@@ -8,7 +8,8 @@
 // down the call graph (depth 4; virtual calls resolved through the stored vtable) in a function
 // that only this type reaches, or that exactly two types reach with a constant helper argument
 // (ASSUMED; shared: only helpers reached by three or more types), the last call when ambiguous.
-// 11 init sites are not decoded: their table or count is computed at run time.
+// 0 init sites are not decoded: their table or count is computed at run time.
+// 9 more are built by their constructor at run time (CONSTRUCTED_BOXES: the row as formula text).
 // Indexed sites (table = base + stride * [field], e.g. Booma 0x44) have one row set per variant.
 
 export interface CollisionBoxRow {
@@ -63,6 +64,8 @@ export const COLLISION_TABLES: Readonly<Record<number, readonly CollisionBoxRow[
   0x00648117: [{ offset: [0, 0, 0], radius: 22.5, halfX: 0, shape: 0, flags: 0x10003 }],
   0x006486cf: [{ offset: [0, 0, 0], radius: 23, halfX: 0, shape: 0, flags: 0x10003 }],
   0x006489ec: [{ offset: [0, 0, 0], radius: 3, halfX: 0, shape: 0, flags: 0x10003 }],
+  0x006ebef1: [{ offset: [0, 0, 0], radius: 10, halfX: 1, shape: 0, flags: 0x40107 }],
+  0x007acd78: [{ offset: [0, 0, 0], radius: 5, halfX: 1, shape: 1, flags: 0x40007 }],
   0x007ae641: [{ offset: [0, 0, 5], radius: 19, halfX: 5, shape: 0, flags: 0x1103 }],
   0x007ae80f: [{ offset: [0, 0, 5], radius: 19, halfX: 5, shape: 0, flags: 0x1103 }],
   0x007aeceb: [{ offset: [0, 0, 5], radius: 19, halfX: 5, shape: 0, flags: 0x1103 }],
@@ -335,7 +338,7 @@ export const COLLISION_TABLES: Readonly<Record<number, readonly CollisionBoxRow[
   0x009f7740: [{ offset: [0, 12.5, 0], radius: 7.5, halfX: 0, shape: 0, flags: 0x8003 }],
 };
 
-// Every decoded call site (270; the unresolved ones are not listed).
+// Every decoded call site (272; the unresolved ones are not listed).
 export const COLLISION_SITES: readonly CollisionBoxSite[] = [
   { site: 0x00440488, func: 0x00440458, table: 0x009a4eb0, via: null, variants: null },
   { site: 0x004413f5, func: 0x004413a4, table: 0x009a4f70, via: null, variants: null },
@@ -559,10 +562,12 @@ export const COLLISION_SITES: readonly CollisionBoxSite[] = [
   { site: 0x006841e9, func: 0x0068416c, table: 0x009cb94c, via: null, variants: null },
   { site: 0x006e8419, func: 0x006e83b0, table: 0x009cf95c, via: null, variants: null },
   { site: 0x006e9005, func: 0x006e8ca4, table: 0x009cf95c, via: null, variants: null },
+  { site: 0x006ebef1, func: 0x006ebd58, table: 0x006ebef1, via: null, variants: null },
   { site: 0x0076548c, func: 0x007653e8, table: 0x009f5a48, via: null, variants: null },
   { site: 0x007662f8, func: 0x0076619c, table: 0x009f5ae8, via: null, variants: null },
   { site: 0x0076c706, func: 0x0076c644, table: 0x009f76bc, via: null, variants: null },
   { site: 0x0076e0a7, func: 0x0076dfec, table: 0x009f7740, via: null, variants: null },
+  { site: 0x007acd78, func: 0x007acaf8, table: 0x007acd78, via: null, variants: null },
   { site: 0x007ae641, func: 0x007ae360, table: 0x007ae641, via: null, variants: null },
   { site: 0x007ae80f, func: 0x007ae360, table: 0x007ae80f, via: null, variants: null },
   { site: 0x007aeceb, func: 0x007aea10, table: 0x007aeceb, via: null, variants: null },
@@ -607,6 +612,31 @@ export const COLLISION_SITES: readonly CollisionBoxSite[] = [
   { site: 0x0054db15, func: 0x0054d8c8, table: 0x009bd3f8, via: 0x00521c5c, variants: null },
   { site: 0x005a9e95, func: 0x005a9c58, table: 0x009c07ec, via: 0x00521c5c, variants: null },
   { site: 0x005a9eec, func: 0x005a9c58, table: 0x009c0818, via: 0x00521c5c, variants: null },
+];
+
+// Init sites whose box the constructor writes at run time (CONSTRUCTED_SITES in the generator, DEVLOG
+// 2026-10-25 collision sites). Formula text: arg1 = the constructor's first argument (this+0x1c),
+// arg2 = its second (the set record), this = the object; `.f32+0xNN of X` a float, `.word` / `.dword` integers.
+// ASSUMED where the reader is not traced: the heap rows' fields (this+0x68 / +0x6c / +0x70 / +0x8c) come from the set record.
+export interface ConstructedBox {
+  site: number;
+  func: number; // the constructor
+  owner: 'child' | 'self'; // the object the init boxes (a child: the 0xac object the constructor allocates)
+  table: string; // where the init reads the row: 'this+0xNN', 'stack' or 'heap'
+  count: number;
+  row: { offset: readonly [string, string, string]; radius: string; halfX: string; shape: string; flags: string };
+}
+
+export const CONSTRUCTED_BOXES: readonly ConstructedBox[] = [
+  { site: 0x00619759, func: 0x00619680, owner: 'self', table: "heap", count: 1, row: { offset: ["0", "0", "0"], radius: ".dword+0x8c of this == 0 ? .f32+0x70 of this : .f32+0x6c of this", halfX: ".dword+0x8c of this == 0 ? .f32+0x68 of this : .f32+0x6c of this", shape: "1", flags: "0x18002" } },
+  { site: 0x00635e71, func: 0x00635d98, owner: 'self', table: "heap", count: 1, row: { offset: ["0", "0", "0"], radius: ".dword+0x8c of this == 0 ? .f32+0x70 of this : .f32+0x6c of this", halfX: ".dword+0x8c of this == 0 ? .f32+0x68 of this : .f32+0x6c of this", shape: "1", flags: "0x18002" } },
+  { site: 0x00638261, func: 0x00638188, owner: 'self', table: "heap", count: 1, row: { offset: ["0", "0", "0"], radius: ".dword+0x8c of this == 0 ? .f32+0x70 of this : .f32+0x6c of this", halfX: ".dword+0x8c of this == 0 ? .f32+0x68 of this : .f32+0x6c of this", shape: "1", flags: "0x18002" } },
+  { site: 0x006461cf, func: 0x006460d8, owner: 'self', table: "stack", count: 1, row: { offset: ["0", "0", "0"], radius: ".f32+0x0c of arg2", halfX: ".f32+0x10 of arg2", shape: "1", flags: "0x10003" } },
+  { site: 0x006de7d0, func: 0x006de5f0, owner: 'child', table: "this+0xbc", count: 1, row: { offset: ["0", "0", "0"], radius: "10", halfX: "1", shape: "0", flags: ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107" } },
+  { site: 0x006de9d7, func: 0x006de7fc, owner: 'child', table: "this+0xbc", count: 1, row: { offset: ["0", "0", "0"], radius: "10", halfX: "1", shape: "0", flags: ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107" } },
+  { site: 0x006f010b, func: 0x006efe50, owner: 'child', table: "this+0xfc", count: 1, row: { offset: ["0", "0", "-10"], radius: "5", halfX: "1", shape: "1", flags: ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107" } },
+  { site: 0x006f0435, func: 0x006f0138, owner: 'child', table: "this+0xfc", count: 1, row: { offset: ["0", "0", "-10"], radius: "5", halfX: "1", shape: "1", flags: ".word+0x1c of arg1 >= 4 || .dword+0x8fc of arg1 != 0 ? 0x40007 : 0x40107" } },
+  { site: 0x0077c197, func: 0x0077c070, owner: 'self', table: "this+0xac", count: 1, row: { offset: ["0", "0", "0"], radius: ".f32+0x24 of arg2", halfX: ".f32+0x28 of arg2", shape: ".f32+0x2c of arg2 < 0 ? 1 : 0", flags: "0x10001 | (abs(.f32+0x2c of arg2) >= 1000 ? 0x100 : 0)" } },
 ];
 
 // Enemy .dat set type -> its factory links (one per factory; areas where it is used).
