@@ -3,9 +3,10 @@
 // angle math: which items spin and at which walk node, the 0x2000 per burst with the 16-bit wrap,
 // BAMS to radians, and that the spun pose is the rest pose times a rotation about the node's own
 // Y axis (its input side, so the node's origin stays put).
+// The remote player's burst gate (6x46 -> do_attack, PsoBB.exe 0x006996c9) is checked in section 8.
 // Run: node tests/weaponspin.test.ts
 import * as THREE from '../client/node_modules/three/build/three.module.js';
-import { addBurstSpin, applyWeaponSpin, MECHGUN_BURST_SPIN, NO_SPIN_NODE, restPoses, spinMatrix, spinNodeOf, spinRadians, spunPose } from '../client/src/render/weaponspin.ts';
+import { addBurstSpin, applyWeaponSpin, burstSpinsOnReceipt, MECHGUN_BURST_SPIN, NO_SPIN_NODE, restPoses, spinMatrix, spinNodeOf, spinRadians, spunPose } from '../client/src/render/weaponspin.ts';
 
 let failures = 0;
 let checks = 0;
@@ -106,6 +107,13 @@ let spin = 0;
 for (let i = 0; i < 3; i++) spin = addBurstSpin(spin);
 check(spin === 0x6000, 'three bursts give 0x6000');
 check(near(spinRadians(spin), (3 * Math.PI) / 4), 'three bursts are 135 degrees');
+
+// 8. A received 6x46 turns the sender's barrel (action_attack_step_finish -> do_attack): another
+// player's burst, in an unsafe map, with or without targets. Not the local player's echo; not a hub.
+check(burstSpinsOnReceipt(3, 0, true), 'a remote burst in an unsafe map spins');
+check(burstSpinsOnReceipt(0, 0, true) === false, 'the local player is not spun by its own 6x46 echo');
+check(burstSpinsOnReceipt(3, 0, false) === false, 'a remote burst in a hub does not spin (is_player_in_unsafe_map)');
+check(burstSpinsOnReceipt(1, 0, true), 'any other remote client id spins too');
 
 console.log(`${checks - failures} of ${checks} checks passed${failures ? `, ${failures} failed` : ''}`);
 if (failures) process.exitCode = 1;

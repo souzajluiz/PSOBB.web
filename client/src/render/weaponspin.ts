@@ -21,10 +21,22 @@
 //     pose: a rotation about the node's own Y axis through its origin, with the children and the
 //     mesh inside it. Its matrix in column-vector form is Ry(theta) with theta the spin angle.
 //
-// ASSUMED: the sine is the helper's first output and the cosine the second (the lookup table
-// 0x00989560 did not decode to a plain sine table here, so the sign of the angle is not checked);
-// the spin angle is BAMS (0x10000 = a full turn) and positive is right-handed about +Y. The visual
-// is not checked in a browser (no Playwright here).
+// Who spins it (proven, objdump of PsoBB.exe): a burst is one do_attack, and a remote player's
+// burst reaches this client as its 6x46 (action_attack_step_finish, exe 0x00699570..0x006996d0:
+// GetPlayer(sender), IsPlayerRootObject, is_player_in_unsafe_map, then the sender's weapon
+// vtable +0x70 at 0x006996c9 = PerformItemAttack 0x005e8908, which calls the +0xcc hook at
+// 0x005e8a14 = do_mechguns_attack). The local player's bursts come from the local attack
+// (gunShot). burstSpinsOnReceipt is that receiver's gate.
+//
+// ASSUMED: which helper output is the cosine. The helper 0x0082d8bc mixes its row 1 with the
+// first sincos output (at (%esp), the value the sincos callee 0x008451f8 stores through its stack
+// pointer) and row 3 with the second (at 0x4(%esp)): row1' = A row1 - B row3 (proven from the
+// disassembly of 0x0082d8bc, columns 1 and 2 read, column 3 by the same pattern); row3 takes the same pair (the port's formula, the
+// second half of the helper not re-traced). The port's c is A and its s is B, so the port is right iff A is the
+// cosine. Not settled: the sincos table at 0x00989560 does not read as a clean float sine table
+// from the file (the values alternate 193.3 / 0 / 52821.3), so the table's identity and the sign of
+// the angle are not checked. The spin angle is BAMS (0x10000 = a full turn) and positive is
+// right-handed about +Y. The visual is not checked in a browser (no Playwright here).
 
 import * as THREE from 'three';
 
@@ -41,6 +53,14 @@ const SPINNING_GROUP_IDX: readonly number[] = [5, 7];
 // The walk index whose transform the spin turns (the item's +0x258), or NO_SPIN_NODE.
 export function spinNodeOf(group2: number, groupIdx: number): number {
   return group2 === MECHGUN_GROUP && SPINNING_GROUP_IDX.includes(groupIdx) ? 2 : NO_SPIN_NODE;
+}
+
+// Whether a received 6x46 from `sender` turns the sender's held weapon on this client (exe
+// action_attack_step_finish): every 6x46 from another player does one do_attack, in a map where the
+// player attacks (is_player_in_unsafe_map), whatever its target count. The local player's own
+// 6x46 is not echoed to it, and its bursts are spun by gunShot.
+export function burstSpinsOnReceipt(sender: number, selfId: number, unsafeMap: boolean): boolean {
+  return sender !== selfId && unsafeMap;
 }
 
 // The spin after `bursts` bursts (AddAndWrapUInt16: a 16-bit wrap).
