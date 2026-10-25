@@ -213,7 +213,7 @@ import { bulletTextureIndex, GunTracers, loadGunBulletModels } from './guntracer
 import { TechEffects, TechObjects, ownsTechnique, type TechWorld } from './techlightning.ts';
 import { CAST_HEIGHT, CAST_LIGHT_AMBIENT, castLightColor, castLightFrames, CHARGE_SE, CHARGE_SE_PADDING, GizondeStrike, GrantsStrike, MEGID_WALL_MASK, MegidOrb, PlainBolt, SE, specialStart, SPECIAL_ID, TechShot, type FxSound, type Vec3 as TechVec3, type WallHit } from '../combat/techlightning.ts';
 import { setModelOpacity } from './hitmodels.ts';
-import { DeathRun, deathPlanFor, mothmantDeathPlan, type DeathActions, type DeathPoint } from '../combat/deathfx.ts';
+import { DeathRun, deathPlanFor, mothmantDeathPlan, SavageDeathMotion, type DeathActions, type DeathPoint } from '../combat/deathfx.ts';
 import { Dissolve, ICE_DEFAULT_RADIUS, iceRadius } from '../combat/hitmodels.ts';
 import { CRITICAL_SE, restaFloat, FLAME_FRAMES, FLAME_PARTICLE, flamePoint, hitParticles, specialHandlerParticles, specialHitFx, statusApplyFx, statusTickFx, techHitFx, type EnemyStatusKind, type HitFxKind, type ParticleSpawn } from '../combat/hitfx.ts';
 import { PlayerHud } from './playerhud.ts';
@@ -381,7 +381,7 @@ interface EnemyRuntime {
   esp: number; // BattleParamEntry esp (the specials' status resistance)
   slimeSlot?: number; // a Pofuilly Slime's k in its control's slots (parent = the control)
   splitHp?: number; // a Hidoom / Migium's HP at the split (its call threshold)
-  death?: { run: DeathRun; acc: number; dissolve: Dissolve | null; fade: boolean }; // combat/deathfx.ts: the death state's steps (fade: the slime's own fade runs)
+  death?: { run: DeathRun; acc: number; dissolve: Dissolve | null; fade: boolean; savage?: SavageDeathMotion }; // combat/deathfx.ts: the death state's steps (fade: the slime's own fade runs; savage: a wolf's kill side, turn and slide)
   blood?: number; // the stats row's f32 @0x10 (the blood pool's distance, formats/battleparams.ts bloodOffset)
 }
 
@@ -7469,7 +7469,15 @@ export class CombatView {
         p.y += mf.dy;
         p.z += mf.dz;
       }
-      if (this.applyDeath(e, d.run.tick(anim?.frame ?? 0, ended, false, mf?.landed ?? false))) return true;
+      const ends = this.applyDeath(e, d.run.tick(anim?.frame ?? 0, ended, false, mf?.landed ?? false));
+      // A wolf's motion turns and slides after the frame's steps (the exe's phase 0 block).
+      if (d.savage) {
+        const m = d.savage.tick(ended);
+        e.instance.root.position.x += m.dx;
+        e.instance.root.position.z += m.dz;
+        e.instance.root.rotation.y = m.yaw;
+      }
+      if (ends) return true;
       if (mf?.dead) return true;
       if (fading && e.ai instanceof SlimeAi && e.ai.stepDeathFade()) return true;
       if (d.dissolve) {
@@ -7512,7 +7520,7 @@ export class CombatView {
     const yaw = e.instance.root.rotation.y;
     let f = pt.forward ?? 0;
     if (pt.bloodForward !== undefined) f += (e.blood ?? 0) * pt.bloodForward;
-    const side = pt.side ?? 0;
+    const side = pt.killSide && e.death?.savage ? e.death.savage.side : (pt.side ?? 0);
     let x = o.x + Math.sin(yaw) * f + Math.cos(yaw) * side;
     let z = o.z + Math.cos(yaw) * f - Math.sin(yaw) * side;
     if (pt.ring) {
@@ -9270,6 +9278,8 @@ export class CombatView {
     if (plan) {
       e.death = { run: new DeathRun(plan), acc: 0, dissolve: null, fade: false };
       if (plan.instant) e.instance.root.visible = false;
+      // A wolf's kill side, turn and slide come from its velocity at the kill (ASSUMED: the last step).
+      if (e.ai instanceof WolfAi) e.death.savage = new SavageDeathMotion(e.instance.root.rotation.y, e.ai.killVelocity());
     }
     // A Barbarous Wolf's death arms its packmates' howl countdown (armPackHowl).
     if (e.ai instanceof WolfAi) {

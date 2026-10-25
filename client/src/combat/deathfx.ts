@@ -64,6 +64,8 @@ export interface DeathPoint {
   forward?: number;
   /** Across it (the exe's RotateVector2D of a local x). */
   side?: number;
+  /** The side is the Savage Wolf / Yowie kill side (SavageDeathMotion.side, +12 or -12) when the enemy has its velocity; `side` otherwise. */
+  killSide?: boolean;
   up?: number;
   /** The blood stain point (create_enemy_blood_stain, 0x00535b38): forward += the BattleParamEntry stats' f32 @0x10 * this (0.5). */
   bloodForward?: number;
@@ -338,11 +340,11 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
           { when: 'end', particles: [{ p: gensei(0x46), at: { base: 'origin', side: -10, forward: -8 } }], pools: [pool('red15', 0x32, { base: 'origin', side: -10, forward: -8 })], sink: sink(200) },
         ],
       };
-    case 'TObjEneBm5Wolf': // Savage / Barbarous Wolf 0x0051ba20 (VERIFIED): SE 0xd6 at the kill; at the motion's end a red 7.5 pool (CreateDropEntity_005782f8, 50 late) and gensei 70 at (+12 or -12, 0, -10) rotated by the heading. The side is the state 0xe (+12) or 0xf (-12) that the kill sets from 0x0051bdb8: 0xe when the velocity at the kill is on one side of the facing (f.z * v.x < f.x * v.z, 0x007829cc against 0x00979ac8 = 0), 0xf when it stands still. ASSUMED: the port keeps +12, since the velocity is not in the plan. The sink 0.1 a frame (0x00921384) until the counter passes 20 (0x00921380): 200 frames (VERIFIED)
+    case 'TObjEneBm5Wolf': // Savage / Barbarous Wolf 0x0051ba20 (VERIFIED): SE 0xd6 at the kill; at the motion's end a red 7.5 pool (CreateDropEntity_005782f8, 50 late) and gensei 70 at (+12 or -12, 0, -10) rotated by the heading. The side is the kill's anim 0xe (+12) or 0xf (-12) from 0x0051bdb8 (VERIFIED by objdump, see SavageDeathMotion): the velocity at the kill, cross = f.z * v.x - f.x * v.z < 0 gives -12, else +12 (zero velocity -12). `side: 12` is the fallback for an enemy with no velocity model. The slide and the turn: SavageDeathMotion. The sink 0.1 a frame (0x00921384) until the counter passes 20 (0x00921380): 200 frames (VERIFIED)
       return {
         steps: [
           { when: 'kill', se: 0xd6 },
-          { when: 'end', particles: [{ p: gensei(0x46), at: { base: 'origin', side: 12, forward: -10 } }], pools: [pool('red7_5', 0x32, { base: 'origin', side: 12, forward: -10 })], sink: sink(200) },
+          { when: 'end', particles: [{ p: gensei(0x46), at: { base: 'origin', side: 12, killSide: true, forward: -10 } }], pools: [pool('red7_5', 0x32, { base: 'origin', side: 12, killSide: true, forward: -10 })], sink: sink(200) },
         ],
       };
     // --- the Booma family: the shared state 8 -----------------------------------
@@ -424,11 +426,11 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
           { when: 'end', pools: [pool('green7_5', 0x32)] },
         ],
       };
-    case 'SatelliteLizardYowie': // Satellite Lizard / Yowie 0x005af0a4 (VERIFIED; the dump names it GoranProcessState): SE by area (table 0x009c14a4) at the kill; at the motion's end, at (+12 for the state 0xe, -12 for 0xf; -10; the kill sets it from 0x005af444 as the Savage Wolf's 0x0051bdb8, ASSUMED: the port keeps +12, the velocity is not in the plan), a red 7.5 pool (CreateDropEntity_005782f8, 50 late) and gensei 70; then the sink 0.1 a frame (0x0092ab48) until the counter passes 20 (0x0092ab44): 200 frames (VERIFIED; it was missing)
+    case 'SatelliteLizardYowie': // Satellite Lizard / Yowie 0x005af0a4 (VERIFIED; the dump names it GoranProcessState): SE by area (table 0x009c14a4) at the kill; at the motion's end, at (+12 for the state 0xe, -12 for 0xf; -10). The kill's side is the Savage Wolf's rule: 0x005af444 is a byte copy of 0x0051bdb8 (VERIFIED by objdump, the same instructions with the offsets moved). The Yowie has no velocity model in the port, so `side: 12` stands (ASSUMED). Then a red 7.5 pool (CreateDropEntity_005782f8, 50 late) and gensei 70; then the sink 0.1 a frame (0x0092ab48) until the counter passes 20 (0x0092ab44): 200 frames (VERIFIED; it was missing)
       return {
         steps: [
           { when: 'kill', ...optSe(areaSe(AREA_SE.yowieKill, area)) },
-          { when: 'end', particles: [{ p: gensei(0x46), at: { base: 'origin', side: 12, forward: -10 } }], pools: [pool('red7_5', 0x32, { base: 'origin', side: 12, forward: -10 })], sink: sink(200) },
+          { when: 'end', particles: [{ p: gensei(0x46), at: { base: 'origin', side: 12, killSide: true, forward: -10 } }], pools: [pool('red7_5', 0x32, { base: 'origin', side: 12, killSide: true, forward: -10 })], sink: sink(200) },
         ],
       };
     default:
@@ -603,6 +605,102 @@ export const DEATH_ROWS: Readonly<Record<string, DeathRow>> = {
   ZU_CRATER: P('Zu'),
   ZU_DESERT: P('Zu'),
 };
+
+// --- the Savage Wolf / Yowie death motion (the velocity at the kill) ----------------------
+
+/** The velocity of the enemy at its kill, in x / z (the exe's +0x30c / +0x314). */
+export interface KillVelocity {
+  x: number;
+  z: number;
+}
+
+const HALF_PI = Math.PI / 2;
+// The death's turn toward the target: ClampAngleDifference(+0x60, +0x434, 0x300) a tick (0x300 BAMS).
+const SAVAGE_TURN = (0x300 * Math.PI * 2) / 0x10000;
+// The velocity's decay a tick in the motion (0x0092138c, the wolf; 0x0092ab50, the Yowie: both 0.8).
+const SAVAGE_DECAY = Math.fround(0.800000011920929);
+
+const wrapPi = (a: number): number => {
+  let r = a % (Math.PI * 2);
+  if (r > Math.PI) r -= Math.PI * 2;
+  if (r <= -Math.PI) r += Math.PI * 2;
+  return r;
+};
+
+/**
+ * The kill of a Barbarous / Savage Wolf (DerolleProcessState_0051ba20, kill = event 4)
+ * and of the Satellite Lizard / Yowie (GoranProcessState_005af0a4, the same code:
+ * 0x005af444 is 0x0051bdb8 moved).
+ *
+ * The facing is f = (sin yaw, cos yaw) (the exe's int_sin / int_cos of +0x60) and the
+ * velocity v is normalized in x / z (normalize_xz_components). CheckVectorCrossProduct_007829cc
+ * returns 1 when cross = f.z * v.x - f.x * v.z < 0 (VERIFIED: 0x007829cc, fsubp then
+ * fcomp 0x00979ac8 = 0, jb). DerolleCalculateTargetAngle_0051bdb8 then writes the target
+ * angle atan2(v.x, v.z) +/- 90 degrees and returns 0 when cross < 0, 1 otherwise; the
+ * kill (0x0051bc69, `test eax, eax`) sets the anim 0xf (side -12) on 0 and 0xe (side +12)
+ * on 1. A zero velocity returns 0 (anim 0xf) and keeps the heading (VERIFIED: the
+ * `je 0x51be6a` at 0x0051bdf1 on the normalize's result against 0x0092136c = 0).
+ * The motion's end puts the body at +12 for 0xe and -12 for 0xf (VERIFIED, 0x0051ba20).
+ *
+ * In the motion (phase 0, the ticks up to and including the one the motion ends on) the
+ * corpse turns its heading toward the target by 0x300 BAMS a tick (ClampAngleDifference),
+ * slides by its velocity (DerolleProcessAttackHitCheck_005209d4 with the normalized
+ * direction and the length before the decay; its wall stop is not ported) and the velocity
+ * decays 0.8 a tick (VERIFIED). The sink (phase 1) does none of it.
+ *
+ * ASSUMED: the velocity at the kill. The exe's writer of +0x30c / +0x314 for a wolf is not
+ * traced; the port passes the wolf's last movement (WolfAi.killVelocity).
+ */
+export class SavageDeathMotion {
+  /** The side of the body at the motion's end: +12 or -12. */
+  readonly side: number;
+  private yaw: number;
+  private readonly target: number | null;
+  private readonly dx: number;
+  private readonly dz: number;
+  private speed: number;
+  private done = false;
+
+  constructor(yaw: number, kill: KillVelocity) {
+    this.yaw = yaw;
+    const len = Math.hypot(kill.x, kill.z);
+    if (len === 0) {
+      this.side = -12;
+      this.target = null;
+      this.dx = 0;
+      this.dz = 0;
+      this.speed = 0;
+      return;
+    }
+    const nx = kill.x / len;
+    const nz = kill.z / len;
+    const cross = Math.cos(yaw) * nx - Math.sin(yaw) * nz;
+    const back = cross < 0;
+    this.side = back ? -12 : 12;
+    this.target = wrapPi(Math.atan2(nx, nz) + (back ? HALF_PI : -HALF_PI));
+    this.dx = nx;
+    this.dz = nz;
+    this.speed = len;
+  }
+
+  /**
+   * One game tick: `ended` whether the death motion has ended. Returns the step the body
+   * takes (dx, dz) and its yaw. Nothing moves after the tick the motion ends on.
+   */
+  tick(ended: boolean): { dx: number; dz: number; yaw: number } {
+    if (this.done) return { dx: 0, dz: 0, yaw: this.yaw };
+    if (this.target !== null) {
+      const d = wrapPi(this.target - this.yaw);
+      this.yaw = wrapPi(this.yaw + Math.max(-SAVAGE_TURN, Math.min(SAVAGE_TURN, d)));
+    }
+    const step = this.speed;
+    const out = { dx: this.dx * step, dz: this.dz * step, yaw: this.yaw };
+    // Both components of the velocity decay alike, so its direction and length scale together.
+    this.speed = Math.fround(this.speed * SAVAGE_DECAY);
+    if (ended) this.done = true;
+    return out;
+  }
+}
 
 // --- the run ---------------------------------------------------------------------------
 
