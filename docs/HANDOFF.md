@@ -157,7 +157,9 @@ worktrees are left.
    - heading per tick (`0x007a8cd0`: a quarter of the way, half over 0x3000) and the
      velocity direction (`0x007a8c9c`), turn in place by 0x800 per tick;
    - walk to run after 6 ticks above 0.75 (keyboard too), keyboard axis ramp 32 per
-     poll up to 128 (`0x0070a60c`), the 6x40 / 6x42 loop-back (`0x008003e0`);
+     poll up to 128 (`0x0070a60c`; checked 2026-10-25: step and caps PROVEN, forward
+     before back, left before right, auto ramps; still open the camera gate and the key
+     table gate of the same function, DEVLOG 2026-10-25), the 6x40 / 6x42 loop-back (`0x008003e0`);
    - drive the local player from it with `TickSmoother` (render/smoothrender.ts),
      remote players following 6x40 / 6x42 targets the same way, wall slide. (The
      animation-speed tie to the leg speed is done in the field, 2026-10-21: the slow

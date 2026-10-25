@@ -119,14 +119,41 @@ export function attackHeading(rad: number, confused: boolean, rand: () => number
   return fromBams(modifyDirection(toBams(rad), true, rand));
 }
 
-// The keyboard ramp (0x0070a60c): a held key moves its axis by 32 a poll up
-// to 128 (the stand-state "amount" is |axis| / 128 against 0.1, and the sum of
-// squares / 16384 against 0.1 / 0.75 while moving); a released key drops to 0.
+// The keyboard ramp (0x0070a60c, PsoBB.exe, dump get_input_movement_speed): a held key moves
+// its axis by 32 a poll up to the cap (the stand-state "amount" is |axis| / 128 against 0.1,
+// and the sum of squares / 16384 against 0.1 / 0.75 while moving); a released key drops to 0
+// when no auto move is on. PROVEN: the step is 0x0096ed7c = 32.0 (fsub / fadd at 0x70a809,
+// 0x70a842, 0x70a8bd, 0x70a902); the cap is 0x0096ed88 = 128.0, or 0x0096ed84 = 64.0 when the
+// setting is the auto walk (edx == 1 at 0x70a63a, the walk test). The exe's key order: the
+// forward key is tested first and its branch jumps past the backward one (0x70a7fb je 0x70a82a,
+// 0x70a828 jmp 0x70a8a5), so forward wins over backward; the left key is tested first and its
+// branch jumps past the right one (0x70a8e8 jmp 0x70a94f), so left wins over right.
+// `negFirst` says which side wins when both keys are held: true for neg (left; the lateral
+// call), false for pos (forward; the forward axis call passes its backward key as neg, forward
+// as pos, and false). `cap` is 128, or KEY_RAMP_WALK_MAX under the auto walk setting.
 export const KEY_RAMP_STEP = 32;
 export const KEY_RAMP_MAX = 128;
-export function rampAxis(value: number, neg: boolean, pos: boolean): number {
-  if (neg) return Math.max(-KEY_RAMP_MAX, value - KEY_RAMP_STEP);
-  if (pos) return Math.min(KEY_RAMP_MAX, value + KEY_RAMP_STEP);
+export const KEY_RAMP_WALK_MAX = 64;
+export function rampAxis(value: number, neg: boolean, pos: boolean, negFirst = true, cap = KEY_RAMP_MAX): number {
+  const down = neg && (negFirst || !pos);
+  const up = pos && (!negFirst || !neg);
+  if (down) return Math.max(-cap, value - KEY_RAMP_STEP);
+  if (up) return Math.min(cap, value + KEY_RAMP_STEP);
+  return 0;
+}
+// No key held while an auto move is on (the same function, the setting not off): the forward
+// axis still ramps 32 a poll to the cap (exe: max(amount - 32, -cap), forward is negative there;
+// 0x70aa6d), so it reaches the cap in cap / 32 polls rather than at once.
+export function autoForwardRamp(value: number, cap: number): number {
+  return Math.min(value + KEY_RAMP_STEP, cap);
+}
+// No key and no stick on the lateral axis while an auto move is on: the amount falls back to 0
+// by 8 a poll from either side (0x0096ed74 = -8.0, 0x0096ed78 = 8.0; 0x70a9e1 / 0x70aa1c).
+// The release with the setting off is 0 at once (0x70aa4c).
+export const LATERAL_DECAY_STEP = 8;
+export function lateralDecay(value: number): number {
+  if (value > 0) return Math.max(0, value - LATERAL_DECAY_STEP);
+  if (value < 0) return Math.min(0, value + LATERAL_DECAY_STEP);
   return 0;
 }
 
