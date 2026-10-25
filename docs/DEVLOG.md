@@ -1,5 +1,19 @@
 # Devlog
 
+## 2026-10-25: Challenge mode left: the material x5 is ported (stale ROADMAP item); the Scape Doll / dead-player rules traced, no port
+
+**Question:** the ROADMAP's Challenge line still lists "the material x5 / Scape Doll / dead-player rules" as open. Which of them can the exe settle with a unit test now?
+
+**Material x5: already ported, the ROADMAP was stale.** `add_power_material` (0x00691b74, dump `.c:573098`) multiplies the amount by 5 when `return1_if_challenge_quest()` is set (`param_3 * '\x05'`), then `UpdatePlayerStatFromClassMax` and `check_and_add_materials` (counter +1). `combat/materials.ts` has `CHALLENGE_MATERIAL_MULTIPLIER` = 5 and `applyMaterial(kind, h, challenge)`, `progression.ts` passes the flag, `render/combat.ts` `useMaterial(kind, challenge)` feeds it. `tests/materials.test.ts` checks the x5 for Power (atp 112, counter 2) and Mind. `node tests/materials.test.ts`: 50/50 checks passed (Node 24). The ROADMAP line is corrected below.
+
+**Scape Doll: not ported, not settled.** No client code revives a player from a Scape Doll (`grep -i scape client/src`: only keys, the `ba_forbid_scape_dolls` opcode and text). The exe side that is known: the use effect is the item's vtable `+0x74` (the header note in `headers/items.h` ~805: "Scape Doll: arm revive trigger", a header note, ASSUMED until the class's vtable is traced), `p_dead_V3` reads whether the player is dead or was revived through a scape doll (`headers/quests.h` ~633, `notes/quest_opcodes_small.md`: "out-reg is 0 if scape doll active"). The dump names no scape doll function, and the revive state's writer was not found in this pass. The battle side already has the start-time removal (`battleoverlay.ts`, `ResetEquipment(inv, this, 3, 9)`), which is not the revive.
+
+**Dead player in a challenge quest: branch read, the sent packet not decoded.** `unknown_dead_player_return_to_p2_related` (`.c:573511`): the battle branch (`ValidateChallengeSubPhaseIndex_006a8efc` 1 / 2, `SendTeleportRequestToPlayer`, the dead-player P2 packet, the start packet); then, outside battle, `return1_if_challenge_quest()` (`.c:554426`: quest started and room type 1) calls `HandlePacket0x60SubcommandWithStateCheck_0069acd4` (`.c:580970`), which returns at once when the player's `+0x32c` is 2 and otherwise calls `checked_call_packet0x60_subcommand` with a stack-built action. That action's contents were not read (ASSUMED: the dead notice of the challenge quest, not yet proven), so no port.
+
+**Port:** none. The item stays open for the Scape Doll revive and the challenge dead-player 0x60 action. ROADMAP line 269 is updated (material x5 done).
+
+**Checks:** `node tests/materials.test.ts` (50/50). No code changed.
+
 ## 2026-10-25: Battle trap announce: the owner check (Trap_CheckPlayerInBattleAndGetName)
 
 **What changed:** `quest/battletraps.ts` `TrapField.tick` now emits the trap's "<name> TRAP" announce only when the owner is among the targets (the owner's player exists). Before, the announce fired on the first in-range player hit whatever the owner. Test: `tests/battletraps.test.ts` (new block: owner absent, the hit lands and the flag stays 0; owner present on a later hit, the announce runs once). The blast helpers in the tests now include the owner's record.
