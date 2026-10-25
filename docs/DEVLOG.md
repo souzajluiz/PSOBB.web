@@ -1,5 +1,30 @@
 # Devlog
 
+## 2026-10-26: Player movement: the camera input gate of the keyboard ramp (0x0070a6c4)
+
+**Question.** The ROADMAP movement line left the camera gate open: `get_input_movement_speed` (0x0070a60c) was ported with the gate "camera_input_enabled ASSUMED on". Decode the gate from objdump and port it.
+
+**PROVEN (objdump of PsoBB.exe, every instruction re-read; `tools/exedata.py read 009ff3d4 u 1` = 1 in the file).**
+- Getter 0x007917b8: `movzx eax, byte [0x009ff3d4]; ret`. The byte is the dump's `camera_input_enabled`.
+- Writer 0x00791748 (the dump's `unknown_keyboard_enable_in_menu`): range check `0 <= v < 8` (`jl`, `cmp eax,8`, `jge`), then `mov [0x9ff3d4], al`. Its dump body: value 1 takes the branch that calls `ResetKeyboardInputState_0078eea8` and `SetKeyboardInputState_0078f5a8` over a 0x54-byte table (the dump's keyboard-on branch); the else branch was not read.
+- The byte is also cleared at construction (0x00792bfe, `mov [0x9ff3d4], al` with al = 0) and in `CleanupGameEngine_00791680` (the dump's `camera_input_enabled = 0`).
+- Gate in `get_input_movement_speed`: `X = (camera != 1)` (0x70a6c4..0x70a6da: `cmp eax,1; je 0x70aab7` gives 0, else 1). After a loop over six table entries (0x70a719..0x70a736: the held test 0x0078fee0 per entry), a held key sends the flow to 0x70aaa3, which sets ebp = 1. At 0x70a744 `test eax / je 0x70a751`, then `test ebp / je 0x70a751`, and 0x70a74c is `add esp,0x48; pop; ret`. So the function returns before it writes an axis when X != 0 and a key is held. With X = 0, or no key held, it runs as before (0x70a751 onward: the auto move, then the held ramp).
+
+**ASSUMED.**
+- That the held test 0x0078fee0 is the key test of the six-key table (its body reads a per-action binding of up to three keys). The port uses the four move keys as the table.
+- That the menus are the callers that write 0: the dump names the function, and the sampled callers (0x4dbee4 pushes 1 in 0x4dbecc, 0x4dbf3f and 0x64a3c1 push 0) fit. The other callers are not all read.
+- The mapping in the port: the lobby's `busy` (any menu open) stands for camera_input_enabled = 0. The lobby already blanked the key set while busy; the new part is that a held move key now freezes the axes instead of decaying them to 0.
+- The field (`fieldmenu` and the town field) is not changed in this pass.
+
+**Port.**
+- `client/src/render/playermove.ts` `rampFrozen(cameraInputOn, moveKeyHeld)` = `!cameraInputOn && moveKeyHeld`.
+- `client/src/render/lobbyview.ts`: `cameraInputOn`, `moveKeyHeld` fields. When frozen (keyboard, no stick), the ramp is skipped and the mover gets 0 for both axes; the stored `keyFb` / `keyLr` keep their value.
+- `client/src/classic/lobby.ts`: the viewer's frame wrapper sets both fields (`!busy`, and a move key among the raw keys).
+
+**Tests.** `tests/playermove.test.ts`: the four gate cases, and the frozen axis resumes from its value (64 then 96). `node tests/playermove.test.ts` ok, `NEWSERV=vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures, `npx tsc --noEmit -p .` clean. Not run in Chrome.
+
+**Open.** The field's menus; the six-key table's exact keys; the other 130+ writers of the keyboard switch; whether the exe's frozen axis moves the player while a menu is up (the port gives the mover 0).
+
 ## 2026-10-25: Quick menu tools tab: the rest of the tool branch (class_check, cures, Telepipe, scrolls, grinder, materials)
 
 **Question.** The mag cell rule was ported; the other tool branches of `CheckItemEquipConditions_005d5f40` were ASSUMED off. Which of them can the port decide, and with what data?

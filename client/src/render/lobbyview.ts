@@ -30,7 +30,7 @@ import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator, skeletonNodePosition } from './playeranim.ts';
 import { HAND_BODY_NODE, type WeaponNodeRef } from '../combat/weaponorigin.ts';
-import { KEY_RAMP_MAX, KEY_RAMP_WALK_MAX, PlayerMover, RAND_MAX_C, autoForwardRamp, fromBams, lateralDecay, legSpeed, modifyDirection, rampAxis, remoteStep, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
+import { KEY_RAMP_MAX, KEY_RAMP_WALK_MAX, PlayerMover, RAND_MAX_C, autoForwardRamp, fromBams, lateralDecay, legSpeed, modifyDirection, rampAxis, rampFrozen, remoteStep, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 import { HeldWeaponFiles, type HeldWeapon } from './heldweapon.ts';
 import { addBurstSpin, applyWeaponSpin, NO_SPIN_NODE, restPoses, spinNodeOf } from './weaponspin.ts';
@@ -241,6 +241,11 @@ export class LobbyView {
   // chasing behind the player while it runs.
   private camera = new PlayerCamera();
   private cameraKeyHeld = false;
+  // The camera input gate (playermove.ts rampFrozen): the lobby sets cameraInputOn false while a
+  // menu holds the keys (the key set it passes is then blank), and moveKeyHeld to whether a move
+  // key is down on the stage. ASSUMED mapping of the exe's camera_input_enabled to the menus.
+  cameraInputOn = true;
+  moveKeyHeld = false;
   private get cameraYaw(): number {
     return this.camera.angle;
   }
@@ -887,7 +892,10 @@ export class LobbyView {
       this.prevLogic.copy(pos);
       // A held key ramps its axis once per game tick (0x0070a60c): in the move
       // loop, and while dead (the move loop is off then, the camera still turns).
-      if (!stick && (moveOn || dead)) {
+      // The camera input gate (playermove.ts rampFrozen, the exe's return at 0x70a74c): while a
+      // menu holds the keys the axes keep their value and the mover gets 0.
+      const frozen = !stick && rampFrozen(this.cameraInputOn, this.moveKeyHeld);
+      if (!stick && (moveOn || dead) && !frozen) {
         // The exe's order (0x0070a60c): forward wins over back, left over right; the cap is
         // 64 under the auto walk setting (KEY_RAMP_WALK_MAX), else 128. With no key held and an
         // auto move on, the forward axis ramps to the cap and the lateral one falls back to 0
@@ -901,8 +909,8 @@ export class LobbyView {
         if (lrHeld) this.keyLr = rampAxis(this.keyLr, keys.has(KEYS.moveLeft), keys.has(KEYS.moveRight), true, cap);
         else this.keyLr = axes ? lateralDecay(this.keyLr) : 0;
       }
-      const lr = stick ? stick.lr : this.keyLr;
-      const fb = stick ? stick.fb : this.keyFb;
+      const lr = stick ? stick.lr : frozen ? 0 : this.keyLr;
+      const fb = stick ? stick.fb : frozen ? 0 : this.keyFb;
       if (moveOn && leg) {
         // The exe's per-tick checks: the slow, then the guard stance by the flat
         // (x, z) distance to the target (0x007a9180 reads x and z only).
