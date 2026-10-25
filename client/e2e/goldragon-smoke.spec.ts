@@ -11,9 +11,10 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { consoleLog, cursorTo, expectInGame, key, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
 
-const USER = process.env.PSO_USER ?? 'webep2';
-const PASSWORD = process.env.PSO_PASSWORD ?? 'webep2';
+const USER = process.env.PSO_USER ?? 'webtest';
+const PASSWORD = process.env.PSO_PASSWORD ?? 'webtest';
 const GOL_FLOOR = 15; // area 0x21
+const GOL_ENTRANCE = 0x1e; // GOL_STATE.entrance (combat/goldragon.ts)
 
 interface GolState {
   index: number;
@@ -115,6 +116,9 @@ test('Gol Dragon: the brain runs in Chrome, its states change, a key attack hits
   });
 
   // Stand 35 units in front of the body and attack with the real keys until the hit is logged.
+  // The entrance state (0x1e) is untargetable (GoldDragonAi.untargetable: render/combat.ts concealed),
+  // so no swing can hit it there: wait for the brain to leave it first.
+  for (let i = 0; i < 120 && (await golState(page))?.sid === GOL_ENTRANCE; i++) await page.waitForTimeout(500);
   const hpBefore = last.hp;
   const hitLines = () => logs.filter((l) => /hit the Gol Dragon/.test(l));
   await page.evaluate(

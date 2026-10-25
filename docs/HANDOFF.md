@@ -1,5 +1,16 @@
 # Handoff: where to resume
 
+## 2026-10-25: e2e run (DEVLOG 2026-10-25 "e2e run")
+
+- Passing: `guns.spec.ts` (Mechgun 3 bursts of 2 pellets), `darkfalz-casket.spec.ts` (live camera),
+  `boss-smoke.spec.ts`, `goldragon-smoke.spec.ts` (hit for 11 on the last run).
+- Gol Dragon 0-hit cause: the swing ran while the Gol was in the entrance state (0x1e), which is
+  untargetable (`concealed`), so no `applyEnemyHit` line. The spec now waits for the state to change.
+  Not proven as the original pre-2026-10-23 cause (that run used the other session's account; the
+  spec now defaults to webtest). Other lead: weapon reach at 35 units.
+- Shared Vite on 5173 full-reloads when other sessions save in the main checkout: e2e runs can fail
+  with "Execution context was destroyed". Rerun on a quiet tree.
+
 ## 2026-10-25: Mechgun and Rifle traced (DEVLOG 2026-10-25)
 
 - Done: the Mechgun (kind 8) makes three bursts per swing (`mechguns_constructor` writes

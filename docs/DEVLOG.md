@@ -1,5 +1,23 @@
 # Devlog
 
+## 2026-10-25: e2e run: guns, Dark Falz casket, boss smoke, Gol Dragon
+
+**Runs** (headless Chrome, the running stack: newserv, bridge, Vite on 5173; `npx playwright test`, Node 24):
+- `e2e/guns.spec.ts`: PASS. Mechgun: bursts [3,3,3], pellets [6,6,6] (3 bursts of 2 pellets, the 2026-10-25 port). Samba, Handgun, Rifle, Shot unchanged. Page errors 0, failed requests 0. The spec expectations are not stale; no spec change.
+- `e2e/darkfalz-casket.spec.ts`: PASS. Live pivots in use (scene 2 `view=live`), 7 camera samples matching the boss view, 0 mismatches (>5), largest distance 1.51. Page errors 0.
+- `e2e/boss-smoke.spec.ts`: PASS. Forest 1 and the Dragon entrance, particle peak 2. Page errors 0, failed requests 0.
+- `e2e/goldragon-smoke.spec.ts`: PASS on the last run (the attack hit: "hit the Gol Dragon for 11: 7489/7500"). Two earlier runs failed for other reasons (below).
+
+**Gol Dragon: what the 0-hit failure is.** The melee log line `hit the Gol Dragon for N` is written only inside `applyEnemyHit` (`render/combat.ts`, the `GoldDragonAi` branch), and that runs only for a target that `weaponTargets` / `pickStrikeTargets` returns. A miss or a 0 roll still logs the line, so zero lines means no swing reached the Gol. `concealed()` drops `GoldDragonAi` while `untargetable` (`sid === GOL_STATE.entrance`, 0x1e), so a swing during the entrance state silently hits nothing. The spec stood the player at 35 units and swung without waiting for the brain to leave the entrance. That is the best lead, and it is now fixed in the spec: it waits (up to 60 s) for sid != 0x1e before the swing. Not proven: the failure before 2026-10-23 was seen only with the old default account, so the entrance-state cause is not confirmed as the original one. Weapon reach (the target needs `hypot - 15 <= horizontal + vertical`, 35 units away is 20) is the other candidate for a different weapon; not checked.
+
+**Spec changes.**
+- `goldragon-smoke.spec.ts` defaults to `webtest` / `webtest` (was `webep2`, the account another session uses; the earlier runs of this session used it by mistake and were discarded).
+- The swing waits for the Gol out of the entrance state (`GOL_ENTRANCE`).
+
+**Environment, not the game.** Vite on 5173 serves the main checkout, which other sessions edit. Source saves during a run make Vite full-reload the page, and the spec then fails with "Execution context was destroyed" (two runs of this session; the screenshot shows the boot splash). Rerun when the tree is quiet.
+
+No game code changed. `npx tsc --noEmit -p .` is clean.
+
 ## 2026-10-25: NPC attack AI: the guard stance's walk-only send and the 6x40 flags word
 
 **Question:** the ROADMAP's "NPC players' attack AI" line left open the 6x40 flags word and the 0x100000 gate of the state-1 send. What does the exe do with the NPC's guard stance there?
