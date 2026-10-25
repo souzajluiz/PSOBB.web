@@ -362,7 +362,7 @@ export class GameView {
           data1 = this.game.players.get(clientId)?.weapon;
         }
         const w = pmt && data1 ? pmt.getWeapon(data1[1], data1[2]) : undefined;
-        return w ? { type: w.type, skin: w.skin } : null;
+        return w ? { type: w.type, skin: w.skin, kind: data1![1], variant: data1![2] } : null;
       },
       // The weapon's motion class: ItemPMT's kind table (combat/attack.ts Motion class, ASSUMED).
       motionClass: (clientId) => {

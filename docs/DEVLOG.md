@@ -22,6 +22,26 @@ Evidence: `tests/qstnonbb.test.ts` checks the XB layout offsets and the unused b
 - Vol Opt control, parts and body, Dark Falz and its parts: not traced in this pass. The Vol Opt monitor and pillar icons and the Dark Falz forms already have their forced icons in the port (`darkfalz1.ts`, `darkfalz2.ts`, `darkfalz3.ts` minimapIcons); their lock and hit gates were not checked against the boxes.
 
 **Port.** `client/src/render/combat.ts`: `radarConcealed(e)` = `concealed(e)` without the Dragon (the forced icon); `minimapEnemies` uses it. `tests/dragon.test.ts`: the entrance is on the radar (the lock and hit checks are unchanged).
+## 2026-10-25: Mechgun barrel spin: the walk callback turns node 2 about its own Y axis
+
+**What changed:** `client/src/render/weaponspin.ts` (new): `spinNodeOf(group2, groupIdx)` (2 for group_2 8 with group_idx 5 or 7, else -1), `addBurstSpin` (+0x2000 per burst, 16-bit wrap), `spinRadians`, `spinMatrix` / `spunPose` (rest * Ry(theta)), `applyWeaponSpin` (sets the held weapon's bones: the spun node's rest pose times Ry, its children turn with it), `restPoses`. `render/lobbyview.ts`: each marker keeps `spinNode`, `spin` and the weapon's `weaponRest`; the model build resets the spin to 0 (the ctor does); `addWeaponSpinBurst(clientId)`. `render/combat.ts` `gunShot`: a Mechgun shot (kind 8) adds one burst to the local player's marker. `render/gameview.ts` `heldSource.equipped` returns `kind` / `variant` (data1[1] / data1[2]). Tests: `tests/weaponspin.test.ts` (35 checks: the node rule, the wrap, BAMS to radians, Ry, the spun pose, the bones with children).
+
+**Proven (PsoBB.exe, objdump of `~/Downloads/psobb-client/PsoBB.exe`; dump `src/Psobb.exe-05112026.c`):**
+- Who calls slot 0xf4: the item's per-node walk callback. `UpdateTargetSwitchWeaponVisuals_005e6364` (0x005e6364) calls `(**ptr_to_weapon_to_render->vtable)[0xf4]` at 0x005e6396. The callback is item +0xe0 (`*(code **)&this->field_0xe0 = UpdateTargetSwitchWeaponVisuals_005e6364`, dump line 441397 / 443029 / 443169), set only during `UpdateItemPosition` (0x005e6334 -> 442975) and cleared at its end. `unk_apply_weapon_model_transforms_from_nj` (dump 411822) calls `unk_nj_processing_fn_ptr` (= +0xe0) for every node it visits, before the node's mesh and its children, in walk order.
+- The counter 0xa8d84c is `g_RenderMode`: `UpdateItemPosition` sets it to 0 at its start and its end (dump 442975 / 443114 region, `g_RenderMode = 0`); the callback reads it and adds 1 at its end (0x005e6410). The xref sites match the dump's `g_RenderMode` writes (0x005e2179 etc. are in `RenderOffhandWeapon_005e20ec`, which the dump also writes). So during the weapon's walk, g_RenderMode is the pre-order index of the node being visited (0 = the root).
+- Slot 0xf4 (0x005f4688): `if (g_RenderMode == this->+0x258) sincos_helper(0, this->+0x25c)` (0x005f468a..0x005f469f). The helper 0x0082d8bc turns the transform stack head (0x00af0328) by the angle: rows 1 and 3 of the D3DMATRIX head mix, `row1' = c row1 - s row3`, `row3' = s row1 + c row3` (0x0082d8d9..0x0082d97d; the row-1 and row-3 offsets, the translation row 4 is not touched). In row-vector form that is a rotation of the node's input (local) coordinates about its own Y axis, with the node's origin fixed, and the children inherit it because they push from the head.
+- The ctor (0x005f473c): `movl $-1` or `movl $2` to +0x258 (0x005f4773 / 0x005f47b3 / 0x005f47bf) by `cmpl $8` on byte[1] and `cmpl $5` / `cmpl $7` on byte[2]; +0x25c from eax (0x005f4785, 0 at the ctor).
+- The spin per burst: do_mechguns_attack (0x005f4620) `AddAndWrapUInt16(+0x25c, 0x2000)` (from the 2026-10-25 entry; the wrap is 16-bit).
+
+**ASSUMED:**
+- The helper's first output (`[esp+4]`) is the sine and the second is the cosine. The lookup table (0x00989560 / 0x0098e560) did not read as a plain sine table at the quarter turn, so the sign of the angle is not checked against the table. The port turns right-handed about +Y by theta = spin / 0x10000 * 2 pi.
+- Node 2 is the third node of the held weapon's walk. The port's `weaponBones` are in the same walk order (exeWalkIndices), which the attach indexes already rely on.
+- Branch 1 of the walk (all three unit flags set, the node has no pose of its own) also turns the parent's frame; the port turns the node's bones, which is the same when the node's pose is the identity.
+- Non-uniform scale: the port's `rest * Ry` is the exe's order (input rotated, then scale, rotation, translation), so it is exact for any scale.
+- Only the local player's shots drive the spin (`gunShot` is the local attack path). Remote Mechguns are not driven yet (their bursts are not decoded here).
+- Not checked in Chrome (no Playwright in this change); the visual (that the barrel reads as spinning) is not seen.
+
+**Checks:** `node tests/weaponspin.test.ts` 35 of 35. `node tests/mechgun.test.ts` 22, 0 failures. `node tests/gunbullet.test.ts` all passed. `NEWSERV=... node tests/weaponorigin.test.ts` all passed. `ITEMPMT=... node tests/heldweapontex.test.ts` ALL PASS (94). `node tests/combat.test.ts` 5859 checks, 0 failures. `npx tsc --noEmit -p .` in client (Node 24) clean.
 
 ## 2026-10-25: Booma spawn gate is current_target == 1, set by the Booma ctor: every Booma animates
 
