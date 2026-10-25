@@ -1,5 +1,19 @@
 # Devlog
 
+## 2026-10-25: Barba Ray: the other states run on the shared animation clock (Player__Animate); the shot, beam, jump, arc and finale timings move
+
+**Question:** the drop (0x0d) runs its clock by Player__Animate (stride per row, blend, wrap at 1.0). Do the other Barba states do the same, and which of them read +0xc0?
+
+**What changed:** `combat/barbaray.ts` has one clock helper: `animateClock()` (Player__Animate: `+0xc0 += stride`, the blend on a slot change, the wrap to 0 at 1.0 with the row's speed) and `crossed(th)` (check_entity_animation_elapsed_threshold). The drop, jump, shot, beam, arc, finale, idle, volopt, followers, swim and transitions call it at the top of their frame, as the exe does. The port's `timer += 1` per tick is gone, and so is the jump's `timer = 0` at the windup end (the exe writes no clock there; the blend wrap does it). The jump's sub 1 and the arc's sub 0 wait for the blend's wrap. Docs: `docs/bosses/barbaray-map.md` Pass 14 (the per-state table).
+
+**Proven:** Player__Animate is called in event 0 of those states (refsrc line 791218 callers: the jump at line 235288, the shot at 236150, the finale at 237402, the drop, the followers 235672, the swim 235957, the idle's SetEnemyAnimationState_004b9e54, and the unnamed 0x004b6d08 / 0x004b2cd0 / 0x004b0ee0 / 0x004b1e98 by Ghidra). The timed (0x1b) and dead (0x1d) do not. The blend's rule (StartNpc 0x007a9a6c: new 0x80000000 and old 0x40000000 flags clear, so slot 0 never blends). `check_entity_animation_elapsed_threshold` is 0x007aaa30. The motion frame counts (data.gsl BML entries 6 + motion) are in the map doc.
+
+**ASSUMED:** the blend's `+0xb0 & 0x81` test is clear; the clock's start at each enter (the port's generic reset); the spawn's stride 0.7 (intro row); the mode 2 chain is the renderer's `animationEnded` (not the exact frame count); the loop wrap and the hold are not modelled (no threshold reaches them, the map doc lists the checks); the arc's sounds and FUN_004b2904 (transitions) are not ported / not decoded.
+
+**Result (ticks from the blend wrap):** the shot's 8.0 sound on tick 22 (was 9); the beam's 10.0 sound on tick 27 and its attack window on 27..37 (was 10..14); the jump's take-off on tick 23 and its landing on tick 91 (was 25); the finale's marks on the 29th / 122nd / 176th step (was 20 / 85 / 123). The drop is unchanged (the wrap at tick 22, the rise at 57). Volopt, followers, swim and the transitions read no clock threshold, so their timing is unchanged.
+
+**Tests:** `node tests/barbaray.test.ts` ALL PASS (the beam, shot and jump blocks use the stride ticks; a new beam case from the spawn: no blend, the sound at tick 15); `client` `tsc --noEmit` clean; `NEWSERV=... node tests/combat.test.ts` 5859 checks, 0 failures. No Playwright run.
+
 ## 2026-10-25: Enemy defence roll settled: GetEnemyDefense is 0 for every enemy (ROADMAP "where the fight moves the children" leftovers)
 
 **Question:** the ROADMAP's Pofuilly line still lists "the defence roll that resists an attack (`GetEnemyDefense_00773a44`, every enemy: not ported)". Can the exe settle what an enemy's defence is?

@@ -935,6 +935,75 @@ code; the ctor sets `animation_flags = 0`, dump line 232606); the loop's phase a
 apex); the njm frame count off by one (no effect); the clock's start at the enter (not traced; erased by the wrap); the type 2 end of
 motion 10 and its re-blend after the rise (no effect on z).
 
-**Not changed, open:** the other phases still use `timer += 1` a tick (the jump 0x11 / 0x12, the arc, the volopt, the shot). They
-have the same clock problem (their stride and blend are not traced yet) and are not touched here. The renderer's `animationEnded`
-drives the mode-2 chains, not the clock.
+**Not changed, open (closed by Pass 14):** the other phases still used `timer += 1` a tick (the jump 0x11 / 0x12, the arc, the volopt, the shot).
+
+## Pass 14: the other Barba states on the shared clock (Player__Animate), 2026-10-25
+
+**Question:** which Barba states still advance the clock by 1 a tick, which of them read +0xc0 at all, and do the
+exe's motion slots (stride per row, blend on the id change, wrap to 0 at 1.0) change their timing?
+
+**Shared model (`combat/barbaray.ts`, `animateClock` / `crossed`; one helper for every state):** Player__Animate
+(refsrc `Psobb.exe-05112026.c` line 791218, objdump 0x007aa094) is called at the top of event 0 in the exe for:
+the idle 0 (`SetEnemyAnimationState_004b9e54`, the only thing in its event 0), the drop 0x0d (0x004b7040, 0x004b70a4),
+the jump 0x11 / 0x12 (0x004b30fc, line 235288), the shot 0x19 / 0x1a (0x004b4684, line 236150), the beam 0x17
+(FUN_004b6d08, `FUN_007aa094()` first), the arc 0x04 / 0x0a (FUN_004b0ee0, sub 0 and sub 1), the volopt 0x0f / 0x10
+(FUN_004b2cd0), the followers 0x13 / 0x14 (0x004b3c2c, line 235672), the swim 0x15 / 0x16 (0x004b41ac, line 235957),
+the transitions 0x03..0x0e (0x004b1e98, FUN_007aa094 first) and the finale 0x1c (0x004b5d1c, line 237402). The timed
+0x1b (0x004b60c4) and the dead 0x1d (0x004b5c98) do not call it.
+
+Its steps (PROVEN, from the refsrc body): (1) `+0xc0 += +0xc8`; (2) the id check: `Enemy__CheckAnimationId` (+0xb8 vs
++0xba, the started id) and `Player__StartNpcAnimation` on a change; the BLEND branch (`+0xb0 |= 6`, type 4) is taken when
+`(+0xb0 & 0x81) == 0`, the new row's flags have no 0x80000000 and the old row's no 0x40000000 (every row but slot 0,
+whose flags are 0xc0000000, so a change from or into the intro's slot 0 is the else branch: no clock reset, no stride
+change); (3) type 4: when `1.0 <= +0xc0` (0x97d97c), `+0xc0 = 0` and `+0xc8` = the speed of the row now playing.
+The threshold tests that read the clock are `check_entity_animation_elapsed_threshold` (0x007aaa30 = the same function,
+refsrc line 791545): true when `th < +0xc0 <= th + stride` with the blend's bit (`+0xb0 & 4`) clear and no id change.
+
+The port's `animateClock` is that step list (the blend starts when the slot differs from the started slot and neither is
+0; the wrap sets the stride from `BARBA_SLOTS[slot].speed`); `crossed(th)` is the crossing test. The state handlers call
+`animateClock()` first, like the exe. `setSlot` is the only writer of the slot; a mode 2 chain (the renderer's
+`animationEnded`) is a slot change and so a blend too.
+
+**Frame counts (`bm_boss7_de_rol_le_c.bml` from `data.gsl`, BML entry 6 + motion, `formats/njmotion.ts` frameCount;
+Pass 13's 40 / 34 for motions 10 / 11 agree):** motion 0 15, 1 16, 2 20, 3 26, 4 21, 5 60, 6 60, 7 200, 8 150, 9 33,
+10 40, 11 34, 12 80, 13 40, 14 80, 15 40, 16 50. The mode 1 loop wrap (`frameCount <= +0xc0`, subtract the count), the
+mode 2 chain (`frameCount - 1 <= +0xc0`) and the mode 3 hold (the clock freezes at the end) are NOT in the brain: the
+chain is the renderer's `animationEnded`, and every clock threshold these states read is reached before the first
+wrap, chain or hold (checked below: beam_a chains at clock 19, the 10..14 window and the 10.0 sound come first; beam_c
+at 20 with the 8.0 sound first; r_bite at 39 with the 25.0 landing first; rljump / lrjump at 79 with the arc's 64 first;
+motion 10 (drop) at 39 after the 29 mark; ed_boss2 holds at 199 after the finale's 123 mark). ASSUMED: the exe's
+`Enemy__GetAnimationMotions` is non-zero for each chain (no fallback subtract).
+
+**Per state (verdict; the exe's reads of +0xc0 and what changed):**
+
+| state (exe) | slot (speed) | clock reads (exe) | verdict and port change |
+|---|---|---|---|
+| idle 0 (0x004b9e54) | 1 (0.6) | none; Player__Animate only | the helper runs (keeps the started id); no threshold |
+| drop 0x0d | 1 (0.6), 4 (0.3) | 13.5/10.5/16/22/29 (0x906cd8.. ), crossings none | unchanged numbers: the blend wrap at 22, the rise at tick 57; the 0.3 stride is now the row's (slot 4), not a constant |
+| jump 0x11 / 0x12 (0x004b30fc) | 1 windup, 7 / 8 (0.28) | 6.0 (0x906e8c), 13.0 (0x906e98), 20.0 (0x906ea4), 25.0 (0x906ea8) by `>=`; 15.0 (0x3ec) and 8.5 (0x3ed) by crossing | CHANGED: the port's `timer += 1` and the `timer = 0` at the windup end are gone; the windup's id change blends, sub 1 waits for the wrap (`+0xb0 & 4`, PROVEN). Counted from the wrap tick: the take-off (sub 3) on the 23rd tick (clock 6.16), the landing on the 91st (clock 25.2), was 25 ticks |
+| arc 0x04 / 0x0a (0x004b0ee0) | 5 / 6 (0.5) | the sub-state marks 0x906f9c, 0x906fa4, 0x906fa8, 0x906fb0, 0x906fb8, 0x906fbc (the port's 10 / 20 / 28 / 45 / 46 / 64 by `>=`, values not re-read here); the sub 3 step `-= 0.2`; the arc sounds 0x3ec / 0x3ed by crossing (10 / 41 / 25.0; not ported) | CHANGED: sub 0 waits for the blend's wrap (was one frame); the clock runs at 0.5 a tick (was 1) |
+| volopt 0x0f / 0x10 (0x004b2cd0) | 3 (0.4, hold) | none (the sweep reads the rows and 0x1cc / 0x1cd) | no change to the logic; the helper runs (the exe's Player__Animate) |
+| shot 0x19 / 0x1a (0x004b4684) | 14 (0.4) | 8.0 crossing (0x3ed) only | CHANGED: the sound is at tick 22 (the wrap at tick 2, then 0.4 a tick); was tick 9 |
+| beam 0x17 (0x004b6d08) | 12 (0.4) | 10..14 window (0x906d3c / 0x906d38; `>=` and `<=`) for the attack, the 10.0 crossing (0x3ec) | CHANGED: the sound at tick 27 and the attack window at ticks 27..37 (was 10..14). The enter from the spawn's slot 0 does not blend (the clock stays at the spawn stride 0.7: the 10.0 sound at tick 15) |
+| transitions 0x03..0x0e (0x004b1e98) | 1 (0.6) | none in the sub-states checked (approach, the x/z easings, the wait 0xc8); FUN_004b2904 (sub 4's settle) not decoded | no change to the timing; the helper runs. ASSUMED: 0x004b2904 reads no clock |
+| followers 0x13 / 0x14 (0x004b3c2c) | 9 / 10 | none (the counter 0x734 and the arrival flags) | no change; the helper runs |
+| swim 0x15 / 0x16 (0x004b41ac) | 9 / 10 by side (2.0, the bite loops; enter writes them), 1 (0.6) on the exit | none | no change; the helper runs |
+| finale 0x1c (0x004b5d1c) | 16 (0.7, hold at 199) | 85.0 (the cut), 20.0 (0x20f) and 123.0 (the late effect) by crossing | CHANGED: the marks are crossings on the clock, not `timer === mark` on the +1 count: on the 29th, 122nd and 176th step after the wrap at 0.7 (were 20 / 85 / 123 ticks) |
+| timed 0x1b (0x004b60c4) | none | the countdown (0x1be) only | no Player__Animate; unchanged |
+| dead 0x1d (0x004b5c98) | none | none | no Player__Animate; unchanged |
+
+**Proven:** the Player__Animate call list above (each line is a call in the handler's event 0, Ghidra refsrc or the
+`decomp.sh` body of the unnamed handlers 0x004b6d08, 0x004b2cd0, 0x004b0ee0, 0x004b1e98); the threshold forms; the
+blend rule; `check_entity_animation_elapsed_threshold` = 0x007aaa30 (its body: `th < +0xc0 <= +0xc8 + th`, and the
+flags / id gate).
+
+**ASSUMED (marked in the code):** the blend's `+0xb0 & 0x81` test is clear (no writer found in the Barba's code); the
+clock's start at each enter is 0 (the generic enter; the exe writes no +0xc0 at the enters, so the carry of the last
+state is what the exe would have, and it is erased by the first blend wrap in every state checked); the spawn's stride
+0.7 (the intro row, slot 0; `Enemy__InitAnimation` of id 0 is not traced); the renderer's `animationEnded` is the mode 2
+chain's frame (within one tick of the clock's `frameCount - 1`); the arc's sounds (not ported); the transitions' FUN_004b2904.
+
+**Tests (`tests/barbaray.test.ts`):** the beam block (the idle first, then the sound at tick 27; the spawn's no-blend case at
+tick 15); the shot block (the sound at tick 22, with the chain); the jump block (the landing at `1 + ceil(25 / 0.28)` ticks,
+the 15.0 crossing tick, x and yaw on the last descent frame from the clock); the drop block unchanged. `node tests/barbaray.test.ts`
+ALL PASS; `client` `tsc --noEmit` clean; `NEWSERV=... node tests/combat.test.ts` 5859 checks, 0 failures.

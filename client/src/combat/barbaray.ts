@@ -113,6 +113,7 @@ export const BARBA_TABLES: readonly (readonly number[])[] = [
 
 // Phases (the table codes and the dispatcher's values).
 export const BARBA_PHASE = {
+  idle: 0x00, // 0x004b9e54 (SetEnemyAnimationState): slot 1, the event 0 is Player__Animate
   enter: 0x01,
   run0: 0x13,
   run2: 0x14,
@@ -354,11 +355,10 @@ export const BARBA_DROP = {
   attackB: 6 / 0.195, // a47a98 = 6.0 / a47aa0 (PROVEN, static init 0x004b9b72; float32 30.769229)
   liftZero: 0.195, // a47aa0 = 0x3e47ae15 (PROVEN, static init 0x004b9b68)
   z0: 300,
-  // The clock's strides (+0xc8, map Pass 13, PROVEN chain): the fall runs in slot 1 (row speed 0.6);
-  // sub 0 -> 1 writes slot 4, whose blend (StartNpc type 4) wraps at the clock 1.0 to clock 0 and
-  // stride 0.3 (row 4 speed, static init 0x004b9c14).
+  // The clock's stride at the enter (+0xc8, ASSUMED: the carry of slot 1's 0.6 from the idle). The
+  // strides after it come from the rows (animateClock): the fall runs in slot 1 (row speed 0.6);
+  // sub 0 -> 1 writes slot 4, whose blend wraps at the clock 1.0 to clock 0 and stride 0.3 (row 4).
   fallStride: 0.6,
-  dropStride: 0.3,
   zTarget: 500,
   zMaxRise: 7,
   zAccel: 0.2,
@@ -370,8 +370,8 @@ export const BARBA_DROP = {
 // Enter (event 4): slot 1 (0xb8 = 1), the gate block set (0x630 = (0x630 & ~0x100) | 4), the body to
 // anchor `side` (0x6c8 = 0x1b2 = side, FUN_004b1e58), z0 = the anchor's z, vz = 0, the z accel -0.2.
 // Event 0: sub 0 = 11 frames of windup (z sinks, vz -0.2 a tick, clamp -7), then slot 7 (side 0) or
-// 8 with the clock (+0xc0) from 0; sub 1 waits on 0xb0 bit 2 (ASSUMED clear: one tick); sub 2..5 are
-// the jump, timed by the clock at 6 / 13 / 20 / 25; sub 6 is the landing (0x3ee, 0x630 |= 0x200).
+// 8 (the blend: the clock wraps to 0 on the next tick); sub 1 waits for that wrap (0xb0 bit 4, PROVEN);
+// sub 2..5 are the jump, timed by the clock at 6 / 13 / 20 / 25; sub 6 is the landing (0x3ee, 0x630 |= 0x200).
 // Event 2 (the keyboard, ASSUMED the mode-2 poll): palette Left (g_KeyboardSharedState[0xe]) sends
 // 0x13 / 0x14 (6xAA), else Right (index 0xc, ASSUMED) sends 0x15 / 0x16 (6xA9). Event 9 steps the table
 // once the chain is in slot 9 / 10 (r_bite / l_bite chained into the bite loop).
@@ -643,11 +643,11 @@ export class BarbaRayAi extends BrainBase {
   private dropCount = 0;
   // Phase 0x0f / 0x10: the sweep's sub-state (+0x734) and the volopt kind (+0x70c, 0..2).
   private voloptSub = 0;
-  // The animation clock's stride in effect (+0xc8, see playerAnimate).
-  private animStride = 0;
-  // The blend into slot 4 (Player__StartNpcAnimation's type 4, asm 0x007a9a6c): blendWait = the
-  // id changed and the next Player__Animate starts it; blendOn = the wrap (clock 1.0) is pending.
-  private blendWait = false;
+  // The animation clock's stride in effect (+0xc8) and the slot the body was last started in (+0xba,
+  // the started id): the carry at spawn is the intro row's speed (ASSUMED: Enemy__InitAnimation of 0).
+  // blendOn = the blend's wrap (clock 1.0) is pending (+0xb0 bit 4). See animateClock.
+  private animStride = BARBA_SLOTS[0]!.speed;
+  private startedSlot = 0;
   private blendOn = false;
   private voloptKind = 0;
   private followSpeed = 0;
@@ -1093,6 +1093,7 @@ export class BarbaRayAi extends BrainBase {
   // easing output, signed, from the start. The done flag (0x730 = 1) is the leader's cue
   // for the next table step (event 9).
   private transitionFrame(): void {
+    this.animateClock(); // asm 0x004b1e98 event 0 runs Player__Animate first (PROVEN); no clock threshold
     let done = false;
     switch (this.tSub) {
       case 0:
@@ -1222,11 +1223,12 @@ export class BarbaRayAi extends BrainBase {
     this.teleport(3);
   }
 
-  // Event 0 of 0x19 / 0x1a (asm 0x004b4684): the shot's sound (0x3ed) at the timer's crossing of
-  // 8.0 (ASSUMED stride 1). ASSUMED: +0xc0 (the animation clock) advances a tick.
+  // Event 0 of 0x19 / 0x1a (asm 0x004b4684): Player__Animate, then the shot's sound (0x3ed) when the
+  // clock passes 8.0 (check_entity_animation_elapsed_threshold, PROVEN). The beam_c blend starts the
+  // clock from 0, so the sound is about 20 ticks after the enter (stride 0.4).
   private shotFrame(): void {
-    this.timer += 1;
-    if (this.timer > 8 && this.timer <= 9) this.events.push({ kind: 'se', id: BARBA_SE.pigShot });
+    this.animateClock();
+    if (this.crossed(8)) this.events.push({ kind: 'se', id: BARBA_SE.pigShot });
   }
 
   // 0x004b6d08 enter (event 4): the gate open (0x630: bit 2 cleared, bit 8 set), the body to
@@ -1241,15 +1243,16 @@ export class BarbaRayAi extends BrainBase {
   // Event 0 of 0x17 (asm 0x004b6d08): the counter (730) counts the frames; at timers 10..14 with
   // the counter at 3 or more the counter restarts and the attack object (UpdateSinowberillAttackPos3,
   // 0x201, at (x + 30 r, -5, z + 80)) is made. ASSUMED: the attack object is not spawned and its
-  // random draw is not taken. The beam sound (0x3ec) at the timer's crossing of 10.0 (ASSUMED stride 1).
+  // random draw is not taken. The beam sound (0x3ec) at the clock's crossing of 10.0 (PROVEN:
+  // FUN_007aaa30 is check_entity_animation_elapsed_threshold). Player__Animate runs first (PROVEN).
   private beamFrame(): void {
-    this.timer += 1; // ASSUMED: +0xc0 (the animation clock) advances a tick
+    this.animateClock();
     this.moveSub += 1;
     if (this.timer >= 10 && this.timer <= 14 && this.moveSub >= 3) {
       this.moveSub = 0;
       // ASSUMED: the attack object is not made (see above).
     }
-    if (this.timer > 10 && this.timer <= 11) this.events.push({ kind: 'se', id: BARBA_SE.beamFlash });
+    if (this.crossed(10)) this.events.push({ kind: 'se', id: BARBA_SE.beamFlash });
   }
 
   // 0x004b2cd0 enter (event 4, side = 0 for 0x0f, 2 for 0x10): the gate block and 0x100 cleared,
@@ -1270,6 +1273,7 @@ export class BarbaRayAi extends BrainBase {
   // (the part rows, root+0x538), and sub 2 once the index reaches 4 (0x906ee4). ASSUMED: the
   // animation hold (0xb0 bit 4) is clear. The point's visual is not drawn (the sub-entity).
   private voloptFrame(): void {
+    this.animateClock(); // asm 0x004b2cd0 event 0 runs Player__Animate (PROVEN); no clock threshold
     if (this.voloptSub === 0) {
       this.updateVolopt();
       this.voloptSub = 1;
@@ -1303,46 +1307,55 @@ export class BarbaRayAi extends BrainBase {
     this.f750 = 0;
     this.f754 = 0;
     this.f758 = 0;
-    // The enter writes no +0xc0 (PROVEN: no store in 0x004b7040 event 4). The stride in effect is
-    // slot 1's (0.6): the chain that reached slot 1 blended into it. The clock's phase is the loop's
-    // (not traced): the blend's wrap at sub 0 -> 1 resets it, so the phase does not matter.
+    // The enter writes no +0xc0 (PROVEN: no store in 0x004b7040 event 4); the stride carry is slot 1's
+    // (ASSUMED, see BARBA_DROP.fallStride). The clock's phase is the loop's (not traced): the blend's
+    // wrap at sub 0 -> 1 resets it, so the phase does not matter.
     this.animStride = BARBA_DROP.fallStride;
-    this.blendWait = false;
-    this.blendOn = false;
   }
 
-  // The animation clock: +0xc0 = current_animation_elapsed (PROVEN). Player__Animate (refsrc
-  // Psobb.exe-05112026.c line 791218; objdump 0x007aa094) runs first in the drop's event 0 (line 238386):
-  //   1. +0xc0 += +0xc8 (the stride);
-  //   2. the id check (+0xb8 != +0xba, CheckAnimationId 0x007a9970): StartNpc, which for the sub 0 -> 1
-  //      change (slot 1 -> slot 4, both flags 0, old slot not 0) takes the BLEND branch (0x007a9a6c:
-  //      +0xb0 |= 6, type 4), so the type 4 step below runs in the same call;
-  //   3. type 4 (0x007aa369): when 1.0 <= +0xc0 (0x97d97c), +0xc0 = 0 (0x97d978 = 0.0), +0xc8 = the row 4
-  //      speed (0.3, 0x009aba68 from the static init 0x004b9c14), type 2, flags &= ~4 (sub 1's wait ends).
-  // ASSUMED: the blend branch is taken (+0xb0 bits 0x1 / 0x80 are clear: no writer in the Barba's code).
-  private playerAnimate(): void {
+  // The animation clock (+0xc0 = current_animation_elapsed, +0xc8 = animation_frame_stride; PROVEN).
+  // Player__Animate (refsrc Psobb.exe-05112026.c line 791218; objdump 0x007aa094) runs at the top of
+  // event 0 of every state the exe runs it in, whether or not the state reads the clock: the idle (0),
+  // the drop, the jump, the shot, the beam, the arc, the finale, the volopt, the followers, the swim and
+  // the corner transitions. The timed attack (0x1b) and the dead (0x1d) do not. Its steps, in order:
+  //   1. +0xc0 += +0xc8 (animStride);
+  //   2. the id check (+0xb8 != +0xba, CheckAnimationId 0x007a9970): StartNpc (0x007a9a6c) starts a
+  //      BLEND (+0xb0 |= 6, type 4) when the row flags allow it (PROVEN: the new row's 0x80000000 and
+  //      the old row's 0x40000000 are clear, which holds for every slot but 0, whose flags are
+  //      0xc0000000; the +0xb0 & 0x81 test is ASSUMED clear). The else branch leaves +0xc0 and +0xc8;
+  //   3. type 4 (0x007aa369): when 1.0 <= +0xc0 (0x97d97c), +0xc0 = 0 (0x97d978), +0xc8 = the speed of
+  //      the row now playing (table 0x009aba20, BARBA_SLOTS), +0xb0 &= ~4 (the blend's wait ends).
+  // The mode 1 loop wrap, the mode 2 chain and the mode 3 hold are not here: the chain is the
+  // renderer's animationEnded (tick), and no threshold these states read on the clock is past a loop
+  // wrap, chain or hold (the njm frame counts, map Pass 14). The slot change is the caller's setSlot.
+  private animateClock(): void {
     this.timer += this.animStride;
-    if (this.blendWait) {
-      this.blendWait = false;
-      this.blendOn = true;
+    if (this.slot !== this.startedSlot) {
+      if (this.startedSlot !== 0 && this.slot !== 0) this.blendOn = true;
+      this.startedSlot = this.slot;
     }
     if (this.blendOn && this.timer >= 1.0) {
       this.timer = 0;
-      this.animStride = BARBA_DROP.dropStride;
+      this.animStride = BARBA_SLOTS[this.slot]?.speed ?? this.animStride;
       this.blendOn = false;
     }
   }
 
+  // check_entity_animation_elapsed_threshold (0x007aaa30 = refsrc line 791545, PROVEN): true on the
+  // frame the clock passes `th` (th < +0xc0 <= th + stride), with no blend pending and no id change.
+  private crossed(th: number): boolean {
+    return !this.blendOn && this.slot === this.startedSlot && th < this.timer && this.timer <= this.animStride + th;
+  }
+
   // Event 0 of 0x0d (asm 0x004b7040 param 0): Player__Animate first, then the sub-states.
   private dropFrame(): void {
-    this.playerAnimate();
+    this.animateClock();
     if (this.moveSub === 0) {
       // The fall: 21 ticks, the speed drops 0.2 a tick to -7 and z follows it.
       this.moveCounter += 1;
       if (this.moveCounter > BARBA_DROP.fallWait) {
         this.moveSub = 1;
-        this.setSlot(4);
-        this.blendWait = true; // the id change; Player__Animate starts the blend next tick
+        this.setSlot(4); // the id change: the next Player__Animate starts the blend (sub 1 waits for it)
       }
       this.f754 = Math.max(this.f754 - BARBA_DROP.vyStep, BARBA_DROP.vyMin);
       this.z += this.f754;
@@ -1350,7 +1363,7 @@ export class BarbaRayAi extends BrainBase {
     }
     if (this.moveSub === 1) {
       // asm 0x004b7040 sub 1: 0xb0 bit 4 (the blend's flag) clear -> sub 2 (the wrap ends the blend).
-      if (!this.blendOn && !this.blendWait) this.moveSub = 2;
+      if (!this.blendOn) this.moveSub = 2;
       return;
     }
     if (this.moveSub !== 2) return; // 3: done (the leader's table step)
@@ -1453,7 +1466,7 @@ export class BarbaRayAi extends BrainBase {
   // Event 0 of 0x13 / 0x14 (asm 0x004b3d3a): the wait, then one follower target every
   // 180 ticks (the random point or the player), then the wait for the arrivals.
   private followerFrame(targets: readonly AiTarget[]): void {
-    this.timer += 1;
+    this.animateClock(); // asm 0x004b3c2c event 0 (PROVEN); no clock threshold in the followers
     switch (this.moveSub) {
       case 0:
         this.moveCounter += 1;
@@ -1502,7 +1515,7 @@ export class BarbaRayAi extends BrainBase {
 
   // Event 0 of 0x15 / 0x16 (asm 0x004b41ac): sub 0 swims, sub 1 rises to the water line.
   private swimFrame(): void {
-    this.timer += 1;
+    this.animateClock(); // asm 0x004b41ac event 0 (PROVEN); no clock threshold in the swim
     if (this.moveSub === 0) {
       // +0x744 += 256, truncated; clamped to 16384 (the speed compare, then the store).
       const next = Math.trunc(this.f744 + BARBA_SWIM.speedStep);
@@ -1549,12 +1562,13 @@ export class BarbaRayAi extends BrainBase {
     else this.lift = 0;
   }
 
-  // Event 0 of 0x0ee0 (asm 0x004b0ee0): sub-state 0 waits one frame (ASSUMED: the
-  // +0xb0 bit 2 wait is not held), then the arc sub-states 0..6 by the timer marks.
+  // Event 0 of 0x0ee0 (asm 0x004b0ee0): sub-state 0 waits for the blend into the arc's motion (slot 5 /
+  // 6) to wrap, then the arc sub-states 0..6 by the clock marks (+0xc0: 10 / 20 / 28 / 45 / 46 / 64).
   private arcFrame(): void {
-    this.timer += 1;
+    this.animateClock(); // Player__Animate in sub 0 and sub 1 (PROVEN)
     if (this.moveSub === 0) {
-      this.moveSub = 1;
+      // sub 0 waits for the blend's wrap (+0xb0 bit 4 clear, PROVEN), then sub 1 on the same tick.
+      if (!this.blendOn) this.moveSub = 1;
       return;
     }
     switch (this.arcSub) {
@@ -1626,7 +1640,7 @@ export class BarbaRayAi extends BrainBase {
       }
       case 3:
         this.x += this.f75c;
-        this.timer -= 0.5 - 0.3; // 0x906f68 - 0xa47a7c = 0.2
+        this.timer -= 0.5 - 0.3; // 0x906f68 - 0xa47a7c = 0.2 (sub 3's clock step, as the exe)
         this.lift += this.f750;
         this.f750 -= this.f754;
         this.z += this.f758;
@@ -1660,13 +1674,13 @@ export class BarbaRayAi extends BrainBase {
   // crossing; the marks are decoded), and the kill request (ASSUMED: set as
   // soon as the cut starts, the map's pass 4 note on FUN_004d6864).
   private finaleFrame(): void {
-    this.timer += 1;
+    this.animateClock(); // Player__Animate first (PROVEN, asm 0x004b5d1c event 0)
     this.killReady = 1; // ASSUMED (see above)
-    if (this.timer === FINALE_MARKS.cut) {
+    if (this.crossed(FINALE_MARKS.cut)) {
       this.events.push({ kind: 'effect', id: BARBA_FX.finaleCut, part: null }, { kind: 'se', id: BARBA_SE.finaleCut });
     }
-    if (this.timer === FINALE_MARKS.effect) this.events.push({ kind: 'effect', id: BARBA_FX.finaleTwenty, part: null });
-    if (this.timer === FINALE_MARKS.late) this.events.push({ kind: 'effect', id: BARBA_FX.finaleLate, part: null }); // FUN_004b60a0 (effect id ASSUMED)
+    if (this.crossed(FINALE_MARKS.effect)) this.events.push({ kind: 'effect', id: BARBA_FX.finaleTwenty, part: null });
+    if (this.crossed(FINALE_MARKS.late)) this.events.push({ kind: 'effect', id: BARBA_FX.finaleLate, part: null }); // FUN_004b60a0 (effect id ASSUMED)
   }
 
   // 0x1b (the timed attack, 0x004b60c4): the countdown drops by 2.0 a frame
@@ -1774,6 +1788,9 @@ export class BarbaRayAi extends BrainBase {
       return;
     }
     switch (this.phase) {
+      case BARBA_PHASE.idle:
+        this.animateClock(); // 0x004b9e54 event 0 is Player__Animate and nothing else (PROVEN)
+        return;
       case BARBA_PHASE.finale:
         this.finaleFrame();
         return;
@@ -1813,15 +1830,14 @@ export class BarbaRayAi extends BrainBase {
 
   // --- phases 0x11 / 0x12 (0x004b30fc, see BARBA_JUMP) ----------------------------------------
 
-  // Event 0 (the frame). The clock (+0xc0) counts from the start of the jump motion (ASSUMED: it
-  // resets at the sub 0 end, when slot 7 / 8 starts). The sub transition runs first, then the
-  // sounds and the motion of the post-transition sub (the exe's order).
+  // Event 0 (the frame). Player__Animate runs first (PROVEN, asm 0x004b30fc event 0 at 235288); the
+  // clock then reads the sub-state marks. The windup's slot change (7 / 8) is a blend: the clock
+  // restarts at its wrap on the next tick (no write here, PROVEN), so sub 1 lasts that one tick.
+  // The sub transition runs first, then the sounds and the motion of the post-transition sub.
   private jumpFrame(): void {
     const J = BARBA_JUMP;
-    const prev = this.timer;
-    if (this.moveSub >= 1) this.timer += 1; // ASSUMED: one a tick
+    this.animateClock();
     const t = this.timer;
-    const crossed = (mark: number): boolean => prev < mark && mark <= t;
     switch (this.moveSub) {
       case 0: {
         const n = this.moveCounter + 1;
@@ -1833,12 +1849,12 @@ export class BarbaRayAi extends BrainBase {
         this.moveCounter = 0;
         this.moveSub = 1;
         this.f74c = side0 ? -1 : 1;
-        this.timer = 0; // ASSUMED: the clock starts with the motion
         this.setSlot(side0 ? 7 : 8);
         break;
       }
       case 1:
-        this.moveSub = 2; // ASSUMED: 0xb0 bit 2 (the wait) is clear
+        // asm 0x004b30fc sub 1: 0xb0 bit 4 (the blend's wait) clear -> sub 2 (PROVEN; the wrap ends it).
+        if (!this.blendOn) this.moveSub = 2;
         break;
       case 2:
         if (t >= J.t2) this.jumpTakeoff();
@@ -1855,8 +1871,8 @@ export class BarbaRayAi extends BrainBase {
       default:
         break;
     }
-    // The 15.0 mark of the air (sub 2 and on) plays 0x3ec (ASSUMED: a crossing, one a frame).
-    if (this.moveSub >= 2 && crossed(J.seAirMark)) this.events.push({ kind: 'se', id: J.seAir });
+    // The 15.0 mark of the air (sub 2 and on) plays 0x3ec (check_entity_animation_elapsed_threshold, PROVEN).
+    if (this.moveSub >= 2 && this.crossed(J.seAirMark)) this.events.push({ kind: 'se', id: J.seAir });
     // The motion of the post-transition sub: sub 0..2 the z fall, 3 the take-off arc, 4 the apex,
     // 5 the descent with the yaw; 6 is the landing (no motion).
     const s = this.moveSub;
@@ -1873,7 +1889,7 @@ export class BarbaRayAi extends BrainBase {
       const u = t - J.t2;
       this.x = this.f754 * u + this.f750;
       this.z = (J.half * this.f75c * u - J.zTerm) * u + this.f764;
-      if (crossed(J.seFallMark)) this.events.push({ kind: 'se', id: J.seJump });
+      if (this.crossed(J.seFallMark)) this.events.push({ kind: 'se', id: J.seJump });
     } else if (s === 4) {
       const u = t - J.t3;
       this.z = J.half * this.f75c * u * u + this.f764;
