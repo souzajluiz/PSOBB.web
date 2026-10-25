@@ -124,6 +124,31 @@ export interface EnemyIconRule {
   forced: boolean;
 }
 export const ENEMY_ICON_RULE: EnemyIconRule = { scale: 1, color: ENEMY_ICON_COLOR, forced: false };
+// The shared enemy-base radar slot (PsoBB.exe 0x00520618, dump label
+// PoisonLilyUpdateMinimap_00520618; the label is a community name, the function
+// serves every family that reaches it): `if ((flags+0x30) & 0x40800) == 0`, then
+// unknown_add_minimap_icon at +0x38 (x2), colour 0xffffa24c, scale 1, range
+// checked. Bit 0x800 is "dead" (headers/battle.h), 0x40000 is the radar / lock-on
+// bit (DEVLOG 2026-10-25, Gibbon and Mericarol). The slot is the family's +0x198
+// (Mericarol, vtable 0x00b06320, called unconditionally by its update 0x00573050
+// at 0x005730eb) or +0x188 (Gibbon, vtable 0x00b05750). The Booma family does not
+// use it (its states add their own icons, see BOOMA_ICON_STATES).
+export const BASE_ICON_HIDDEN_FLAGS = 0x40800;
+export function baseIconShown(flags: number): boolean {
+  return (flags & BASE_ICON_HIDDEN_FLAGS) === 0;
+}
+// The Booma family (vtable 0x00b01fc0, base ctor 0x0052b6ec, dump label
+// "LilyTarget" for its vtable): unknown_ai_state -> handler, and whether the
+// handler adds a radar icon (the calls to unknown_add_minimap_icon in the
+// handler's body, objdump of PsoBB.exe, VERIFIED for the call sites). State 0 is
+// the spawn (0x00535a6c, unknown_booma_enemy_spawn_handler: no icon); 6 and 9+
+// are the empty slots (0x0061cdb0 placeholder); 8 (0x0052b518) adds none.
+// Shark, Dimenian and the other Booma-substrate families use these handlers
+// (ASSUMED: the same table for each; their vtables were not diffed).
+export const BOOMA_ICON_STATES: readonly number[] = [1, 2, 3, 4, 5, 7];
+export function boomaIconShown(state: number): boolean {
+  return BOOMA_ICON_STATES.includes(state);
+}
 // OLGA_FLOW_1 (the phase-1 beast, ctor 0x00497580): the update of
 // Olga1ObjectUpdate_00492a84 calls icon3 at its position with scale 0x40a00000
 // (5.0), colour 0xffffa24c, flags 1 (exe 0x00492d95). ASSUMED: the position is

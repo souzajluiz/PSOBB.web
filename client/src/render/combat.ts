@@ -1870,9 +1870,13 @@ export class CombatView {
     return out;
   }
 
-  // Where the live enemies of the floor stand, for their radar icons (each
-  // enemy's update calls unknown_add_minimap_icon while it is alive and
-  // constructed; render/fieldhud.ts).
+  // Where the live enemies of the floor stand, for their radar icons. The exe's
+  // baseline for the ordinary families is the enemy-base slot (classic/minimap.ts
+  // baseIconShown: icon unless the entity flags have 0x800 (dead) or 0x40000 (radar
+  // hidden, set by +0x184)), called from the family's own update (Mericarol +0x198,
+  // Gibbon +0x188). The port's dead / death / radar / concealed tests read those bits.
+  // The Booma family adds its icon per state (boomaIconShown), not through the slot:
+  // the port has no Booma state yet, so every alive Booma is drawn here (open).
   minimapEnemies(): { x: number; z: number; type: string }[] {
     const out: { x: number; z: number; type: string }[] = [];
     for (const e of this.enemies.values()) {

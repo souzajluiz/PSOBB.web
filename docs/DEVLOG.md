@@ -1,5 +1,34 @@
 # Devlog
 
+## 2026-10-25: Ordinary enemies' radar baseline: the enemy-base slot 0x00520618 (Mericarol and Gibbon proven), Booma icons per state
+
+**Question.** Where does an ordinary enemy (Booma, Rappy, Gibbon, Mericarol) get its radar icon in the exe? The Gibbon entry above left the Mericarol and Gibbon body icon ASSUMED.
+
+**Outcome.** The baseline is a shared enemy-base slot, not a radar walk. The radar draw only draws the icon buffer that the add functions fill; nothing walks the entity list. Mericarol and Gibbon get their body icon through that slot (PROVEN). The Booma family does not use it: its handlers add their own icons per state (PROVEN). Rappy adds its icon in its own update (PROVEN for the call, ASSUMED for the Ephinea address). Port: no change in behaviour (the port's rule already matches the proven slot rule for Mericarol and Gibbon); new exe-cited helpers and tests, and an open Booma state gap.
+
+**The radar sink (PsoBB.exe, Ephinea addresses; dump labels are community names).** `unknown_add_minimap_icon` (0x00805608, dump 818888) and its `_icon2/3/4` siblings append to the icon buffer (cap 0x80, `minimap_object_count`). Unless the flag argument's bit 0 is set (the "forced" icons), an icon is dropped when its XZ distance from the player (`minimap1_xyz`) is more than `minimap_draw_distance_squared`. The radar (`MinimapRenderIcon_00804b24`, `RenderMinimapIcon_00819f7c`) draws what is in the buffer. So the per-enemy rule lives in the callers.
+
+**The shared enemy-base slot 0x00520618** (dump `PoisonLilyUpdateMinimap_00520618`, dump 304049; the label is wrong, the function serves every family that reaches it):
+```
+if ((flags+0x30) & 0x40800) == 0:  unknown_add_minimap_icon(&x2 (+0x38), 0xffffa24c, 1, false)
+```
+- `+0x30` is the entity flags (headers/battle.h); `0x800` is dead (battle.h:235); `0x40000` is the radar / lock-on bit (DEVLOG 2026-10-25 Gibbon entry).
+- The slot is the family's vtable slot: Mericarol (vtable 0x00b06320) `+0x198`; Gibbon (vtable 0x00b05750) `+0x188`. A scan of both vtables (every slot, body scan to the function end, objdump) finds no other slot with an icon call except the state handlers of Booma (below).
+- Mericarol's update 0x00573050 calls `+0x198` at 0x005730eb (objdump), on its normal path: the early return (0x00573058 `jne` to 0x005730f3) is the paused path, which calls `+0x1ac` instead. So the Mericarol body icon is the slot, every frame, as the DEVLOG's ASSUMED said it might be. Mericarol's state handlers at `+0x154..+0x168` (0x0052164c, 0x00521920, 0x0051f5bc, 0x0051f614, 0x005710b8, 0x005369c4) add no icon (the vtable scan over every slot found only `+0x198`).
+- Gibbon: vtable `+0x188` is the slot (PROVEN); its update's call site to `+0x188` was not pinned to the Gibbon's own function (ASSUMED: the sites 0x005660d4..0x005684dc of the `+0x188` family are the Gibbon's update).
+
+**Booma family (vtable 0x00b01fc0, PROVEN from the vtable and the call sites).** `unknown_ai_state` -> handler (Ephinea addresses): 0 spawn 0x00535a6c (`unknown_booma_enemy_spawn_handler`, dump 319268: no icon); 1 walk 0x0052a6e4 (icon at 0x0052ab6b); 2 0x0052ad80 (icon at 0x0052afd9); 3 chase 0x0052afe4 (icon at 0x0052b148); 4 0x0052b1b8 (0x0052b282); 5 0x0052b290 (0x0052b330); 6 0x0061cdb0 (placeholder, none); 7 0x0052b33c (0x0052b50c); 8 0x0052b518 (none); 9 0x0073d160 (none). `+0x198` is not the slot (it is 0x008d4ff3). The Booma's `unknown_booma_enemy_ai` (dump 311909) calls `enable_reticle` every frame, so the lock-on is unconditional while the icon is per state. The dump's `LilyAI_*` names on these handlers are community labels; the base ctor (dump 311885) sets the vtable to `g_pLilyTargetEntityDtor`.
+
+**Rappy.** `update_rappy` (dump 307984) adds `unknown_add_minimap_icon(&x2, 0xffffa24c, 1, false)` at dump line 308039, after the state dispatch and inside the not-paused branch. It is not gated by `+0x30`. ASSUMED: the Ephinea address of `update_rappy` (not pinned).
+
+**Other sites checked, not ported here.** `EnemyAiupdate_0057d578` (dump 366138) is NOT a shared base: its vtable is the Morfos (0x00b074e0, ctor 0x0057d2a4 and 0x0057f6e8). Its icon test is its own field `+0x390` (`& 0x40000`, the same radar bit), not the slot. The generic controller `update_enemy_control_object` (0x00787a80) still adds its icon only during status timers (the Gibbon entry).
+
+**Port.** `client/src/classic/minimap.ts`: `BASE_ICON_HIDDEN_FLAGS = 0x40800`, `baseIconShown(flags)`; `BOOMA_ICON_STATES = [1,2,3,4,5,7]`, `boomaIconShown(state)`. Neither is wired into `minimapEnemies` yet: the port has no Booma `unknown_ai_state`, so every alive Booma is still drawn (the port draws the spawn state too, which the exe does not). `render/combat.ts` `minimapEnemies` keeps its rule: alive, visible, not concealed, `splitRadarOk` (0x40000 through `isEp2Hidden`), and not `dead` (0x800). That is the slot's rule for the families that use it. The comment there cites the slot.
+
+**ASSUMED / open.** The Gibbon's update site of the `+0x188` slot. The Rappy's Ephinea address. The Booma family's table for Shark, Dimenian and the other Booma-substrate vtables (not diffed). The Booma state machine in the port (the spawn icon gap). The `visible` gate in `minimapEnemies` (the exe's slot has none; the port's visibility models the wave, not a flag).
+
+**Tests.** `tests/minimap.test.ts` (new section: the 0x40800 mask cases, the Booma state table). `node tests/minimap.test.ts` ALL PASS, `enemysplits` ALL PASS, `combat` (NEWSERV = vendor/newserv) 5859 checks, 0 failures. `client`: `tsc --noEmit -p .` clean under Node 24.
+
 ## 2026-10-25: Gibbon and Mericarol: radar, lock-on and hit from the exe's entity flags (the generic icon is status-gated)
 
 **Outcome.** The Gibbon and the Mericarol leave `concealed()`; their radar, lock-on and hit go through `splitRadarOk` / `splitLockOk` / `splitStruckOk` in `render/combat.ts`, with the rule the exe sets with `+0x184`. Gibbles stays on `concealed()` (not traced here). The Mericarol and Gibbon body radar is still not proven: the exe code of both families has no radar call of its own that I could find (below), so the baseline icon stays ASSUMED.
