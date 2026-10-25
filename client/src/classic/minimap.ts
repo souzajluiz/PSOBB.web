@@ -149,6 +149,55 @@ export const BOOMA_ICON_STATES: readonly number[] = [1, 2, 3, 4, 5, 7];
 export function boomaIconShown(state: number): boolean {
   return BOOMA_ICON_STATES.includes(state);
 }
+// The port's Booma-substrate brain (combat/enemyai.ts AiState) mapped to the exe's
+// state numbers. idle = state 1 (wander, 0x0052a6e4); notice and chase = state 3
+// (the war cry, then the chase, 0x0052afe4); attack and recover = state 5 (the
+// attack, then substate 2 with the 15-tick wait, 0x0052b290); dead = state 8.
+// spawn = state 0 (unknown_booma_enemy_spawn_handler 0x00535a6c, dump 319268: the
+// spawn animation 0xb, invulnerable, then state 1). The port has no spawn state
+// yet (ASSUMED: the spawn animation is not modelled), so no brain reports it.
+export const BOOMA_BRAIN_EXE_STATE: Readonly<Record<string, number>> = {
+  spawn: 0,
+  idle: 1,
+  notice: 3,
+  chase: 3,
+  attack: 5,
+  recover: 5,
+  dead: 8,
+};
+export function boomaBrainIconShown(brain: string): boolean {
+  const state = BOOMA_BRAIN_EXE_STATE[brain];
+  return state === undefined ? true : boomaIconShown(state);
+}
+// The families whose vtable is the Booma table (ctor 0x00535f1c for Booma, Gobooma,
+// Gigobooma; ctor 0x00512bd0 for Evil / Pal / Guil Shark, vtable 0x00aff860;
+// ctor 0x00551d3c for Dimenian / La / So, vtable 0x00b041e0). Their states 1 to 8
+// are the same handlers as the Booma's (vtable rows, DEVLOG 2026-10-25). The Shark
+// spawn (0x00552704) and the Dimenian state 9 (0x005517a0) differ and are not
+// gated here (ASSUMED: they add no icon, untraced).
+export const BOOMA_BRAIN_TYPES: ReadonlySet<string> = new Set([
+  'BOOMA', 'GOBOOMA', 'GIGOBOOMA', 'EVIL_SHARK', 'PAL_SHARK', 'GUIL_SHARK', 'DIMENIAN', 'LA_DIMENIAN', 'SO_DIMENIAN',
+]);
+// The radar source of each enemy type, from its vtable (the shared slot
+// 0x00520618 holds 0x198 of the vtable, or 0x188 for Gibbon). 'booma': the Booma
+// table, icon per state. 'slot': the shared enemy-base slot (baseIconShown).
+// 'rappy': unconditional in the alive update (update_rappy, dump 308039).
+// 'unsurveyed': the vtable holds no slot and the family's own icon calls were not
+// traced; the port keeps the default (alive and visible).
+export type RadarSource = 'booma' | 'slot' | 'rappy' | 'unsurveyed';
+export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
+  BOOMA: 'booma', GOBOOMA: 'booma', GIGOBOOMA: 'booma',
+  EVIL_SHARK: 'booma', PAL_SHARK: 'booma', GUIL_SHARK: 'booma',
+  DIMENIAN: 'booma', LA_DIMENIAN: 'booma', SO_DIMENIAN: 'booma',
+  SAVAGE_WOLF: 'slot', CHAOS_SORCERER: 'slot', CHAOS_BRINGER: 'slot', DARK_BELRA: 'slot',
+  RAPPY: 'rappy',
+  HILDEBEAR: 'unsurveyed', GRASS_ASSASSIN: 'unsurveyed', NANO_DRAGON: 'unsurveyed',
+  DUBCHIC: 'unsurveyed', GILLCHIC: 'unsurveyed', GARANZ: 'unsurveyed', DELSABER: 'unsurveyed',
+  DARK_GUNNER: 'unsurveyed', BULCLAW: 'unsurveyed', CLAW: 'unsurveyed',
+};
+export function radarSourceOf(type: string): RadarSource | null {
+  return ENEMY_RADAR_SOURCE[type] ?? null;
+}
 // OLGA_FLOW_1 (the phase-1 beast, ctor 0x00497580): the update of
 // Olga1ObjectUpdate_00492a84 calls icon3 at its position with scale 0x40a00000
 // (5.0), colour 0xffffa24c, flags 1 (exe 0x00492d95). ASSUMED: the position is

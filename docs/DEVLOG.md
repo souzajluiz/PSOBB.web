@@ -1,5 +1,18 @@
 # Devlog
 
+## 2026-10-25: Radar gates wired: Booma brain states and a per-enemy source survey
+
+**Outcome.** `minimapEnemies` (render/combat.ts) now applies the Booma state table: a Booma-table brain (Booma, Gobooma, Gigobooma, Evil / Pal / Guil Shark, Dimenian / La / So) is drawn only in the exe states that add an icon. The mapping is `boomaBrainIconShown(brain)` (classic/minimap.ts `BOOMA_BRAIN_EXE_STATE`): idle = 1 (wander, 0x0052a6e4), notice and chase = 3 (0x0052afe4), attack and recover = 5 (0x0052b290, substate 2 is the 15-tick wait), dead = 8. Spawn = 0 is in the table, but the port has no spawn brain state, so no enemy reports it yet. The gate changes nothing in play today: every mapped port state already adds an icon, and dead was already excluded.
+
+**Survey (vtables, PsoBB.exe, Ephinea addresses).** The literal 0x00520618 occurs in 40 vtables (scan of the exe's data, PE image base 0x400000). Read per family:
+- Slot holders (+0x198 of the vtable): Savage Wolf (0x00b00260), Chaos Sorcerer (0x00b09c60), Chaos Bringer (0x00b026e0), Dark Belra (0x00b02280), Monest (0x00afffe0), Mericarol (0x00b06320). Gibbon (0x00b05750) holds it at +0x188 from its object pointer, as the Gibbon entry says. PROVEN for the table; the update call sites are not traced for the four new rows (ASSUMED the slot is their radar, the default already draws it).
+- Booma table (0x00b01fc0): no slot. Shark (0x00aff860) and Dimenian (0x00b041e0) share Booma's handlers for states 1 to 8 (PROVEN from the vtable rows); the Shark spawn (0x00552704) and the Dimenian state 9 (0x005517a0) differ (not gated, ASSUMED no icon).
+- No slot in the vtable (the ctor's vtable read at 0x00affb20 Hildebear, 0x00b00b60 Grass Assassin, 0x00b074e0 Nano Dragon, 0x00b04760 Dubchic, 0x00b05f80 Garanz, 0x00b03fa0 Delsaber, 0x00b03400 Dark Gunner, 0x00b01b40 Bulclaw, 0x00b01d80 Claw): UNSURVEYED. Several of these vtable reads show null entries at +0x154, so the table identity is doubtful (ASSUMED) and their own icon calls were not traced. The port keeps the default.
+- Rappy: `update_rappy` (dump 307984) adds its icon unconditionally in the alive branch (dump 308039, after the state dispatch and the reticle). The Ephinea address is NOT pinned: no `push 0xffffa24c` sits in the Rappy state range 0x00525b08..0x00526708 (scan of PsoBB.exe), so the call is probably through a register (ASSUMED).
+- Not surveyed: Canadine, Sinow Beat / Gold, Poison Lily, Del Lily, Gillchic (vtable not isolated), the Dubchic / Gillchic shell pieces.
+
+**Tests.** `tests/minimap.test.ts`: the Booma brain mapping (spawn hidden, idle to recover shown, dead hidden) and one row per enemy in `ENEMY_RADAR_SOURCE`.
+
 ## 2026-10-25: Ordinary enemies' radar baseline: the enemy-base slot 0x00520618 (Mericarol and Gibbon proven), Booma icons per state
 
 **Question.** Where does an ordinary enemy (Booma, Rappy, Gibbon, Mericarol) get its radar icon in the exe? The Gibbon entry above left the Mericarol and Gibbon body icon ASSUMED.
