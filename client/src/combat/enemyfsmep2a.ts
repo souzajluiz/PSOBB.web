@@ -1707,8 +1707,9 @@ export class GiGueAi extends BrainBase {
           targetId: id,
         });
       // The tech hit and then the confusion are two effects of one hit: two
-      // identical spits fly together.
-      out.shots = confuse ? [mk({ kind: 'tech', power: this.spitPower }), mk({ kind: 'status', status: STATUS.confusion })] : [mk({ kind: 'tech', power: this.spitPower })];
+      // identical spits fly together. The hit's group is 1 (the Foie family, EFR):
+      // GiGuesProjectileUpdate_0056c96c passes g_Tech_GiGuesProjectileHit = DAT_00926500 = 1.
+      out.shots = confuse ? [mk({ kind: 'tech', power: this.spitPower, group: 1 }), mk({ kind: 'status', status: STATUS.confusion })] : [mk({ kind: 'tech', power: this.spitPower, group: 1 })];
       this.sub = 3;
     }
     if (--this.timer > 0) return;

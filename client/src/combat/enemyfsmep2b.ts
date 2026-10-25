@@ -48,7 +48,7 @@ import { BrainBase, loop, once, turnToward, wrap } from './enemyfsm.ts';
 import { EnemyShot, TechBolt, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { enemyFire } from './techfire.ts';
 import { SporeCloud } from './enemyfsmep2.ts';
-import { techFreezeChance, techShockChance } from './enemystatus.ts';
+import { ENEMY_HIT_GROUP } from './enemytechplayer.ts';
 import { STATUS } from './status.ts';
 import { TECH, techData, techPower } from './techniques.ts';
 import { exhaustive } from '../exhaustive.ts';
@@ -555,24 +555,24 @@ export class MericarolAi extends BrainBase {
     const sub = this.subtype;
     const shots = (out.shots ??= []);
     const base = { x, y: MERICAROL.mouthHeight, z, tx: t.x, tz: t.z, speed };
+    // The confusion flag (param_6 of InitializeTechParameters_00573990) is drawn at every cast, before the
+    // subtype split: get_random_float <= iparam6 / 100 (the caller at 0x00572410's cast code).
+    const confuse = Math.fround(this.rng()) <= Math.fround((this.mv.i[5] ?? 0) / 100);
     if (this.ultimate) {
       shots.push(new MericarolBolt({ ...base, effect: { kind: 'megid', power }, color: 0x802080, onHit: land }));
       return;
     }
-    // InitializeTechParameters_00573990: group 0 / 2 (Gibarta) / 3 (Zonde).
-    shots.push(new MericarolBolt({ ...base, effect: { kind: 'tech', power }, color: sub === 1 ? 0x80d0ff : sub === 2 ? 0xffff40 : 0x60c060, onHit: land }));
-    if (sub === 1) {
-      // ASSUMED: the freeze / shock rolls are the player caster's
-      // (combat/enemystatus.ts); a companion shot carries the status.
-      const chance = techFreezeChance(power, false);
-      shots.push(new MericarolBolt({ ...base, effect: { kind: 'status', status: STATUS.freeze }, color: 0x80d0ff, roll: () => this.rng() < chance }));
-    } else if (sub === 2) {
-      const chance = techShockChance(false);
-      shots.push(new MericarolBolt({ ...base, effect: { kind: 'status', status: STATUS.shock }, color: 0xffff40, roll: () => this.rng() < chance }));
-    } else if (Math.fround(this.rng()) <= Math.fround((this.mv.i[5] ?? 0) / 100)) {
-      // The extra confusion hit (group 0x12) a Mericarol's bolt rolls at launch.
-      shots.push(new MericarolBolt({ ...base, effect: { kind: 'status', status: STATUS.confusion }, color: 0x60c060 }));
-    }
+    // InitializeTechParameters_00573990 stores the group at the tech entity's +0x3c from the caster's subtype
+    // (enemy +0x464, read by GetPlayerDifficulty_005735c0): 0 Mericarol, 2 Merikle (Gibarta, freeze), 3 Mericus
+    // (Zonde, shock). The tech entity's hit (MericarolTechEntity_Update_00573ce4 -> vtable +0x38 -> 0x00573bf4 ->
+    // 0x005221c0 -> the player's entity_hit_by_tech) passes that group, so the freeze / shock roll is the
+    // group's own (enemytechplayer.ts: state-1 gate), not a companion shot.
+    // A Mericarol's bolt with the flag set re-hits with group 0x12 (confusion) after its first hit landed (the
+    // update's `group == 0 && +0x42` branch): the effect carries it, applied on each landed hit.
+    const group = sub === 1 ? ENEMY_HIT_GROUP.gibarta : sub === 2 ? ENEMY_HIT_GROUP.zonde : ENEMY_HIT_GROUP.fixed;
+    const status = sub === 0 && confuse ? { type: STATUS.confusion, chance: 1 } : undefined;
+    const color = sub === 1 ? 0x80d0ff : sub === 2 ? 0xffff40 : 0x60c060;
+    shots.push(new MericarolBolt({ ...base, effect: { kind: 'tech', power, group, ...(status ? { status } : {}) }, color, onHit: land }));
   }
 
   // 0x00572094.
