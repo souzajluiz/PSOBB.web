@@ -1,5 +1,32 @@
 # Devlog
 
+## 2026-10-25: Merissa A / AA, part 1: the exe's state table, the +0x37c radar bit and the vanish countdown; no brain yet
+
+**Question:** the Merissa radar gate (+0x37c bit 0x8, the update's icon skip at 0x005b67c4) needs a port brain that owns +0x37c. Port the brain: update, dispatch, states, movement, attacks, motions, and say what bit 0x8 means.
+
+**Answer:** part of it. The dispatch, the state rows, the mask writes, the gate and the vanish arithmetic are traced and PROVEN below. The state machine's transition conditions, the movement, the attacks and the motion meanings are NOT ported: the generic transition (EnemyTransitionState_005b5768) has its distance and angle classes read from the 0x009c1dbc / 0x009c1dc0 / 0x009c1dc4 tables and a 40-byte record family at 0x009c1ac0, and those are not decoded. So Merissa has NO AI_PROFILES or OWN_FSM row: the Merissa stays where it spawns, as before. The radar gate is NOT wired into `render/combat.ts minimapEnemies` (the port has no per-enemy +0x37c to read); `merissaRadarIconShown` is ready for it.
+
+**What is proven (objdump on PsoBB.exe, `tools/exedata.py read` for the data, dump names from reverse/refsrc):**
+- Vtable 0x00b0b6a0: +4 = update 0x005b66ec, +8 = lock-on render 0x005b6864 (`exedata.py read 00b0b6a0 u 12`).
+- Update 0x005b66ec: the pause gate (g_UnknownShouldPauseEnemyAI, else +0x39c = 1.0 and return), then the dispatch at 0x005b670f..0x005b6726: the row is 0x009c1a24 + state * 20, handler = word 0, called with ecx = this when not 0. Then the transform, the collision step, the lock-on point, the animation (0x005b6793..: a motion >= 0 calls 0x007aa094 unless +0x37c bit 0x4), and the icon test below.
+- Row words (the transition 0x005b5933..0x005b5967 and the ctor read them by these offsets): +0 handler, +4 EnemySetStateFlag argument, +8 motion (short, written to +0xb8; -1 = none), +0xc mask OR-ed into +0x37c, +0x10 hook called on the transition.
+- Rows 0..7 (the port's MERISSA_STATE_ROWS): 0 handler 0x005b53dc (unnamed), 1 0x005b54cc (unnamed), 2 EnemyUpdateState0 0x005b5618, 3 EnemyProcessState 0x005b5f3c, 4 EnemyProcessState 0x005b61a0, 5 EnemyResetState 0x005b6108 (hook = on_merissa_dead 0x005b52ec), 6 EnemyProcessSubEntitySpawn 0x005b6328, 7 none. Row 6 is the only row with mask 0x8.
+- Icon gate: `testb $0x8, %dl` on +0x37c at 0x005b67c1 and `jne 0x005b67e1` at 0x005b67c4 skips `unknown_add_minimap_icon(0xffffa24c, scale 1)` at 0x005b67d3. So bit 0x8 HIDES the plain icon.
+- Mask writes: the transition to state 3 (0x005b5768 tail) clears 0xfffffff1 (bits 0x2, 0x4, 0x8; `andl $-0xf` at 0x005b590e) and ORs row 3's mask (2). The reset EnemyResetState_005b6108 clears the same mask (dump 401763). So bit 0x8 is set on entry to row 6 and cleared by the next transition or reset.
+- Ctor (merissa_constructor 0x005b6c..0x005b6e7f): +0x37c = 0 then EnemySetStateFlag(row 0 flag 1), motion 0 (row 0 +8, g_MerissaAnimId), mask 4 (row 0 +0xc). So at spawn bit 0x8 is 0 and the icon shows.
+- Vanish countdown (EnemyProcessSubEntitySpawn 0x005b6328): while the motion-end flag (+0xb0 bit 0x10) is set, the once-only green pool (+0x37c bit 0x40) and +0x3c4 -= 0.1f (0x0092aff4 = 0.10000000149); when the result < -15.0f (0x0092aff0) the bit 0x1 of +0x08 is set. Float32 accumulation: removed at step 150.
+
+**ASSUMED (not proven):**
+- Bit 0x8 means "vanishing" (state 6 is the vanish: the ctor's "vanish motion" in formats/enemymodels.ts and the sub-entity countdown). The meaning of the state, and that the icon is hidden while the Merissa vanishes, are ASSUMED from the handler's shape.
+- The hook of the transition to state 3 is row 2's +0x10 (0x005b51f8, EnemyUpdateTargetDistance), not row 3's: the code reads 0x009c1a5c. ASSUMED that it is the hook of the state being left.
+- Row 0 handler 0x005b53dc and row 1 0x005b54cc: not named in the dump (the 0x005b53dc range is past on_merissa_dead's tail). Their behaviour is unread.
+- Motion meanings (0 ctor, 1, 2, 6, 7, 8/9 death jump via on_merissa_dead): ASSUMED.
+- Only the state 6 entry writes bit 0x8 among the traced rows. The other mask-writing paths (0x005b5b5c, the 0x9c1dbc distance tables) are not traced, so the bit could be set elsewhere.
+
+**Open (the rest of the Merissa brain):** the transition conditions (EnemyTransitionState_005b5768: the target from GetTargetable 0x00770738, the angle and the distance classes from the 0x009c1dbc / 0x009c1dc0 / 0x009c1dc4 tables, the record family at 0x009c1ac0), the approach and the wander (rows 0 and 1), the attacks (merissa_stab_attack and unknown_merissa_freeze_stab_attack, dump lines 401866 and 401891; their addresses are not traced), the motion step 0x007aa094, and the AI record at +0x3c0.
+
+**Files.** `client/src/combat/enemyfsmmerissa.ts` (new: the table, the mask, the gate function, the vanish step), `tests/enemyfsmmerissa.test.ts` (new, ALL PASS). Nothing else in the port changed. `render/combat.ts` is unchanged.
+
 ## 2026-10-25: Olga tail anchor, pass 8: exhaustive asm check of the anchor slots; verdict still NOT PORTED
 
 **Question:** the tail swipe's anchors (+0x640 / +0x644 / +0x648 base, +0x64c / +0x654 tip) need a writer that the port can copy: a model node, a matrix slot, or a follow rule. Is there one in the exe?
