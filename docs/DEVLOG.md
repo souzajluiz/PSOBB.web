@@ -284,6 +284,25 @@
 **Not checked:** a Chrome view (the brief says no Playwright).
 
 **Left:** Invite (0x29, the 6x62 C1 17 sender), Point Regist (0x2d: the count and labels), the points window of Team Info (its header), and the owner callback's trace if it turns out to do more than close.
+## 2026-10-25: Barba Ray drop: the blend sets the stride (0.3) and resets the clock; the apex is ~672, not 300
+
+**What changed:** `combat/barbaray.ts` (`BARBA_DROP.fallStride` 0.6, `dropStride` 0.3; `playerAnimate` starts the blend
+on the sub 0 -> 1 id change and wraps at clock 1.0 to clock 0, stride 0.3; sub 1 waits for the wrap). `tests/barbaray.test.ts`
+updated: the rise starts at tick 57, the fall bottoms near -528, the apex near 672, landing 500. Docs: `docs/bosses/barbaray-map.md`
+Pass 13.
+
+**Proven:** the stride 0.3 is slot 4's row speed (static init 0x004b9c14); Player__StartNpcAnimation's blend (asm 0x007a9a6c)
+and the sType 4 wrap (asm 0x007aa369: clock = 0.0 at 1.0, stride = row speed) run at the sub 0 -> 1 change. Slot 1 and slot 4 flags are 0.
+
+**Result:** the discrete replay (float32, the exe's sub-state ladder) gives apex 672.4 (the old port 559 = the run without the
+reset). The 300 is the rise formula's target; the sub 3 halving leaves a speed the 0.2 decel spends above it.
+
+**ASSUMED:** the blend branch is taken (+0xb0 bits 0x1 / 0x80 clear); the loop phase at sub 0's end (apex +-2 units).
+Open: the other phases still use one clock tick a frame.
+
+**Checks:** `node tests/barbaray.test.ts` ALL PASS; `NEWSERV=... node tests/combat.test.ts` 5852 checks, 0 failures;
+`client` `tsc --noEmit` exit 0 (Node 24).
+
 ## 2026-10-25: Barba Ray drop clock (+0xc0): the stride, not one a tick
 
 **What changed:** `combat/barbaray.ts` drops the one-a-tick clock of the drop (0x0d). Event 0 now runs `playerAnimate()` (the exe's Player__Animate: +0xc0 += the stride), and the sub 2 lift steps the clock 0.3 - 0.105. `BARBA_DROP.clockStride` = 0.3 (ASSUMED). Docs: `docs/bosses/barbaray-map.md` Pass 12.

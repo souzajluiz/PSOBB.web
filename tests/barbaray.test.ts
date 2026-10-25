@@ -828,6 +828,14 @@ const runTicks = (b: BarbaRayAi, n: number) => {
   // The speed: -0.2 a tick, so 21 ticks reach -4.2 and z dropped by sum(-0.2 k) = -(0.2 * 21 * 22 / 2).
   near(b.f754, -4.2, 'drop fall: speed -0.2 a tick');
   near(b.z - zBefore, -0.2 * 21, 'drop fall: z moves with the last speed only (tick 21)');
+  // The blend (asm 0x007a9a6c type 4, 0x007aa369 wrap): the id change starts it on the next
+  // Player__Animate (tick 22); the clock (0.6 a tick in slot 1) is past 1.0 by then, so it wraps at once:
+  // clock 0, stride 0.3, and sub 1 ends on the same tick.
+  b.tick([]);
+  const pa = b as unknown as { moveSub: number; timer: number; animStride: number };
+  eq(pa.moveSub, 2, 'drop blend: sub 1 ends on the wrap tick (tick 22)');
+  near(pa.timer, 0, 'drop blend: the clock is 0 after the wrap');
+  near(pa.animStride, 0.3, 'drop blend: the stride is slot 4 (0.3) after the wrap');
   // The leader's table step waits for sub 3 (the done state): a follower never steps.
   let done = -1;
   for (let k = 0; k < 3000 && b.moveSub !== 3; k++) {
@@ -857,11 +865,12 @@ const runTicks = (b: BarbaRayAi, n: number) => {
     zMin = Math.min(zMin, b.z);
   }
   check(b.moveSub === 3, `drop z: reaches sub 3 (got ${b.moveSub})`);
-  // The exe's drop (clock at the stride 0.3): the fall bottoms near -373, the rise peaks above 300 (the
-  // design's z0 = 300 is the rise formula's target, and the sub 3 halving overshoots it), then the easing
-  // settles on z 500 (anchor 1). Not the -1104 of the one-a-tick clock.
-  check(zMin > -400 && zMin < -360, `drop z: the fall bottoms near -373 (got ${zMin})`);
-  check(peak > 300 && peak < 600, `drop z: the rise peaks above 300 (got ${peak})`);
+  // The exe's drop (map Pass 13, the blend's wrap resets the clock at sub 0 -> 1): the fall runs 21 ticks
+  // then 35 more to the rise (z -521 at tick 57, the bottom -528 at tick 60). The rise peaks near 672: the
+  // design's z0 = 300 is the rise formula's target, not the apex (the sub 3 halving leaves a speed of ~11
+  // that the 0.2 decel spends above it). The easing lands on z 500 (anchor 1) for any apex above 500.
+  check(zMin > -545 && zMin < -515, `drop z: the fall bottoms near -528 (got ${zMin})`);
+  check(peak > 600 && peak < 700, `drop z: the rise peaks near 672, above 600 (got ${peak})`);
   const apex = b.f754;
   check(b.ez.max === 7 && b.ez.accel === 0.2 && Math.abs(b.ez.decel - 0.05) < 1e-6, 'drop z: easing max 7, accel 0.2, decel 0.05 (0x4b7485..8d)');
   check(Math.abs(b.ez.dist - Math.abs(500 - apex)) < 1e-6, `drop z: easing dist |500 - apex| (${b.ez.dist})`);
@@ -906,7 +915,9 @@ const runTicks = (b: BarbaRayAi, n: number) => {
       expect = ((BARBA_DROP.attackA + BARBA_DROP.attackB) * -vPrev + (BARBA_DROP.z0 - zPrev)) / ((0.5 * BARBA_DROP.attackA + BARBA_DROP.attackB) * BARBA_DROP.attackA);
     }
   }
-  check(tr >= 34 && tr <= 36, `drop sub 0 -> 1: the clock reaches 10.5 on the 35th tick (got tick ${tr})`);
+  // The blend wrap (sub 0 -> 1, tick 22) resets the clock to 0; sub 2 then starts and the clock
+  // reaches 10.5 (0x906cf0) on the 35th tick at a stride of 0.3: the rise starts at tick 57 (k = 56).
+  check(tr === 56, `drop sub 0 -> 1: the clock reaches 10.5 on the 35th tick after the blend (got k ${tr})`);
   check(Math.abs(b2.f758 - expect) < 1e-9, `drop sub 0 -> 1: rise speed with the static-init A and B (got ${b2.f758}, want ${expect})`);
 }
 {

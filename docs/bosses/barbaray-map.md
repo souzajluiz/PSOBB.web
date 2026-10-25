@@ -852,7 +852,7 @@ needs Player__Animate (the 0xc0 writers) to decide; the easing is not the cause.
 Test: `tests/barbaray.test.ts`, the drop block after the enter / fall checks: the easing's max / accel / decel / dist from
 the apex, pos >= 0, z settled (no tick moves it over 50 ticks) and z = apex - pos (`node tests/barbaray.test.ts` ALL PASS).
 
-## Pass 12: the drop's clock (+0xc0, Player__Animate), 2026-10-25
+## Pass 12: the drop's clock (+0xc0, Player__Animate), 2026-10-25 (its stride and start: superseded by Pass 13)
 
 **Question:** who writes +0xc0 on this entity, at what rate in the drop motion, and when is it reset? Pass 10 / 11 assumed one a tick, which runs the drop's sub 0 -> 1 -> 2 -> 3 in 3 ticks and settles at z -1104.
 
@@ -880,3 +880,61 @@ These exact matches are the evidence for 0.3, but the stride itself is not trace
 **ASSUMED (marked in code):** the stride 0.3 (`clockStride`), the hold 0x40 clear, the blend branch of StartNpc not taken, the generic enter's clock reset to 0, the sType 1 / 2 wraps not reached in the drop.
 
 **Tests (`tests/barbaray.test.ts`, the 0x0d block):** the rise speed is checked at the 35th tick (the clock reaches 10.5) against the formula with the values before that tick; the lift steps the clock 0.195 for ~30 ticks; the other sub-states step 0.3; the fall bottoms near -373, the peak lies in (300, 600), the body lands on z 500 (+-0.5) after the easing.
+
+## Pass 13: the drop's stride is the blend's (slot 4, 0.3), the clock resets there, the apex is ~672, 2026-10-25
+
+**Question (Pass 12's open items):** (1) what writes +0xc8 = 0.3 before the drop; (2) why the port's apex is ~559, not ~300.
+
+**Verdict:** the stride 0.3 is PROVEN (it is slot 4's row speed, written by the blend's wrap). The clock resets to 0 at the
+sub 0 -> 1 change (Pass 12 missed this: the port kept the clock running through the fall). With the reset the exe-model apex is
+~672 (not 300): the port's 559 is the no-reset run, reproduced exactly by a discrete replay (below). The "300" is the rise
+formula's target only.
+
+**Proven (Ghidra refsrc `Psobb.exe-05112026.c`; objdump of `~/Downloads/psobb-client/PsoBB.exe`):**
+- Player__Animate = 0x007aa094 (called from the drop's event 0 at 0x004b70a4). Its asm: `+0xc0 += +0xc8` (0x007aa0ba..c5), then
+  `Enemy__CheckAnimationId` (0x007a9970 = `(+0xb8 != +0xba)`), then the sType switch (`+0xf4`).
+- The blend: StartNpc (0x007a9a6c, Player__StartNpcAnimation) copies the new row's flags (row +0xc) to +0xb4, then takes the BLEND
+  branch (0x007a9c70) when `(+0xb0 & 0x81) == 0`, `(new flags & 0x80000000) == 0` and `(old row flags & 0x40000000) == 0`. The
+  blend sets `+0xb0 |= 6` and `animation_type = 4`; the else branch clears `+0xb0 & 4` and sets the type from the row.
+- sType 4 wrap (0x007aa369): when `1.0 <= +0xc0` (0x97d97c = 1.0): `+0xc0 = [0x97d978]` = 0.0, `+0xc8` = row speed of
+  `animation_id` (`[+0xd8 + 16*id + 8]`, unless `+0xb0 & 0x100`), type = next (`+0xf6`), `+0xb0 = (+0xb0 & ~4) | 8`.
+- Drop sub 1 (0x004b7040, the `iVar4 == 1` branch): `if ((+0xb0 & 4) == 0) 0x730 = 2`. So sub 1 lasts until the wrap.
+- Rows (0x009aba20, 16 bytes; `tools/exedata.py motions`): slot 1 = motion 11 forward, mode 1, speed 0.6 (static init writes
+  0x009aba38 = 0x3f19999a); slot 4 = motion 10 fjump, mode 2, next 1, speed 0.3 (0x009aba68 = 0x3e99999a, static init 0x004b9c14).
+  The flags word is 0 for slots 1 and 4; slot 0 has 0xc0000000 (so the blend never starts from or into slot 0 in this drop).
+- Frame counts (njm frameCount of `bm_boss7_de_rol_le_c.bml` from `data.gsl`, BML entry 6 + motion, parsed with
+  `formats/njmotion.ts`): motion 10 = 40, motion 11 = 34. The exe's count is `dwUnk + (1.0 or 0.0)`, so the off-by-one is ASSUMED
+  irrelevant here.
+- Sequence: enter (slot 1, +0xc0 not written) -> 21 fall ticks at stride 0.6 (slot 1's loop) -> tick 21 writes 0xb8 = 4 -> tick 22:
+  Player__Animate adds 0.6, StartNpc(4) blends, the clock is >= 1.0 at once, wraps to 0 with stride 0.3, and sub 1 ends in the same
+  tick -> sub 2 from tick 23 with the clock 0 and step 0.3 (the lift steps 0.195). The clock hits 10.5 on tick 57, 16 on tick 76, 22 on
+  tick 106, 29 on tick 130. Motion 10's end (type 2, clock 39 = count - 1) comes at tick ~163, after the rise and sub 3's halving; it
+  re-blends into slot 1 and resets the clock again but nothing reads the clock after 29, so the drop's z is unaffected.
+
+**Discrete replay (scratchpad `drop_sim.py`, float32, the exe's sub-state ladder: one transition per tick, the motion of the new
+state in the same tick):** z at tick 57 = -521.4 (rise start), the fall bottom -528.2 (tick 60), the speed reaches 23.1 at the lift
+end, sub 3 halves it to 11.3 (tick 106, z 356), then the -0.2 decel adds ~320 above it. Easing starts at tick 163 with z = 672.44;
+it lands on 500 (`apex - |500 - apex|` = 500 for any apex above 500). The fall-stride choice (0.6 or 0.3) does not change the apex
+(the reset erases it); the apex varies only 667..684 for a 1-2 tick shift of the blend wrap (ASSUMED: the loop's phase at sub 0's
+end, the wrap is at tick 22 or 23).
+- Port-like run (no reset, stride 0.3 throughout, the clock from the enter): apex 558.95 = the port's old 559. That is the whole
+  difference: the port kept the clock running through the 21 fall ticks (its sub 2 wait started at tick 35, not 57).
+
+**Why ~300 is not the apex (the "sub 3 rule"):** the rise formula `a = ((A+B)(-v0) + (300 - z0)) / ((0.5A + B) A)` makes the
+continuous z reach 300 after A + B ticks, but the speed at the lift's end is not 0. Sub 3 halves it (0x004b7040 `0x754 *= 0.5`) and
+the else branch then decelerates it by 0.2 a tick while adding it to z, which adds about (v/2)^2 / 0.4 above the 300. The easing starts
+only when the speed reaches 0 (`fVar6 <= 0.0`, 906d24), with `z = 0x754` at that tick. So the apex is 300 + that overshoot.
+
+**Port (`combat/barbaray.ts`):** `BARBA_DROP.fallStride` 0.6 and `dropStride` 0.3 replace `clockStride`. `playerAnimate()` adds the
+stride, starts the blend on the id change (`blendWait`), and wraps at 1.0 (`blendOn`: clock 0, stride 0.3). Sub 1 waits for the wrap
+(`moveSub = 2` only when neither flag is set). `tests/barbaray.test.ts`: the blend tick (22), the rise at tick 57 (k = 56), the fall
+bottom -528 (-545..-515), the apex 672 (600..700), the landing 500 (unchanged).
+
+**ASSUMED (marked in the code):** the blend branch is taken (the +0xb0 bits 0x1 and 0x80 are clear: no writer found in the Barba's
+code; the ctor sets `animation_flags = 0`, dump line 232606); the loop's phase at sub 0's end (the wrap at tick 22 or 23, +-2 units of
+apex); the njm frame count off by one (no effect); the clock's start at the enter (not traced; erased by the wrap); the type 2 end of
+motion 10 and its re-blend after the rise (no effect on z).
+
+**Not changed, open:** the other phases still use `timer += 1` a tick (the jump 0x11 / 0x12, the arc, the volopt, the shot). They
+have the same clock problem (their stride and blend are not traced yet) and are not touched here. The renderer's `animationEnded`
+drives the mode-2 chains, not the clock.
