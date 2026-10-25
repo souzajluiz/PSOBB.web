@@ -29,6 +29,21 @@
 **ASSUMED (still open):** the caller of `find_targets_for_weapons_and_techs` (dump 785117) is not named in the dump, so whether the type-4 record is built on Pioneer 2 is not traced. The port shows the support cursor there, as the exe's reticle code does when the record exists. The Chrome check is not run.
 
 **Checks:** `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/npcs.test.ts` ALL PASS (Node 24). `cd client && npx tsc --noEmit -p .` clean.
+## 2026-10-25: Minimap: the De Rol Le shell segments' forced 1.2 icon; the forced icons' owners traced
+
+**What changed:** the ten De Rol Le shell segments (`DE_ROL_LE_BODY`, `DrlSegmentAi` in `combat/derolle.ts`) draw their radar icon forced at scale 1.2, as the exe does. `FORCED_ICON_RULES.DE_ROL_LE_BODY` in `classic/minimap.ts`. Before, `minimapEnemies` (`render/combat.ts`) reported the segments with the body's slot type `DE_ROL_LE`, so each targetable segment drew the body's forced 2.0 icon. Now a segment reports `DE_ROL_LE_BODY`. Tests: `tests/minimap.test.ts` (rule lines for `DE_ROL_LE_BODY` and `DE_ROL_LE_MINE`).
+
+**Exe evidence (Ghidra dump `Psobb.exe-05112026.c`; decompile by `tools/ghidra/decomp.sh 0x00435294`):**
+- `handle_derolle_shell_behavior` (dump 176942) is the function at 0x00435294. The decompile is the same body: `FUN_0080575c(param_1 + 0x38, 0xffffa24c, 0x3f99999a, 1, 1)` (icon3, colour, scale 1.2, shape 1, flag 1) after `FUN_006401f0`, unconditional. Position at +0x38 is the segment's, copied from the pointer at +0x398 (the body's slot, `current_target` in the dump). Dump line 176968.
+- The exe word 0x00435294 sits at 0x00af46e4 (a scan of PsoBB.exe's data for the address), i.e. slot 1 of the table at 0x00af46e0, the vtable `combat/derolle.ts` names for the 10 children (`DE_ROL_LE_BODY`, ctor 0x004351c4). So the update is the segments' class's. The port notes already say the segment update copies the body's slot.
+
+**Traced, not ported (no port rule added):**
+- Sinow Berill sub-entity icons. `EnableSinowberillVisualIndicators_004b9198` (dump 239865) is called by `UpdateSinowberillEntity_004b8584` (dump 239279, vtable 0xafab60, slot 1). Its icon is forced 2.0 only when hitbox flag bit 0 is set: a condition a per-type rule cannot express. The owner is ASSUMED to be the Sinow Spigell form (setdata 0xd4 with p6 > 0), because `UpdateSinowberillEntity_004addc0` (vtable 0xafa7c4, the port's SINOW_BERILL, 2.0) is the other 0xd4 class. ASSUMED.
+- `UpdateSinowberillPositionAndState_004ba0ac` (dump 240354, vtable 0xafada4): forced 1.2 when hitbox flag bit 0 is set, at a position read from the pointer at +0x3c8. Owner ASSUMED (a sub-entity that follows a position); conditional, so not a rule.
+- `UpdatePlayerEntityInBossFight_004cbf68` (dump 247150, vtable 0xafb864) and `UpdatePlayerStateInSinowberillFight_004cee30` (dump 249235, vtable 0xafbc24): forced 2.0 at the player object's position. The bodies use the player fields (`floor_id`, `character_flags`, `unknown_camera_idx` against `g_CurrentPlayerSlotIndex`), so the owner is a player, not an enemy. The port's rules are keyed by enemy type; a per-player forced icon would need its own path. Open.
+- `Enemy_Update_007648dc` (dump 737262, vtable 0xb4314c, slot 0): the icon at +0xcc is drawn only when the entity's +0xe4 object is set; colour 0xffffa24c when the entity is active or its hitbox flag 4 is set, else 0xff909090; scale = the +0xac object's float at +0xc times `_DAT_0097609c`. The class that owns the +0xe4 object is not settled (no port entity identified). ASSUMED nothing.
+
+**Checks:** `node tests/minimap.test.ts` all checks passed (Node 24). `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome or Playwright.
 
 ## 2026-10-25: Battle trap announce: the owner check (Trap_CheckPlayerInBattleAndGetName)
 

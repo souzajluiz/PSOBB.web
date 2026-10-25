@@ -151,10 +151,20 @@ export const ENEMY_ICON_RULE: EnemyIconRule = { scale: 1, color: ENEMY_ICON_COLO
 // has its own forced icon, 1.5, in its state 1 (MOVE), not state 2: combat/
 // galgryphonminion.ts minimapIcons(). Nothing creates the Effect yet (the Gal
 // Gryphon brain is not in the port), so no icon reaches the radar.
+// The De Rol Le shell segments (DE_ROL_LE_BODY, the ten DrlSegmentAi entities):
+// their update is FUN_00435294 = handle_derolle_shell_behavior (dump 176942;
+// the exe decompile of 0x00435294, tools/ghidra/decomp.sh, is the same body:
+// the position is the pointer at +0x398 = current_target, then enable_reticle_
+// and unknown_add_minimap_icon3 at the segment's own position with 0x3f99999a
+// (1.2), colour 0xffffa24c, flags 1, dump 176968). Unconditional in the update,
+// so forced whatever the hit box. The icon's owner is the segment, not the
+// body (the body's own icon is 2.0 above); render/combat.ts minimapEnemies
+// reports the segments under this type.
 export const FORCED_ICON_RULES: Readonly<Record<string, EnemyIconRule>> = {
   OLGA_FLOW_1: { scale: 5, color: ENEMY_ICON_COLOR, forced: true },
   OLGA_FLOW_2: { scale: 4, color: ENEMY_ICON_COLOR, forced: true },
   DE_ROL_LE: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
+  DE_ROL_LE_BODY: { scale: 1.2, color: ENEMY_ICON_COLOR, forced: true },
   GAL_GRYPHON: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
   SINOW_BERILL: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
   DRAGON: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
