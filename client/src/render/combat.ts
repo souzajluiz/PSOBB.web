@@ -1521,16 +1521,21 @@ export class CombatView {
           });
         }
         else if (className === 'Zu') {
-          // Zu / Pazuzu (combat/enemyfsmep4.ts). ASSUMED: the rare flag (+0x504) is the set's p6 bit 0 (the model's
-          // variant bit, formats/enemymodels.ts); the level of the target is its player's level.
+          // Zu / Pazuzu (combat/enemyfsmep4.ts). The rare flag (+0x504) is the set's p6 bit 0 (zu_constructor:
+          // PROVEN); the exe also ORs is_monster_rare(the floor's rare list, not ported). The level of the
+          // target is its player's level. The map ray (cast_ray_at_map_collision_geometry, mask -1) cuts the
+          // retreat sweep, the aim and the tech bolt's flight.
+          const wallHit = this.opts.wallHit;
           ai = new ZuAi({
             ...at,
+            y: instance.placed.world[1],
             movement,
             detect: cfg.detect,
             floor: this.floor,
             ultimate,
             wide: (subtype & 1) === 1,
             levelOf: (id) => this.game.players.get(id)?.level ?? 1,
+            wall: wallHit ? (from, to) => wallHit(from, to, -1) : null,
             rng: () => this.rng(),
           });
         } else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, barbarous: head.slot.type === 'BARBAROUS_WOLF', rng: () => this.rng() });

@@ -8,7 +8,10 @@ import {
   ZU_CLASS_STATE,
   ZU_ICON_HIDDEN_BIT,
   ZU_MOTIONS,
+  ZU_HITBOX_SCALE,
+  ZU_STAT_SCALE,
   ZU_STATES,
+  ZU_TECH_TRAVEL,
   ZU_DEFAULT_TUNING,
   ZuAi,
   bamsOf,
@@ -21,6 +24,7 @@ import {
   zuTuning,
   zuVolleyHeadings,
 } from '../client/src/combat/enemyfsmep4.ts';
+import { TechBolt } from '../client/src/combat/enemyshots.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 
 let failures = 0;
@@ -120,10 +124,19 @@ eq(zuGate(0x7fffffff), 0, 'gate just under 2^31');
 eq(zuGate(0x80000000), 1, 'gate at 2^31');
 eq(zuGate(0xffffffff), 1, 'gate at the top');
 
-// Tunables: the MovementData fparams replace the walk, dash and slide; zero keeps the default.
+// Tunables (zu_constructor, PROVEN): the Zu's MovementData row gives the walk and dash (x the
+// 5/27 stat scale), the TechProjectile speed (fparam2) and power (iparam4), and the counters;
+// the slide is the 85/54 hitbox scale (no row value); the travel limit is 500.
 eq(zuTuning(null), ZU_DEFAULT_TUNING, 'no movement keeps the defaults');
-eq(zuTuning({ fparam1: 3, fparam2: 0, fparam3: 5, fparam4: 0, fparam5: 0, fparam6: 0, iparam: [0, 0, 0, 0, 0, 0] }).walk, 3, 'fparam1 is the walk');
-eq(zuTuning({ fparam1: 3, fparam2: 0, fparam3: 5, fparam4: 0, fparam5: 0, fparam6: 0, iparam: [0, 0, 0, 0, 0, 0] }).dash, 5, 'fparam3 is the dash');
+const row = { fparam1: 3, fparam2: 7, fparam3: 5, fparam4: 0, fparam5: 0, fparam6: 0, iparam: [30, 31, 20, 9, 21, 22] };
+check(Math.abs(zuTuning(row).walk - 3 * ZU_STAT_SCALE) < 1e-6, 'fparam1 is the walk, times the stat scale');
+check(Math.abs(zuTuning(row).dash - 5 * ZU_STAT_SCALE) < 1e-6, 'fparam3 is the dash, times the stat scale');
+eq(zuTuning(row).slide, ZU_HITBOX_SCALE, 'the slide is the hitbox scale');
+eq(zuTuning(row).techSpeed, 7, 'fparam2 is the TechProjectile speed');
+eq(zuTuning(row).techPower, 9, 'iparam4 is the TechProjectile power');
+eq([zuTuning(row).fireCharge, zuTuning(row).fireVolley, zuTuning(row).techCharge], [30, 31, 20], 'iparam1..3 are the fireball charge, volley and tech charge');
+eq([zuTuning(row).lunge, zuTuning(row).dashWait], [21, 22], 'iparam5 and 6 are the lunge and the dash wait');
+eq(zuTuning(row).techRange, ZU_TECH_TRAVEL, 'the bolt travels 500');
 
 // --- The brain (ZuAi): driven through its phases ---------------------------------------
 
@@ -218,9 +231,9 @@ for (const wide of [false, true]) {
 
 // With a wall on every ray at 100, the back-off is 100 - 20 = 80 (the aim at least 40 out).
 {
-  const wall = (x0: number, z0: number, x1: number, z1: number) => {
-    const d = Math.hypot(x1 - x0, z1 - z0);
-    return { x: x0 + ((x1 - x0) / d) * 100, z: z0 + ((z1 - z0) / d) * 100 };
+  const wall = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) => {
+    const d = Math.hypot(b.x - a.x, b.z - a.z);
+    return { x: a.x + ((b.x - a.x) / d) * 100, y: a.y, z: a.z + ((b.z - a.z) / d) * 100 };
   };
   const ai = new ZuAi({ x: 0, z: 0, angle: 0, rng: zero, wall });
   ai.tick([]);
@@ -233,6 +246,31 @@ for (const wide of [false, true]) {
   const a = ai.aimPoint;
   const d = Math.hypot(a.x - at.x, a.z - at.z);
   check(Math.abs(d - 80) < 1e-6, `walled retreat backs off 80 from the Zu (${d})`);
+}
+
+// The tech bolt's flight: a map ray on the step ends it with no hit (update 0x0057fcc0), and
+// with no ray it strikes a player on its path.
+{
+  const target = [player(300, 0)];
+  const open = new TechBolt({ x: 0, y: 0, z: 0, angle: Math.PI / 2, speed: 4, range: ZU_TECH_TRAVEL, radius: 4, effect: { kind: 'tech', power: 1 }, color: 0 });
+  let struck = 0;
+  for (let i = 0; i < 100 && !open.done; i++) struck += open.tick(target).length;
+  check(struck === 1 && open.done, `a clear bolt strikes the player on its path (${struck})`);
+  const walled = new TechBolt({ x: 0, y: 0, z: 0, angle: Math.PI / 2, speed: 4, range: ZU_TECH_TRAVEL, radius: 4, effect: { kind: 'tech', power: 1 }, color: 0, wallBlocks: () => true });
+  const hits = walled.tick(target);
+  check(hits.length === 0 && walled.done, 'a walled step ends the bolt with no hit');
+}
+
+// The blocked aim (GoranSetupProjectileAttack_005b30c8): a blocked ray puts the aim 400 across
+// the Zu's direction to the weapon point: the target at (100, 0) gives the side point (0, 400).
+{
+  const ai = new ZuAi({ x: 0, z: 0, angle: 0, rng: zero, wall: () => ({ x: 0, y: 0, z: 0 }) });
+  const priv = ai as unknown as { tgt: AiTarget; setupAim: (t: AiTarget[]) => boolean };
+  priv.tgt = player(100, 0);
+  const clear = priv.setupAim([]);
+  check(!clear, 'a blocked ray is not a clear aim');
+  const a = ai.aimPoint;
+  check(Math.abs(a.x) < 1e-6 && Math.abs(a.z - 400) < 1e-6, `the side aim is (0, 400) (${a.x}, ${a.z})`);
 }
 
 // The carry (state 7): the approach value counts 250 down by 2.2 to 80 and the leave requests wander.

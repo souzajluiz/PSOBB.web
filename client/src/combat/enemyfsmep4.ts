@@ -45,10 +45,11 @@
 //
 // Constants marked PROVEN were read from PsoBB.exe (tools/exedata.py read, float
 // or double as the decompile types them, and the disassembly). ASSUMED marks what
-// is not traced: the map's wall rays (the port has none for enemies unless a
-// `wall` is passed), the wanderer, the player's level, the foie's mouth height,
-// the TechProjectile's flight and damage (Ghidra names it only), and the tuning
-// values of the animation table 0x009c16a0 counters.
+// is not traced: the wanderer, the player's level, the foie's mouth height, the
+// wall ray's height (the Zu's own y, flat), the TechProjectile's hit radius, and the
+// lunge's melee reach. The Zu's tuning is PROVEN from its config row (zu_constructor,
+// see the Tunables section); the wall rays are the map ray (cast_ray_at_map_collision
+// _geometry 0x0077fffc, mask -1) that render/combat.ts passes in.
 
 import { ATTACK_DAMAGE_MULT, ATTACK_KNOCKBACK, BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
 import { BrainBase, nearest, turnToward } from './enemyfsm.ts';
@@ -173,27 +174,54 @@ export const ZU_FIREBALL_RECOVER = 30;
 export const ZU_TECH_RECOVER = 10;
 export const ZU_GATE_INIT = { chase: 0, lunge: 2 } as const;
 
-// --- Tunables (ASSUMED values; the counters live in the animation table) ----------
+// --- Tunables (PROVEN: zu_constructor 0x005b4884 reads one MovementData row) ----------
+//
+// g_ZuConfigArray[wide] (0x00a749c8) is a MovementData row (0x30 bytes): the
+// fparams are speeds, the iparams are counters. The loader getter 0x0077a6cc is
+// base + 0x30 * wide, so the rare Pazuzu is the row after the Zu's (7 / 8, 27 / 28
+// in the port's ZU_* / PAZUZU_* rows). The ctor's reads (PROVEN):
+//   fparam1 (+0x00) walk     = fparam1 * g_ZuStatScaleFactor   -> +0x394 (objdump 0x005b4c82..0x005b4c92)
+//   fparam2 (+0x04) TechProjectile speed (its velocity's length) -> 0x00a74180
+//   fparam3 (+0x08) dash     = fparam3 * g_ZuStatScaleFactor   -> +0x39c
+//   fparam4 (+0x0c) x g_ZuResistanceScaleFactor (1.0)          -> +0x3d4
+//   iparam1 (+0x18) fireball charge counter                    -> +0x3c4
+//   iparam2 (+0x1c) fireball volley counter                    -> +0x3cc
+//   iparam3 (+0x20) tech charge counter                        -> +0x3e0
+//   iparam4 (+0x24) TechProjectile power (the 4th argument of entity_hit_by_tech) -> 0x00a74170
+//   iparam5 (+0x28) lunge counter                              -> +0x400
+//   iparam6 (+0x2c) dash wait counter                          -> +0x414
+// g_ZuStatScaleFactor is 0x0092ad78 = 0x3e3da12f (5/27, a static of .data; the ctor's
+// walk and dash read it). g_ZuHitboxScaleFactor is 0x00a74994 = 0x3fc97b42 (85/54,
+// written by 0x005b4d34): the slide (+0x398) is that value times the entity scale 1.0,
+// no row value (the stack order of 0x005b4c82..0x005b4c8a settles which global is
+// which: the walk's product takes the 5/27 one).
+export const ZU_STAT_SCALE = Math.fround(0.18518517911434174);
+export const ZU_HITBOX_SCALE = Math.fround(1.5740740299224854);
+// The TechProjectile's travel limit (0x00927b8c = 500.0): its elapsed distance gains the
+// speed each frame and the bolt ends at 500 (update 0x0057fcc0).
+export const ZU_TECH_TRAVEL = 500;
 
 export interface ZuTuning {
-  walk: number; // +0x394 (ASSUMED: MovementData fparam1, the walk of states 0, 9, 10, 12, 13)
-  slide: number; // +0x398 (ASSUMED: fparam2, the dash of state 11)
-  dash: number; // +0x39c (ASSUMED: fparam3, the lunge of state 14)
-  fireCharge: number; // state 10 phase 0 counter (+0x3c4 bits, ASSUMED)
-  fireVolley: number; // state 10 phase 1 counter (ASSUMED)
-  techCharge: number; // state 13 charge (+0x3e0 bits, ASSUMED)
-  dashWait: number; // state 11 phase 0 counter (+0x414 bits, ASSUMED)
-  lunge: number; // state 14 counter (+0x400 bits, ASSUMED)
-  techSpeed: number; // the TechProjectile speed (ASSUMED)
-  techRange: number; // its range (ASSUMED)
-  techPower: number; // its tech power (ASSUMED)
+  walk: number; // +0x394 (fparam1 x the stat scale)
+  slide: number; // +0x398 (the hitbox scale; the dash of state 11)
+  dash: number; // +0x39c (fparam3 x the stat scale; the lunge of state 14)
+  fireCharge: number; // +0x3c4 (iparam1), the fireball's charge counter
+  fireVolley: number; // +0x3cc (iparam2), the volley's counter
+  techCharge: number; // +0x3e0 (iparam3), the tech's charge counter
+  dashWait: number; // +0x414 (iparam6), the dash's wait counter
+  lunge: number; // +0x400 (iparam5), the lunge's counter
+  techSpeed: number; // fparam2: the TechProjectile speed (the velocity's length)
+  techRange: number; // 500 (the travel limit, PROVEN)
+  techPower: number; // iparam4: the TechProjectile power
   wander: number; // the wanderer's radius about the spawn (ASSUMED 100, the call's argument)
   meleeReach: number; // the lunge's melee reach (ASSUMED)
 }
 
+// The defaults are used only with no MovementData row (the test fixtures); the
+// speeds, the counters and the walk are the old ASSUMED ones, the slide and the travel PROVEN.
 export const ZU_DEFAULT_TUNING: ZuTuning = {
   walk: 2,
-  slide: 3,
+  slide: ZU_HITBOX_SCALE,
   dash: 6,
   fireCharge: 30,
   fireVolley: 30,
@@ -201,7 +229,7 @@ export const ZU_DEFAULT_TUNING: ZuTuning = {
   dashWait: 20,
   lunge: 20,
   techSpeed: 4,
-  techRange: 300,
+  techRange: ZU_TECH_TRAVEL,
   techPower: 20,
   wander: 100,
   meleeReach: 15,
@@ -210,9 +238,17 @@ export const ZU_DEFAULT_TUNING: ZuTuning = {
 export function zuTuning(movement: EnemyMovementData | null, over: Partial<ZuTuning> = {}): ZuTuning {
   const t: ZuTuning = { ...ZU_DEFAULT_TUNING };
   if (movement) {
-    if (movement.fparam1 > 0) t.walk = movement.fparam1;
-    if (movement.fparam2 > 0) t.slide = movement.fparam2;
-    if (movement.fparam3 > 0) t.dash = movement.fparam3;
+    const ip = (k: number): number => Math.trunc(movement.iparam[k] ?? 0);
+    t.walk = Math.fround(movement.fparam1 * ZU_STAT_SCALE);
+    t.slide = ZU_HITBOX_SCALE;
+    t.dash = Math.fround(movement.fparam3 * ZU_STAT_SCALE);
+    t.techSpeed = movement.fparam2;
+    t.fireCharge = ip(0);
+    t.fireVolley = ip(1);
+    t.techCharge = ip(2);
+    t.techPower = ip(3);
+    t.lunge = ip(4);
+    t.dashWait = ip(5);
   }
   return { ...t, ...over };
 }
@@ -324,7 +360,8 @@ export function zuRadarIconHidden(flags390: number): boolean {
 
 // A map wall ray: the hit point of the segment (x0, z0) -> (x1, z1), or null.
 // ASSUMED to exist only when the owner passes it (cast_ray_at_map_collision_geometry).
-export type ZuWall = (x0: number, z0: number, x1: number, z1: number) => { x: number; z: number } | null;
+export type ZuPoint = { x: number; y: number; z: number };
+export type ZuWall = (from: ZuPoint, to: ZuPoint) => ZuPoint | null;
 
 export interface ZuOptions {
   x: number;
@@ -338,6 +375,7 @@ export interface ZuOptions {
   wide?: boolean; // the rare flag (+0x504): the volley has four more foie
   levelOf?: (clientId: number) => number; // the target's level (get_level)
   wall?: ZuWall | null;
+  y?: number; // the Zu's height: the wall rays run at it (ASSUMED flat; the exe's weapon position is not traced)
   tuning?: Partial<ZuTuning>;
 }
 
@@ -348,6 +386,11 @@ const ZU_MELEE_KNOCKBACK = ATTACK_KNOCKBACK;
 const ZU_MELEE_MULT = ATTACK_DAMAGE_MULT;
 const WANDER_STEP = 8; // ASSUMED: the wanderer picks its next point within 8 units
 
+// A shot point (above the launch ground) as a world point at the Zu's ground height.
+function lift(p: ZuPoint, ground: number): ZuPoint {
+  return { x: p.x, y: p.y + ground, z: p.z };
+}
+
 export class ZuAi extends BrainBase {
   state = 'wander';
   readonly tuning: ZuTuning;
@@ -357,6 +400,7 @@ export class ZuAi extends BrainBase {
   private readonly detect: number;
   private readonly levelOf: (clientId: number) => number;
   private readonly wall: ZuWall | null;
+  private readonly y: number;
   private readonly spawnX: number;
   private readonly spawnZ: number;
 
@@ -396,6 +440,7 @@ export class ZuAi extends BrainBase {
     this.detect = opts.detect ?? 100;
     this.levelOf = opts.levelOf ?? (() => 1);
     this.wall = opts.wall ?? null;
+    this.y = opts.y ?? 0;
     this.spawnX = opts.x;
     this.spawnZ = opts.z;
     this.aim = { x: opts.x, z: opts.z };
@@ -864,22 +909,22 @@ export class ZuAi extends BrainBase {
 
   // GoranSetupProjectileAttack_005b30c8: aim at the player's weapon position (the
   // turn toward it first); true when the line from the player to the Zu is clear.
-  // Blocked, the aim is a point 400 to the side of the Zu (ASSUMED: the exe then
-  // computes a lob velocity, not traced).
+  // Blocked (the ray 0x0077fffc, mask -1, from the weapon point to the Zu's point), the
+  // aim is the Zu's point plus 400 (0x0092ae2c, PROVEN) across the direction from the Zu to
+  // the weapon point: (-dz, dx) / |d| with d = weapon - Zu on XZ (objdump-checked sign). The
+  // exe then computes a lob velocity (EnemyAI_CalculateProjectileVelocity_00771f5c, not traced).
   private setupAim(targets: readonly AiTarget[]): boolean {
     void targets;
     const t = this.tgt;
     if (!t) return false;
     this.aim = { x: t.x, z: t.z };
     this.turnToward(this.aim, ZU_TURN);
-    if (!this.wall || !this.wall(t.x, t.z, this.x, this.z)) return true;
-    let nx = this.x - t.x;
-    let nz = this.z - t.z;
-    const len = Math.hypot(nx, nz);
-    if (len > 0) {
-      nx /= len;
-      nz /= len;
-    }
+    if (!this.wall || !this.wall(this.p3(t.x, t.z), this.p3(this.x, this.z))) return true;
+    const dx = t.x - this.x;
+    const dz = t.z - this.z;
+    const len = Math.hypot(dx, dz);
+    const nx = len > 0 ? dx / len : 0;
+    const nz = len > 0 ? dz / len : 0;
     this.aim = { x: this.x - nz * ZU_SIDE_AIM, z: this.z + nx * ZU_SIDE_AIM };
     return false;
   }
@@ -891,6 +936,10 @@ export class ZuAi extends BrainBase {
     const t = this.tgt;
     if (!t) return false;
     const angle = Math.atan2(t.x - this.x, t.z - this.z);
+    // The shot's y is above the launch ground; the map ray runs at the Zu's height.
+    const wall = this.wall;
+    const ground = this.y;
+    const wallBlocks = wall ? (a: ZuPoint, b: ZuPoint): boolean => wall(lift(a, ground), lift(b, ground)) !== null : undefined;
     const bolt = new TechBolt({
       x: this.x,
       y: ZU_MOUTH_Y,
@@ -898,9 +947,13 @@ export class ZuAi extends BrainBase {
       angle,
       speed: this.tuning.techSpeed,
       range: this.tuning.techRange,
-      radius: 4,
+      // ASSUMED: the hit radius is one step (the exe's test is the squared distance to the
+      // weapon point below the speed squared; 0x78ea2c's return is not traced).
+      radius: this.tuning.techSpeed,
       effect: { kind: 'tech', power: this.tuning.techPower },
       color: 0xffa040,
+      // update 0x0057fcc0: the step from the old position to the new one meets the map (mask -1) first.
+      wallBlocks: wallBlocks,
     });
     out.shots = [...(out.shots ?? []), bolt];
     return true;
@@ -962,7 +1015,7 @@ export class ZuAi extends BrainBase {
     for (; k < 3; k++) {
       const r = theta * BAMS_TO_RAD;
       const e = { x: ox - ZU_PROBE * Math.cos(r), z: oz + ZU_PROBE * Math.sin(r) };
-      const hit = this.wall ? this.wall(ox, oz, e.x, e.z) : null;
+      const hit = this.wall ? this.wall(this.p3(ox, oz), this.p3(e.x, e.z)) : null;
       if (!hit) {
         end = e;
         break;
@@ -1020,6 +1073,11 @@ export class ZuAi extends BrainBase {
     this.tgt = t;
     this.targetId = t ? t.clientId : null;
     this.dist2 = t ? (t.x - this.x) ** 2 + (t.z - this.z) ** 2 : Infinity;
+  }
+
+  // A point at the Zu's height (the map rays are 3-D; the port's targets are XZ only).
+  private p3(x: number, z: number): ZuPoint {
+    return { x, y: this.y, z };
   }
 
   private distTo(p: { x: number; z: number }): number {
