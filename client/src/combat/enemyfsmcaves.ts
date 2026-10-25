@@ -54,7 +54,7 @@ const EMPTY_MV: EnemyMovementData = { fparam1: 0, fparam2: 0, fparam3: 0, fparam
 //     ground: 0x3b4 = 1 (not yet out), flags 0x4040000 (invulnerable). Sub 0
 //     runs the abeast spawn: SE 0x124 (0x0052d25c's remap, ASSUMED identity)
 //     and the particles 0xea (10, 30) at the spot and 0xe9 at the spot plus
-//     g_AbeastParticleYOffset (ASSUMED 0); it starts the state timer
+//     g_AbeastParticleYOffset (0x0092746c = 30.0); it starts the state timer
 //     (0x00576c48: rate 2 / 10, t = rate * -30, done at t >= 2 (0x00576b18):
 //     40 frames). Sub 1 then clears 0x3b4 and goes to sub 2 (the wander).
 //     A target found in the meantime (0x524d18 clears the flags 0x40000 /
@@ -82,8 +82,9 @@ export const GRASS = {
   emergeSe: 0x124,
   // The abeast spawn particles (create_abeast_spawn_particle_effects 0x005789e4 family).
   emergeFx: [0xea, 0xe9],
-  // ASSUMED: g_AbeastParticleYOffset is 0 (the value is not read yet).
-  emergeFxDy: 0,
+  // g_AbeastParticleYOffset = 30.0 (exe 0x0092746c; create_abeast_spawn_particle_effects
+  // 0x00578998 family: fadd [0x92746c] before the 0xe9 create).
+  emergeFxDy: 30,
 } as const;
 
 export type GrassState = 'emerge' | 'idle' | 'ambush' | 'chase' | 'slash' | 'dash' | 'web' | 'dead';

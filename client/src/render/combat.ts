@@ -1449,8 +1449,12 @@ export class CombatView {
           // The spawn animation branch: booma_constructor (0x00535f1c) writes the
           // current_target == 1 test value, so every Booma (floor or wave) animates.
           // Booma: the spawn animation; Shark and Dimenian: their spawn timer (AI_PROFILES.spawnTimer).
-          // The Dimenian's +0x398 == 1 writer is not identified (ASSUMED, the Shark's is 0x00512ed4).
-          spawn: true,
+          // The timed spawn's gate is +0x398 == 1 on the first tick (DorphonProcessAttackPhase
+          // 0x005ad51c sub 0). Shark: its ctor writes 1 (0x00512ed4). Dimenian: its ctor writes 0,
+          // and nothing before that first tick writes 1 (the only 1-writer in its vtable is
+          // EnableDerolleEntity 0x005517a0, reached only through unknown_booma_enemy_ai state 9),
+          // so a fresh Dimenian takes the no-effect branch (spawn: false).
+          spawn: className !== 'TObjEneDimedian',
         });
         // The Monest's own states are its spawner (combat/enemyfsm.ts).
         if (monest) ai = null;

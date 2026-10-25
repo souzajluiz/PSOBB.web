@@ -931,6 +931,14 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
   none.tick([near]);
   eq(none.state, 'idle', 'Shark without +0x398: idle on the next tick');
 
+  // A fresh Dimenian: its ctor writes +0x398 = 0 and only EnableDerolleEntity (state 9) writes 1, so the
+  // first spawn tick takes the no-effect branch (render/combat.ts passes spawn false for it).
+  const freshDim = timed(dimenian, false);
+  const fd0 = freshDim.tick([near]);
+  eq([freshDim.state, fd0.motion, fd0.spawnFx], ['spawn', null, undefined], 'a fresh Dimenian (+0x398 == 0): the first tick plays no sound and no particles');
+  freshDim.tick([near]);
+  eq(freshDim.state, 'idle', 'a fresh Dimenian: idle on the next tick');
+
   // Hits during the timed spawn land (no invulnerability): the chase starts on the attacker.
   const hit = timed(dimenian, true);
   hit.tick([]);

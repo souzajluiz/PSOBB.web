@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-10-25: Dimenian timed spawn gate (+0x398) and the Grass Assassin emerge Y offset
+
+**Outcome.** A fresh Dimenian (and La / So Dimenian) does not take the timed spawn: the port now passes `spawn: false` for them (no sound, no particles, idle on the next tick). The Shark keeps `spawn: true`. The Grass Assassin emerge's 0xe9 particle is raised by 30, not 0.
+
+**Proven (PsoBB.exe, `tools/exedata.py`, `tools/refsrc.sh` on `Psobb.exe-05112026.c`).**
+- The Dimenian's vtable is 0x00b041e0 (deathfx.ts already cites it as VERIFIED). Its slot +0x154 is `DorphonProcessAttackPhase` (0x005ad51c, the sub 0 / 1 / 2 timer code), and its slot +0x178 is `EnableDerolleEntity` (0x005517a0). Its slot +0x0 is `g_pDerolleDtor`, which `dimenian_constructor` sets.
+- `unknown_booma_enemy_ai` dispatches by `unknown_ai_state` through the vtable: case 0 calls +0x154 (spawn), case 9 calls +0x178. So the Dimenian's spawn tick is state 0, and state 9 is `EnableDerolleEntity`.
+- `EnableDerolleEntity` is the only writer of +0x398 = 1 in the Dimenian's reach: it stores 1 at +0x398, then calls the 0x3b0 object's +0x10. `dimenian_constructor` (0x00551d3c) writes no +0x398 in its body; the earlier note's base write of 0 (0x0052b6ec) is taken as given. The superclass ctor `unknown_booma_superclass_constructor` sets `unknown_ai_state` and `state_maybe` to 0. So a fresh Dimenian has +0x398 = 0 and state 0.
+- `UpdateMovementRestriction_00606f10` (the set-file `param2` / `param3` register gate, the NPC's `npcShown`) is NOT a Dimenian writer: it runs only from `EnemyObjectUpdateAnimation_00606e34` (that slot sits only in the 0xb1xxxx vtables, not the Dimenian's) and from the challenge dispatcher. So the set-file register is not the gate, and neither is the wave spawn (the spawn creator `CreateDimenianPlayer_00551c70` calls only the constructor).
+- Consequence: a fresh Dimenian starts in state 0 with +0x398 = 0, so sub 0 takes the else branch (sub 2, no effects), exactly the port's `spawn: false` path. The timer runs only after state 9 has been applied first.
+- Grass Assassin emerge: `DerolleProcessStateWanderer_0052407c` sub 0 calls `abeast_enemy_sfx_and_particle` (0x0052407c's helper), which calls `create_abeast_spawn_particle_effects`: create 0xea at the spot, then `fadd [0x0092746c]` (g_AbeastParticleYOffset) and create 0xe9. Bytes at 0x005789b2 (`d8 05 6c 74 92 00`). `0x0092746c` reads 30.0, the same constant as the Shark's dy 30. The emerge's dy 0 for 0xea and 30 for 0xe9 match the port after this change.
+
+**ASSUMED / open.**
+- What sets state 9 on a Dimenian. `state_maybe` (Enemy__UpdateAiState) and `SetEnemyAiState_0051f62c(…, 9)` are fed by the network enemy-state and quest paths (`ApplyEnemyTargetAndState_00423a78`, `SetEnemyTargetAndState_004b98fc`); not traced to a Dimenian packet. A joined client or a server-driven state 9 would take the timer path; the port has no such trigger.
+- The unnamed function containing 0x005ade89 (the old candidate writer) was not read in this pass.
+- The Grass sound 0x124 goes through `RemapEntityIdForMap_0052d25c` on the per-map table (`null_ARRAY_009273e0`), kept as ASSUMED identity as before.
+
+**Port.** `client/src/render/combat.ts`: `spawn: className !== 'TObjEneDimedian'` (the comment cites the proof). `client/src/combat/enemyfsmcaves.ts`: `emergeFxDy: 30`. `client/src/combat/enemyai.ts`: the +0x398 comment.
+
+**Tests.** `tests/enemyfsm.test.ts`: a fresh Dimenian (`spawn` false) plays nothing on the first tick and is idle on the next. `tests/enemyfsmcaves.test.ts`: the emerge's effect dy is [0, 30]. enemyfsm, enemyfsmcaves, minimap, combat (with NEWSERV) pass; `tsc --noEmit` clean.
+
 ## 2026-10-25: Xbox (XB) .qst: parse and pack, newserv byte cross-check
 
 `formats/qst.ts` takes `version: 'XB'` (`QstVersion`). newserv's `S_OpenFile_XB_44_A6` (`src/CommandFormats.hh`, 0x50 bytes) is the PC / GC open body plus `xb_filename` (pstring 0x10, ASCII, at 0x38) and `content_meta` (u32 at 0x48, `0x30000000 | quest number`, `Quest.cc` `add_open_file_command_t` XB overload). The header is the 4-byte DC-style one; the write commands are the GC ones (`add_write_file_commands_t` with `bb_alignment` false). `qstVersion` returns `XB` for the first command's size 0x54 (it used to refuse). `packQstFiles(..., xb)` takes `{ xbFilename, contentMeta }` and throws without them; `parseQstFiles` returns them as `xb`. `packQst(..., { version: 'XB', language })` names the Xbox file `quest<N>_<c>.dat` with `c` the lowercase language letter (`JEGFSBTK`, default English), as newserv `VersionedQuest::xb_filename`. XB download files are the PSO V2 payload, as on DC / PC / GC (newserv's decode_qst_data_t applies its DLQ decoder to every A6 file).

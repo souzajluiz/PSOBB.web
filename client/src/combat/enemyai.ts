@@ -695,8 +695,8 @@ export class EnemyAi {
 
   // The Shark (0x00552704) and Dimenian (0x005ad51c) spawn, same sub-states as
   // the Booma one but timed. Sub 0 (+0x398 == 1, set by their constructors for
-  // the Shark at 0x00512ed4; ASSUMED for the Dimenian, see the notes in
-  // render/combat.ts): the timer init, the sound and particles, sub 1. The
+  // the Shark at 0x00512ed4; a fresh Dimenian has 0, see render/combat.ts): the
+  // timer init, the sound and particles, sub 1. The
   // else branch (+0x398 == 0) goes to sub 2 with no effects. Sub 1: the tick
   // (0x00576b18 / 0x00512404); when it reports done, +0x398 = 0 and sub 2. Sub 2:
   // the next tick is state 1 (idle), no motion. No motion plays during the spawn.
