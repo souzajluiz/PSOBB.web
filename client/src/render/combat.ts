@@ -1439,6 +1439,8 @@ export class CombatView {
           radius,
           // initdata_param2: the e.dat entry's wander radius.
           wander: Math.max(0, head.slot.set.params[1]),
+          // The Booma family's spawn state (the profile has one only for it).
+          spawn: true,
         });
         // The Monest's own states are its spawner (combat/enemyfsm.ts).
         if (monest) ai = null;
@@ -1880,9 +1882,9 @@ export class CombatView {
   // hidden, set by +0x184)), called from the family's own update (Mericarol +0x198,
   // Gibbon +0x188). The port's dead / death / radar / concealed tests read those bits.
   // The Booma family adds its icon per state (boomaIconShown), not through the slot:
-  // boomaBrainIconShown maps the brain's state to the exe's (idle 1, notice and chase 3,
-  // attack and recover 5, dead 8). The port has no spawn state yet, so a spawning Booma
-  // is not hidden here (open, classic/minimap.ts BOOMA_BRAIN_EXE_STATE).
+  // boomaBrainIconShown maps the brain's state to the exe's (spawn 0, idle 1, notice and
+  // chase 3, attack and recover 5, dead 8): a spawning Booma (the spawn animation, then
+  // idle) has no icon (classic/minimap.ts BOOMA_BRAIN_EXE_STATE).
   minimapEnemies(): { x: number; z: number; type: string }[] {
     const out: { x: number; z: number; type: string }[] = [];
     for (const e of this.enemies.values()) {

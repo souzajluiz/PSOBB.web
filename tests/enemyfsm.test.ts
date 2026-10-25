@@ -25,7 +25,7 @@ import {
   armPackHowl,
   wolfLeapHeight,
 } from '../client/src/combat/enemyfsm.ts';
-import { AI_PROFILES, type AiTarget, type EnemyAiProfile } from '../client/src/combat/enemyai.ts';
+import { AI_PROFILES, EnemyAi, type AiTarget, type EnemyAiProfile } from '../client/src/combat/enemyai.ts';
 import { STATUS } from '../client/src/combat/status.ts';
 import { expandEnemySets } from '../client/src/formats/enemyslots.ts';
 import type { EnemySet } from '../client/src/formats/setdata.ts';
@@ -785,6 +785,68 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
   eq(hurt.state, 'chase', 'a hit starts the chase');
   eq(hurt.targetId, 4, 'the attacker is the target');
   eq(hurt.resume(), 'chase', 'resume keeps the chase');
+}
+
+// --- Booma spawn (exe state 0, unknown_booma_enemy_spawn_handler 0x00535a6c) ---
+{
+  const boomaSpawn = (spawn: boolean, profile: EnemyAiProfile = AI_PROFILES.TObjEneBeast as EnemyAiProfile) =>
+    new EnemyAi({
+      x: 0,
+      z: 0,
+      angle: 0,
+      profile,
+      detect: 225,
+      turnRate: 1024,
+      attack: { minAtp: 0, maxAtp: 0, minAta: 0, maxAta: 0, distanceX: 12, angle: 0x1c71, distanceY: 0 },
+      speeds: { idleMove: 0.8, idleAnim: 0.8, engagedMove: 0.5, engagedAnim: 0.5 },
+      radius: 7,
+      wander: 0,
+      spawn,
+    });
+  const near: AiTarget = { clientId: 0, x: 50, z: 0, charClass: 0, dead: false };
+  const spawnMotion = AI_PROFILES.TObjEneBeast.spawn!;
+  const idleMotion = AI_PROFILES.TObjEneBeast.idle;
+
+  // The Booma profile has the spawn animation 0xb: motion 0, once, 0.5 (slot 11 of 0x009bc980).
+  eq(spawnMotion, { index: 0, speed: 0.5, loop: false }, 'the Booma spawn animation is motion 0, once, speed 0.5');
+
+  // Spawn: the first tick plays animation 0xb and sets invulnerable; no target search.
+  const ai = boomaSpawn(true);
+  eq(ai.state, 'spawn', 'a Booma with spawn starts in the spawn state');
+  const r0 = ai.tick([near]);
+  eq(r0.motion, spawnMotion, 'the first tick plays the spawn animation');
+  eq([ai.state, ai.invulnerable, ai.targetId], ['spawn', true, null], 'spawning: invulnerable, no target search');
+  // The owner reports the end test only after the first tick, so an ended animation before it is ignored.
+  const ai2 = boomaSpawn(true);
+  ai2.tick([], true);
+  eq([ai2.state, ai2.invulnerable], ['spawn', true], 'an end reported on the first tick does not end the spawn');
+  // The animation plays: no motion change, the player in range does not start the war cry.
+  const r1 = ai.tick([near], false);
+  eq([r1.motion, ai.state], [null, 'spawn'], 'while the animation plays nothing changes');
+  // The end test: animation 0 (idle) and no longer invulnerable; the state changes on the next tick.
+  const r2 = ai.tick([near], true);
+  eq([r2.motion, ai.state, ai.invulnerable], [idleMotion, 'spawn', false], 'the end test plays idle and drops the invulnerable flag');
+  const r3 = ai.tick([near]);
+  eq([ai.state, r3.motion], ['idle', null], 'the next tick is state 1 (idle), the motion already plays');
+  // Idle is the normal brain from here: the player in range starts the war cry (state 3).
+  const r4 = ai.tick([near]);
+  eq([ai.state, r4.motion], ['notice', AI_PROFILES.TObjEneBeast.notice], 'after the spawn a near player starts the war cry');
+
+  // A hit after the spawn lands: the brain goes to the chase on the attacker.
+  const hitAfter = boomaSpawn(true);
+  hitAfter.tick([]);
+  hitAfter.tick([], true);
+  hitAfter.tick([]);
+  eq(hitAfter.state, 'idle', 'the spawn ended');
+  hitAfter.onDamage(4);
+  eq(hitAfter.state, 'chase', 'a hit after the spawn starts the chase');
+
+  // Without the spawn flag, or a family without a spawn profile, the brain starts idle as before.
+  eq(boomaSpawn(false).state, 'idle', 'no spawn flag: idle');
+  eq(boomaSpawn(true).invulnerable, false, 'a fresh spawn is not invulnerable before its first tick');
+  eq(boomaSpawn(true, AI_PROFILES.TObjEneMoja as EnemyAiProfile).state, 'idle', 'a family without a spawn profile starts idle');
+  eq(boomaSpawn(true, AI_PROFILES.TObjEneShark as EnemyAiProfile).state, 'idle', 'the Shark has no spawn state in the port');
+  eq(boomaSpawn(true, AI_PROFILES.TObjEneDimedian as EnemyAiProfile).state, 'idle', 'the Dimenian has no spawn state in the port');
 }
 
 if (failures) {

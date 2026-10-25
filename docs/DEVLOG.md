@@ -1,5 +1,25 @@
 # Devlog
 
+## 2026-10-25: Booma brain spawn state (exe state 0): animation 0xb, invulnerable, then idle
+
+**Outcome.** The Booma-substrate brain (combat/enemyai.ts `EnemyAi`) has a `spawn` state. The Booma / Gobooma / Gigobooma profile (`TObjEneBeast`) plays the spawn animation, is invulnerable (`invulnerable` getter, so `applyEnemyHit` shows "0" and does nothing), then goes to idle. The radar gate (`boomaBrainIconShown('spawn')`, exe state 0) hides it during the spawn. The constructor takes `spawn: true` (render/combat.ts passes it for every enemy); families without `profile.spawn` start idle as before.
+
+**Proven (PsoBB.exe, Ephinea addresses).**
+- Booma vtable 0x00b01fc0 +0x154 = 0x00535a6c, the spawn handler (+0x158 idle 0x0052a6e4, ..., +0x178 0x0073d160 state 9). The dump body is `unknown_booma_enemy_spawn_handler`.
+- Sub-states (enemy +0x330): 1 after the first tick sets animation_id 0xb, `unknown_set_entity_flags(0xa000000)` and the type flag `maybe_invuln` (0x4000000). Sub 1 ends when `field_0xb4 != 0x20` (the same end test as the war cry, 0x0052afe4): animation_id 0, the flags cleared, sub 2. Sub 2: `unknown_ai_state = 1` (idle) on the next tick.
+- Animation 0xb is motion table slot 11 of 0x009bc980: mode 2 (once), motion 0, speed 0.5, flags 0x20. Modelled as `once(0, 0.5)`.
+- The Shark spawn is 0x00552704 by vtable (0x00aff860 +0x154). The dump names that function `RappyAIStateHandler_00552704`, a community label that is wrong here. Its body: sub 0 with a non-null target starts a timer (`InitializeEnemyStateTimer_00576c48`) and the SFX/particle, sub 1 waits for the timer, sub 2 is idle. It sets no animation, no invulnerable flag and adds no radar icon.
+- The Dimenian state 9 (0x005517a0, vtable 0x00b041e0 +0x178) is not a spawn: it sets +0x398 = 1, calls the object at +0x3b0 (vtable +0x10) and sets bit 0x1 of +0x8 when that returns 1. No animation, no icon. The Dimenian's own spawn is 0x005ad51c (the dark portal), which is not decoded here.
+
+**ASSUMED.**
+- Every spawn takes the animation branch. The handler takes it only when `current_target` equals the sentinel `&g_ChallengeListWindowFlag`; otherwise it skips to idle. The sentinel is a shared global label in the dump, so what sets it is not traced.
+- The animation length is not read (frame count of motion 0 not decoded); the end is the owner's `animationEnded`.
+- Gobooma and Gigobooma use the same handler table (ctor 0x00535f1c, same vtable slot as the Booma).
+
+**Not ported.** The Shark spawn (duration is a per-object float times `g_EnemyStateTimerScaleFactor`, not traced) and the Dimenian portal spawn. Both keep the old behaviour: they start idle and are never hidden for spawn.
+
+**Tests.** `tests/enemyfsm.test.ts`: the spawn motion, invulnerable during the animation only, the end test on the owner's report (the first tick ignores it), idle one tick after, the war cry after that, a hit after the spawn, and the families without a spawn profile. `tsc --noEmit` clean; enemyfsm, minimap, combatdepth and combat tests pass.
+
 ## 2026-10-25: Radar gates wired: Booma brain states and a per-enemy source survey
 
 **Outcome.** `minimapEnemies` (render/combat.ts) now applies the Booma state table: a Booma-table brain (Booma, Gobooma, Gigobooma, Evil / Pal / Guil Shark, Dimenian / La / So) is drawn only in the exe states that add an icon. The mapping is `boomaBrainIconShown(brain)` (classic/minimap.ts `BOOMA_BRAIN_EXE_STATE`): idle = 1 (wander, 0x0052a6e4), notice and chase = 3 (0x0052afe4), attack and recover = 5 (0x0052b290, substate 2 is the 15-tick wait), dead = 8. Spawn = 0 is in the table, but the port has no spawn brain state, so no enemy reports it yet. The gate changes nothing in play today: every mapped port state already adds an icon, and dead was already excluded.

@@ -110,6 +110,9 @@ export interface EnemyAiProfile {
   walk: EnemyAiMotion | null; // animation 2; null = the enemy never walks
   notice: EnemyAiMotion | null; // animation 7, the war cry
   attacks: readonly EnemyAiMotion[]; // animations 3 and 4
+  // animation 0xb, the spawn (unknown_booma_enemy_spawn_handler 0x00535a6c);
+  // null / absent = the family has no spawn state in the port.
+  spawn?: EnemyAiMotion | null;
 }
 
 const loop = (index: number, speed: number): EnemyAiMotion => ({ index, speed, loop: true });
@@ -121,7 +124,9 @@ export const AI_PROFILES: Record<string, EnemyAiProfile> = {
   // 0x009bc980 (Booma / Gobooma / Gigobooma): 0 stund (9, 0.6, loop),
   // 2 walk (11, 0.5, loop), 3 attack A (1, 0.65), 4 attack B (2, 0.85),
   // 7 war cry (10, 0.8).
-  TObjEneBeast: { idle: loop(9, 0.6), walk: loop(11, 0.5), notice: once(10, 0.8), attacks: [once(1, 0.65), once(2, 0.85)] },
+  // Slot 11 (0x009bca30, mode 2, motion 0, 0.5) is the spawn animation 0xb: the
+  // exe's spawn handler writes animation_id 0xb and leaves it on its end test.
+  TObjEneBeast: { idle: loop(9, 0.6), walk: loop(11, 0.5), notice: once(10, 0.8), attacks: [once(1, 0.65), once(2, 0.85)], spawn: once(0, 0.5) },
   // 0x009bb300 (Evil / Pal / Guil Shark): same layout, different speeds.
   TObjEneShark: { idle: loop(9, 0.6), walk: loop(11, 1), notice: once(10, 0.8), attacks: [once(1, 1), once(2, 1)] },
   TObjEneDimedian: { idle: loop(9, 0.6), walk: loop(11, 1), notice: once(10, 0.8), attacks: [once(1, 1), once(2, 1)] },
@@ -250,7 +255,9 @@ export function enemySpeeds(movement: EnemyMovementData | null, fallback: number
   };
 }
 
-export type AiState = 'idle' | 'notice' | 'chase' | 'attack' | 'recover' | 'dead';
+// 'spawn' is exe state 0 (unknown_booma_enemy_spawn_handler, 0x00535a6c): the
+// spawn animation, invulnerable, then idle.
+export type AiState = 'spawn' | 'idle' | 'notice' | 'chase' | 'attack' | 'recover' | 'dead';
 
 export interface AiTarget {
   clientId: number;
@@ -365,6 +372,10 @@ export class EnemyAi {
   private attackFrames = 0;
   private dealt = false;
   private current: EnemyAiMotion | null = null;
+  // The spawn sub-state (enemy+0x330): 0 before the first tick (the spawn
+  // animation is played then), 1 while it plays (invulnerable), 2 once its
+  // end test passed (the next tick is idle).
+  private spawnSub = 0;
 
   constructor(opts: {
     x: number;
@@ -377,6 +388,8 @@ export class EnemyAi {
     speeds: EnemySpeeds;
     radius: number;
     wander?: number;
+    // The enemy starts in its spawn state (exe state 0) when the family has one.
+    spawn?: boolean;
   }) {
     this.x = this.spawnX = opts.x;
     this.z = this.spawnZ = opts.z;
@@ -389,11 +402,24 @@ export class EnemyAi {
     this.wander = opts.wander ?? 0;
     this.reach = opts.attack && opts.attack.distanceX > 0 ? opts.attack.distanceX : 0;
     this.reachAngle = ((opts.attack?.angle ?? 0x2000) & 0xffff) * BAMS_TO_RAD;
-    this.current = opts.profile.idle;
+    if (opts.spawn && opts.profile.spawn) {
+      // The first tick plays the spawn motion (current is null, so play() emits it).
+      this.state = 'spawn';
+      this.current = null;
+    } else {
+      this.current = opts.profile.idle;
+    }
   }
 
   get motion(): EnemyAiMotion | null {
     return this.current;
+  }
+
+  // The spawn animation is playing: the spawn handler sets the entity type flag
+  // maybe_invuln (0x4000000) and a hit does nothing (render/combat.ts
+  // applyEnemyHit). The flag is cleared at the end test, so sub-state 2 takes hits.
+  get invulnerable(): boolean {
+    return this.state === 'spawn' && this.spawnSub === 1;
   }
 
   // The enemy died: state 8, the owner plays the death motion itself.
@@ -417,7 +443,7 @@ export class EnemyAi {
 
   // Called once the damage motion ended (combat/render puts the AI motion back).
   resume(): AiState {
-    if (this.state === 'dead') return this.state;
+    if (this.state === 'dead' || this.state === 'spawn') return this.state;
     if (this.state === 'chase' || this.state === 'attack' || this.state === 'recover') {
       this.state = 'chase';
       this.current = this.gait() ?? this.profile.idle;
@@ -456,6 +482,7 @@ export class EnemyAi {
   tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
     const out: AiFrame = { motion: null, x: this.x, z: this.z, angle: this.angle, hit: null };
     if (this.state === 'dead') return out;
+    if (this.state === 'spawn') return this.tickSpawn(out, animationEnded);
     const target = this.findTarget(targets);
     switch (this.state) {
       case 'idle':
@@ -552,6 +579,33 @@ export class EnemyAi {
     out.x = this.x;
     out.z = this.z;
     out.angle = this.angle;
+    return out;
+  }
+
+  // unknown_booma_enemy_spawn_handler (0x00535a6c, exe state 0). Sub 0, the
+  // first tick: animation 0xb and invulnerable. Sub 1: the animation plays; its
+  // end test (field_0xb4 leaves 0x20, the war cry's test too) sets animation 0 and
+  // clears the invulnerable flag (sub 2). Sub 2: the next tick is state 1 (idle).
+  // The animation's own length is not read: the owner reports the end.
+  // ASSUMED: every spawn takes the animation branch (the handler's "no spawn
+  // animation" branch, taken when the spawn carries no trigger, is not modelled).
+  private tickSpawn(out: AiFrame, animationEnded: boolean): AiFrame {
+    const spawn = this.profile.spawn;
+    if (!spawn) {
+      this.state = 'idle';
+      return out;
+    }
+    if (this.spawnSub === 0) {
+      this.spawnSub = 1;
+      out.motion = this.play(spawn);
+    } else if (this.spawnSub === 1) {
+      if (animationEnded) {
+        this.spawnSub = 2;
+        out.motion = this.play(this.profile.idle);
+      }
+    } else {
+      this.state = 'idle';
+    }
     return out;
   }
 
