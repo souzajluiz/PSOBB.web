@@ -1955,7 +1955,8 @@ export class CombatView {
       // The Dark Gunner's icon follows its state (classic/minimap.ts DARK_GUNNER_BRAIN_EXE_STATE);
       // a timed status (paralysis, freeze, shock or the hold) adds one in any state (the update's
       // timed-status branch, which skips the dispatcher).
-      if (e.slot.type === 'DARK_GUNNER' && e.ai instanceof GunnerAi && !e.status.locked && !darkGunnerBrainIconShown(e.ai.state)) continue;
+      // The flinch (owner damage state, exe state 4 = 0x00544704) shows the icon in any brain state.
+      if (e.slot.type === 'DARK_GUNNER' && e.ai instanceof GunnerAi && !e.status.locked && !darkGunnerBrainIconShown(e.state === 'damage' ? 'flinch' : e.ai.state)) continue;
       // Dark Falz forms 1 and 3 have their own forced icons (minimapIcons).
       if (e.ai instanceof DarkFalzPartAi && (e.ai.entity === DF_ID.form3 || e.ai.entity === DF_ID.form1)) continue;
       const p = e.instance.root.position;

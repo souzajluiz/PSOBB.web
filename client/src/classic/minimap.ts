@@ -207,9 +207,18 @@ export function darkGunnerIconShown(state: number): boolean {
 // split follows the exe's sub-phases inside that one handler). shoot = 2, stun = 6,
 // home = 8, dead = 5. home returns to 0 within 10 units of the spawn (the state 8
 // handler calls SetAnimationBasedOnDistance, 0x005444cc), as the port's requestHome does.
-// Not modelled: the flinch (exe 4), which the port keeps inside its current state
-// (ASSUMED: the exe's hit on an idle gunner shows the icon during the flinch), and the
-// exe's timed wait 3, which no port state reaches (its writer is not in the dump).
+// flinch = 4 (0x00544704): the hit reaction. The gunner's update takes the flinch on any
+// landed hit (EntityHitEntity sets +0x30 took_damage 0x200; the update's vtable slot +0x88
+// tests it and slot +0x100 = 0x0054615c sets the pending state 4), except a Death Gunner
+// that is shooting (its group is stunned instead). The port plays the flinch as the owner's
+// damage state (render/combat.ts playDamage; resumed to hover when the animation ends,
+// the exe's exit: 0x00544704 leaves to state 1 once animation_flags is no longer 8). The
+// icon shows in state 4 (0x00544704 adds it on every path).
+// The exe's timed wait 3 (0x005448e0: counter loaded from +0x342 = 15 on entry, one
+// decrement a tick, back to 1 when it goes below 0, no animation gate) has no writer in the
+// gunner code range 0x00543e8c-0x00546300: the only pending-3 writes there are the Death
+// Gunner control's own (update_death_gunner: 0x0054363f, 0x00543663, 0x005438ea). No port
+// state reaches 3 (ASSUMED no gunner reaches it).
 export const DARK_GUNNER_BRAIN_EXE_STATE: Readonly<Record<string, number>> = {
   dormant: 0,
   idle: 0,
@@ -218,6 +227,7 @@ export const DARK_GUNNER_BRAIN_EXE_STATE: Readonly<Record<string, number>> = {
   turn: 1,
   dash: 1,
   shoot: 2,
+  flinch: 4,
   stun: 6,
   home: 8,
   dead: 5,
@@ -249,9 +259,8 @@ export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
   SAVAGE_WOLF: 'slot', CHAOS_SORCERER: 'slot', CHAOS_BRINGER: 'slot', DARK_BELRA: 'slot',
   // Canadine (vtable 0x00b02be0, slot +0x198, update calls it at 0x00541d99), Poison Lily
   // and Del Lily (vtable 0x00b00fe0, slot at +0x198, update 0x00529754 calls it at 0x005297c1,
-  // gated by the pause only), Dubchic (vtable 0x00b04a40 / 0x00b04cc0, slot at +0x198;
-  // the extra pause gate FUN_004f7c84 is ASSUMED to change nothing here).
-  CANADINE: 'slot', POISON_LILY: 'slot', DEL_LILY: 'slot', DUBCHIC: 'slot',
+  // gated by the pause only; the extra pause gate FUN_004f7c84 is ASSUMED to change nothing here).
+  CANADINE: 'slot', POISON_LILY: 'slot', DEL_LILY: 'slot',
   RAPPY: 'rappy',
   // Own icon, no 0x40800 test: Hildebear (0x00affb20, icon at 0x0051360a), Grass Assassin
   // (0x00b00b60, unconditional at the end of each state), Delsaber (0x00b03fa0 / 0x00b041e0,
@@ -267,15 +276,18 @@ export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
   GARANZ: 'none',
   // Claw: +0x390 bit 0x10000000 hides the icon (ASSUMED the port's ClawAi.hidden is that bit).
   CLAW: 'gated',
-  // Gillchic: its ctor gilchic_constructor (0x00556600, write of vtable 0x00b04760 at
-  // 0x005566b9, dump name gilchic_constructor) gives vtable 0x00b04760, whose slot +0x198 is
-  // null and whose update 0x005548f0 (dump RappyAIUpdateLoop_005548f0) adds the icon
-  // unconditionally (dump line 338624, only the pause gate before it): 'own', PROVEN for the
-  // vtable and the call; ASSUMED the Dubchic shares 0x00b04760 (same ctor, param6 only),
-  // which would make DUBCHIC's 'slot' row (0x00b04a40 / 0x00b04cc0) need a re-check.
+  // Gillchic and Dubchic (enemy id 0x80; setdata.ts: p6 != 0 Gillchic, p6 == 0 Dubchic). The
+  // factory row for id 0x80 (table 0x009fa440) is ctor 0x00556600 (gilchic_constructor), which
+  // writes vtable 0x00b04760 unconditionally (0x005566b7, before any p6 test). That vtable's
+  // slot +0x198 is null (no slot icon), and its slot +0x4 update 0x005548f0 (dump
+  // RappyAIUpdateLoop_005548f0) adds the icon unconditionally after the pause gate (dump line
+  // 338624): 'own', PROVEN for both. The vtables 0x00b04a40 / 0x00b04cc0 are not Dubchic's: they
+  // are written only in the functions at 0x00557908-0x005579d0 (the Dragon base that Epsigard
+  // builds on, its caller 0x0055be9c) and 0x00558334 / 0x005584f0 (Derolle), never by id 0x80,
+  // so the old DUBCHIC 'slot' row was wrong.
   // Sinow Gold: the same sinowbeat_constructor as the Sinow Beat, subtype 1 (set_sinowbeat_subtype,
   // dump line 374960, changes the model and the subtype only): 'own', ASSUMED the Sinow Beat's icon path.
-  GILLCHIC: 'own', SINOW_GOLD: 'own',
+  GILLCHIC: 'own', DUBCHIC: 'own', SINOW_GOLD: 'own',
 };
 export function radarSourceOf(type: string): RadarSource | null {
   return ENEMY_RADAR_SOURCE[type] ?? null;
