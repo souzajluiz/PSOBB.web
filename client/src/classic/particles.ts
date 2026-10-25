@@ -174,8 +174,9 @@ export interface Emitter {
   orient: Orient | null; // the emitter's object angles (null = none: the velocity is not turned)
   fx: EffectFx;
   acc: number;
-  // ParticleEffectSingleParticle_SetId_00508ee4: a colour override (RGB,
-  // flag 0x100 of the effect). ASSUMED to scale the entry's colour.
+  // ParticleEffectSingleParticle_SetId_00508ee4: the owner's colour (ARGB) and
+  // flag 0x100. The exe copies it into the instance at spawn (0x00509170..0x00509237)
+  // as the colour base (R, G, B) and its alpha (+0x4c); see particleShade.
   tint?: number | undefined;
 }
 
@@ -529,13 +530,20 @@ export class ParticleSystem {
 //   type 0 (update_particle_effect_single_particle, 0x0050dbb8): slope
 //     +0x6c / +0x70 / +0x74 (`fmul [ecx+0x6c]` at 0x0050df88, 0x0050dfbc, 0x0050dfeb);
 //   type 1 ring (ParticleEffectInstance_Update_0050f3fc): slope +0x50 / +0x38 / +0x3c.
-// Both use the bases +0x7c / +0x80 / +0x84 when instance flag 0x100 is clear
-// (0x0050df86 and 0x0050f9c9), whatever effect_nt flag 1 is. The 0x100 path
-// (the tint) takes the particle's own RGB as the base instead (type 0 `fadd
-// [ebp+0x50]` at 0x0050def5, ring `fadd [esi+0x50]` at 0x0050f7b6); the port
-// multiplies the tint in instead (ASSUMED; the exe's instance +0x50..+0x58 is
-// zeroed by its ctor 0x00508460 and no copy of the owner's dword into it was
-// found, see the DEVLOG 2026-10-21 tint entry).
+// Both add the entry bases +0x7c / +0x80 / +0x84 with instance flag 0x100 clear
+// (0x0050df86 and 0x0050f9c9), whatever effect_nt flag 1 is.
+// Flag 0x100 (set by ParticleEffectSingleParticle_SetId_00508ee4 on the owner): the
+// spawn block (0x00509170..0x00509237, esi = the new instance, ebx = the owner) copies
+// the owner's ARGB dword at +0x4c into the instance as floats: alpha = A / 255 at +0x4c,
+// R / 255 at +0x50, G / 255 at +0x54, B / 255 at +0x58 (`fdiv` by 255.0 at 0x00920100,
+// the stores at 0x005091ec / 0x00509204 / 0x0050921d / 0x0050922e), and sets 0x100 in the
+// instance's +0x24. The update then uses +0x50 / +0x54 / +0x58 as the base in place of the
+// entry's +0x7c / +0x80 / +0x84 (type 0 `fadd [ebp+0x50]` at 0x0050def5 and 0x0050e0b4;
+// ring `fadd [esi+0x50]` at 0x0050f7b6). So a tinted particle is clamp(t * slope + tint RGB);
+// the tint is not multiplied in. The colour is packed to ARGB into the instance's +0x94
+// (0x0050e27c). Not modelled: the alpha at +0x4c is a factor only on the flags2 bit 0x4 path
+// (`fmul [ebp+0x4c]` at 0x0050de39), and the flags2 bit 0x2 constant branch; the port has no
+// flags2, so both are ASSUMED clear.
 export function particleShade(q: Particle): { fade: number; rgb: [number, number, number] } {
   const d = q.e.entry;
   const t = Math.min(q.age, 1);
@@ -543,8 +551,8 @@ export function particleShade(q: Particle): { fade: number; rgb: [number, number
   const tint = q.e.tint;
   const slope = q.ring ? d.ring.colorSlope : d.colorSlope;
   const rgb = [0, 1, 2].map((i) => {
-    const v = Math.max(0, Math.min(1, t * slope[i]! + d.colorBase[i]!));
-    return tint ? v * (((tint >>> (16 - 8 * i)) & 0xff) / 255) : v;
+    const base = tint !== undefined ? ((tint >>> (16 - 8 * i)) & 0xff) / 255 : d.colorBase[i]!;
+    return Math.max(0, Math.min(1, t * slope[i]! + base));
   }) as [number, number, number];
   return { fade, rgb };
 }

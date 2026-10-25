@@ -125,6 +125,38 @@ So the geometry gate (bit 0, field4 0x8000) passes for every table entry read. T
 **The port.** `combat/formulas.ts`: `TOOK_DAMAGE_MIN = 1` and `tookDamage(total, landed)`; `applyDamage` returns 0x100 and deals nothing below it. `render/combat.ts` `applyEnemyHit`: `hitLanded = tookDamage(damage, landed)`, so the 6x0A send and the remote flinch (the `0x200` branch) follow the exe. The generic flinch gate stays `damage >= 1`, which is the same test. Enemy-to-enemy hits use the same test (ASSUMED). Tests: `tests/flinch.test.ts` (new), `tests/combat.test.ts` (the 0-damage assertion is flipped: it was the dump's misread). Checks: flinch, combat (NEWSERV), enemyfsm, enemyfsmruins, combatdepth, buffs, dubwitch, `tsc --noEmit`.
 
 **Scratch.** The exe dump (`objdump -D`) and the vtable/calls scans lived in the session scratchpad (`flinch_*`) and were deleted.
+## 2026-10-25: Particle flag 0x100: the owner's SetId colour is the instance's colour base (ported)
+
+**Question (HANDOFF item 6).** Does the owner's tint (SetId, `ParticleEffectSingleParticle_SetId_00508ee4`, `or 0x100` at +0x2c, the ARGB dword at +0x4c) reach the particle colour, and with what math?
+
+**Answer: yes, at spawn, as the colour base.** Earlier entries of this day said no copy existed. That was wrong: the copy sweep matched only stores that end in a comma, and it missed the single-operand `fstp dword ptr [esi+0x4c]` form. The copy is found by reading the spawn block directly (objdump, VERIFIED).
+
+**The copy (0x00509170..0x00509237).** `esi` is the new instance (the result of the factory call through `[8*ecx+0x9ba8f8]` at 0x0050913c, `mov esi, eax` at 0x00509143); `ebx` is the owner. The block runs when the owner's flags word `[ebx+0x2c]` has `0x100` (`test edx,0x100` at 0x005091ca):
+- alpha: `(owner+0x4c) >> 24`, `fild`, `fdiv` by 255.0 (0x00920100) -> instance `+0x4c` (0x005091ec);
+- R: `>> 16 & 0xff` / 255 -> instance `+0x50` (0x00509204);
+- G: `>> 8 & 0xff` / 255 -> instance `+0x54` (0x0050921d);
+- B: `& 0xff` / 255 (`fdivrp`) -> instance `+0x58` (0x0050922e);
+- then `or 0xffff0100` on the instance's `+0x24` (0x00509231): the flag reaches the instance.
+The owner's `+0x78` and `+0x9c..` copies (rotation) are the same block's neighbours, as before.
+
+**The update uses that base (VERIFIED).** `%ebp` in the type 0 update 0x0050dbb8 is the instance: the instance vtable 0x00aff4a8 slot +4 holds 0x0050dbb8 (`tools/exedata.py read 00aff4ac`), and the function does `mov ebp, ecx` at 0x0050dbbf. With flag 0x100 (`and eax,0x100` at 0x0050de2a):
+- type 0: `fadd [ebp+0x50]` at 0x0050def5 (and 0x0050e0b4 when entry bit 0 is clear) is the base, in place of the entry's `+0x7c` (0x0050df8b for the untinted path);
+- slope is unchanged, `fmul [ecx+0x6c]` at 0x0050def2 (`ecx` = the entry);
+- ring 0x0050f3fc: `fadd [esi+0x50]` at 0x0050f7b6 (`mov esi, ecx` at 0x0050f401);
+- so the colour is `clamp(t * slope + tint RGB)`, clamped to 0..1 (0x00920438 = 1.0). The tint is not multiplied in.
+- The packed colour is written to the instance `+0x94` (`mov [ebp+0x94], esi` at 0x0050e27c), ARGB from the channels scaled by 254.0 (0x00920434).
+
+**Consequence.** Shifta (0xffff9999) starts red-dominant, Deband (0xff337fff) blue, Anti (0xff4dff99) green: the colours the game shows. The old port multiplied the entry base by the tint, and the 2026-10-25 change of this day (base 0, tint dropped) was wrong too. Both are replaced.
+
+**Not modelled (ASSUMED).** The alpha at `+0x4c` is a factor only on the flags2 bit `0x4` path (`fmul [ebp+0x4c]` at 0x0050de39, entry bit 0 set). The flags2 bit `0x2` constant branch (0x0050de6c..) reads `+0x50..+0x58` clamped and is not used by any tint. The port has no flags2, so both are taken as clear. Also ASSUMED: the instance `+0x94` byte reads (0x0050d262, 0x0050d87f) are not traced for these particles.
+
+**Corrections to earlier entries.** The flags2 gates are `test esi,0x2` (0x0050de66, constant branch) and `test esi,0x4` (0x0050de31, factor), not bits "2" and "4" as written on 2026-10-21.
+
+**Port.** `client/src/classic/particles.ts` `particleShade`: with a tint, the base is the tint's R, G, B / 255 (`(tint >>> (16 - 8*i)) & 0xff` / 255) in place of the entry base, for type 0 and ring. `Emitter.tint` documents the spawn copy. `tests/particletint.test.ts` (new, 11 checks, ALL PASS): the untinted bases, Anti at age 0.5, Shifta and Deband at birth, the alpha byte ignored, tint 0 selecting the tinted path, the ring, the clamp, the fade.
+
+**Visible effect (not checked in Chrome).** Tinted supports now start at the tint colour and ramp with the entry slope, instead of the entry colour multiplied by the tint.
+
+**Checks.** `node tests/particletint.test.ts` ALL PASS; `particleslope`, `techlightning`, `hitfx`, `telepipe`, `playerfx` pass; `NEWSERV=vendor/newserv node tests/combat.test.ts`: 5859 checks, 0 failures; `client` `tsc --noEmit -p .` clean (Node 24).
 
 ## 2026-10-25: Dubchic's radar row is 'own' (vtable 0x00b04760); the Dark Gunner's flinch shows its icon
 
