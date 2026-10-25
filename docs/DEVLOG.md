@@ -1,5 +1,33 @@
 # Devlog
 
+## 2026-10-25: Zu / Pazuzu brain, first part: state map, movement and volley arithmetic; no brain yet, radar gate not wired
+
+**Outcome.** Zu (set 0x114) was chosen over Merissa A / AA as the brief asked (Merissa was not sized in depth; its dump functions are named too). The port still has NO Zu brain: no `AI_PROFILES` or `OWN_FSM` row, so the Zu stays where it spawns, as before. This entry adds `client/src/combat/enemyfsmep4.ts` (the traced pieces, each with its address) and `tests/enemyfsmep4.test.ts` (ALL PASS). The radar gate for Zu is not wired: the port has no enemy `+0x390` flags to read the 0x40000 bit from, so the icon stays on, as before.
+
+**Why only part of the brain.** The Zu's state graph is wired through pending states: the wander (state 0) transitions to projectile states 9, 12 and 0 by distance class, and the projectile states 11, 12, 13, 14 and the fireball (10) transition into each other and into the flinch (4) and the carry (7). The dump's helper names are the Goran family's (`GoranProcessWanderState`, `GoranTransitionToState`, ...), and the Zu's update calls them on a `player`-typed struct. A faithful brain needs all of states 0, 3, 4, 7, 9 to 14 plus the helpers `EnemyAI_ProcessProjectileMovement_0077a07c`, `EnemyAI_UpdateProjectileVtable_0077a0d0`, `GoranHandleProjectileTimer_005b3064`, `GoranSetProjectileStateFlags_005b50c8`, `EnemyAI_SpawnTechProjectile_0057ff44` and the tech id of the tech projectile (state 13), which are not traced here. A partial brain would leave transitions into unported states, so none was added.
+
+**Dispatcher (PROVEN, dump `handle_zu_ai`, objdump not re-derived).** +0x32e: 0 wander 0x005b44f8, 3 generic 0x0052c6ac, 4 0x005b41a0, 5 on_zu_killed (death; `combat/deathfx.ts` already plays it), 7 carry 0x005b3e94, 9 0x005b3dd4, 10 zu_fireball_state, 11 0x005b3808, 12 0x005b3544, 13 0x005b3234, 14 0x005b29e4. States 1, 2, 6, 8 have no case. The map is `ZU_STATES` in the new file.
+
+**Movement (PROVEN constants, read with `tools/exedata.py`).**
+- Distance class (`GoranCheckAndTransitionState_005b378c`): class 0 below 8100.0 (0x0092ae08), 1 below 62500.0 (0x0092ae04), else 2, on the squared distance in +0x3b0. ASSUMED: +0x3b0 is squared XZ distance (its writer `EnemyGetDistanceToPlayer_007713d4` is not traced; the thresholds are squares).
+- Pending state by class: int table 0x0092ac88 = [9, 12, 0]. Approach speed by class: float table 0x0092aea4 = [10.0, 60.0, 80.0].
+- Approach (`GoranWaitForProjectileToReachTarget_005b36e4`): step 2.2 (0x0092ae10) toward the speed, -2.2 (0x0092ae14) when above it, arrival inside 0.5 (0x0092ae1c, 0x0092ae18 = -0.5), snap on overshoot. `zuApproach`.
+- Projectile difficulty (`GoranCalculateProjectileDifficulty_005b3d90`): floor * 10 + level / 20, clamp 29 (0x1d), / 3. PROVEN by objdump 0x005b3d90..0x005b3dc4 (signed magic divisions).
+
+**Attack (dump, PROVEN structure; the foie tech id is ASSUMED).** Fireball (state 10, `zu_fireball_state`): phases 0 (set the pending counter, flag 0x80000 on +0x390), 1 (wind-up count), 2 (fire: `GoranSpawnProjectileEffect_005b3cb0` creates 3 foie objects at heading +0x1000, 0, -0x1000, and 2 more at +-0x2000 when +0x504 is set; difficulty from `GoranCalculateProjectileDifficulty`), 3 (recovery; a random roll `ROUND(2 * u / 2^32)` decides a cooldown of 120 frames at +0x3d0 or the next state), -1 (exit). `zuVolleyHeadings` gives the headings. ASSUMED: `create_foie_object1` makes a Foie technique object (its ctor takes no tech id; the name says foie). Not checked in the exe.
+
+**Targeting (PROVEN constants).** `Derolle_IsTargetInRangeAndFacing_00786494`: refused on character flags & 0x2000800; out of range when range^2 < dx^2 + dz^2; bearing = trunc(atan2(dz, dx) * 65536 / 6.283184051513672) (0x0097a1d0 = 65536.0, 0x0097a1c8 = 6.283184051513672 as a double; the FPU is set to truncate, 0xc00); faces when the 16-bit difference of heading (+0x60) and 0x4000 - bearing is at most arc / 2. `zuInRangeAndFacing`. ASSUMED: double precision where the exe uses 80-bit.
+
+**Radar (PROVEN gate, not wired).** `update_zu` 0x005b27e8 draws the icon (unknown_add_minimap_icon 0xffffa24c, scale 1) only when `+0x390 & 0x40000` is clear (test at 0x005b28bc). No writer of 0x40000 in the Zu's range; the bit must come from the factory's flags (ASSUMED, not traced). `zuRadarIconHidden` is the helper for when a brain exists.
+
+**Death.** `on_zu_killed` (dump 400583): phase 0 at the kill (counter 30 at +0x344, the sound by area from table 0x009c17a4, animation 4, or 0xd with flag 0x1000000), phase 1 waits for the animation (particle 0xf0), phase 2 (the sinking, 0x0092add0 / 0x0092add4), phase 3 (30 frames, particle 0x1e and item drop 0xf), phase 4 (the section fade). Already in `combat/deathfx.ts` (VERIFIED there), not re-checked here.
+
+**Still open.** States 3, 4, 7, 9 to 14 and their helpers (listed above); Zu's hit-box and lock-on point (update_zu, not ported); the enemy flags for the radar bit. Pazuzu is assumed to share the Zu vtable and the state map (ASSUMED, the set type is one for both).
+
+**Files.** `client/src/combat/enemyfsmep4.ts` (new), `tests/enemyfsmep4.test.ts` (new), `docs/ROADMAP.md` (the Episode 4 gates line).
+
+**Checks.** `node tests/enemyfsmep4.test.ts` ALL PASS; `node tests/enemyfsm.test.ts` and `node tests/minimap.test.ts` ALL PASS; `NEWSERV=vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures; `cd client && npx tsc --noEmit -p .` clean (Node 24).
+
 ## 2026-10-25: Vol Opt lock-on read from the reticle filter; the monitors have no lock-on caller; no port change
 
 **Outcome.** The reticle's candidate filter is `check_enemy_is_targetable` (exe 0x007a2b28, a function start; dump 785953), not `FUN_007714cc` (that is the AI's nearest-target search, used by enemy AIs such as Darvant and the Vol Opt core's own searches). The filter reads, per player and per weapon record: the record's three masks (field4 box include, field5 box exclude, field6 entity include, field7 entity exclude), the entity's `+0x30` flags, the box bits, the distance and cone tests and, in battle mode, a map ray test. Lock-on is therefore not "box bit 0 only". The Vol Opt facts below follow from that. Verdicts: the monitors are never a lock-on target (no `enable_reticle_` caller in their code); the prison and the control are never (same); the core, the pillars and the rod have per-state lock calls; the body is not mapped by state. Lock and hit gates are NOT changed in the port: the struck test shares `concealed()` with the lock test, so a lock-only change needs the hit path traced first.
