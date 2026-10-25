@@ -1,5 +1,20 @@
 # Devlog
 
+## 2026-10-25: Minimap: the Dragon's forced 2.0 icon; the Sinow Berill and De Rol Le shell icons traced, not ported
+
+**What changed:** the Dragon (Episode 1 Caves boss, `combat/dragon.ts`) draws its radar icon forced at scale 2.0, as the exe does. Until now it fell to the plain range-checked icon of scale 1 (`ENEMY_ICON_RULE`). `FORCED_ICON_RULES.DRAGON` in `classic/minimap.ts` is the only change; `render/fieldhud.ts` already reads the rule for every enemy.
+
+**Proven (exe, Ephinea dump `reverse/refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, the largest dump):**
+- Line 165532 is `unknown_add_minimap_icon3((vec3f *)&param_1->x, 0xffffa24c, 0x40000000, 1, 1)`: colour 0xffffa24c, scale 2.0, shape 1, flag 1 (forced, no range check). It sits in `OlgaUpdateMainLoop_00423b7c` (the Dragon's per-frame update; the name is a community mislabel, see the header of `combat/dragon.ts`), right after `enable_reticle_`, at the function body's indent, so it runs every frame after both branches (leader and follower).
+- The Dragon's entity type is `DRAGON` (`formats/setdata.ts`: case 0xc0 with a < 0x12).
+
+**Traced, not ported (the owner is not settled, so no rule is added):**
+- Sinow Berill sub-entity icons: `EnableSinowberillVisualIndicators_004b9198` (dump 239865) draws forced 2.0 at `&param_1->x` only when the hitbox's `unknown_flags` bit 0 is set; `UpdateSinowberillPositionAndState_004ba0ac` (dump 240354) forced 1.2 at `&param_1->x`; `UpdatePlayerEntityInBossFight_004cbf68` (dump 247150) and `UpdatePlayerStateInSinowberillFight_004cee30` (dump 249235) forced 2.0. The dump types these as `player`, so the port object each one is is ASSUMED.
+- `handle_derolle_shell_behavior` (dump 176942, icon at 176968): forced 1.2 at `this->x2`. Which De Rol Le entity it is, and whether the port's DE_ROL_LE_BODY segments (combat/derolle.ts, the segment notes say "a radar icon") draw it, is not settled.
+- `Enemy_Update_007648dc` (dump 737262): forced icon at `+0xcc` when the entity's `+0xe4` pointer is set; colour 0xffffa24c when the entity is active or its hitbox flag 4 is set, else 0xff909090; scale = the `+0xac` object's float at `+0xc` times `_DAT_0097609c`. The owner of the `+0xe4` object is not settled.
+
+**Checks:** `node tests/minimap.test.ts`: all checks pass (new: `enemyIconRule('DRAGON')`). `cd client && npx tsc --noEmit -p .` (Node 24) clean. Not run in Chrome or Playwright.
+
 ## 2026-10-25: Darvant child link: the constant table of the Dark Falz grid
 
 **What changed:** `tools/gen-collision-boxes.py` has a second loop-child list, `CHILD_CONST_CALLERS`, for a constructor whose box table is one constant (no index, no mask). Dark Falz's Darvants (set type 0xc8) are the entry. The generator regenerates `client/src/formats/collisionboxes.gen.ts` with `CHILD_COLLISION_LINKS[0x00c8] = { callee: 0x0045fbd4, count: 80, mask: 0, variants: { 0: 0x009a67c8 } }`. `childBoxTable(0xc8, k)` now returns the row set for each Darvant `k` in 0..79 (`mask 0`: every child takes variant 0). No runtime code reads it yet; the Darvant is not drawn or hit through this table.

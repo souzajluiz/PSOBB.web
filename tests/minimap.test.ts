@@ -361,6 +361,7 @@ eq(enemyIconRule('DE_ROL_LE'), { scale: 2, color: 0xffffa24c, forced: true }, 'b
 eq(enemyIconRule('GAL_GRYPHON'), { scale: 2, color: 0xffffa24c, forced: true }, 'boss icon: Gal Gryphon is forced at scale 2.0 (update_gal_gryphon)');
 eq(enemyIconRule('SINOW_BERILL'), { scale: 2, color: 0xffffa24c, forced: true }, 'enemy icon: Sinow Berill is forced at scale 2.0 (UpdateSinowberillEntity_004addc0)');
 eq(enemyIconRule('SINOW_GOLD'), { scale: 1, color: 0xffffa24c, forced: false }, 'enemy icon: Sinow Gold keeps the plain icon');
+eq(enemyIconRule('DRAGON'), { scale: 2, color: 0xffffa24c, forced: true }, 'boss icon: the Dragon is forced at scale 2.0 (OlgaUpdateMainLoop_00423b7c, dump 165532)');
 {
   const m = new MinimapState();
   m.enterFloor(0, 0, [], new MinimapFloors());

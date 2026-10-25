@@ -142,6 +142,11 @@ export const ENEMY_ICON_RULE: EnemyIconRule = { scale: 1, color: ENEMY_ICON_COLO
 // Berill's: the dump's enemy id 212 (0xd4) is the setdata row that gives
 // SINOW_BERILL (formats/setdata.ts, p6 == 0), and the state set (lock-on attack,
 // death) matches it. Sinow Berill is an enemy, not a boss.
+// DRAGON (the Episode 1 Caves boss, OlgaUpdateMainLoop_00423b7c = the Dragon's
+// per-frame update, dump 165532, the name is a community mislabel, see
+// combat/dragon.ts): icon3 at &x with scale 0x40000000 (2.0), colour 0xffffa24c,
+// flags 1 (dump 165532), unconditional after enable_reticle_ (the leader and
+// follower branches both end before it). Settled 2026-10-25 (DEVLOG).
 // The Gal Gryphon minion's Effect (UpdateGalgryphonMinion_004ab283, dump 229625)
 // has its own forced icon, 1.5, in its state 1 (MOVE), not state 2: combat/
 // galgryphonminion.ts minimapIcons(). Nothing creates the Effect yet (the Gal
@@ -152,6 +157,7 @@ export const FORCED_ICON_RULES: Readonly<Record<string, EnemyIconRule>> = {
   DE_ROL_LE: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
   GAL_GRYPHON: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
   SINOW_BERILL: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
+  DRAGON: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
 };
 export function enemyIconRule(type: string): EnemyIconRule {
   return FORCED_ICON_RULES[type] ?? ENEMY_ICON_RULE;
