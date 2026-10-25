@@ -11,8 +11,8 @@
 //     an enemy is never poisoned.
 //   +0xbc maybe_paralyze_entity (0x007789c8): nothing on a machine (+0x2e8 &
 //     4), with flag 0x1000000 or the immunity bit +0x11c & 2; else slot 0 =
-//     paralysis, EVP multiplier -0.15 (0xbe19999a; EVP += round(EVP * -0.15),
-//     0x00978100) and 0xd2 frames.
+//     paralysis, EVP multiplier -0.15 (0xbe19999a; EVP += trunc(EVP * -0.15),
+//     0x00978100, fistp under RC = 11 at 0x00778a77) and 0xd2 frames.
 //   +0xc0 slow_entity (0x00778b10): entities up to 0x1000 only; never an enemy.
 //   +0xc4 confuse_entity (0x00778be8): nothing on a mini-boss (+0x2e8 & 0x10)
 //     or with +0x11c & 0x10; slot 1 = confusion, 300 frames, multiplier 0.
@@ -40,7 +40,7 @@
 // enemy stands still; a confused one keeps acting. (ASSUMED: a hit that lands
 // during the lock is not consumed here; the port drops it, see render/combat.ts.)
 // The 0x4000 hold (Player_ApplyStatusEffect_00779828, dump line 751127, the
-// enemy's vtable slot 0xe8): +0x294 = round(power), +0x28c = 20, flag 0x4000.
+// enemy's vtable slot 0xe8): +0x294 = trunc(power) (fistp, RC = 11), +0x28c = 20, flag 0x4000.
 // Its one writer is entity_hit_by_tech's always_zero_damage case (tech group
 // 20, dump line 748365), which runs on a live enemy whatever its invulnerable
 // bits (the invulnerability test skips group 20). The paralysis test (+0x98,
@@ -76,7 +76,7 @@
 // -> dark; gibbles, GiGue (native), Mericarol (A.beast), Dorphon (dark) carry
 // the mini-boss bit too.
 
-import { roundHalfEven } from './buffs.ts';
+import { chop } from './buffs.ts';
 import { STATUS, STATUS_FLAG, STATUS_NAME, type StatusType } from './status.ts';
 
 const f32 = Math.fround;
@@ -167,15 +167,16 @@ export class EnemyStatus {
   }
 
   // Player_ApplyStatusEffect_00779828 (vtable 0xe8, from entity_hit_by_tech's
-  // always_zero_damage case): the hold lasts round(power) ticks.
-  // ASSUMED: ROUND is round-half-even (as the EVP's).
+  // always_zero_damage case): the hold lasts trunc(power) ticks (the fistp
+  // at 0x00779836 runs under RC = 11, so it truncates).
   applyHold(power: number): void {
-    this.hold = roundHalfEven(power);
+    this.hold = chop(power);
   }
 
-  // EVP after the multipliers: evp + round(mult * evp) per slot.
+  // EVP after the multipliers: evp + trunc(mult * evp) per slot (the paralysis
+  // 0x007789c8, the shock 0x00778e40 and the freeze 0x00778cc0 all chop).
   evp(base: number): number {
-    return base + roundHalfEven(this.slot0.mult * base) + roundHalfEven(this.slot1.mult * base);
+    return base + chop(this.slot0.mult * base) + chop(this.slot1.mult * base);
   }
 
   // Whether the entry of `type` takes on this enemy (the immunity checks).

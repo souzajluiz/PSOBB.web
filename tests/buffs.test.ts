@@ -16,6 +16,7 @@ import {
   reverserHp,
   roundHalfEven,
   statusIcon,
+  SUPPORT_PARTICLE,
   supportPower,
 } from '../client/src/combat/buffs.ts';
 import { rollDamage, type AttackerStats, type DefenderStats } from '../client/src/combat/formulas.ts';
@@ -157,6 +158,9 @@ eq([remoteTechLevel(14, 6), remoteTechLevel(5, 6)], [20, 5], 'the 6x8D override 
 eq(parseTechLevelOverride(buildTechLevelOverride(2, 6)), { clientId: 2, extra: 6 }, '6x8D round trip');
 eq([statusIcon(9), statusIcon(10), statusIcon(11), statusIcon(12), statusIcon(0)], [6, 8, 7, 9, 14], 'get_monster_status');
 eq([statusIconTexel(6), statusIconTexel(8), statusIconTexel(14)], [[32, 208], [96, 208], null], 'status icon texels');
+// The enemy support hooks' particles (enemy vtable +0x11c .. +0x128, objdump-read): Shifta and
+// Jellen 0x1fd (0x00779c64 / 0x00779c90), Deband and Zalure 0x1fe (0x00779cd8 / 0x00779d04).
+eq([SUPPORT_PARTICLE[GROUP.shifta], SUPPORT_PARTICLE[GROUP.jellen], SUPPORT_PARTICLE[GROUP.deband], SUPPORT_PARTICLE[GROUP.zalure]], [0x1fd, 0x1fd, 0x1fe, 0x1fe], 'support hook particle ids');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

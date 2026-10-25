@@ -117,6 +117,8 @@ eq([SLOW_FRAMES, CONFUSION_FRAMES, FREEZE_FRAMES, SHOCK_FRAMES], [210, 300, 150,
   const { s } = harness();
   s.inflict(STATUS.freeze);
   eq(s.evp(100), 70, 'frozen EVP');
+  // The player's freeze term is trunc(-0.3 * EVP) (0x00778cc0, fistp under RC = 11): 55 -> 39.
+  eq(s.evp(55), 39, 'frozen EVP term truncates: 55 - 16.5 -> 39 (not 38)');
   check(s.immobile, 'frozen: input state 0x13');
   check(!s.inflict(STATUS.freeze), 'no refreeze while frozen');
   s.inflict(STATUS.shock);

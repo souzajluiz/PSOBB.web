@@ -81,6 +81,23 @@ export const BUFF_FRAMES_SCALE = 30; // 0x009780e4 / 0x009780c8
 export const GROUP = { anti: 7, reverser: 8, shifta: 9, deband: 10, jellen: 11, zalure: 12 } as const;
 export type BuffGroup = (typeof GROUP)['shifta' | 'deband' | 'jellen' | 'zalure'];
 
+// The particle an enemy shows when a support technique reaches it, made by the
+// enemy's vtable hook in entity_hit_by_tech's switch, before the stat change,
+// so a refused, weaker cast still shows it; skipped while the entity's flag
+// 0x2000000 is set (the port keeps no such flag on enemies): +0x11c Shifta (0x00779c64,
+// create_particle_effect_3 with 0x1fd), +0x120 Jellen (0x00779c90, 0x1fd,
+// create_particle_effect13 with the angle vector (0, 0, NaN) at +0x78..+0x80;
+// the port draws it unrotated, ASSUMED), +0x124 Deband (0x00779cd8, 0x1fe),
+// +0x128 Zalure (0x00779d04, 0x1fe, as Jellen). Each makes one emission
+// (+0x34 = 1) at the enemy's position (+0x300), following it with the motion
+// index (flag 0x10, 0x50).
+export const SUPPORT_PARTICLE: Readonly<Record<BuffGroup, number>> = {
+  [GROUP.shifta]: 0x1fd,
+  [GROUP.jellen]: 0x1fd,
+  [GROUP.deband]: 0x1fe,
+  [GROUP.zalure]: 0x1fe,
+};
+
 // power = v_power (1) * 0-based level.
 export function supportPower(level: number): number {
   return Math.max(0, level);

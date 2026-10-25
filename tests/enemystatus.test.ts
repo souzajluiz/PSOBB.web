@@ -56,6 +56,7 @@ eq(enemyAttribute('GIBBLES') & ENEMY_ATTR.miniboss, ENEMY_ATTR.miniboss, 'Gibble
   s.inflict(STATUS.paralysis);
   eq(s.slot0.frames, ENEMY_PARALYSIS_FRAMES, 'paralysis 0xd2 frames');
   eq(s.evp(100), 85, 'paralysis EVP -0.15');
+  eq(s.evp(50), 43, 'paralysis EVP term truncates: 50 - 7.5 -> 43 (not 42)');
   eq(s.locked, true, 'paralysis locks');
   let lockedFrames = 0;
   for (let i = 0; i < 300; i++) if (s.tick().locked) lockedFrames++;
@@ -68,6 +69,9 @@ eq(enemyAttribute('GIBBLES') & ENEMY_ATTR.miniboss, ENEMY_ATTR.miniboss, 'Gibble
   s.inflict(STATUS.freeze);
   eq(s.slot1.frames, ENEMY_FREEZE_FRAMES, 'freeze 0x96 frames');
   eq(s.evp(100), 70, 'freeze EVP -0.3');
+  // The EVP term is trunc(mult * EVP) (the fistp under RC = 11 in 0x00778cc0 / 0x007789c8 /
+  // 0x00778e40): -0.3 * 55 = -16.5 chops to -16, round-half-even would give -17.
+  eq(s.evp(55), 39, 'freeze EVP term truncates: 55 - 16.5 -> 39');
   eq(s.inflict(STATUS.freeze), false, 'no refreeze while frozen');
   for (let i = 0; i < ENEMY_FREEZE_FRAMES; i++) s.tick();
   eq(s.flags, 0, 'freeze wore off');
@@ -165,10 +169,12 @@ near(techShockChance(true), 0.025, 'Zonde shock 0.025 in Ultimate');
   eq(s.slot0.frames, ENEMY_PARALYSIS_FRAMES - 1, 'the paralysis counts after the hold');
 }
 {
-  // round(2.5) is 2 (round half even, ASSUMED); an invulnerable enemy takes the hold too.
+  // The hold count is trunc(power) (fistp under RC = 11, 0x00779828): 2.7 -> 2, not 3.
   const s = new EnemyStatus(ENEMY_ATTR.native);
   s.applyHold(2.5);
-  eq(s.hold, 2, 'round(power) for the hold count');
+  eq(s.hold, 2, 'trunc(power) for the hold count');
+  s.applyHold(2.7);
+  eq(s.hold, 2, 'the hold count truncates 2.7 to 2 (round would give 3)');
   const z = new EnemyStatus(ENEMY_ATTR.machine);
   z.applyHold(1);
   eq(z.tick().locked, true, 'a machine is held too (the hold is not an attribute check)');
