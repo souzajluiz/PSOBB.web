@@ -698,6 +698,8 @@ export class WolfAi extends BrainBase {
   private howlSounded = false;
   // The howl's countdown (0x41c); 0 = not armed.
   private howlIn = 0;
+  // The position before this tick: killVelocity is the last tick's step.
+  private stepFrom = { x: 0, z: 0 };
   // The roam (state 7) and the dash share the walk speed 0x40c, the walk's
   // target speed 0x408 and the arrival threshold 0x43c; the origin is 0x3fc..0x404.
   private speed = 0;
@@ -911,7 +913,14 @@ export class WolfAi extends BrainBase {
     this.howlIn = ticks;
   }
 
+  // The velocity at the kill (combat/deathfx.ts SavageDeathMotion). ASSUMED: the
+  // exe's +0x30c / +0x314 writer for a wolf is not traced, so the last step stands in.
+  killVelocity(): { x: number; z: number } {
+    return { x: this.x - this.stepFrom.x, z: this.z - this.stepFrom.z };
+  }
+
   tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
+    this.stepFrom = { x: this.x, z: this.z };
     const out = this.frame();
     if (this.state === 'dead') return out;
     this.timer++;

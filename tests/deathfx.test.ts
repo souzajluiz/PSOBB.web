@@ -8,7 +8,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BloodPool, POOLS, POOL_LIMIT, POOL_UV, slopeAllowed, type PoolId } from '../client/src/combat/blooddecals.ts';
-import { DEATH_ROWS, DeathRun, deathPlanFor, type DeathActions, type DeathPlan } from '../client/src/combat/deathfx.ts';
+import { DEATH_ROWS, DeathRun, deathPlanFor, SavageDeathMotion, type DeathActions, type DeathPlan } from '../client/src/combat/deathfx.ts';
 import { ICE_SHARD_COUNT, ICE_SHARD_MODEL, ICE_SHARD_TEXTURE_ID, ICE_SHATTER_PIECES, velocityAngles } from '../client/src/combat/hitmodels.ts';
 import { FRAGMENT_TABLES, ShellFragments } from '../client/src/combat/shellfragments.ts';
 import { parseParticleEntry, ParticleSystem } from '../client/src/classic/particles.ts';
@@ -450,6 +450,34 @@ const allSe = (acts: DeathActions[]) => acts.flatMap((a) => a.se);
     if (a.remove) break;
   }
   check(yN === 200 && Math.abs(ySunk - 20) < 0.5, `Yowie sinks 20 units over 200 frames (${yN} frames, ${ySunk})`);
+}
+{
+  // The Savage Wolf / Yowie kill side and motion (SavageDeathMotion): the side is the sign of
+  // cross = f.z * v.x - f.x * v.z (0x007829cc, < 0 gives -12), the target is the velocity's
+  // angle 90 degrees off it (0x0051bdb8), the turn 0x300 BAMS a tick, the slide and the decay 0.8.
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-4;
+  const sideOf = (yaw: number, x: number, z: number) => new SavageDeathMotion(yaw, { x, z }).side;
+  eq([sideOf(0, 1, 0), sideOf(0, -1, 0), sideOf(0, 0, 1), sideOf(0, 0, -1), sideOf(0, 0, 0)], [12, -12, 12, 12, -12], 'Savage side: cross < 0 is -12, cross >= 0 is +12, zero velocity -12');
+  eq([sideOf(Math.PI / 2, 0, 1), sideOf(Math.PI / 2, 0, -1)], [-12, 12], 'Savage side turns with the heading (facing +x)');
+  const settle = (yaw: number, x: number, z: number) => {
+    const m = new SavageDeathMotion(yaw, { x, z });
+    let y = yaw;
+    for (let i = 0; i < 200; i++) y = m.tick(false).yaw;
+    return y;
+  };
+  check(near(settle(0, 1, 1), -Math.PI / 4), `Savage turns to the velocity minus 90 degrees: (1,1) -> ${settle(0, 1, 1)}`);
+  check(near(settle(0, -1, 1), Math.PI / 4), `Savage turns to the velocity plus 90 degrees: (-1,1) -> ${settle(0, -1, 1)}`);
+  check(near(settle(0, 0, -1), Math.PI / 2), `Savage (0,-1) -> +90 degrees: ${settle(0, 0, -1)}`);
+  check(near(settle(0.3, 0, 0), 0.3), 'Savage with no velocity keeps its heading');
+  check(near(new SavageDeathMotion(0, { x: 1, z: 1 }).tick(false).yaw, -(0x300 * 2 * Math.PI) / 0x10000), 'Savage turns 0x300 BAMS on the first tick');
+  const s = new SavageDeathMotion(0, { x: 0, z: 2 });
+  const st = [s.tick(false), s.tick(false), s.tick(true), s.tick(false)];
+  check(near(st[0].dz, 2) && near(st[1].dz, 1.6) && near(st[2].dz, 1.28) && st[3].dz === 0 && st[3].dx === 0, `Savage slides by the velocity and decays 0.8 a tick, none after the motion ends: ${st.map((a) => a.dz).join(',')}`);
+  // Without a velocity the plan keeps its fallback side (+12) and the body does not move.
+  const fallback = new DeathRun(deathPlanFor('TObjEneBm5Wolf', 'SAVAGE_WOLF', ctxOf(1))!);
+  fallback.tick(0, false);
+  const fe = fallback.tick(10, true);
+  eq(fe.pools.map((p) => [p.at.side, p.at.killSide]), [[12, true]], 'Wolf end pool: the side is the kill side, +12 as the fallback');
 }
 
 if (failures) {

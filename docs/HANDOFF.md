@@ -112,7 +112,7 @@ worktrees are left.
 6. Smaller leftovers of the day (each in its DEVLOG entry): particle tint 0x100 (no copy
    of the owner's tint into the particle found; the port keeps the multiply), Saint-Milion
    laser aim (no writer of +0x44 / +0x38 in the exe; 0x8000 / 620 stay ASSUMED), the
-   Savage Wolf / Yowie death side (velocity at the kill), the Held weapon's -1 texture ids.
+   Savage Wolf / Yowie death side: the side and turn rule is decoded and ported (DEVLOG 2026-10-25, `SavageDeathMotion`); still open: the exe's writer of the velocity at the kill (+0x30c / +0x314 of a wolf; the port uses its last step, ASSUMED), and the Yowie's velocity (no model, +12 kept). The Held weapon's -1 texture ids.
 
 ## State of `main`
 
