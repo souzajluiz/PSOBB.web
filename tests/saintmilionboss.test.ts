@@ -21,7 +21,7 @@ import {
   type SmBossOptions,
 } from '../client/src/combat/saintmilionboss.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
-import { SM_LASER, SM_MISSILE, SM_SAND, SM_STORM, SM_WAVE, SmBlast, SmLaser, SmMissile, SmRng, SmSandSonic, SmStorm, SmWave } from '../client/src/combat/saintmilionents.ts';
+import { SM_LASER, SM_MISSILE, SM_SAND, SM_STORM, SM_WAVE, SmBlast, SmLaser, laserLength, SmMissile, SmRng, SmSandSonic, SmStorm, SmWave } from '../client/src/combat/saintmilionents.ts';
 import { BmlArchive } from '../client/src/formats/bml.ts';
 import { parseNjmFile } from '../client/src/formats/njmotion.ts';
 import type { EnemyShot } from '../client/src/combat/enemyshots.ts';
@@ -749,6 +749,24 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     dmg = 800;
     l.tick([]);
     eq(l.effect.kind === 'tech' ? l.effect.power : -1, 800, 'the damage follows the row (iparam2 each frame)');
+  }
+  // The length ramp (0x00976100 = 100 an update, +0x50): 100, 200, ... and capped at the stand-in reach (620, the wall is
+  // not in the port). The aim of update k is that length along the heading, so the boss's aim distance is the ramp.
+  {
+    eq(laserLength(0), 100, 'length: the first update is 100 (one ramp step)');
+    eq(laserLength(4), 500, 'length: the fifth update is 500');
+    eq(laserLength(5), 600, 'length: the sixth update is 600');
+    eq(laserLength(6), 620, 'length: the seventh update is capped at the stand-in 620');
+    eq(laserLength(SM_LASER.frames - 2), 620, 'length: the cap holds for the whole laser');
+    // The sixth update (sweep frame 5: cur 0x5000, prev 0x4000, midpoint 0x4800) with the ramp as its aim distance:
+    // a player at 150 on the midpoint is hit (reach 600 + the box radius); the first update's aim (100) is the same ramp.
+    const ramp = mk({ origin: () => ({ x: 0, z: 0 }), aim: (k) => at(0x1000 * k, laserLength(k)) });
+    for (let i = 0; i < 5; i++) ramp.tick([]);
+    const mid = at(0x4800, 150);
+    eq(ids(ramp.tick([player(1, mid.x, mid.z)])), '1', 'ramp: a player at 150 on the midpoint is hit at update 5 (reach 600)');
+    const short = mk({ origin: () => ({ x: 0, z: 0 }), aim: (k) => at(0x1000 * k, laserLength(0)) });
+    for (let i = 0; i < 5; i++) short.tick([]);
+    eq(ids(short.tick([player(1, mid.x, mid.z)])), '', 'a length-100 aim (the first update) does not reach 150');
   }
   // The brain: phase 4 of states 19 / 20 makes one laser on the boss's position and the sound 0x6f8.
   {
