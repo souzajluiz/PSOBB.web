@@ -131,6 +131,18 @@ export function attackHeading(rad: number, confused: boolean, rand: () => number
 // `negFirst` says which side wins when both keys are held: true for neg (left; the lateral
 // call), false for pos (forward; the forward axis call passes its backward key as neg, forward
 // as pos, and false). `cap` is 128, or KEY_RAMP_WALK_MAX under the auto walk setting.
+// The camera input gate of the same function (0x0070a6c4..0x0070a750, re-read from objdump 2026-10-26):
+// `X = camera_input_enabled != 1` (the getter 0x007917b8 reads the byte at 0x009ff3d4, set by
+// 0x00791748, the dump's unknown_keyboard_enable_in_menu: 1 when the keys are the field's, 0 while a
+// menu holds them; the menu reading is from the dump's names and a sample of the 135 callers, ASSUMED
+// for every caller). When X is set and a key of the six-key table is held
+// (0x0078fee0 per key, ASSUMED to be the held test; the four move keys stand in for the table),
+// the function returns at 0x70a74c before it writes either axis: the amounts stay as they were.
+// With X clear, or with no key held, the ramp runs as before.
+export function rampFrozen(cameraInputOn: boolean, moveKeyHeld: boolean): boolean {
+  return !cameraInputOn && moveKeyHeld;
+}
+
 export const KEY_RAMP_STEP = 32;
 export const KEY_RAMP_MAX = 128;
 export const KEY_RAMP_WALK_MAX = 64;

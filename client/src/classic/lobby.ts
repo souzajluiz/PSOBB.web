@@ -266,7 +266,12 @@ export class LobbyScreen implements Screen {
     // chat input has the keyboard), then apply the main menu's view shift.
     const inner = viewer.onFrame;
     viewer.onFrame = (dt) => {
-      inner?.(dt, this.busy ? new Set() : this.keys);
+      // The camera input gate (render/playermove.ts rampFrozen): while a menu has the keys the
+      // move keys are seen by the view only as "held" (the exe freezes the keyboard axes).
+      const busy = this.busy;
+      this.view.cameraInputOn = !busy;
+      this.view.moveKeyHeld = [KEYS.moveForward, KEYS.moveBackward, KEYS.moveLeft, KEYS.moveRight].some((k) => this.keys.has(k));
+      inner?.(dt, busy ? new Set() : this.keys);
       this.applyViewShift();
     };
     this.chat = new ChatLine((text) => lobby.sendChat(text));

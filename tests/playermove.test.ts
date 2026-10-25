@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { toBams, RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, KEY_RAMP_WALK_MAX, autoForwardRamp, lateralDecay, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, remoteStep, slowApplies, inUnsafeMap, guardStance, GUARD_HUNTER_CLASSES } from '../client/src/render/playermove.ts';
+import { toBams, RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, KEY_RAMP_WALK_MAX, autoForwardRamp, lateralDecay, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, remoteStep, slowApplies, inUnsafeMap, guardStance, GUARD_HUNTER_CLASSES, rampFrozen } from '../client/src/render/playermove.ts';
 
 assert.equal(RUN_SPEED, 45);
 assert.equal(WALK_SPEED, 30);
@@ -245,4 +245,24 @@ assert.equal(padRun.state, 'run', 'a stick at amount 0.78 runs');
 const keyWalk = new PlayerMover(0, 0);
 for (let i = 0; i < 40; i++) keyWalk.tick({ ...padFwd, keyboard: true }, free(keyWalk));
 assert.equal(keyWalk.state, 'walk', 'the same deflection on the keys walks (sum of squares 0.61)');
+// The camera input gate (0x0070a6c4..0x0070a750): X = camera != 1; the function returns before
+// any axis is written when X is set and a key of the table is held. Re-read from objdump: the
+// getter 0x007917b8 is `movzx eax, byte [0x009ff3d4]`, `cmp eax, 1`, `je 0x70aab7` (camera 1 gives
+// X = 0), and the held branch 0x70aaa3 sets ebp = 1 then `test eax / je 0x70a751` / `test ebp /
+// je 0x70a751` / 0x70a74c `ret`, so the return needs X != 0 and a held key.
+assert.equal(rampFrozen(true, true), false, 'camera input on: a held key still ramps');
+assert.equal(rampFrozen(true, false), false, 'camera input on, no key: the ramp runs');
+assert.equal(rampFrozen(false, false), false, 'keys off with no key held: the auto move ramp still runs');
+assert.equal(rampFrozen(false, true), true, 'keys off (a menu) and a key held: the axes are frozen');
+{
+  // The frozen axis keeps its value across a skipped poll and ramps again from it once free.
+  let f = rampAxis(0, false, true, false);
+  f = rampAxis(f, false, true, false);
+  assert.equal(f, 64);
+  const frozen = rampFrozen(false, true);
+  if (!frozen) f = rampAxis(f, false, true, false);
+  assert.equal(f, 64, 'the menu poll writes nothing');
+  f = rampAxis(f, false, true, false);
+  assert.equal(f, 96, 'after the menu, a key still held ramps from the frozen 64');
+}
 console.log('playermove exe keyboard mapping: ok');
