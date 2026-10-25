@@ -47,6 +47,8 @@ import {
   baseIconShown,
   boomaIconShown,
   boomaBrainIconShown,
+  darkGunnerBrainIconShown,
+  darkGunnerIconShown,
   BOOMA_BRAIN_TYPES,
   ENEMY_RADAR_SOURCE,
   radarSourceOf,
@@ -571,6 +573,19 @@ eq(boomaBrainIconShown('recover'), true, 'Booma brain recover = exe state 5 subs
 eq(boomaBrainIconShown('dead'), false, 'Booma brain dead = exe state 8 (0x0052b518) adds none');
 eq(boomaBrainIconShown('unknown-brain'), true, 'an unmapped brain state keeps the default icon');
 
+// Dark Gunner (vtable 0x00b03400, dispatcher 0x005443c4 on +0x32e): states 1, 2, 3, 4, 6 add the icon; 0, 5, 8 do not.
+for (const s of [1, 2, 3, 4, 6]) eq(darkGunnerIconShown(s), true, `Dark Gunner exe state ${s} adds the icon`);
+for (const s of [0, 5, 7, 8]) eq(darkGunnerIconShown(s), false, `Dark Gunner exe state ${s} adds no icon`);
+// The port's GunnerAi states mapped to the exe's state word (classic/minimap.ts DARK_GUNNER_BRAIN_EXE_STATE).
+eq(darkGunnerBrainIconShown('dormant'), false, 'Dark Gunner dormant = exe state 0 (idle, 0x00545a64): no icon');
+eq(darkGunnerBrainIconShown('idle'), false, 'Dark Gunner idle = exe state 0: no icon');
+for (const b of ['drop', 'hover', 'turn', 'dash']) eq(darkGunnerBrainIconShown(b), true, `Dark Gunner ${b} = exe state 1 (active): icon`);
+eq(darkGunnerBrainIconShown('shoot'), true, 'Dark Gunner shoot = exe state 2: icon');
+eq(darkGunnerBrainIconShown('stun'), true, 'Dark Gunner stun = exe state 6 (0x00544518): icon');
+eq(darkGunnerBrainIconShown('home'), false, 'Dark Gunner home = exe state 8 (0x00544410): no icon');
+eq(darkGunnerBrainIconShown('dead'), false, 'Dark Gunner dead = exe state 5 (0x00544634): no icon');
+eq(darkGunnerBrainIconShown('unknown-brain'), true, 'an unmapped Dark Gunner state keeps the default icon');
+
 // Per-enemy radar source (vtable survey, DEVLOG 2026-10-25).
 // Booma table families: Booma, Gobooma, Gigobooma (ctor 0x00535f1c, vtable 0x00b01fc0).
 for (const t of ['BOOMA', 'GOBOOMA', 'GIGOBOOMA']) eq(radarSourceOf(t), 'booma', `${t}: the Booma table (no shared slot in 0x00b01fc0)`);
@@ -587,14 +602,16 @@ eq(baseIconShown(0), true, 'a slot family with no hidden bits is on the radar (t
 // Rappy (update_rappy, dump 308039): the icon is unconditional in the alive branch.
 eq(radarSourceOf('RAPPY'), 'rappy', 'Rappy: unconditional icon in its alive update (dump 308039)');
 // Own icon families (no 0x40800 test on the icon's path): the default (alive and visible) stays.
-for (const t of ['HILDEBEAR', 'GRASS_ASSASSIN', 'NANO_DRAGON', 'DELSABER', 'BULCLAW', 'DARK_GUNNER', 'NAR_LILY', 'SINOW_BEAT']) {
+for (const t of ['HILDEBEAR', 'GRASS_ASSASSIN', 'NANO_DRAGON', 'DELSABER', 'BULCLAW', 'NAR_LILY', 'SINOW_BEAT']) {
   eq(radarSourceOf(t), 'own', `${t}: its own icon call, no 0x40800 test (default kept)`);
 }
+eq(radarSourceOf('DARK_GUNNER'), 'gunner', 'Dark Gunner: the per-state icon (darkGunnerIconShown)');
 // Garanz: no slot and no icon call (E8 scan of 0x56f8b8..0x571000): no icon.
 eq(radarSourceOf('GARANZ'), 'none', 'Garanz: no radar icon (no slot, no icon call)');
 // Claw: its own icon, off while +0x390 bit 0x10000000 (hidden) is set.
 eq(radarSourceOf('CLAW'), 'gated', 'Claw: own icon gated by +0x390 bit 0x10000000');
-for (const t of ['GILLCHIC', 'SINOW_GOLD']) eq(radarSourceOf(t), 'unsurveyed', `${t}: not resolved (default kept)`);
+eq(radarSourceOf('GILLCHIC'), 'own', 'Gillchic: vtable 0x00b04760 (gilchic_constructor), icon unconditional in its update 0x005548f0');
+eq(radarSourceOf('SINOW_GOLD'), 'own', 'Sinow Gold: the Sinow Beat constructor with subtype 1 (ASSUMED the same icon path)');
 eq(radarSourceOf('CANADINE_NOT_A_TYPE'), null, 'an unknown type has no radar source');
 eq(Object.keys(ENEMY_RADAR_SOURCE).length, 9 + 8 + 1 + 8 + 1 + 1 + 2, 'the survey table has 30 enemy rows');
 

@@ -180,6 +180,53 @@ export function boomaBrainIconShown(brain: string): boolean {
 export const BOOMA_BRAIN_TYPES: ReadonlySet<string> = new Set([
   'BOOMA', 'GOBOOMA', 'GIGOBOOMA', 'EVIL_SHARK', 'PAL_SHARK', 'GUIL_SHARK', 'DIMENIAN', 'LA_DIMENIAN', 'SO_DIMENIAN',
 ]);
+// The Dark Gunner (vtable 0x00b03400, update 0x00543e8c). Its state word +0x32e picks
+// the handler through the dispatcher 0x005443c4: 0 idle (0x00545a64), 1 active
+// (0x00544fe0), 2 shoot (gunner_shooting_update), 3 a 15-frame timed wait
+// (0x005448e0, then SetAnimationTo1), 4 flinch (0x00544704), 5 death (0x00544634), 6
+// stun (0x00544518), 8 home (0x00544410). The icon call (unknown_add_minimap_icon,
+// colour 0xffffa24c, scale 1) is in the body of states 1, 2, 3, 4 and 6 on every path
+// (dump lines 329544, 329150, 328942, 328895, 328764: no return before it). States 0, 5
+// and 8 make no such call (0x00545a64 returns early or sets its counter; 0x00544634 and
+// 0x00544410 end without it). PROVEN from the dump's bodies.
+// The update adds the icon after the dispatcher (dump line 328612) only when a timed
+// status returns nonzero, and that branch skips the dispatcher: +0x98 paralysis
+// (0x00546240, unknown_handle_paralysis_effect), +0xa4 freeze (0x00546254,
+// frozen_effect_tick), +0xa8 shock (0x0077818c: flag 0x4, counter +0x270). PROVEN by the
+// vtable reads and the disassembly of 0x0077818c. The pause gate
+// (g_UnknownShouldPauseEnemyAI) returns before any icon: not modelled (ASSUMED no pause
+// on the radar in the port).
+export const DARK_GUNNER_ICON_STATES: readonly number[] = [1, 2, 3, 4, 6];
+export function darkGunnerIconShown(state: number): boolean {
+  return DARK_GUNNER_ICON_STATES.includes(state);
+}
+// The port's GunnerAi states (combat/enemyfsmruins.ts) mapped to the exe's state word.
+// dormant and idle = 0 (0x00545a64: the dormant branch sets 0x4040000 and the idle branch
+// only sets its counter; neither changes the state). drop, hover, turn and dash = 1
+// (the active handler's sub-phases: the drop, the hover, the dash; ASSUMED the port's
+// split follows the exe's sub-phases inside that one handler). shoot = 2, stun = 6,
+// home = 8, dead = 5. home returns to 0 within 10 units of the spawn (the state 8
+// handler calls SetAnimationBasedOnDistance, 0x005444cc), as the port's requestHome does.
+// Not modelled: the flinch (exe 4), which the port keeps inside its current state
+// (ASSUMED: the exe's hit on an idle gunner shows the icon during the flinch), and the
+// exe's timed wait 3, which no port state reaches (its writer is not in the dump).
+export const DARK_GUNNER_BRAIN_EXE_STATE: Readonly<Record<string, number>> = {
+  dormant: 0,
+  idle: 0,
+  drop: 1,
+  hover: 1,
+  turn: 1,
+  dash: 1,
+  shoot: 2,
+  stun: 6,
+  home: 8,
+  dead: 5,
+};
+export function darkGunnerBrainIconShown(brain: string): boolean {
+  const state = DARK_GUNNER_BRAIN_EXE_STATE[brain];
+  return state === undefined ? true : darkGunnerIconShown(state);
+}
+
 // The radar source of each enemy type, from its vtable (the shared slot
 // 0x00520618 holds 0x198 of the vtable, or 0x188 for Gibbon). 'booma': the Booma
 // table, icon per state. 'slot': the shared enemy-base slot (baseIconShown).
@@ -192,11 +239,9 @@ export const BOOMA_BRAIN_TYPES: ReadonlySet<string> = new Set([
 // 0x56f8b8..0x571000, DEVLOG 2026-10-25 Garanz).
 // 'gated': an own icon behind an exe flag, which the port applies (Claw: +0x390 bit
 // 0x10000000 hides the icon; ClawAi.hidden).
-// 'unsurveyed': no vtable or update found; the port keeps the default.
-// Dark Gunner's icon is per state (dispatcher 0x005443c4 on +0x32e: states 1, 2, 3,
-// 4, 6 add it; 0, 5, 8 do not) and its update adds one only in a timed-status branch;
-// the port has no brain for it, so it stays 'own' (default), ASSUMED.
-export type RadarSource = 'booma' | 'slot' | 'rappy' | 'own' | 'none' | 'gated' | 'unsurveyed';
+// 'gunner': the Dark Gunner, its icon per state (DARK_GUNNER_ICON_STATES) and in the
+// timed-status branch of its update.
+export type RadarSource = 'booma' | 'slot' | 'rappy' | 'own' | 'gunner' | 'none' | 'gated';
 export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
   BOOMA: 'booma', GOBOOMA: 'booma', GIGOBOOMA: 'booma',
   EVIL_SHARK: 'booma', PAL_SHARK: 'booma', GUIL_SHARK: 'booma',
@@ -210,18 +255,27 @@ export const ENEMY_RADAR_SOURCE: Readonly<Record<string, RadarSource>> = {
   RAPPY: 'rappy',
   // Own icon, no 0x40800 test: Hildebear (0x00affb20, icon at 0x0051360a), Grass Assassin
   // (0x00b00b60, unconditional at the end of each state), Delsaber (0x00b03fa0 / 0x00b041e0,
-  // call at 0x00551692), Bulclaw (0x00b01b40, 0x00531e77), Dark Gunner (see above),
+  // call at 0x00551692), Bulclaw (0x00b01b40, 0x00531e77),
   // Nano Dragon (0x00b074e0, gate word +0x390 bit 0x40000; the port's concealed() already
   // reads its untargetable), Nar Lily and Sinow Beat (sibling 0x008056b0, state and +0x398
   // gates; family attribution of the update 0x00606e34 ASSUMED).
   HILDEBEAR: 'own', GRASS_ASSASSIN: 'own', NANO_DRAGON: 'own', DELSABER: 'own',
-  BULCLAW: 'own', DARK_GUNNER: 'own', NAR_LILY: 'own', SINOW_BEAT: 'own',
+  BULCLAW: 'own', NAR_LILY: 'own', SINOW_BEAT: 'own',
+  // Dark Gunner: per-state icon (darkGunnerIconShown), see above.
+  DARK_GUNNER: 'gunner',
   // Garanz: no icon.
   GARANZ: 'none',
   // Claw: +0x390 bit 0x10000000 hides the icon (ASSUMED the port's ClawAi.hidden is that bit).
   CLAW: 'gated',
-  // Gillchic (vtable not found) and Sinow Gold (no ctor in the type table): default kept.
-  GILLCHIC: 'unsurveyed', SINOW_GOLD: 'unsurveyed',
+  // Gillchic: its ctor gilchic_constructor (0x00556600, write of vtable 0x00b04760 at
+  // 0x005566b9, dump name gilchic_constructor) gives vtable 0x00b04760, whose slot +0x198 is
+  // null and whose update 0x005548f0 (dump RappyAIUpdateLoop_005548f0) adds the icon
+  // unconditionally (dump line 338624, only the pause gate before it): 'own', PROVEN for the
+  // vtable and the call; ASSUMED the Dubchic shares 0x00b04760 (same ctor, param6 only),
+  // which would make DUBCHIC's 'slot' row (0x00b04a40 / 0x00b04cc0) need a re-check.
+  // Sinow Gold: the same sinowbeat_constructor as the Sinow Beat, subtype 1 (set_sinowbeat_subtype,
+  // dump line 374960, changes the model and the subtype only): 'own', ASSUMED the Sinow Beat's icon path.
+  GILLCHIC: 'own', SINOW_GOLD: 'own',
 };
 export function radarSourceOf(type: string): RadarSource | null {
   return ENEMY_RADAR_SOURCE[type] ?? null;
