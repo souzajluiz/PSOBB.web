@@ -1,5 +1,23 @@
 # Devlog
 
+## 2026-10-25: Darvant child link: the constant table of the Dark Falz grid
+
+**What changed:** `tools/gen-collision-boxes.py` has a second loop-child list, `CHILD_CONST_CALLERS`, for a constructor whose box table is one constant (no index, no mask). Dark Falz's Darvants (set type 0xc8) are the entry. The generator regenerates `client/src/formats/collisionboxes.gen.ts` with `CHILD_COLLISION_LINKS[0x00c8] = { callee: 0x0045fbd4, count: 80, mask: 0, variants: { 0: 0x009a67c8 } }`. `childBoxTable(0xc8, k)` now returns the row set for each Darvant `k` in 0..79 (`mask 0`: every child takes variant 0). No runtime code reads it yet; the Darvant is not drawn or hit through this table.
+
+**Proven (exe, `~/Downloads/psobb-client/PsoBB.exe`, objdump; the generator checks each step):**
+- The grid 0x0044c430 calls the factory 0x0045fb24 at 0x0044c605 inside its ring loop (rings 5, 15, 25, 35: `add $0xa`, `cmp $0x2d`, as in the DEVLOG 2026-10-23 Dark Falz entry).
+- The factory calls the constructor 0x0045fbd4 at 0x0045fbaf.
+- The constructor's init site 0x0045fca0 passes the table 0x009a67c8 and count 1 (the generator's `COLLISION_SITES` row; the table's row is radius 0, flags 0x807a).
+- The row's bit 0 is clear: `boxPairActive(PLAYER_BOX_FLAGS, 0x807a)` is false, so a Darvant box never blocks the player (the existing gate, `tests/objectcollision.test.ts`).
+
+**ASSUMED:**
+- The count 80 is the sum of the ring sizes (5 + 15 + 25 + 35). It is read from the ring bounds in the DEVLOG, not computed by the generator (the generator checks the chain of calls, not the loop bound).
+- The child's table is the constructor's own table, not a per-child one (the same row for all 80, as the constant argument says).
+
+**Checks:** `node tests/objectcollision.test.ts`: all checks passed (Darvant children 0 and 79 resolve, 80 does not, the row is one disabled sphere; the Vol Opt child 5 still resolves to 0x009a512c). `node tests/collision.test.ts`, `townfield`, `darkfalz`: pass. `client/node_modules/typescript/bin/tsc --noEmit -p client` (Node 24): clean. `tools/gen-collision-boxes.py` rerun: the only diff is the new `0x00c8` line and the comment. Not run in Chrome or Playwright.
+
+**Left (ROADMAP line):** 0xca's own init (the constructor's indirect call through 0x009a6c64) and 0xcb's table are still not settled; the 27 unresolved call sites and the enemies' use of the tables are unchanged.
+
 ## 2026-10-25: the near-enemy flag (character_flags 0x100000): the setter is enemy-only, the NPC guard stays clear
 
 **Question:** which exe code sets / clears `in_guard_stance` (0x100000, newserv `is_near_enemy`), from what distance test, and does the port already have it for the local player (so an NPC could reuse it)?

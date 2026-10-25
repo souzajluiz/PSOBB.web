@@ -711,6 +711,16 @@ CHILD_CALLERS = {
     0x0044161C: {"set": 0x00C2, "site": 0x0043C92E, "arg": 4, "count": 0x18, "bound": 0x0043C94A},
 }
 
+# Loop-built children with one constant table (no index): every child takes the same row set
+# (variant 0, written with mask 0). Dark Falz's Darvants (set type 0xc8): the grid 0x0044c430 builds
+# them in its rings (5, 15, 25, 35: 80 in all, ASSUMED from the ring bounds, DEVLOG 2026-10-25) by
+# calling the factory 0x0045fb24 at 0x0044c605; the factory calls the constructor 0x0045fbd4 at
+# 0x0045fbaf, and that constructor's init (0x0045fca0) passes the constant table 0x009a67c8, one row.
+CHILD_CONST_CALLERS = {
+    0x0045FBD4: {"set": 0x00C8, "site": 0x0044C605, "factory": 0x0045FB24, "count": 80,
+                 "factory_site": 0x0045FBAF, "init_site": 0x0045FCA0, "table": 0x009A67C8},
+}
+
 
 def row_is_set(r):
     """A plausible box row: finite, bounded numbers, shape 0 or 1, and a flag or a radius set."""
@@ -880,6 +890,17 @@ def main(argv):
         child_links[spec["set"]] = {"callee": callee, "count": spec["count"], "mask": index_mask(idx),
                                     "variants": idx["variants"]}
 
+    # Loop-built children with one constant table (CHILD_CONST_CALLERS): the loop's call, the
+    # factory's call of the constructor, and the constructor's own init with that table (one row).
+    for callee, spec in CHILD_CONST_CALLERS.items():
+        if (spec["site"], spec["factory"]) not in calls or (spec["factory_site"], callee) not in calls:
+            raise SystemExit(f"CHILD_CONST_CALLERS: {spec['site']:#x} / {spec['factory_site']:#x} do not chain to {callee:#x}")
+        inits = [s for s in site_by_func.get(callee, []) if s["site"] == spec["init_site"]]
+        if len(inits) != 1 or inits[0]["table"] != spec["table"] or inits[0]["count"] != 1:
+            raise SystemExit(f"CHILD_CONST_CALLERS: {spec['init_site']:#x} is not the constant table {spec['table']:#x}")
+        child_links[spec["set"]] = {"callee": callee, "count": spec["count"], "mask": 0,
+                                    "variants": {0: spec["table"]}}
+
     # Enemy set type -> factory (per area) -> the box table its constructor sets.
     trees = {}
     fan_in = collections.Counter()  # function -> number of set types whose factories reach it
@@ -1044,7 +1065,7 @@ def main(argv):
     lines.append("export interface CollisionChildLink {")
     lines.append("  callee: number; // the child's constructor")
     lines.append("  count: number; // children built by the loop")
-    lines.append("  mask: number; // the constructor's `and` on the loop counter")
+    lines.append("  mask: number; // the constructor's `and` on the loop counter (0: one constant table, variant 0)")
     lines.append("  variants: Readonly<Record<number, number>>; // variant -> table VA")
     lines.append("}")
     lines.append("")
