@@ -48,7 +48,7 @@ for i in range(_nsect):
     name = DATA[o : o + 8].rstrip(b"\0").decode("ascii", "replace")
     vsize, va, rawsize, raw = struct.unpack_from("<IIII", DATA, o + 8)
     SECTIONS.append((name, BASE + va, max(vsize, rawsize), raw, rawsize))
-TEXT = next(s for s in SECTIONS if s[0] == ".text")
+TEXT = next((s for s in SECTIONS if s[0] == ".text"), SECTIONS[0])  # the unnamed first section is the code
 
 
 def offset(va):

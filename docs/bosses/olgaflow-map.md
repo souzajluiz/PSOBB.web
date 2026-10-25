@@ -850,3 +850,66 @@ nothing: use `-D`). Ghidra was not needed for this pass.
   0x004a0xxx). Stores to those offsets exist only in other functions: 0x0042a731..0x0042a7bf (six stores), 0x004cb8b2..
   0x004cb8eb, 0x004c8cba, 0x004c90d9, 0x004c92ae, 0x00423e4a. Their owner is not identified in this pass (ASSUMED: not
   Olga). Next step: the owner of 0x0042a7bf and 0x004cb8b2 (the function bounds, the caller that passes an Olga beast).
+
+## 17. Pass 7 (2026-10-25): the tail anchor +0x640..+0x654 (owner of the stores)
+
+Sources: the Ghidra dump (`tools/refsrc.sh addr`, Ephinea addresses), `tools/ghidra/decomp.sh` on the stores' functions
+(the Ghidra project was present and read-only), the asm (`objdump -D -M intel`, the code section is the unnamed first
+section, VA 0x401000). `tools/exedata.py` was failing on `.text` (the section is unnamed): fixed to fall back to the first
+section. Mark: PROVEN unless noted.
+
+### 17.1 The tail's reads (PROVEN, Olga1TailSwipe_00495684, dump 215137)
+
+- The swipe passes two points to `UpdateOlgaAttackVectors_004a053c` (dump 215181): A = (+0x640, +0x644, +0x648) and
+  B = (+0x64c, 10.0, +0x654). B's Y is the constant 0x41200000 (10.0), as the sword's Y. The triangle test uses
+  body +0x38 / +0x40, the previous tip +0x4d0 and the current tip +0x64c. The tail's end copies +0x64c / +0x650 / +0x654
+  to +0x4d0 / +0x4d4 / +0x4d8 (215233..215236).
+- So +0x640 / +0x644 / +0x648 = the tail's base (XZ, Y unused), +0x64c / +0x654 = the tip (XZ). The reads are PROVEN; their
+  values are not.
+
+### 17.2 Every literal-offset store to 0x63c..0x658 in the exe (PROVEN by the function that holds each store)
+
+| store | function (Ghidra / dump name) | what the function is | writes |
+|---|---|---|---|
+| 0x0042a731..0x0042a7bf | FUN_0042a40c, DestroyDerolleEntity_0042a40c (dump 169147) | Derolle destructor | clears pointer slots 0x63c..0x658: each slot's object gets `ushort[+8] \|= 1` (release), then 0 |
+| 0x004cb8b2..0x004cb8eb | FUN_004cb480, InitializeDragonEntity_004cb480 (dump 246611) | base ctor of the 0x8b4 dragon family (AllocateEntity_004cb404, the Sinowberill sub-entity ctor) | +0x63c..+0x644 = +0x38..+0x40 (the spawn position), +0x648..+0x650 = the same position, +0x654 = +0x658 = 0, +0x65c = 1 (Ghidra lines 120..129) |
+| 0x004c8cba, 0x004c90d9, 0x004c92ae | FUN_004c8b2c (dump PlayerEntity_ProcessAnimationState_004c8b2c, name suspect) | a state machine on the 0x8b4 family (ASSUMED family: it uses the `param_1[0x217]` state index that FUN_004cb480 also sets) | flags: `param_1[0x195]` (= +0x654) = 0 / 1 |
+| 0x00423e4a | FUN_00423e4a | a one-call thunk to FUN_00520dc0 | nothing |
+
+- The Derolle destructor and the dragon base ctor are the only functions that write the 0x63c..0x658 slots as an object
+  (pointers or positions). The dragon family's layout at these slots is NOT the Olga's.
+- The Olga beast is NOT a member of that family: `CreateOlga1Form1Entity_004974d0` (dump 216457) allocates 0x68c bytes and
+  calls `InitializeOlga1Form1` (216481). The dragon base is 0x8b4 bytes and is reached only through AllocateEntity_004cb404
+  and the sub-entity ctor (SinowberillSubEntity_Constructor_004cede4). The Olga ctor does not call FUN_004cb480 (PROVEN from
+  the ctor's body: its callees are the Olga / Volopt / sub-object initialisers). So the 0x4cb8b2 stores are NOT on the Olga
+  object.
+
+### 17.3 The Olga ctor and the arena (PROVEN absence + ASSUMED value)
+
+- No Olga1 function in the dump's Olga range (204000..224500) writes +0x63c..+0x658 by a literal offset or a `field_0x64x`
+  name (the matches are the Olga sub-object's 0x658 pointer list at 213283 / 214235, the Volopt minion's +0x638 at 219354,
+  and GetOlga2TargetVectorData at 221764 reading +0x638..+0x640 of the Olga2 object).
+- The beast's memory is `allocate_in_main_arena(0x68c)` (`arena_allocate`, dump 789884). The arena does NOT zero the payload
+  (it returns the node's payload as found: the free-list header is the only write). ASSUMED: the tail's anchor is therefore
+  the stale arena bytes at the beast's +0x640..+0x654, not a value any decoded code writes. (A never-used arena page is
+  zero; a reused node is not.)
+- The Olga's "previous tip" +0x4d0 is copied each tick from +0x64c, so the first tick reads the same stale bytes.
+
+### 17.4 What the fields mean (ASSUMED)
+
+- The base ctor's copy (0x4cb8b2) says the family's slots 0x63c..0x650 hold the spawn position in their 0x38..0x40 order:
+  the bone / position meaning is the family's, not the Olga's. The Olga's tail uses the same slot numbers with a 10.0 Y
+  in B, so the Olga's own +0x640 is a separate writer that the exe does not contain (or a computed-offset writer, not
+  excluded here).
+- "Previous-frame positions": only +0x4d0 (the previous tip, copied from +0x64c each tick) is decoded as a previous-frame
+  value. +0x640..+0x648 have no previous-frame copy in the Olga code.
+
+### 17.5 Verdict (pass 7)
+
+- The tail hit stays NOT PORTED. The evidence does not give the anchor's values: the only writers of these slots in the exe
+  belong to the dragon family and the Derolle destructor, and the Olga beast's own writer is absent. The port must not guess
+  the anchor (any geometry would be an invention).
+- Left to close it: (1) a computed-offset writer in the Olga range (search for `+ iVar * 4 + 0x63c`-style addressing
+  through `this`, and the Olga's per-tick copies through the generic enemy update, FUN_00492a84's callees); (2) if none is
+  found, the exe reads stale arena bytes and the port needs a documented choice (zero anchors = no hit, or ASSUMED
+  spawn-position anchors); (3) the lancer's and stab's bones remain ASSUMED (15.5, 16.5).
