@@ -179,7 +179,23 @@ export class PanArmsAi extends BrainBase {
     this.timer = this.buriedWait;
   }
 
-  // Not on the radar, not locked on, not struck (render/combat.ts concealed).
+  // The lock flag (+0x3e4). ASSUMED initial value false (the ctor is not traced).
+  lockable = false;
+
+  // The radar icon (exe 0x00580b2c: state != 0 and (+0x3e4 set and state != 4, or state 1)).
+  // State 4 is ASSUMED to be the death state (its entry 0x00582d60 runs the death clean-up).
+  get radar(): boolean {
+    return this.state === 'buried' || (this.lockable && this.state !== 'dead');
+  }
+
+  // enable_reticle runs while +0x3e4 is set (0x00580b2c, every state but 0).
+  get lockOn(): boolean {
+    return this.lockable;
+  }
+
+  // The hit: NOT PROVEN. The Pan Arms family never calls SetEnemyInvulnerableAndImmune (no
+  // 0x53fdf0 call in 0x580000..0x58a000); its entries clear bit 0 of the sub-object at +0x398
+  // (+0x18) in states 1, 2, 9, 10, 11, 12. This rule is the port's earlier one, ASSUMED.
   get untargetable(): boolean {
     return this.invulnerable;
   }
@@ -198,6 +214,11 @@ export class PanArmsAi extends BrainBase {
 
   private enter(out: AiFrame, s: PanState): void {
     this.state = s;
+    // The lock flag (+0x3e4, read by DerolleUpdateStateTransition 0x00580b2c): the entries of
+    // 2 (emerge, 0x583cf8) and 12 (rejoin, 0x5835ac) set it, 10 (split, DerolleOnHit 0x583720)
+    // and 11 (merge, DerolleHandleHit 0x583648) clear it. The other entries keep it (sticky).
+    if (s === 'emerge' || s === 'rejoin') this.lockable = true;
+    else if (s === 'split' || s === 'merge') this.lockable = false;
     this.timer = 0;
     this.sub = 0;
     this.animFrame = 0;

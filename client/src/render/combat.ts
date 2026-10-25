@@ -512,20 +512,25 @@ for (const n of ['TObjEneMe3StelthReal', 'TObjEneMe3SinowZoaReal', 'TObjEneDelDe
 }
 // A Bulclaw's child slots (newserv: 4 CLAW children).
 const BULCLAW_CLAWS = 4;
-// A Pan Arms (buried, emerging, split), a hidden Hidoom / Migium or a slime control:
-// not on the radar, not locked on, not struck, not a technique or confused-enemy
-// target (combat/enemysplits.ts untargetable). Vol Opt's control object, its parts that
+// A hidden Hidoom / Migium, a slime control, or the other split / boss parts: not on the
+// radar, not locked on, not struck, not a technique or confused-enemy target
+// (combat/enemysplits.ts untargetable). Vol Opt's control object, its parts that
 // are not up and its body before the fight are hidden the same way.
-// A Pofuilly Slime follows the exe's three rules instead (SlimeAi.radar / lockable / invulnerable):
-//   - the radar icon every frame but the dead one (SinowzoaUpdate_00596104, `field_0x38c != 0xd`);
-//   - the lock-on and the technique records only while +0x3f4 is set (enable_reticle);
-//   - the hit only while the box is on (0x28 clear: SetEnemyInvulnerableAndImmune is off).
-export const slimeRadarOk = (e: { ai: EnemyBrain | null }): boolean => !(e.ai instanceof SlimeAi) || e.ai.radar;
-export const slimeLockOk = (e: { ai: EnemyBrain | null }): boolean => !(e.ai instanceof SlimeAi) || e.ai.lockable;
-export const slimeStruckOk = (e: { ai: EnemyBrain | null }): boolean => !(e.ai instanceof SlimeAi) || !e.ai.invulnerable;
-const techRecordOk = slimeLockOk;
+// A Pan Arms and a Pofuilly Slime follow the exe's three rules instead (PanArmsAi / SlimeAi
+// radar / lockable / invulnerable), so the three predicates below read them:
+//   - the radar icon: the Pofuilly every frame but the dead one (SinowzoaUpdate_00596104,
+//     `field_0x38c != 0xd`); the Pan Arms while buried or lockable (DerolleUpdateStateTransition
+//     _00580b2c, state != 0 and (+0x3e4 set and state != 4, or state 1));
+//   - the lock-on and the technique records only while the lock flag is set (enable_reticle):
+//     +0x3f4 for the slime, +0x3e4 for the Pan Arms;
+//   - the hit only while the box is on: the slime's 0x28 bits (SetEnemyInvulnerableAndImmune);
+//     the Pan Arms' hit is ASSUMED (its own box bits are not traced, see PanArmsAi.invulnerable).
+export const splitRadarOk = (e: { ai: EnemyBrain | null }): boolean => !(e.ai instanceof SlimeAi || e.ai instanceof PanArmsAi) || e.ai.radar;
+export const splitLockOk = (e: { ai: EnemyBrain | null }): boolean => !(e.ai instanceof SlimeAi || e.ai instanceof PanArmsAi) || e.ai.lockable;
+export const splitStruckOk = (e: { ai: EnemyBrain | null }): boolean => !(e.ai instanceof SlimeAi || e.ai instanceof PanArmsAi) || !e.ai.invulnerable;
+const techRecordOk = splitLockOk;
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
-  ((e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
+  ((e.ai instanceof PanHalfAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
   ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
   (e.ai instanceof GoldDragonAi && e.ai.untargetable) ||
   (e.ai instanceof DubwitchAi && e.ai.untargetable) ||
@@ -1855,7 +1860,7 @@ export class CombatView {
   minimapEnemies(): { x: number; z: number; type: string }[] {
     const out: { x: number; z: number; type: string }[] = [];
     for (const e of this.enemies.values()) {
-      if (e.dead || e.state === 'death' || !e.instance.root.visible || concealed(e) || !slimeRadarOk(e)) continue;
+      if (e.dead || e.state === 'death' || !e.instance.root.visible || concealed(e) || !splitRadarOk(e)) continue;
       // Dark Falz forms 1 and 3 have their own forced icons (minimapIcons).
       if (e.ai instanceof DarkFalzPartAi && (e.ai.entity === DF_ID.form3 || e.ai.entity === DF_ID.form1)) continue;
       const p = e.instance.root.position;
@@ -6243,7 +6248,7 @@ export class CombatView {
     let best: EnemyRuntime | null = null;
     let bestSq = 220 * 220; // ASSUMED lock-on range
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible || (e.ai instanceof ClawAi && e.ai.hidden) || concealed(e) || !slimeLockOk(e)) continue;
+      if (e.dead || !e.instance.root.visible || (e.ai instanceof ClawAi && e.ai.hidden) || concealed(e) || !splitLockOk(e)) continue;
       const p = e.instance.root.position;
       let diff = Math.atan2(p.x - from.x, p.z - from.z) - me.angle;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
@@ -6659,7 +6664,7 @@ export class CombatView {
       if (e.dead) continue;
       // An enemy whose wave has not spawned yet is not in the room (its model
       // is hidden by render/waves.ts), so it cannot be hit.
-      if (!e.instance.root.visible || concealed(e) || !slimeStruckOk(e)) continue;
+      if (!e.instance.root.visible || concealed(e) || !splitStruckOk(e)) continue;
       const p = e.instance.root.position;
       const dx = p.x - from.x;
       const dz = p.z - from.z;
@@ -6877,7 +6882,7 @@ export class CombatView {
       this.opts.log(`gun bullet reaches player ${b.player + 1}: its victim rolls the hit`);
       return;
     }
-    if (this.disposed || e.dead || !e.instance.root.visible || concealed(e) || !slimeStruckOk(e)) return;
+    if (this.disposed || e.dead || !e.instance.root.visible || concealed(e) || !splitStruckOk(e)) return;
     const p = e.instance.root.position;
     const now = { x: p.x, y: p.y + this.aimHeightOf(e), z: p.z };
     if (bulletMissed(b.origCentre, now)) {
@@ -7657,7 +7662,7 @@ export class CombatView {
   npcEnemies(): Array<{ id: number; x: number; z: number; boxes: EnemyBoxHit[] }> {
     const out: Array<{ id: number; x: number; z: number; boxes: EnemyBoxHit[] }> = [];
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible || concealed(e) || !slimeStruckOk(e)) continue;
+      if (e.dead || !e.instance.root.visible || concealed(e) || !splitStruckOk(e)) continue;
       const p = this.hitPoint(e);
       out.push({ id: 0x1000 | e.index, x: p.x, z: p.z, boxes: this.enemyBoxHits(e) });
     }
@@ -7861,7 +7866,7 @@ export class CombatView {
     const pool = this.fireTargets;
     let n = 0;
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible || concealed(e) || !slimeStruckOk(e)) continue;
+      if (e.dead || !e.instance.root.visible || concealed(e) || !splitStruckOk(e)) continue;
       const p = e.instance.root.position;
       const t = pool[n] ?? (pool[n] = { id: 0, x: 0, z: 0, radius: 0, y: 0 });
       t.id = e.index;
@@ -8039,7 +8044,7 @@ export class CombatView {
   }
 
   private techWorld(): TechWorld {
-    const live = (e: EnemyRuntime | undefined): e is EnemyRuntime => !!e && !e.dead && e.instance.root.visible && !concealed(e) && slimeStruckOk(e);
+    const live = (e: EnemyRuntime | undefined): e is EnemyRuntime => !!e && !e.dead && e.instance.root.visible && !concealed(e) && splitStruckOk(e);
     const enemyOf = (id: number): EnemyRuntime | undefined => (id >= 0x1000 ? this.enemies.get(id - 0x1000) : undefined);
     return {
       rng: () => this.rng(),
