@@ -29,6 +29,7 @@ import { parseItemPMT } from '../formats/itempmt.ts';
 import { ItemNames } from '../formats/itemnames.ts';
 import { lobbyEntryArrival, type LobbyEntry } from '../formats/lobbyspawn.ts';
 import { ShipSelectScreen } from './shipselect.ts';
+import { shipSelectCameraAngle, shipSelectCameraPose } from './shipselectcamera.ts';
 import { connectBridge } from '../net/wstransport.ts';
 import { CharCreateScreen, NAME_MAX, type CharCreateAssets } from './charcreate.ts';
 import { TEXTURE_FILES } from './charcreate_data.ts';
@@ -201,17 +202,25 @@ async function main(): Promise<void> {
   };
 
   // Behind the ship select the client shows the lobby; the camera path is
-  // not decoded yet, so it slowly circles the lobby centre (approximation).
+  // not decoded (classic/shipselectcamera.ts: ASSUMED fitted circle). The
+  // frame hook is removed when the screen changes (stopBackdrop, in show).
+  let stopBackdrop: (() => void) | null = null;
   const showLobbyBackdrop = async (lobbyNumber: number) => {
     const v = world();
     showWorld(true);
     await v.load(source, lobbyMapFile(lobbyNumber));
     v.setOrbitEnabled(false);
-    let t = 0;
-    v.onFrame = (dt) => {
-      t += dt * 0.05;
-      v.camera.position.set(Math.sin(t) * 260, 120, Math.cos(t) * 260);
-      v.camera.lookAt(0, 0, 0);
+    let angle = 0;
+    const onFrame = (dt: number) => {
+      angle = shipSelectCameraAngle(angle, dt);
+      const { position, target } = shipSelectCameraPose(angle);
+      v.camera.position.set(position.x, position.y, position.z);
+      v.camera.lookAt(target.x, target.y, target.z);
+    };
+    v.onFrame = onFrame;
+    // Only this hook is removed: a screen that set its own hook keeps it.
+    stopBackdrop = () => {
+      if (v.onFrame === onFrame) v.onFrame = null;
     };
   };
 
@@ -783,6 +792,12 @@ async function main(): Promise<void> {
   let current: Screen = title;
   loader.step('open');
   function show(s: Screen): void {
+    // Leaving the ship select drops its backdrop camera (three.js: the hook
+    // stops driving the viewer's camera; the lobby or field sets its own).
+    if (!(s instanceof ShipSelectScreen)) {
+      stopBackdrop?.();
+      stopBackdrop = null;
+    }
     current = s;
     stage.show(s);
     // The stage box follows the screen's layout (tall for the phone's title).

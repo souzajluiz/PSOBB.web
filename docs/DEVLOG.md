@@ -20422,3 +20422,21 @@ The stab pass left four placeholders (plane 0, axis 30, epsilon 0, range 20) bec
 - The `0x3f4` value 1 in the arm state comes from the arm entry's code range (ASSUMED, not a separate function).
 
 **Checks.** `node tests/enemysplits.test.ts`: all checks passed. `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts`: 5859 checks, 0 failures. `node tests/combatdepth.test.ts`: 836 checks, 0 failures. `node tests/enemyfsmmines.test.ts`: all checks passed. `cd client && npx tsc --noEmit -p .` (Node 24): clean. Not run in Chrome (no Playwright).
+
+## 2026-10-25: ship-select camera: the exe's camera is not found; the fitted circle moves to its own module
+
+**Result: not decoded.** The ROADMAP item asked for position, target, FOV, motion and the 3D background. None is proven. The exe's Ship Select camera was looked for in the Ghidra dump (`src/Psobb.exe-05112026.c`, dump line numbers) and these were ruled out:
+- `init_ship_connection_manager` (TLobby constructor, 776104) sets no camera. The ship menu handler `handle_ship_block_select_packets` (779863) and its state setters `LobbyMenuHandler_SetShipSelectState_0079bb58` (779917) / `..._SetBlockSelectState_0079bb7c` (779925) do not either. The lobby menu id is only a flag word there (`ship_select`, 776428).
+- `SetGameListMenuCameraPosition` (144485) is the camera of the `MapObject` created in the character select object (`153761`, next to `CreateDressingRoomObject`). It is the character select camera.
+- `create_lobby_burst_screen` (157525) and `update_loading_screen_widget` (157082, `SetDefaultNpcCamera(9)`) belong to the loading screen that runs when a lobby is entered (`play_loading_screen_animation`, `unk_end_loading_screen`), not to Ship Select.
+- The JP decomp `HandleShipLobbyInput` (0x004046d4) rotates a camera with Up/Down/PageUp/PageDown (`FUN_0073c554`, step -6.0), but it is the in-lobby ship state (state 0x18), not the select window. Not traced further.
+
+Not checked: the `MapObject` state table for the menu scroll (`144485`) is only partly read; the title's 3D view was not looked at; no capture of the exe's Ship Select background with motion was taken this session.
+
+**Port (ASSUMED, fitted):** the camera was already a circle over lobby 1 (`classic/main.ts`, radius 260, height 120, 0.05 rad a second, target at the origin). The numbers and the pose math now live in `client/src/classic/shipselectcamera.ts` (`SHIP_SELECT_CAMERA`, `shipSelectCameraAngle`, `shipSelectCameraPose`); `main.ts` sets `camera.position` and `lookAt` from them.
+
+**Dispose on screen change:** `showLobbyBackdrop` used to leave its frame hook on the shared map viewer after the ship select was gone (the viewer kept driving the camera while hidden). It now returns a stop (`stopBackdrop`), and `show()` calls it for any screen that is not the `ShipSelectScreen`. The stop removes the hook only if it is still ours (`v.onFrame === onFrame`), so a lobby or field hook set after it is kept.
+
+**Tests:** `tests/shipselectcamera.test.ts` (new): the fitted values, the pose at 0 and a quarter turn, 720 angles on the circle at the height looking inward at the origin, the 0.05 rad a second time base, and the period 2π / rate. `node tests/shipselectcamera.test.ts`: all tests passed. `npx tsc --noEmit -p .` (client, Node 24) clean. Not run in Chrome or Playwright.
+
+**Open:** the exe's Ship Select camera (position, target, FOV, any motion, and which scene is the backdrop) is still not decoded. Leads for the next pass: the exe's per-frame camera update of the lobby scene (the default NPC camera slot used by the lobby, not the loading screen), and a capture of the original's ship select background at two times.
