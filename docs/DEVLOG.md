@@ -1,5 +1,23 @@
 # Devlog
 
+## 2026-10-25: Episode 1 bosses: the Dragon's radar is the update's forced icon; De Rol Le segments' lock and hit are box bit 0
+
+**Outcome.** Of the Episode 1 bosses only the Dragon's radar gate changed: the entrance (sid 0x1d) is on the radar, because the Dragon's update forces an icon every live frame. The Dragon's lock-on and hit stay on `concealed()` (ASSUMED, see below). De Rol Le segments: lock-on and hit are proven to follow box bit 0, which the port's `untargetable` already models; their radar is not proven and is unchanged. Vol Opt, its parts, Dark Falz and its parts are not done (see the open list).
+
+**Proven (PsoBB.exe; community dump `Psobb.exe-05112026.c` and Ghidra `tools/ghidra/decomp.sh`).**
+- Dragon update `OlgaUpdateMainLoop_00423b7c` (vtable +0x04). In the live branch (flag 0x40 of +0x3c8 clear, not paused), after the state dispatch, it calls `enable_reticle_` and `unknown_add_minimap_icon3(&x, 0xffffa24c, 0x40000000, 1, 1)`. The icon has no state test; param 5 = 1 skips the distance test, so the icon is added in every state (the entrance included). The paused branch and the 0x40 branch add nothing.
+- `enable_reticle` (dump body) runs `check_enemy_is_targetable` per player and weapon slot. That test reads the hit boxes: a box counts only with bit 0 (`unknown_flags & 1`), and the weapon's masks follow. So the lock needs box bit 0.
+- The Dragon's `vtable +0x88` is `FUN_00777ba4` (Ghidra): `return entity_flags(+0x30) & 0x200`. The update clears the hit boxes' bit 0 (`unset_hit_flags_on_hitboxes`) when that is set and the cursor (+0x684) is below 0x32; it also restores the hp. So the lock and the hit of the Dragon follow flag 0x200 and the cursor. The port's `DragonAi.invulnerable` is not that test.
+- De Rol Le segment update `FUN_00435070` (the segment's `untargetable` in `derolle.ts`): with the segment's y at or above the threshold (`DAT_008fcc10 - DAT_008fd4ec`), `FUN_0052045c` sets bit 0 of every box; below it, `FUN_005204b0` clears bit 0 of every box, and the update clears bits 1 and 2 of the box flags. The segment's update calls no minimap or reticle function (its own), so its radar is not gated here.
+
+**ASSUMED / open.**
+- Dragon entrance lock and hit: the port keeps them hidden (`SaintEmilionPart_DisableAll`). Not traced: whether the entrance's boxes are off (the 0x200 flag is not set or cleared in the entrance code that was read: `FUN_0041b220`, param 4 and the tick).
+- Dragon death: the port hides it from the radar (`dead` / `death`). The update's own 0x40 branch is not traced for the death state's flag; unchanged.
+- De Rol Le segment radar: no icon in the segment's own update; whether the base slot icon (0x00520618) or the vtable +0x18c / +0x190 calls add one is not traced. Unchanged, still `concealed()`.
+- Vol Opt control, parts and body, Dark Falz and its parts: not traced in this pass. The Vol Opt monitor and pillar icons and the Dark Falz forms already have their forced icons in the port (`darkfalz1.ts`, `darkfalz2.ts`, `darkfalz3.ts` minimapIcons); their lock and hit gates were not checked against the boxes.
+
+**Port.** `client/src/render/combat.ts`: `radarConcealed(e)` = `concealed(e)` without the Dragon (the forced icon); `minimapEnemies` uses it. `tests/dragon.test.ts`: the entrance is on the radar (the lock and hit checks are unchanged).
+
 ## 2026-10-25: Booma spawn gate is current_target == 1, set by the Booma ctor: every Booma animates
 
 **Outcome.** The spawn handler's "current_target == &g_ChallengeListWindowFlag" test is not a global. It is the integer 1 in the `current_target` slot (enemy +0x398), and the dump's `&g_ChallengeListWindowFlag` is a mis-resolved name for that constant (the same mis-resolution is noted in `client/src/combat/blooddecals.ts`). The Booma constructor writes 1 there on every spawn path, so every Booma takes the animation branch. The port's `spawn: true` is right; the port now also models the exe's else branch (spawn false: sub 2, no motion, not invulnerable, idle on the next tick).
