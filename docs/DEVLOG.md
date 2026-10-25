@@ -60,6 +60,29 @@
 **Tests** (`tests/enemyfsmillgill.test.ts`): the preambles use `wake()` (the 42-tick spawn and the advance); new checks for the spawn's 42 ticks and the float32 step, the advance's hold, the drop beyond 400 from home and the chase stand-in, and the tackle recovery (fparam1 2.9 gives 2 counted ticks, the chase on the third).
 
 **Still ASSUMED / open.** The tackle's probes (always pass), the dash's travel (the animation stride), the sub 4 exit to the chase, the spawn's wander and the advance's external request, the Ep4 row 38 layout (fparam zero in the Ep4 files), the walk speed and turn of the chase, and the player's elemental resists (0 in the port).
+## 2026-10-25: Team count set bonus (armour 0x55 DFP, shield 0x95 ATP); shield 0x87 fix
+
+**Question.** The equipment compare's set bonus branches left the armour frame 0x55 and the shield 0x95 unported (ROADMAP "Equipment stat recalculation"). Both read the player's team through `GetChallengeDataById_00797790`. Port them, and check the shield 0x87 branch the port had as an EVP resist.
+
+**Answer.** `combat/playerstats.ts`: `teamFrameBonus(ctx)` returns `2 * min(100, memberCount)` when the player's team record has a nonzero masterGuildCard, teamId, unknownA5 or unknownA6, else 0. Armour 0x55 adds it to the DFP resist (`resDfp`), shield 0x95 adds it to the ATP stat (`atp`). `SetContext.team` carries the record; `setLiveTeamSource` is set in `classic/main.ts` to the connection's TeamClient membership (ASSUMED: the lobby table entry for the player is that membership). Tests: `tests/playerstats.test.ts`.
+
+**PROVEN (objdump, tools/exedata.py).**
+- Dispatch: handle_frame_weapon_set_bonus (0x005d53ac) jump table at 0x0092c204, index = the armour index (0x37..0x56, `lea eax,[edx-0x37]; cmp eax,0x1f`). Entry 0x55 at 0x0092c358 = 0x005d53fd. The shield handler (handle_barrier_and_weapon_set_bonus, 0x005d4e14) is a compare chain; 0x95 at 0x005d4e6a, body at 0x005d4e75.
+- Record lookup (GetChallengeDataById, 0x00797790): walks 12 entries of 0x217 dwords (0x85c bytes, `lea/add` chain), matching the dword at +0x34 (guild card) against the argument; copies the entry to the caller's buffer, or zeroes the 0x11-byte header block when no entry matches (`mov byte [edi+0x11], al` path at 0x007977f4). The table pointer is at `[0x00aab180]`, offset +0x1c.
+- Found test (0x005d5460..0x005d5480 and 0x005d4ed8..0x005d4ef8): the four dwords at buffer +0x00, +0x04, +0x08, +0x0c are OR-tested; any nonzero gives bVar2 = 1. Those four dwords are the membership (`net/team.ts` parseMembership: masterGuildCard, teamId, unknownA5, unknownA6).
+- Count byte: the buffer byte at +0x11 (`movzx ebx, byte [esp+0x31]` with the buffer at esp+0x20). Member count per `parseMembership` (`data[offset+0x11]`). Cap: `cmp ebx,0x64; jle; mov ebx,0x64` = min(count, 100). Doubling: `fild; fadd st,st(0)` (2 x n exact), `fistp` under control word RC = 11 (truncate); an integer so ROUND does nothing.
+- Armour 0x55 write: `add dword [ecx+0x1c], eax` (0x005d54d0) with ecx = the candidate's resist block: resDfp (+0x1c). No weapon condition (the 0x55 case runs for any worn weapon).
+- Shield 0x95 write: `add word [ecx], ax` (0x005d4f47) with ecx = the candidate's stat block: stat [0] = ATP. No weapon condition.
+- Shield 0x87 (0x005d5128): `add word [eax], 0x32` on the same stat block when the worn weapon's sub is 0xbf, so the write is ATP +50 (stat [0]), not an EVP resist. The port had `resEvp += 50`; that was wrong. Fixed here (`t.atp += 50`), and the test that encoded it is updated.
+
+**ASSUMED.**
+- The record the lobby table holds for the player equals the TeamClient membership (the save's 0x315c block at connection start, then 12EA updates). The 13EA list fills the same 0x85c entries (`parseLobbyTeamInfo`), but the port does not read 13EA for this.
+- The decompile labels the lobby global `g_TLobbyInstance_009ff4f8`, while the code reads `[0x00aab180]` (objdump 0x00797798 region). The port does not use the address; the record layout is taken from the code's +0x1c table and +0x34 guild card.
+- `teamFrameBonus` is written for the compare (`recalculateCandidate`) and the live `SetContext`, which read the same source.
+
+**Still open.** The shield 0x95 path and the armour 0x55 path are the only team readers in the set bonus; the shield 0x93 (beat-time +0x32 on one of four stats, objdump not re-read this pass) and 0x9b / 0x90 / 0x8d / 0x86 are unchanged.
+
+**Tests.** `node tests/playerstats.test.ts` ALL PASS (new cases: 7 member count 14 DFP, null record 0, zero membership 0, cap 100 -> 200, teamId alone counts, shield 0x95 ATP 14 / null 0 / no DFP, 0x87 ATP 50 with no EVP). `client` `npx tsc --noEmit -p .` clean. Also `tests/combatsetatp`, `tests/playerstatsatp`, `tests/beattime`, `tests/fieldhud`, `tests/tekker`, `tests/items` (NEWSERV) and `tests/combat.test.ts` (NEWSERV) pass.
 
 ## 2026-10-25: Merissa A / AA, part 3: the brain (OWN_FSM 'MerissaA') and the radar gate
 

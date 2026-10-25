@@ -11,7 +11,8 @@ import { Game, type GameListEntry } from '../net/game.ts';
 import type { BBConnection } from '../net/bbconnection.ts';
 import type { Lobby } from '../net/lobby.ts';
 import type { GuildCardSearchResult } from '../net/guildcard.ts';
-import { exchangeTeamPointsPayload, inviteSubcommand, membershipFromSave, NO_TEAM, TEAM_INVITE_ACCEPT, TEAM_INVITE_DECLINE, TEAM_POINTS_SUB, TeamClient } from '../net/team.ts';
+import { setLiveTeamSource } from '../combat/playerstats.ts';
+import { exchangeTeamPointsPayload, inviteSubcommand, membershipFromSave, TEAM_INVITE_ACCEPT, TEAM_INVITE_DECLINE, TEAM_POINTS_SUB, TeamClient } from '../net/team.ts';
 import { InventoryModel } from '../net/items.ts';
 import { TeamChat } from './teamchat.ts';
 import { GameView } from '../render/gameview.ts';
@@ -311,8 +312,11 @@ async function main(): Promise<void> {
   // The team client of a connection, made once. Its 07EA lines go to the team chat log.
   const teamClientFor = (conn: BBConnection, gc: number): TeamClient => {
     if (teamClient?.conn !== conn) {
-      const client = new TeamClient(conn, NO_TEAM, gc);
+      // The save's membership (0x315c) is the player's team record for the armour 0x55 / shield 0x95
+      // set bonuses (playerstats.ts teamFrameBonus); later 12EA updates replace it.
+      const client = new TeamClient(conn, membershipFromSave(session?.fullCharacter ?? null), gc);
       client.onChat = (sender, text) => teamChat.receive(sender, text);
+      setLiveTeamSource(() => client.membership);
       teamClient = { conn, client };
     }
     return teamClient.client;
