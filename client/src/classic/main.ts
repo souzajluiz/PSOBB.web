@@ -11,7 +11,8 @@ import { Game, type GameListEntry } from '../net/game.ts';
 import type { BBConnection } from '../net/bbconnection.ts';
 import type { Lobby } from '../net/lobby.ts';
 import type { GuildCardSearchResult } from '../net/guildcard.ts';
-import { membershipFromSave, NO_TEAM, TeamClient } from '../net/team.ts';
+import { exchangeTeamPointsPayload, inviteSubcommand, membershipFromSave, NO_TEAM, TEAM_INVITE_ACCEPT, TEAM_POINTS_SUB, TeamClient } from '../net/team.ts';
+import { InventoryModel } from '../net/items.ts';
 import { TeamChat } from './teamchat.ts';
 import { GameView } from '../render/gameview.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
@@ -435,7 +436,12 @@ async function main(): Promise<void> {
     const c = session?.character;
     if (!c) return [];
     const rows = itemRows(c, { names: itemNames, charClass: c.charClass, level: c.level, stats: c.stats, lobby: true }, '');
-    return rows.map((r) => ({ id: r.id, name: r.name, count: Number.parseInt(r.count.replace(/\D/g, ''), 10) || 1 }));
+    return rows.map((r) => {
+      // Point Regist's worth: the item's ItemPMT team points (0 without the table).
+      const it = c.inventory.find((i) => i.data.id === r.id);
+      const teamPoints = it && itemNames ? (itemNames.teamPoints(it.data) ?? 0) : 0;
+      return { id: r.id, name: r.name, count: Number.parseInt(r.count.replace(/\D/g, ''), 10) || 1, teamPoints };
+    });
   };
   const teamHost = (owner: Lobby, shipName = ''): TeamHost | undefined => {
     const s = session;
@@ -484,6 +490,30 @@ async function main(): Promise<void> {
         const answer = conn.waitFor(0x16ea);
         owner.sendSubcommand(0xcb, payload);
         return (await answer).flag;
+      },
+      // Team Invite (0x29): the lobby's team info rows (14EA -> 15EA).
+      nearby: async () => (await c.nearby()).map((r) => ({ name: r.name, guildCard: r.guildCard })),
+      // Team Invite (0x29), state 3..6: the picked card's client id (the lobby's player list) gets the
+      // 6xC1 (0x62 relay); the invitee's 6xC2 answer decides: accept -> 03EA with the answer's card
+      // and the 04EA flag; any other answer is a decline. The card the row carries is the one sent.
+      invite: async (card) => {
+        const target = [...owner.players.values()].find((p) => p.guildCardNumber === card);
+        if (!target) return 'absent';
+        const answer = owner.waitInviteAnswer();
+        conn.send(0x62, target.clientId, inviteSubcommand({ selfId: owner.selfId, guildCard: card, name: owner.self?.name ?? '', teamName: c.membership.name }));
+        const a = await answer;
+        if (a.action !== TEAM_INVITE_ACCEPT) return 'declined';
+        const flag = await c.addMember(a.guildCard);
+        if (flag === 0) return 'joined';
+        return flag === 5 ? 'full' : 'failed'; // 04EA: 0 ok, 5 full, other error (net/team.ts)
+      },
+      // Point Regist (0x2d): 6xCC in a game only (send_packet0x60_subcommand0xcc returns in the lobby);
+      // the local inventory loses the amount, as the exe's local run of the subcommand does.
+      exchangeItem: (itemId, amount) => {
+        if (!(owner instanceof Game)) return;
+        owner.sendSubcommand(TEAM_POINTS_SUB, exchangeTeamPointsPayload(itemId, amount));
+        const character = session?.character;
+        if (character) new InventoryModel(character).remove(itemId, amount);
       },
     };
   };
