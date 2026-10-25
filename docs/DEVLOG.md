@@ -104,6 +104,11 @@
 **Port.** No code change. The port has no handler for 6x10 / 6x11 / 6xA8 / 6xA9 / 6xAA on generic enemies (6x12 is the Dragon's; 6xA8 / 6xA9 / 6xAA are Gol Dragon / Barba Ray), so there is no existing event to hang a state-9 trigger on. `spawn: className !== 'TObjEneDimedian'` (`client/src/render/combat.ts`) stays.
 
 **Tests.** `tests/enemyfsm.test.ts`: passed. `NEWSERV=…/vendor/newserv node tests/combat.test.ts`: 5859 checks, 0 failures. `cd client && npx tsc --noEmit -p .`: clean.
+## 2026-10-25: Barba Ray's attack centre: origin + dir * (80 + 30 k), the aura's direction from the target; the attacker is a 120 sphere
+
+**Outcome.** The Barba Ray attack (0x18) now moves its area centre out along the aura's direction as the aura grows (80 to 500), instead of sitting on the target. Proven: the centre formula, the scale per body, the direction rule (target minus origin, normalized on xz, and 0 when no target), the origin formula and the attacker record (a sphere of 120, flags 0x9d03). ASSUMED: the origin is the body (the leader's cast+0x84 / +0x90 writers are not found yet), and the map floor's y-projection of the ground point is not ported (the spawn point's xz is used). The hitbox overlap is not ported (the player's own record shape is not decoded). Details in `docs/bosses/barbaray-map.md` Pass 17.
+
+**Port.** `client/src/combat/barbaray.ts`: `BARBA_ATTACK.auraStart / auraStep / auraEnd` (80 / 30 / 500); sub 1's end takes `attackDir` (`auraDirection`: normalize_xz(target - body), zero vector when none); sub 2's body uses `origin + dir * min(500, 80 + 30 k)` for the hit centre. `tests/barbaray.test.ts`: the main block (the target 100 east: body 1 hit at +110, the late player hit at body 12 at +440, the far player never), the no-target direction, and the target direction (0.6, -0.8). `node tests/barbaray.test.ts` ALL PASS; `client` `tsc --noEmit` clean; `NEWSERV=... node tests/combat.test.ts` 5859 checks, 0 failures.
 
 ## 2026-10-25: Episode 1 bosses: the Dragon's lock and hit are the entrance's box bit 0; De Rol Le's shell segments are on the radar with their box off
 

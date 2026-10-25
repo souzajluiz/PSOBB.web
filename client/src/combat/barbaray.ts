@@ -578,6 +578,11 @@ export const BARBA_ATTACK = {
   // 0x00907220 = 30.0 and sets state 2 once +0x4c >= 0x00907218 = 500.0). 80 + 30 * 14 = 500, so the
   // 14th update sets state 2; the sub 2 body sees it on the next tick (either update order gives 14 bodies).
   aura: 14,
+  // The aura's scale +0x4c (PROVEN: 0x42a00000 = 80.0 in the ctor, 0x00907220 = 30.0 a update, 0x00907218 =
+  // 500.0 the state 2 mark). The body k (1-based) sees k updates, so its centre is origin + dir * (80 + 30 k).
+  auraStart: 80,
+  auraStep: 30,
+  auraEnd: 500,
   // Sub 3 holds while the animation is not ended: PROVEN, Player__Animate sets +0xb0 bit 0x10 when a
   // play-once row (type 3) reaches `elapsed >= frame_count - g_AnimationTimeOffset` (1.0, 0x0097d97c).
   // Slot 13 is motion 3 (26 frames, the njm count from the map Pass 14). ASSUMED: the exe's frame count
@@ -679,12 +684,14 @@ export class BarbaRayAi extends BrainBase {
   private startedSlot = 0;
   private blendOn = false;
   // State 0x18: the sub-state (+0x730), its counter (+0x734), the once-per-attack hit list (+0x720,
-  // cleared at the windup's end and at the enter), the target's ground point (0x774..0x77c, the
-  // target's position here) and the aura's hold (ASSUMED, see BARBA_ATTACK.aura).
+  // cleared at the windup's end and at the enter), the target point (0x774..0x77c, the target's position
+  // here, null = the exe's 0 write), the aura's direction (+0x2c, the unit xz vector from the origin to the
+  // target) and the aura's hold (see BARBA_ATTACK.aura).
   attackSub = 0;
   private attackCount = 0;
   private attackHits = new Set<number>();
-  private attackCenter: { x: number; z: number } | null = null;
+  private attackTarget: { x: number; z: number } | null = null;
+  attackDir = { x: 0, z: 0 };
   private attackAura = 0;
   // The area's power: MovementData[15] fparam1 (the root's record at +0x628, dword 0 as a float).
   private attackPower: number;
@@ -1292,15 +1299,17 @@ export class BarbaRayAi extends BrainBase {
     this.attackSub = 0;
     this.attackCount = 0;
     this.attackHits.clear();
-    this.attackCenter = null;
+    this.attackTarget = null;
+    this.attackDir = { x: 0, z: 0 };
   }
 
   // Event 0 of 0x18 (asm 0x004b6300, PROVEN steps): Player__Animate first; then the sub-state.
-  // Sub 0: 20 windup frames, then the slot 13 (beam_b) and the target's ground point, the 0x3f6 sound.
-  // Sub 1: waits for the clock to reach 13.0 (0x906d50, `>=`), then the clock is set to 13.0, the
-  // 0x3f7 sound, and sub 2. Sub 2: the area hit each frame at the ground point (the hit list keeps a
-  // player to one hit per attack), held while the aura is in state 1 (BARBA_ATTACK.aura = 14 updates,
-  // PROVEN). Sub 3: the animation hold until the play-once end (0xb0 & 0x10, BARBA_ATTACK.animEnd).
+  // Sub 0: 20 windup frames, then the slot 13 (beam_b), the target point (0x774) and the 0x3f6 sound.
+  // Sub 1: waits for the clock to reach 13.0 (0x906d50, `>=`), then the clock is set to 13.0, the aura
+  // direction is taken (InitializeSinowberillAuraEffect), the 0x3f7 sound, and sub 2. Sub 2: the area hit
+  // each frame at the aura's ground point (origin + dir * scale, the scale growing 80 -> 500; the hit list
+  // keeps a player to one hit per attack), held while the aura is in state 1 (BARBA_ATTACK.aura = 14
+  // updates, PROVEN). Sub 3: the animation hold until the play-once end (0xb0 & 0x10, BARBA_ATTACK.animEnd).
   // Sub 4 is the done state (event 9 steps).
   private attackFrame(targets: readonly AiTarget[]): void {
     const A = BARBA_ATTACK;
@@ -1316,7 +1325,7 @@ export class BarbaRayAi extends BrainBase {
         this.attackSub = 1;
         this.attackHits.clear();
         this.setSlot(A.slot); // the id change: the blend starts on the next Player__Animate (PROVEN)
-        this.attackCenter = this.targetGround(targets);
+        this.attackTarget = this.targetPoint(targets);
         this.events.push({ kind: 'se', id: A.seStart });
         return;
       }
@@ -1325,14 +1334,22 @@ export class BarbaRayAi extends BrainBase {
           this.timer = A.fire;
           this.attackSub = 2;
           this.attackAura = A.aura;
+          this.attackDir = this.auraDirection();
           this.events.push({ kind: 'se', id: A.seFire });
         }
         return;
-      case 2:
+      case 2: {
         this.timer = A.fire;
-        this.attackArea(targets);
+        // Body k (1-based) sees k aura updates (PROVEN: the same count in either update order).
+        const k = A.aura - this.attackAura + 1;
+        const scale = Math.min(A.auraEnd, A.auraStart + A.auraStep * k);
+        this.attackArea(targets, {
+          x: this.x + this.attackDir.x * scale,
+          z: this.z + this.attackDir.z * scale,
+        });
         if (--this.attackAura <= 0) this.attackSub = 3;
         return;
+      }
       case 3:
         // 0xb0 bit 0x10 (the play-once end of slot 13, see BARBA_ATTACK.animEnd): sub 3 holds until then.
         if (this.timer >= A.animEnd) this.attackSub = 4;
@@ -1342,23 +1359,34 @@ export class BarbaRayAi extends BrainBase {
     }
   }
 
-  // The target's position (0x774..0x77c, from FindAndProcessSinowberillTarget, sub 0 end). PROVEN: the exe
-  // uses it only as the aura's direction (aura +0x2c); the area centre is the aura's ground point (0x780),
-  // not this. ASSUMED stand-in until that point is ported: the leader's target id (6xAA) and its position;
-  // null when it is not in range.
-  private targetGround(targets: readonly AiTarget[]): { x: number; z: number } | null {
+  // The target point (0x774..0x77c, from FindAndProcessSinowberillTarget at sub 0 end; the exe writes 0 when
+  // it finds none, PROVEN). ASSUMED: the leader's target id (6xAA) and its position stand in for the target;
+  // null when it is not in range (read as 0,0 by auraDirection).
+  private targetPoint(targets: readonly AiTarget[]): { x: number; z: number } | null {
     const t = targets.find((p) => p.clientId === this.targetId);
     return t ? { x: t.x, z: t.z } : null;
   }
 
+  // The aura's direction (aura +0x2c..+0x34): normalize_xz(target - origin) (PROVEN: InitializeSinowberill
+  // AuraEffect_004baec4 subtracts +0x20 from +0x2c, then normalize_xz_components). The origin is the body
+  // here (ASSUMED: the exe's origin is CalculateSinowberillAttackPosition(cast +0x84, +0x90), its writers
+  // not decoded). A zero vector stays zero.
+  private auraDirection(): { x: number; z: number } {
+    const T = this.attackTarget ?? { x: 0, z: 0 };
+    const dx = T.x - this.x;
+    const dz = T.z - this.z;
+    const len = Math.hypot(dx, dz);
+    return len > 0 ? { x: dx / len, z: dz / len } : { x: 0, z: 0 };
+  }
+
   // The area hit (0x0051fc9c -> EnemyUpdateLogic 0x00521cf8 -> the sweep 0x007b8618): each living player
-  // whose xz distance to the point is within BARBA_ATTACK.radius (PROVEN: the sweep's `dist^2 <= r^2`),
-  // once per attack (the hit list). ASSUMED: the box test (CheckTwoHitboxCollision 0x007b5e40, PROVEN to
-  // run after the sphere and to reject a player with no hitbox list) is not ported, so the sphere alone
-  // decides. ASSUMED: the point is the target (see targetGround); the exe's point is the aura's ground
-  // point, which moves from 80 to 500 units out along the aura's direction over the hold.
-  private attackArea(targets: readonly AiTarget[]): void {
-    const c = this.attackCenter ?? { x: this.x, z: this.z };
+  // whose xz distance to the point c is within BARBA_ATTACK.radius (PROVEN: the sweep's `dist^2 <= r^2`),
+  // once per attack (the hit list). c is the aura's ground point (0x780): origin + dir * scale (PROVEN form,
+  // the map ray-cast's y-projection not ported: ASSUMED flat floor, so the spawn point xz is used). The box
+  // test (CheckTwoHitboxCollision 0x007b5e40) is not ported: the attacker's record is a sphere (kind 0,
+  // radius 120, PROVEN), so the box test only refuses a player whose own record is an oriented box (ASSUMED
+  // none).
+  private attackArea(targets: readonly AiTarget[], c: { x: number; z: number }): void {
     for (const t of targets) {
       if (t.dead || this.attackHits.has(t.clientId)) continue;
       if (Math.hypot(t.x - c.x, t.z - c.z) > BARBA_ATTACK.radius) continue;
