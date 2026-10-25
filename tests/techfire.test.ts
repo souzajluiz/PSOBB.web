@@ -337,11 +337,11 @@ check(!circleHits(0, 0, 400, T(1, 120, 0, 8), 100) && circleHits(0, 0, 400, T(1,
   near(s!.y, 12, 'its height above the launch ground');
   const g = enemyFire({ tech: TECH.gibarta, level: 0, x: 0, y: 12, z: 0, heading: 0, enemy: true })!;
   const ge = g.effect;
-  check(ge.kind === 'tech' && ge.status?.type === STATUS.freeze && Math.abs(ge.status.chance - 0.75) < 1e-6, 'an enemy Gibarta freezes with 0.75');
+  check(ge.kind === 'tech' && ge.group === 2 && !ge.status, 'an enemy Gibarta is group 2 (the freeze is the hit\'s EIC roll, state 1 only)');
   const rb = enemyFire({ tech: TECH.rabarta, level: 0, x: 0, y: 0, z: 0, heading: 0, enemy: true })!;
-  check(rb.effect.kind === 'tech' && !!rb.effect.status, 'and Rabarta');
+  check(rb.effect.kind === 'tech' && rb.effect.group === 2 && !rb.effect.status, 'and Rabarta');
   const gi = enemyFire({ tech: TECH.gifoie, level: 0, x: 0, y: 0, z: 0, heading: 0, enemy: true })!;
-  check(gi.fire instanceof GifoieRing && gi.effect.kind === 'tech' && !gi.effect.status, 'Gifoie has no status');
+  check(gi.fire instanceof GifoieRing && gi.effect.kind === 'tech' && gi.effect.group === 1 && !gi.effect.status, 'Gifoie is group 1 (EFR) with no status');
   // dead players are ignored
   const dead = enemyFire({ tech: TECH.rabarta, level: 0, x: 0, y: 0, z: 0, heading: 0, enemy: true })!;
   eq(dead.tick([{ ...player(1, 5, 5), dead: true }]).length, 0, 'a dead player is not hit');

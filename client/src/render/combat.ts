@@ -59,6 +59,7 @@ import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
 import { ZuAi } from '../combat/enemyfsmep4.ts';
 import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MORFOS, MorfosAi, MorfosBolt, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
 import { IllGillAi } from '../combat/enemyfsmillgill.ts';
+import { ENEMY_HIT_GROUP, enemyTechOnPlayer } from '../combat/enemytechplayer.ts';
 import { MerissaAi } from '../combat/enemyfsmmerissa.ts';
 import { EpsilonFx } from './epsilonfx.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
@@ -4748,7 +4749,7 @@ export class CombatView {
         return;
       }
       case 'tech':
-        if (ev.clientId === this.game.selfId && !this.damage.dead) this.enemyTechHitsPlayer(e, Math.max(0, techPower(TECH[ev.tech], ev.level)), ev.x, ev.z, ev.what);
+        if (ev.clientId === this.game.selfId && !this.damage.dead) this.enemyTechHitsPlayer(e, Math.max(0, techPower(TECH[ev.tech], ev.level)), ev.x, ev.z, ev.what, 0, techGroup(TECH[ev.tech]));
         this.overlay?.techEffect(ev.tech === 'rabarta' ? 'support' : 'light', ev.x, 0, ev.z, 20);
         return;
       case 'megid':
@@ -4955,7 +4956,7 @@ export class CombatView {
         const what = `E-${s.owner.index.toString(16)} (${s.owner.slot.type})`;
         if (fx.kind === 'tech') {
           const wasDying = this.damage.dying;
-          this.enemyTechHitsPlayer(s.owner, fx.power, s.shot.x, s.shot.z, what, fx.knockback ?? 0);
+          this.enemyTechHitsPlayer(s.owner, fx.power, s.shot.x, s.shot.z, what, fx.knockback ?? 0, fx.group ?? 0);
           // A Nano Dragon hit that kills its target starts the power-up
           // (EnemyAI_Projectile hit 0x00580380 / breath 0x0057fed6: the victim's
           // flag 0x800 is set by the hit). ASSUMED: only the local player's
@@ -4979,23 +4980,35 @@ export class CombatView {
     this.shots = this.shots.filter((x) => !x.shot.done);
   }
 
-  // entity_hit_by_tech (0x00773afc) with group 0 on the local player: an
-  // enemy attacker's base is its MST * 0.5 (0x00978278) + power, and case 0
-  // (jump table 0x00977ea0 -> 0x00774cc7) multiplies it by 0.2 (0x00978250),
-  // truncated; no resistance, no evasion roll.
-  // ASSUMED: knockback 0 (try_knockdown_player's threshold was not traced).
-  private enemyTechHitsPlayer(e: EnemyRuntime, power: number, fromX: number, fromZ: number, what: string, knockback = 0): void {
+  // entity_hit_by_tech (0x00773afc) with the local player as the defender and this enemy as the attacker
+  // (combat/enemytechplayer.ts has the groups, the resists they read and the status rolls). `group` is the
+  // technique_group of the cast (0 = the fixed damage, the default). The enemy's MST is its battleparams
+  // MST; the player's resists are selfElements() (EFR / EIC / ETH / ELT / EDK, playerresist.ts).
+  // ASSUMED: the defender state is 0 (a normal player; the freeze / shock need 1) and the last-killer id
+  // (player +0x2d8) is 0; knockback 0 (try_knockdown_player's threshold, 0x25% of max HP, sets a flag only).
+  private enemyTechHitsPlayer(e: EnemyRuntime, power: number, fromX: number, fromZ: number, what: string, knockback = 0, group = 0): void {
     const view = this.view;
     if (!view || this.damage.dead) return;
+    if (group === ENEMY_HIT_GROUP.megid) {
+      this.enemyMegidHitsPlayer(power, what);
+      return;
+    }
     const me = view.playerPositions().get(this.game.selfId);
     const ctx = this.difficultyParams;
     const def = ENEMY_TYPE_PARAMS[e.slot.type];
     const mst = ctx?.params && def?.stats.length ? Math.max(0, ctx.params.stats(ctx.difficulty, def.stats[0]).mst) : 0;
-    const damage = Math.trunc((mst * 0.5 + Math.max(0, power)) * Math.fround(0.2));
+    const out = enemyTechOnPlayer({ group, power, mst, ultimate: ctx?.difficulty === 3, elements: this.selfElements(), rng: () => this.rng() });
+    if (!out.handled) {
+      this.opts.log(`${what}: technique group ${group} not a damage group here`);
+      return;
+    }
+    const damage = out.damage;
     const angle = me ? Math.atan2(me.x - fromX, me.z - fromZ) : 0;
     this.damage.hit(damage, angle, knockback, 0x1000 | e.index);
     if (damage >= 1) this.gainPb(damage, true);
-    this.opts.log(`${what}: technique hit for ${damage}`);
+    if (!this.damage.dead && out.freeze) this.inflictStatus(STATUS.freeze, what);
+    if (!this.damage.dead && out.shock) this.inflictStatus(STATUS.shock, what);
+    this.opts.log(`${what}: technique hit for ${damage}${out.freeze ? ' (freeze)' : ''}${out.shock ? ' (shock)' : ''}`);
   }
 
   // A Saint-Milion missile's blast on the local player (the defender's vtable +0x60 with the boss as
@@ -5165,14 +5178,16 @@ export class CombatView {
     this.opts.log(`${what}: web hold for ${h.frames} frames`);
   }
 
-  // entity_hit_by_tech's Megid case on the local player (an enemy Megid:
-  // the Chaos Sorcerer's in Ultimate, the Del Lily's): death when rand <
-  // (power - EDK) * 0.01 (0x0097826c). ASSUMED: the player's EDK is 0 and the
-  // tech-resist roll (get_player_tech_resist_chance) is left out.
+  // entity_hit_by_tech's Megid case on the local player (an enemy Megid: the Chaos Sorcerer's in
+  // Ultimate, the Del Lily's): death when the roll < (power - EDK) * 0.01 (0x0097826c), EDK = the
+  // player's +0x2fc (playerresist.ts). No tech-resist roll: an enemy cast passes tech_id -1 (the early
+  // miss test is skipped). Blocked in Ultimate when the last killer id (+0x2d8) is above 0xfff.
   private enemyMegidHitsPlayer(power: number, what: string): void {
     if (this.damage.dead) return;
-    const chance = power * 0.01;
-    if (this.rng() < chance) {
+    const ctx = this.difficultyParams;
+    const out = enemyTechOnPlayer({ group: ENEMY_HIT_GROUP.megid, power, mst: 0, ultimate: ctx?.difficulty === 3, elements: this.selfElements(), rng: () => this.rng() });
+    const chance = out.megidChance;
+    if (out.megidKill) {
       this.opts.log(`${what}: Megid (${Math.round(chance * 100)}%) killed you`);
       this.damage.hit(this.damage.hp, 0, 0, 0);
     } else this.opts.log(`${what}: Megid (${Math.round(chance * 100)}%) missed`);

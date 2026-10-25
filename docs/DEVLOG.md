@@ -71,6 +71,55 @@
 **Verdict on the header claim.** Settled: some set branches write the elemental resists [1..5] of the resist block. None of them changes the compared stats (EVP / DFP only), so the port leaves them out with a comment.
 
 **Tests.** `tests/playerstats.test.ts`: the 0x87 / 0x95 checks now expect EVP and zero ATP; new checks for shields 0x93 / 0x9b / 0x86 and shield 0x2a with an armour 0x45 (nothing compared). Passing: playerstats (ALL PASS), playerstatsatp, combatsetatp, playerresist, beattime, combat (NEWSERV, 5860 checks), `tsc --noEmit`. ITEMPMT was the real Sega table (not committed).
+## 2026-10-25: Enemy techniques on the player (entity_hit_by_tech with an enemy attacker) and the set-bonus resists
+
+**Question.** (1) When the defender is the local player and the attacker an enemy, which resist does each technique group read, what is the damage, what are the status rolls, and where does the power come from? (2) Do the item set-bonus branches (handle_item_set_bonus, dump 427136) write the resist block?
+
+**Answer.** `combat/enemytechplayer.ts` (new, the group's damage and rolls), `render/combat.ts` `enemyTechHitsPlayer` (now group-aware, `group` argument, default 0), `combat/playerresist.ts` (`setBonusElementDeltas`: the set bonuses that write [1..5]; the weapon joins the sum). Tests: `tests/enemytechplayer.test.ts` (new), `tests/playerresist.test.ts` (set-bonus checks). Verdicts below.
+
+**PROVEN (entity_hit_by_tech 0x00773afc, objdump 0x00773afc..0x00775600, the Ghidra decompile, tools/exedata.py).**
+- Defender = `ecx` (ebp), attacker = the 2nd argument (ebx), group = edx at entry (the switch is a jump table at 0x00977ea0, `cmpl $0x15`).
+- The resist each group reads (the enemy's own ATP / MST path is the same for every group):
+  - group 1 (Foie, Gifoie, Rafoie): EFR at player +0x2f6.
+  - group 2 (Gibarta, Rabarta): EIC at +0x2fa; group 0x13 (Barta) also EIC, with no status.
+  - group 3 (Zonde family): ETH at +0x2f8 (the `param_1[0xbe]` dword index).
+  - group 4 (Grants): ELT at +0x2fe.
+  - group 5 (Megid): EDK at +0x2fc (`param_1[0xbf]`). The `+0xbf` note in MR_DRAFT_WIKI.md is this slot: EDK, not ELT.
+  - group 0 (fixed damage) and the group 0x15 path: no resist.
+- Damage, group 0 and the element groups: `base = max(0, bpMst) * 0.5 (0x00978278) + max(0, power)` for a monster attacker (the boost branch is for a player attacker, id < 0xc), then `dmg = (100 - R) * 0.002 (0x00978270) * base` for groups 1..4 and 0x13, `dmg = base * 0.2 (0x00978250)` for group 0. Rounded by truncation (fldcw |0xc00). Floats are stored after each multiply (f32).
+- Megid (group 5): no damage; the kill happens when `roll < (power - EDK) * 0.01 (0x0097826c)`; a kill sets the HP to 0 (FUN_00770b74) and the flags 0x800 / 0x200. A miss changes nothing. The gate FUN_00807db8 blocks Megid when a table at 0x0097f040 indexed by the attacker's id is 0xb; the monster ids read no 0xb (ASSUMED from the register flow, the decompile shows `in_EAX`). Ultimate with the defender's +0x2d8 (last killer id) above 0xfff also blocks it (`DAT_00a9cd68 == 3`).
+- Early miss roll (get_player_tech_resist_chance, 0x00775170 reads the `unknown_character_state` pointer at +0x324, short [4], times 0x0097823c, capped at 0x00978238): it runs only when `tech_id != -1` (dump line 86). Every enemy call passes `~foie` = -1 (HandleVoloptTechHit 190519, the Dark Falz and Olga call sites 198604..218432, the Gizonde call at 295423), so the miss roll never runs for an enemy attacker. The header's claim that it does is not right for the enemy side.
+- Status rolls:
+  - Group 2 (freeze): the roll `FUN_007751b0` is drawn after the damage; chance `max(0, EIC / -100 + 0.75)` (0x00978264 = -100, 0x00978268 = 0.75; the attacker id is in 0x1000..0x3fff, so the else branch). The freeze is `vtbl+0xc8` (dump field50_0xc8).
+  - Group 3 (shock): the chance is `max(0, ETH / -100 + 0.75)`; the roll is drawn only when the gate passes; the shock is `vtbl+0xcc` (`afflict_shock`).
+  - The gate is `defender +0x32c == 1 || CheckPlayerInvincibility(attacker) != 0` (disassembly: `movswl 0x32c(%ebp)`, `cmpl $1`, then `movl %ebx,%eax; calll 0x77524c`). CheckPlayerInvincibility returns 0 for any entity id above 0xfff, so an enemy attacker never passes it. A normal player's +0x32c is 0 (the challenge modes write 1..7, SinowberillChallengePlayer_SetChallengeType, dump 552703). So **an enemy's Gibarta / Rabarta / Zonde freezes or shocks a player only in state 1.**
+  - ApplyHitEffects_00773ab0 (called last with the attacker) writes only when the defender's state is 1 and the damage is positive: inert in state 0.
+- Power and tech level: the caller passes the power. For an enemy's Zonde the dump gives `power = level * 20.0 (0x0092092c) + 240.0 (0x00920930)`, the level from the enemy's battleparams (`unknown_get_tech_level_from_battleparams_stats`, HildeBear ultimate branch, dump 295421..295424). `techPower(tech, level)` is the same formula in the port.
+- Which enemies cast which group at the player (the vtable call sites, dump 190519..295424): fixed group 0 for almost all (Volopt, Dark Falz, the Olga minion and form 3 hits, the Olga sword wave); group 1 for the Olga Flow mines (`olga1_mine_attack_player_hit_check` 208123, `CheckOlga1ProximityHit_00495fe0` 215479, power = randomly_adjust(0.1) of the mine); group 3 for the Ultimate Zonde (295423).
+
+**PORTED.**
+- `enemyTechHitsPlayer(e, power, x, z, what, knockback, group)`: group 0 default (the old behaviour, now with the f32 steps); groups 1..5 and 0x13 read `playerElements()`. The freeze and shock go through `inflictStatus` only when the state gate passes. Megid goes through the EDK chance and the Ultimate gate.
+- `tech` events (`TECH[ev.tech]`) and enemy shots of a technique (`ShotEffect.group`, set by `enemyFire` to `techGroup(r.tech)`) pass their group. The Gibarta / Rabarta shot's old unconditional 0.75 freeze (techfire.ts `ENEMY_FREEZE_CHANCE`) is removed: it did not match the exe (no EIC, no state gate). `tests/enemyfsmep2b.test.ts` expectations updated (`group` added).
+
+**SET BONUSES (part 2): VERIFIED, they write the resist block.**
+- `handle_item_set_bonus`'s `param_3` is ApplyEquipmentBonuses' p3 (the item's resist block: `ApplyWeaponStats` writes the armour's pmt bytes to p3[1..5] and the DFP dword to p3+0x1c, so the block is the resist layout). The playerresist.ts header's "stat block" reading was wrong.
+- Written branches (all `p3[1..5]`, ELEMENTS order EFR, EIC, ETH, ELT, EDK):
+  - shield (sub 2, `handle_barrier_and_weapon_set_bonus`, dump 427245..427380): group_idx 0x2a with a worn armour 0x45: +2, +2, +2, +5, +5; group_idx 0x9b with a worn armour 0x56: +20 each; group_idx 0x93: one element +50 by `(beat >> 1) & 3` (0 EFR, 1 EIC, 2 ETH, 3 EDK). The 0x9b branch was labelled "armour" in playerstats.ts; it is the shield's.
+  - weapon (type 0, `handle_weapon_misc_set_bonus`, dump 427516..427594): sub 0xc5: +15 on all five, unconditional; sub 0xac with a worn mag (group 2 = 0x44): ELT +10, EDK +10.
+  - Not elemental: armour set bonus (`handle_frame_weapon_set_bonus`) writes DFP only; shield 0x95 writes EVP [0]; proof of the sword saint writes EVP / DFP; the mags write no resist.
+- Weapons contribute to the player's block through these (`Player_ApplyStatModifications` is applied to each equipped item's p3, `ApplyItemStatsToPlayer_005d1f0c`, dump 425101..425134); `playerElements` now includes the weapon.
+
+**ASSUMED / OPEN.**
+- Defender state 0 and last killer id 0 in the port (no challenge state, no +0x2d8 keeper). So enemy freeze / shock never land on the local player in the port, and the MST term is always included.
+- Megid's table gate at 0x0097f040 is ASSUMED open for monster ids.
+- The episode-2 gate (`DAT_00aafdb8 == 2`, defender +0x28 vs attacker +0x28, the room id) and the defender's 0x4000000 flag (invulnerable, returns 0 with "0") are not ported.
+- Not changed: the enemy Merikle / Mericarol freeze as a separate `kind: 'status'` shot (enemyfsmep2b), which the exe's tech path would not give; the Olga lancer's group (0 assumed); the enemy shots built as `{kind:'tech'}` without a group (group 0 until each is traced); the `techHit` of enemyfsmep2a (group 0).
+- No port of the Olga Flow mine / proximity hit exists; when it is added it must use group 1 (EFR).
+- The knockback flag (try_knockdown_player, 0x400, when the hit is above 25% of max HP) is still the port's `heavy` rule in playerdamage.ts.
+
+**Verdict.** The group-0 formula the port used is right for fixed-damage enemies; the Foie / Zonde / Barta / Grants / Megid groups read EFR / ETH / EIC / ELT / EDK; the status rolls are gated on the defender's state 1 (never in a normal quest). The set bonuses write the resist block (5 branches), now ported.
+
+**Checks.** `node tests/playerresist.test.ts` (ALL PASS, +13 set-bonus checks), `tests/enemytechplayer.test.ts` (new, ALL PASS), `tests/enemyfsmep2b.test.ts`, `tests/playerstats.test.ts`, `tests/techniques.test.ts`, `tests/combatdepth.test.ts`, `NEWSERV=... node tests/combat.test.ts` (5860 checks), `cd client && npx tsc --noEmit -p .`.
 
 ## 2026-10-25: Player elemental resists (EFR / EIC / ETH / ELT / EDK)
 

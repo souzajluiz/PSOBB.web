@@ -33,7 +33,8 @@ export const PLAYER_AIM_HEIGHT = 10;
 // index into its ENEMY_TYPE_PARAMS attack list: the Dark Belra's arm uses
 // entry 19) and roll a status effect on the player it hit (`status`).
 export type ShotEffect =
-  | { kind: 'tech'; power: number; knockback?: number; status?: { type: number; chance: number } }
+  // group: the technique_group of the cast (entity_hit_by_tech's group; 0 = the fixed damage).
+  | { kind: 'tech'; power: number; group?: number; knockback?: number; status?: { type: number; chance: number } }
   | { kind: 'melee'; mult: number; knockback: number; attack?: number; status?: { type: number; chance: number } }
   | { kind: 'status'; status: number }
   | { kind: 'megid'; power: number }

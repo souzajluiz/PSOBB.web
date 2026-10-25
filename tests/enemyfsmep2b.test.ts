@@ -11,7 +11,6 @@ import { SporeCloud } from '../client/src/combat/enemyfsmep2.ts';
 import type { AiFrame, AiTarget, EnemyAiMotion } from '../client/src/combat/enemyai.ts';
 import { STATUS } from '../client/src/combat/status.ts';
 import { TECH, techPower } from '../client/src/combat/techniques.ts';
-import { ENEMY_FREEZE_CHANCE } from '../client/src/combat/techfire.ts';
 
 let failures = 0;
 const check = (ok: boolean, what: string) => {
@@ -557,8 +556,8 @@ class Rig {
       void ai;
       return (shots ?? []).map((s) => s.effect);
     };
-    eq(spells(0, false), [{ kind: 'tech', power: techPower(TECH.foie, 6) }], 'Ul: Foie');
-    eq(spells(1, false), [{ kind: 'tech', power: techPower(TECH.gibarta, 6), status: { type: STATUS.freeze, chance: ENEMY_FREEZE_CHANCE } }], 'Zol (leader, non-ultimate): unknown_create_sorc_tech = Gibarta (freeze)');
+    eq(spells(0, false), [{ kind: 'tech', power: techPower(TECH.foie, 6), group: 1 }], 'Ul: Foie (group 1: the Foie family, EFR on the player)');
+    eq(spells(1, false), [{ kind: 'tech', power: techPower(TECH.gibarta, 6), group: 2 }], 'Zol (leader, non-ultimate): unknown_create_sorc_tech = Gibarta (group 2: the freeze is the hit\'s roll, state 1 only)');
     eq(spells(0, true), [{ kind: 'tech', power: techPower(TECH.gizonde, 6) }], 'Ul, Ultimate: Gizonde');
     eq(spells(1, true), [{ kind: 'megid', power: techPower(TECH.megid, 6) }], 'Zol, Ultimate: Megid');
     const { ai, rig } = mkG({ rng: () => 0.2, params: [1, 0.5, 0, 1, 0, 0] });

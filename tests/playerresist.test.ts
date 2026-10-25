@@ -90,6 +90,27 @@ eq(statusChanceFromResist(25), 0.5, 'resist 25: chance 0.5');
 eq(statusChanceFromResist(100), 0, 'resist 100: chance floored at 0');
 eq(statusChanceFromResist(200), 0, 'resist 200: still 0');
 
+// The set bonuses that write the resist block (handle_item_set_bonus; setBonusElementDeltas): the shield
+// 0x2a with a worn armour 0x45 (+2, +2, +2, +5, +5), the shield 0x9b with a worn armour 0x56 (+20 each),
+// the shield 0x93 (+50 on one element by beat time: 0 EFR, 1 EIC, 2 ETH, 3 EDK), the weapon 0xc5 (+15 each,
+// no condition) and the weapon 0xac with a worn mag 0x44 (ELT +10, EDK +10).
+const W = (hex: string) => itemFromHex((hex + '0'.repeat(24)).slice(0, 24));
+const MAG44 = W('024400');
+eq(res(worn({ weapon: W('00c5') })), { efr: 15, eic: 15, eth: 15, elt: 15, edk: 15 }, 'weapon 0xc5: +15 on all five');
+eq(res(worn({ weapon: W('00ac') })), ZERO, 'weapon 0xac without the mag 0x44: nothing');
+eq(res(worn({ weapon: W('00ac'), mag: MAG44 })), { ...ZERO, elt: 10, edk: 10 }, 'weapon 0xac with mag 0x44: ELT and EDK +10');
+eq(res(worn({ shield: W('01022a'), armour: W('010145') })), { efr: 2, eic: 2, eth: 2, elt: 5, edk: 5 }, 'shield 0x2a with armour 0x45: +2 +2 +2 +5 +5');
+eq(res(worn({ shield: W('01022a') })), ZERO, 'shield 0x2a without armour 0x45: nothing');
+eq(res(worn({ shield: W('01029b'), armour: W('010156') })), { efr: 20, eic: 20, eth: 20, elt: 20, edk: 20 }, 'shield 0x9b with armour 0x56: +20 each');
+eq(res(worn({ shield: W('01029b') })), ZERO, 'shield 0x9b without armour 0x56: nothing');
+const beatShield = W('010293');
+for (const [beat, want] of [[0, { ...ZERO, efr: 50 }], [2, { ...ZERO, eic: 50 }], [4, { ...ZERO, eth: 50 }], [6, { ...ZERO, edk: 50 }], [8, { ...ZERO, efr: 50 }]] as const) {
+  const ctx = { ...defaultSetContext(worn({ shield: beatShield })), beatTime: beat };
+  eq(playerElements(worn({ shield: beatShield }), pmt, ctx), want, `shield 0x93 at beat ${beat}: one element +50`);
+}
+// The armour's set bonus writes DFP only: an armour with its own group index adds no elemental here.
+eq(res(worn({ armour: W('010145') })), ZERO, 'armour 0x45 alone (its set bonus is DFP): no elemental');
+
 // The real table (when present): every armour and shield's bytes land on the same slots, and a unit
 // with stat 9..14 gives its slot. Checked against the raw bytes of the parsed entries.
 const real = process.env.ITEMPMT ?? join(process.env.HOME ?? '', 'Downloads/psobb-master/tethealla/ItemPMT.prs');
