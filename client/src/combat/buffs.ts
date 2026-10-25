@@ -86,16 +86,33 @@ export type BuffGroup = (typeof GROUP)['shifta' | 'deband' | 'jellen' | 'zalure'
 // so a refused, weaker cast still shows it; skipped while the entity's flag
 // 0x2000000 is set (the port keeps no such flag on enemies): +0x11c Shifta (0x00779c64,
 // create_particle_effect_3 with 0x1fd), +0x120 Jellen (0x00779c90, 0x1fd,
-// create_particle_effect13 with the angle vector (0, 0, NaN) at +0x78..+0x80;
-// the port draws it unrotated, ASSUMED), +0x124 Deband (0x00779cd8, 0x1fe),
-// +0x128 Zalure (0x00779d04, 0x1fe, as Jellen). Each makes one emission
-// (+0x34 = 1) at the enemy's position (+0x300), following it with the motion
-// index (flag 0x10, 0x50).
+// create_particle_effect13 with the angle vector (0, 0, NaN) at +0x78..+0x80),
+// +0x124 Deband (0x00779cd8, 0x1fe), +0x128 Zalure (0x00779d04, 0x1fe, as Jellen).
+// Each makes one emission (+0x34 = 1) at the entity's position (+0x300), following
+// the entity whose entity_index is the motion index (flag 0x10, 0x50). The player
+// class (vtable 0x00b2d940, slots +0x11c..+0x128 = the same four functions) gets
+// the same particles on its own object (combat/buffs.ts SUPPORT_PARTICLE, render/combat.ts
+// buffPlayerFx).
 export const SUPPORT_PARTICLE: Readonly<Record<BuffGroup, number>> = {
   [GROUP.shifta]: 0x1fd,
   [GROUP.jellen]: 0x1fd,
   [GROUP.deband]: 0x1fe,
   [GROUP.zalure]: 0x1fe,
+};
+
+// The object angles of those emitters (classic/particles.ts Orient, radians). The
+// create_particle_effect13 calls (Jellen 0x00779c90, Zalure 0x00779d04) pass the
+// vector (0, 0, NaN): the stored Z is 0xffff8000 (`movl $0xffff8000, 0x8(%esp)`).
+// update_particle_effect_single_particle (dump 291423) tests the Z word with an int
+// `== 0`, which fails, so the turned branch runs, and rotate_matrix_by_int_angle
+// (int_angle_sincos, the 0x800 case) turns by 0x8000 BAMS = half a turn about Z:
+// sin 0, cos -1, so the emitter's local velocity loses its X and Y signs. Shifta and
+// Deband pass (0, 0, 0) (create_particle_effect_3 zeroes +0x78..+0x80): unturned.
+export const SUPPORT_ORIENT: Readonly<Record<BuffGroup, readonly [number, number, number] | null>> = {
+  [GROUP.shifta]: null,
+  [GROUP.jellen]: [0, 0, Math.PI],
+  [GROUP.deband]: null,
+  [GROUP.zalure]: [0, 0, Math.PI],
 };
 
 // power = v_power (1) * 0-based level.

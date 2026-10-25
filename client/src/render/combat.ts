@@ -153,7 +153,7 @@ import { boxTargetable, childBoxTable, enemyBoxTable, slotSetType, slotVariant, 
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
 import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { gunBulletStart, SECOND_START_BODY_NODE, weaponPositionY, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
-import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, SUPPORT_PARTICLE, supportPower, type BuffGroup } from '../combat/buffs.ts';
+import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, SUPPORT_ORIENT, SUPPORT_PARTICLE, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { STATUS_ICON_BLAST_FIRST } from '../classic/hud.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
 import { attackHeading, inUnsafeMap, RAND_MAX_C, slowApplies } from './playermove.ts';
@@ -8601,6 +8601,7 @@ export class CombatView {
 
   // entity_hit_by_tech(shifta / deband) on the local player.
   private applySelfBuff(group: BuffGroup, power: number, what: string): void {
+    this.buffPlayerFx(this.game.selfId, group);
     const before = { atp: this.selfBuffs.attack.mult, dfp: this.selfBuffs.defense.mult };
     const took = this.selfBuffs.apply(group, power);
     const slot = group === GROUP.shifta || group === GROUP.jellen ? this.selfBuffs.attack : this.selfBuffs.defense;
@@ -8613,8 +8614,20 @@ export class CombatView {
     this.opts.log(`${what}: ${buffName(group)} ${pct(slot.mult)} for ${(slot.frames / GAME_TICKS_PER_SECOND).toFixed(0)} s (${stat})`);
   }
 
+  // The support hook on a player object (the player vtable's +0x11c..+0x128 are the same
+  // four functions as the enemy's): the same emitter as on an enemy, made before the
+  // stat change, following the player (FindEntityById takes ids below 0xc as players).
+  private buffPlayerFx(clientId: number, group: BuffGroup): void {
+    this.particle(
+      { id: SUPPORT_PARTICLE[group], orient: SUPPORT_ORIENT[group] },
+      () => this.view?.playerPositions().get(clientId)?.clone() ?? null,
+      true,
+    );
+  }
+
   // entity_hit_by_tech(shifta / deband) on another player (the remote copy's slot).
   private applyRemoteBuff(id: number, group: BuffGroup, power: number, what: string): void {
+    this.buffPlayerFx(id, group);
     let b = this.remoteBuffs.get(id);
     if (!b) {
       b = new EntityBuffs();
@@ -8638,7 +8651,7 @@ export class CombatView {
     // The enemy's support hook (combat/buffs.ts SUPPORT_PARTICLE): made before the stat
     // change, so a refused cast shows it too; one emission at the enemy's feet that
     // follows it (create_particle_effect_3 / 13, flag 0x10).
-    this.particle({ id: SUPPORT_PARTICLE[group] }, () => (e.dead ? null : e.instance.root.position.clone()), true);
+    this.particle({ id: SUPPORT_PARTICLE[group], orient: SUPPORT_ORIENT[group] }, () => (e.dead ? null : e.instance.root.position.clone()), true);
     if (!e.buffs.apply(group, power)) return;
     const attackSlot = group === GROUP.jellen || group === GROUP.shifta;
     const slot = attackSlot ? e.buffs.attack : e.buffs.defense;
