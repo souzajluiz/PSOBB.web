@@ -6,6 +6,9 @@ import {
   createTeamPacket,
   crossRankingPacket,
   disbandPacket,
+  exchangeTeamPointsPayload,
+  inviteSubcommand,
+  parseInviteAnswer,
   inTeam,
   memberListPacket,
   memberRowLabel,
@@ -199,6 +202,20 @@ function membershipBytes(): Uint8Array {
   const back = parseTeamChat(p.payload);
   check('07EA round trip: sender and text', back.sender === 'Ann' && back.text === 'hi there');
   check('07EA text is zero terminated (length (len*2+5)&~3 with a 4-byte floor)', p.payload.length === 0x20 + Math.max(4, ((8 * 2 + 5) & ~3)));
+}
+
+// Team Invite (6xC1 body, the 6xC2 answer) and Point Regist (6xCC payload): the layouts the
+// dump's writers and the newserv structs give (net/team.ts).
+{
+  const body = inviteSubcommand({ selfId: 2, guildCard: 0x1234, name: 'Ann', teamName: 'Reds' });
+  const dv = new DataView(body.buffer);
+  check('6xC1 body is 0x5C bytes with the size word 0x17 and the 0xC1 sub', body.length === 0x5c && body[0] === 0xc1 && body[1] === 0x17);
+  check('6xC1 sender id at +2, card at +4, action 0 at +8', dv.getUint16(2, true) === 2 && dv.getUint32(4, true) === 0x1234 && dv.getUint32(8, true) === 0);
+  check('6xC1 name at +0xC (24 units), team name at +0x3C (16 units)', dv.getUint16(0x0c, true) === 0x41 && dv.getUint16(0x3c, true) === 0x52 && dv.getUint16(0x3c + 2 * 3, true) === 0x73);
+  check('6xC2 answer: card at +4, action at +8', JSON.stringify(parseInviteAnswer(body)) === JSON.stringify({ guildCard: 0x1234, action: 0 }));
+  const pts = exchangeTeamPointsPayload(0x100, 3);
+  const pv = new DataView(pts.buffer);
+  check('6xCC payload: item id then amount (u32 each, 8 bytes)', pts.length === 8 && pv.getUint32(0, true) === 0x100 && pv.getUint32(4, true) === 3);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

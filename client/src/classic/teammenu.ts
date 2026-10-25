@@ -64,8 +64,9 @@
 // with a 6x message and waits for his answer: state 68, the 6x subcommand is not
 // decoded; the row is greyed here), Buying Privileges / Team Flag Records (the
 // 19EA / 1AEA / 1BEA / 0FEA packets exist in net/team.ts, the windows do not),
-// inviting a player (03EA / 04EA, [11:0x14c] "Now inviting %s."), the team chat
-// line, the banned-name check (ValidatePlayerName 0x00819f28 against the 90
+// the Home menu's Invite (0x29) and Point Regist (0x2d) are in the Home leaves, see the
+// TeamInviteWindow and TeamPointWindow sections below (their message texts are not identified),
+// the team chat line, the banned-name check (ValidatePlayerName 0x00819f28 against the 90
 // strings of banned_names_list; the server is the only check here).
 // ASSUMED (undecodable from the dump): the width of the master menu and of the
 // member lists (widest row + 20), eight visible rows with scrolling, the
@@ -130,6 +131,8 @@ export interface TeamItemRow {
   id: number;
   name: string;
   count: number;
+  // The item's team points each (ItemPMT); Point Regist's worth. Optional: no table means 0.
+  teamPoints?: number;
 }
 
 // What the menus ask of the connection (net/team.ts TeamClient plus the lobby).
@@ -160,6 +163,12 @@ export interface TeamHost {
   // Team Info (0x2b, see TeamInfoWindow below): 18EA and 19EA / 1AEA answers.
   intraRanking?(): Promise<IntraRanking>;
   rewards?(owned: boolean): Promise<TeamReward[]>;
+  // Team Invite (0x29, TeamInviteWindow): 14EA -> 15EA (the lobby's team info rows), and the invite
+  // (6xC1, the answer 6xC2, then 03EA / 04EA; see net/team.ts). Optional: a host without them has no Invite.
+  nearby?(): Promise<TeamInviteRow[]>;
+  invite?(guildCard: number): Promise<TeamInviteOutcome>;
+  // Point Regist (0x2d, TeamPointWindow): the 6xCC exchange (the local inventory loses the amount).
+  exchangeItem?(itemId: number, amount: number): void;
 }
 
 export interface TeamText {
@@ -1271,6 +1280,290 @@ export class TeamLogWindow {
     ctx.save();
     ctx.translate(extra / 2, 0); // menus follow the counter's centring
     this.list.draw(ctx, skin, TEAM_LOG_POS.x, TEAM_LOG_POS.y, this.text(T11_TEAM_LOG.title), TEAM_LOG_MIN_WIDTH);
+    ctx.restore();
+  }
+}
+
+// --- Home menu > Team > Invite (0x29) ------------------------------------------------------
+//
+// ChallengeMenuWindow_Constructor_0074c860 (dump 720465; process vtable 0x00b41e68 slot 1 =
+// 0x0074c964). Its list is titled unitxt (11, 0x15a) at get_gui_position(0x15) = (13, 256) and
+// its rows are the team info records of the 15EA answer (ChallengeMenuListWindow_UpdateItems_0074d37c:
+// stride 0x85C, name at +0x3c, guild card at +0x34), so the window asks 14EA first (ASSUMED: sent
+// when the window opens). A decided row goes to state 3: the picked player's client id is found
+// (the 12 player records), 6xC1 is sent to it (0x62), and the window waits in state 4 for the
+// invitee's 6xC2 answer. 2 = accept: 03EA with the answer's card, then the 04EA result (state 6);
+// 3 = declined (state 5); anything else is the error path (state 8). The messages of those states
+// are per-file strings (FUN_0079317c), not unitxt, and are not identified: the port shows no
+// message and closes the window when the answer comes (ASSUMED). Keys are ignored while the answer
+// is pending (ASSUMED: Cancel too). The list's 300-frame counter (state 2, DAT_00973a48) is not
+// ported (ASSUMED: no idle close).
+export const T11_TEAM_INVITE = { title: 0x15a } as const;
+export const TEAM_INVITE_POS = { x: 13, y: 256 } as const; // get_gui_position(0x15), static 0x00971f40 + 8 * 0x15
+
+export interface TeamInviteRow {
+  name: string;
+  guildCard: number;
+}
+
+// The outcome of one invite: 'joined' (04EA 0), 'full' (04EA 5), 'failed' (other 04EA flag),
+// 'declined' (6xC2 action other than 2), 'absent' (no such player in the lobby, nothing sent).
+export type TeamInviteOutcome = 'joined' | 'full' | 'failed' | 'declined' | 'absent';
+
+export interface TeamInviteHost {
+  nearby(): Promise<TeamInviteRow[]>;
+  invite(guildCard: number): Promise<TeamInviteOutcome>;
+}
+
+export class TeamInviteWindow {
+  private visible = false;
+  private epoch = 0;
+  private waiting = false;
+  private list = new PickList([]);
+  private readonly host: TeamInviteHost;
+  private readonly text: Text;
+
+  constructor(host: TeamInviteHost, text: Text) {
+    this.host = host;
+    this.text = text;
+  }
+
+  get open(): boolean {
+    return this.visible;
+  }
+
+  get pending(): boolean {
+    return this.waiting;
+  }
+
+  show(): void {
+    const epoch = ++this.epoch;
+    this.visible = true;
+    this.waiting = false;
+    this.list = new PickList([]);
+    this.host
+      .nearby()
+      .then((rows) => {
+        if (epoch !== this.epoch || !this.visible || this.waiting) return;
+        this.list = new PickList(rows.map((r) => ({ label: r.name, value: r.guildCard, enabled: true })));
+      })
+      .catch(() => {});
+  }
+
+  close(): void {
+    this.epoch++;
+    this.visible = false;
+    this.waiting = false;
+  }
+
+  // Returns whether the window is still open.
+  key(e: MenuKey): boolean {
+    if (!this.visible) return false;
+    if (this.waiting) return true;
+    if (menuKeyOf(e) === 'cancel') {
+      this.close();
+      return false;
+    }
+    this.list.key(e);
+    const r = this.list.result;
+    this.list.result = null;
+    const row = this.list.selected;
+    if (r === 'decide' && row?.enabled) this.ask(row.value as number);
+    return true;
+  }
+
+  private ask(guildCard: number): void {
+    const epoch = ++this.epoch;
+    this.waiting = true;
+    this.host.invite(guildCard).then(
+      (outcome) => {
+        if (epoch !== this.epoch || !this.visible) return;
+        console.info(`[classic] Team Invite: ${outcome} (not shown: the message strings are not identified)`);
+        this.close();
+      },
+      () => {
+        if (epoch !== this.epoch || !this.visible) return;
+        this.close();
+      },
+    );
+  }
+
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
+    if (!this.visible) return;
+    ctx.save();
+    ctx.translate(extra / 2, 0); // menus follow the counter's centring
+    this.list.draw(ctx, skin, TEAM_INVITE_POS.x, TEAM_INVITE_POS.y, this.text(T11_TEAM_INVITE.title));
+    ctx.restore();
+  }
+}
+
+// --- Home menu > Team > Point Regist (0x2d) ------------------------------------------------
+//
+// ChallengePlayerInfoWindowListWindow (dump 722203; process ProcessState_0074f2dc, vtable 0x00b42120).
+// The list is the local inventory (ChallengePlayerListWindow_PopulateInventory_00751ee8; ASSUMED:
+// the rows are the items with team points, meseta left out). A decided item with one in the
+// stack asks Yes / No (state 5, unitxt (11, 0x172) is its text, not shown here); a stack asks the
+// amount first (state 4, a numeric list 1..count). Yes sends 6xCC (sendSubcommand 0xCC, in a game
+// only: send_packet0x60_subcommand0xcc returns in the lobby) and the result line is unitxt (11, 0x173)
+// with the points (the item's team points times the amount; "%d"). A key closes it (state 7).
+// ASSUMED: the Yes / No default is No (the exe's SetSelectedIndex 1), the title is unitxt (11, 0x170).
+export const T11_TEAM_POINT = { title: 0x170, result: 0x173 } as const;
+export const TEAM_POINT_POS = { x: 13, y: 256 } as const; // get_gui_position(3), the Team Info list
+export const TEAM_POINT_RESULT_POS = { x: 299, y: 256 } as const; // get_gui_position(4) (the yes/no's); ASSUMED for the result line
+
+export type TeamPointPhase = 'items' | 'quantity' | 'confirm' | 'done';
+
+export interface TeamPointHost {
+  itemRows(): TeamItemRow[];
+  // The 6xCC: the server adds the points, the local inventory loses the amount.
+  exchange(itemId: number, amount: number): void;
+}
+
+export class TeamPointWindow {
+  private visible = false;
+  private phase: TeamPointPhase = 'items';
+  private items: PickList = new PickList([]);
+  private quantity: PickList | null = null;
+  private confirm: PickList | null = null;
+  private chosen: TeamItemRow | null = null;
+  private amount = 0;
+  private earned = 0;
+  private readonly host: TeamPointHost;
+  private readonly text: Text;
+
+  constructor(host: TeamPointHost, text: Text) {
+    this.host = host;
+    this.text = text;
+  }
+
+  get open(): boolean {
+    return this.visible;
+  }
+
+  get state(): TeamPointPhase {
+    return this.phase;
+  }
+
+  // The points of the last exchange (the result line's number).
+  get points(): number {
+    return this.earned;
+  }
+
+  show(): void {
+    this.visible = true;
+    this.enterItems();
+  }
+
+  close(): void {
+    this.visible = false;
+    this.quantity = null;
+    this.confirm = null;
+    this.chosen = null;
+  }
+
+  private enterItems(): void {
+    const rows = this.host.itemRows().filter((r) => r.id !== TEAM_MESETA_ROW_ID && (r.teamPoints ?? 0) > 0);
+    this.items = new PickList(rows.map((r) => ({ label: r.name, value: r.id, enabled: true })));
+    this.phase = 'items';
+    this.quantity = null;
+    this.confirm = null;
+    this.chosen = null;
+  }
+
+  // Returns whether the window is still open.
+  key(e: MenuKey): boolean {
+    if (!this.visible) return false;
+    const k = menuKeyOf(e);
+    switch (this.phase) {
+      case 'items': {
+        if (k === 'cancel') {
+          this.close();
+          return false;
+        }
+        this.items.key(e);
+        const r = this.items.result;
+        this.items.result = null;
+        const row = this.items.selected;
+        if (r === 'decide' && row) {
+          this.chosen = this.host.itemRows().find((x) => x.id === row.value) ?? null;
+          if (!this.chosen) return true;
+          if (this.chosen.count < 2) this.askConfirm(1);
+          else {
+            this.quantity = new PickList(Array.from({ length: this.chosen.count }, (_, i) => ({ label: String(i + 1), value: i + 1, enabled: true })));
+            this.phase = 'quantity';
+          }
+        }
+        return true;
+      }
+      case 'quantity': {
+        if (!this.quantity) return true;
+        if (k === 'cancel') {
+          this.quantity = null;
+          this.phase = 'items';
+          return true;
+        }
+        this.quantity.key(e);
+        const r = this.quantity.result;
+        this.quantity.result = null;
+        const row = this.quantity.selected;
+        if (r === 'decide' && row) this.askConfirm(row.value as number);
+        return true;
+      }
+      case 'confirm': {
+        if (!this.confirm) return true;
+        if (k === 'cancel') {
+          this.confirm = null;
+          this.phase = 'items';
+          return true;
+        }
+        this.confirm.key(e);
+        const r = this.confirm.result;
+        this.confirm.result = null;
+        const row = this.confirm.selected;
+        if (r === 'decide' && row) {
+          if (row.value === 0) this.exchange();
+          else this.enterItems();
+        }
+        return true;
+      }
+      case 'done':
+        this.close();
+        return false;
+    }
+  }
+
+  private askConfirm(amount: number): void {
+    if (!this.chosen) return;
+    this.amount = amount;
+    this.confirm = new PickList([
+      { label: this.text(T11_TEAM.yes), value: 0, enabled: true },
+      { label: this.text(T11_TEAM.no), value: 1, enabled: true },
+    ]);
+    this.confirm.cursor = 1;
+    this.phase = 'confirm';
+  }
+
+  private exchange(): void {
+    if (!this.chosen) return;
+    this.earned = (this.chosen.teamPoints ?? 0) * this.amount; // the item's ItemPMT team points times the amount
+    this.host.exchange(this.chosen.id, this.amount);
+    this.phase = 'done';
+    this.confirm = null;
+    this.quantity = null;
+  }
+
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
+    if (!this.visible) return;
+    ctx.save();
+    ctx.translate(extra / 2, 0); // menus follow the counter's centring
+    if (this.phase === 'done') {
+      const line = this.text(T11_TEAM_POINT.result).replace(/%d/, String(this.earned));
+      new PickList([{ label: line, value: 0, enabled: false }]).draw(ctx, skin, TEAM_POINT_RESULT_POS.x, TEAM_POINT_RESULT_POS.y, null);
+    } else {
+      this.items.draw(ctx, skin, TEAM_POINT_POS.x, TEAM_POINT_POS.y, this.text(T11_TEAM_POINT.title));
+      if (this.phase === 'quantity' && this.quantity) this.quantity.draw(ctx, skin, TEAM_ACTION_POS.x, TEAM_ACTION_POS.y, null);
+      if (this.phase === 'confirm' && this.confirm) this.confirm.draw(ctx, skin, TEAM_ACTION_POS.x, TEAM_ACTION_POS.y, null);
+    }
     ctx.restore();
   }
 }

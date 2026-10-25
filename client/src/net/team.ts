@@ -460,6 +460,80 @@ export class TeamClient {
   }
 }
 
+// --- Team invite (Home menu > Team > Invite, 0x29) and Point Regist (0x2d) -------------------
+//
+// Invite is a peer message, not a team command. The 6xC1 INVITE is built inline by the Invite
+// window's state 3 (exe 0x0074d0e3, the send after the lobby card match at 0x0074ce43); it does
+// not copy any global. Layout (0x5C bytes, size word 0x17 dwords; relayed by 0x62 to the picked
+// client id: 0x00800464 -> 0x007d3fcc, body size = buffer[1] * 4):
+//   +0 u8 0xC1, +1 u8 0x17, +2 u16 NOT written by the exe (stack garbage; ours sends the sender id),
+//   +4 u32 the window's +0x20 (ASSUMED the card the menu sends; not proven to be the picked player's),
+//   +8 u32 action 0 = invite (the exe's withdraw is 1: 0x0074c7fd, header + action 1 only),
+//   +0xC inviter name, 0x18 UTF-16 units (0x006936b4 result, ASSUMED the local player's name),
+//   +0x3C team name, 0x10 units (copied max 0xF units from the global string 0x00a9ab78, ASSUMED).
+// newserv's G_TeamInvitationAction_BB_6xC1_6xC2_6xCD_6xCE (CommandFormats.hh 5855) is the same
+// shape with action "0 or 1 for 6xC1", so no conflict on the 6xC1 layout.
+//
+// The receiver of 6xC1 is 0x0078bc44 (the 0x60 table row C1 at file 0x0060ed04, ASSUMED from the
+// 8-byte row stride to the C2 row at 0x0060ed0c). Action 1 sets 0x00a9c8c4 = 1
+// (withdrawn). Action 0 passes a gate (0x007917b8); when it accepts, 0x0078bddf copies the body
+// (+4..+0x5B) into the global 0x00a9c8c0 (58 bytes) and sets 0x00a98474 |= 0x10 (invite pending).
+// When the gate refuses, the exe answers itself with a 6xC2 built as: +4 0, +8 4, name and team
+// copied from the packet (ASSUMED reading, the copy is not fully traced).
+//
+// The 6xC2 ANSWER as sent by the invitee (the 0x74c970 function writes 0xC2 at its frame +8, not
+// 0xC1; the global-copy senders 0x0074ca78 and 0x00717754 are answers): +4 = the global's first dword
+// (the invite's +4, the invitee's card), +8 = literal 4, +0xC..+0x5B = the global's +8..+0x57.
+// Other C2 senders (0x00722230 family, ~10 sites) copy the global unchanged, so +8 is the stored
+// action. The answer receiver 0x0078be84 (the 0x60 row C2): action == 2 copies the body (+4..+0x5B)
+// into the global 0x00a9c8c0 and sets 0x00a98474 |= 0x20 (accepted); any other action stores
+// 0x00a9c8c4 = action and the name at 0x00a9c8c8 (declined). CONFLICT: the invitee-side literal is 4,
+// the receiver accepts only 2. ASSUMED that the accept answer is sent by a path not yet traced;
+// the code keeps 2 = accept (TEAM_INVITE_ACCEPT), the receiver's proven check.
+//
+// On accept the inviter sends 03EA with that card (FUN_007f323c) and waits for 04EA (the flag).
+//
+// Point Regist (0x2d) sends 6xCC: [0xCC, 3, sender id (u16 at +2), item id u32, amount u32]
+// (send_packet0x60_subcommand0xcc, dump 570353; sent only in a game, newserv
+// on_exchange_item_for_team_points_bb).
+
+export const TEAM_INVITE_SUB = 0xc1;
+export const TEAM_INVITE_ANSWER_SUB = 0xc2;
+export const TEAM_INVITE_SIZE = 0x5c;
+export const TEAM_INVITE_ACCEPT = 2;
+export const TEAM_POINTS_SUB = 0xcc;
+export const TEAM_POINTS_SIZE = 0x0c;
+const INVITE_NAME_UNITS = 0x18;
+
+// The inviter's 6xC1 body; the caller targets it at the picked player's client id (0x62 flag).
+export function inviteSubcommand(o: { selfId: number; guildCard: number; name: string; teamName: string; action?: number }): Uint8Array {
+  const b = new Uint8Array(TEAM_INVITE_SIZE);
+  const dv = new DataView(b.buffer);
+  b[0] = TEAM_INVITE_SUB;
+  b[1] = TEAM_INVITE_SIZE / 4;
+  dv.setUint16(2, o.selfId, true);
+  dv.setUint32(4, o.guildCard >>> 0, true);
+  dv.setUint32(8, (o.action ?? 0) >>> 0, true);
+  b.set(utf16(o.name, INVITE_NAME_UNITS), 0x0c);
+  b.set(utf16(o.teamName, TEAM_NAME_UNITS), 0x3c);
+  return b;
+}
+
+// The 6xC2 answer as received: the accepter's card and the action.
+export function parseInviteAnswer(body: Uint8Array): { guildCard: number; action: number } {
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return { guildCard: dv.getUint32(4, true), action: dv.getUint32(8, true) };
+}
+
+// The 6xCC body (the 4-byte header included; the caller's sendSubcommand writes the sender id).
+export function exchangeTeamPointsPayload(itemId: number, amount: number): Uint8Array {
+  const b = new Uint8Array(TEAM_POINTS_SIZE - 4);
+  const dv = new DataView(b.buffer);
+  dv.setUint32(0, itemId >>> 0, true);
+  dv.setUint32(4, amount >>> 0, true);
+  return b;
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new TeamError(what, -1)), ms);
