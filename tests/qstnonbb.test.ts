@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { prsDecompress } from '../client/src/formats/prs.ts';
 import { prsCompress } from '../client/src/formats/prscompress.ts';
 import { decodeDownloadQuestData, DLQ_HEADER_SIZE, psoV2Crypt } from '../client/src/formats/psov2.ts';
-import { packQst, packQstFiles, parseQstFiles, qstVersion, type QstVersion } from '../client/src/formats/qst.ts';
+import { packQst, packQstFiles, parseQstFiles, qstVersion, withBinLanguage, type QstVersion } from '../client/src/formats/qst.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MAIN_ROOT = (() => {
@@ -263,6 +263,35 @@ for (const version of VERSIONS) {
     tooLong = /does not fit/.test((e as Error).message);
   }
   check(tooLong, 'packQst: a 12-character base does not fit the PC name field with ".bin"');
+}
+
+// 4b. The download .bin language override (newserv create_download_quest): byte 0x10
+// of the decompressed .bin on DC v1/v2, PC and GC; nothing else changes. 0xFF is a
+// no-op, BB has no field.
+{
+  const gcBinPath = NEWSERV ? join(NEWSERV, 'system/quests/events/q146-gc-e.bin') : null;
+  if (gcBinPath && existsSync(gcBinPath)) {
+    const prsBin = new Uint8Array(readFileSync(gcBinPath));
+    const orig = prsDecompress(prsBin);
+    for (const [version, lang] of [['GC', 3], ['PC', 0], ['DC', 7]] as const) {
+      const out = withBinLanguage(prsBin, version, lang);
+      const got = prsDecompress(out);
+      check(got[0x10] === lang, `${version} language override: byte 0x10 is ${got[0x10]}, not ${lang}`);
+      const expect = Uint8Array.from(orig);
+      expect[0x10] = lang;
+      check(same(got, expect), `${version} language override changed bytes other than 0x10`);
+    }
+    check(same(withBinLanguage(prsBin, 'GC', 0xff), prsBin), 'language 0xFF is not a no-op');
+    let refused = false;
+    try {
+      withBinLanguage(prsBin, 'BB', 1);
+    } catch (e) {
+      refused = e instanceof RangeError;
+    }
+    check(refused, 'a BB .bin takes no language override');
+  } else {
+    console.log('SKIP language override check (no newserv GC quest)');
+  }
 }
 
 // 5. newserv's own encode-qst and decode-qst.

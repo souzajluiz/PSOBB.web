@@ -169,6 +169,21 @@ Closes HANDOFF item 2 (the 10-22 entry "Dark Falz camera: the live pivots of the
 - Not run in Chrome.
 
 **Checks:** `node tests/mechgun.test.ts` 22 checks, 0 failures. `node tests/gunbullet.test.ts` all passed. `node tests/weaponorigin.test.ts` all passed (with `vendor/newserv` linked). `node tests/combat.test.ts` 5852 checks, 0 failures. `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24) clean.
+## 2026-10-25: BB download `.qst` payload is plain PRS; the download `.bin` language override
+
+**Question:** is the payload of a BB download `.qst` (A6 open / A7 write) a PSO V2 DLQ payload (u32 size, u32 seed, V2-encrypted PRS) or plain PRS? newserv's `decode_qst_data_t` decodes every A6 file as DLQ, BB included; the port had assumed plain PRS for BB.
+
+**Verdict: plain PRS.** Decisive lines:
+- PsoBB.exe `decompress_received_quest_files` (refsrc `src/Psobb.exe-5-10-2026.c` line 630103): `prs_decompress(g_ReceivingQuestBinBuffer, ...)` and `prs_decompress(g_ReceivingQuestDatBuffer, ...)`, no decrypt. The other receive path (`HandleQuestFileHeader_006ccbce` / `receive_quest_chunk`, handler slots 0x21 / 0x22) copies the bytes as they come. The dump has no 0xA6 / 0xA7 case.
+- newserv `Quest.cc` `create_download_quest`: `case Version::BB_V4: throw "PSOBB does not support download quests"`. `encode-qst --bb --download` is refused (checked). So newserv never produces a BB A6.
+- newserv's own decoder on a BB A6 file made from its BB 44 `.qst` by relabeling the commands: `decode-qst` fails with `backreference offset beyond beginning of output`. newserv's DLQ assumption for BB does not hold for a plain-PRS payload; the port keeps plain PRS.
+- Open caveat: the exe's `LoadAndDecryptAsset_005b9b3c` (line ~404805) decrypts a DLQ-shaped block (size, key, V2 PRS), but it sits under the `QuestManager` state machine (shuffle, CRC32, local QuestVM path). No A6 receive reaches it in the dump.
+
+**Port:** `formats/qst.ts` already read and wrote BB A6 / A7 as plain PRS; this change makes it documented fact (comments, `docs/QUESTFILES.md`), with tests: `tests/questwrite.test.ts` BB download block (A6 open first, 8-aligned, files are the plain PRS of the `.bin` / `.dat`, 55 quests round-trip, newserv refusal, and a cross-check: newserv's BB 44 `.qst` relabeled to A6 / A7 parses to the same PRS files).
+
+**Language override:** `withBinLanguage(prsBin, version, language)` ports `create_download_quest`'s override (`Quest.cc` 868): byte 0x10 of the decompressed `.bin` (DC v1/v2, PC, GC/Xbox headers, `PSOQuestHeaderDC` / `PC` / `V3`), re-compressed; `0xFF` is a no-op; BB has no language field and is refused. `tests/qstnonbb.test.ts` checks the one changed byte on a newserv GC `.bin`.
+
+**Verification:** `node tests/qstnonbb.test.ts`, `node tests/questwrite.test.ts`, `NEWSERV=... node tests/quests.test.ts` pass; `npx tsc --noEmit -p .` clean.
 
 ## 2026-10-25: Non-BB download `.qst` writer (DC / PC / GC command structs)
 

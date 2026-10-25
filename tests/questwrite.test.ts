@@ -24,7 +24,7 @@ import { QUEST_OPCODES, questOpcode, questOpcodeByName } from '../client/src/for
 import { assembleQuest, disassembleQuest, QuestAssemblyError } from '../client/src/formats/questasm.ts';
 import { decodeTypedData, encodeTypedData, typedLayout, type FieldValue, type TypedRecord } from '../client/src/formats/questdata.ts';
 import { buildQuestDat, serializeQuestBin, serializeQuestDat, setQuestDatChunk } from '../client/src/formats/questwrite.ts';
-import { packQst, parseQst } from '../client/src/formats/qst.ts';
+import { packQst, parseQst, parseQstFiles } from '../client/src/formats/qst.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MAIN_ROOT = (() => {
@@ -223,6 +223,87 @@ check(binExact === quests.length, 'not every .bin round-trips');
 check(asmExact === quests.length, 'not every .bin round-trips through the assembler');
 check(datExact === withDat, 'not every .dat round-trips');
 check(ratioSum / ratioN < 1.5, `PRS output averages ${(ratioSum / ratioN).toFixed(2)}x the shipped size`);
+
+// --- BB download .qst (A6 / A7): the payload is plain PRS ----------------------
+// Evidence (docs/QUESTFILES.md): PsoBB.exe's receive path decompresses A6 / A7 bytes
+// without a decrypt, and newserv refuses to build a BB download .qst. So a BB A6 file
+// holds the same PRS stream as a BB 44 file, with no PSO V2 header.
+{
+  const dlTmp = mkdtempSync(join(tmpdir(), 'bbdl-'));
+  try {
+    let dlExact = 0;
+    for (const q of quests.filter((_, i) => i % 6 === 0)) {
+      if (!q.dat) continue;
+      const bin = parseQuestBin(load(q.bin));
+      const dat = parseQuestDat(load(q.dat));
+      const binSerialized = serializeQuestBin(bin);
+      const datSerialized = serializeQuestDat(dat);
+      const dl = packQst(bin, dat, { filename: q.stem.slice(0, 12), download: true });
+      const dv = new DataView(dl.buffer, dl.byteOffset, dl.byteLength);
+      check(dv.getUint16(0, true) === 0x58 && dv.getUint16(2, true) === 0xa6, `${q.label}: BB download .qst does not start with an A6 open`);
+      check(dl.length % 8 === 0, `${q.label}: BB download .qst is not 8-aligned`);
+      const parsed = parseQstFiles(dl);
+      check(parsed.version === 'BB' && parsed.download === true, `${q.label}: BB download parsed as ${parsed.version}, download ${parsed.download}`);
+      const binFile = parsed.files.find((f) => f.filename.endsWith('.bin'))!;
+      const datFile = parsed.files.find((f) => f.filename.endsWith('.dat'))!;
+      // The stored bytes are the PRS streams themselves (no DLQ header, no seed).
+      check(binFile.seed === undefined && datFile.seed === undefined, `${q.label}: BB download file has a PSO V2 seed`);
+      check(same(prsDecompress(binFile.compressed), binSerialized), `${q.label}: BB A6 .bin is not plain PRS of the .bin`);
+      check(same(prsDecompress(datFile.compressed), datSerialized), `${q.label}: BB A6 .dat is not plain PRS of the .dat`);
+      const back = parseQst(dl);
+      if (back.download && same(serializeQuestBin(back.bin), binSerialized) && same(serializeQuestDat(back.dat), datSerialized)) dlExact++;
+      else fail(`${q.label}: BB download packQst -> parseQst differs`);
+    }
+    check(dlExact > 10, `BB download round trip ran on too few quests (${dlExact})`);
+    console.log(`BB download .qst: ${dlExact} quests round-trip as plain PRS`);
+
+    // newserv will not build one: this is the record of that refusal.
+    if (NEWSERV_BIN) {
+      const sample = quests.find((q) => q.dat);
+      if (sample) {
+        const binCopy = join(dlTmp, `${sample.stem}.bin`);
+        // newserv reads its inputs as the PRS files they are on disk (load() decompresses).
+        writeFileSync(binCopy, readFileSync(sample.bin));
+        writeFileSync(join(dlTmp, `${sample.stem}.dat`), readFileSync(sample.dat!));
+        const out = join(dlTmp, `${sample.stem}-dl.qst`);
+        let refused = false;
+        try {
+          execFileSync(NEWSERV_BIN, ['encode-qst', binCopy, out, '--bb', '--download'], { cwd: NEWSERV, stdio: 'pipe' });
+        } catch (err) {
+          refused = String((err as { stderr?: Buffer }).stderr ?? '').includes('does not support download quests');
+        }
+        check(refused, 'newserv encode-qst --bb --download did not refuse (the BB download assumption may need a look)');
+
+        // Cross-check: newserv's BB 44 / 13 .qst, with only the commands relabeled to A6 / A7
+        // (the bytes of every file unchanged), parses here as a download whose files are
+        // the same PRS streams newserv's own .qst carries.
+        const onlinePath = join(dlTmp, `${sample.stem}-on.qst`);
+        execFileSync(NEWSERV_BIN, ['encode-qst', binCopy, onlinePath, '--bb'], { cwd: NEWSERV, stdio: 'pipe' });
+        const online = new Uint8Array(readFileSync(onlinePath));
+        const relabeled = new Uint8Array(online);
+        for (let at = 0; at + 8 <= relabeled.length; ) {
+          const rdv = new DataView(relabeled.buffer);
+          const size = rdv.getUint16(at, true);
+          const cmd = rdv.getUint16(at + 2, true);
+          if (cmd === 0x44) rdv.setUint16(at + 2, 0xa6, true);
+          else if (cmd === 0x13) rdv.setUint16(at + 2, 0xa7, true);
+          at += Math.max(size, 8);
+          at = (at + 7) & ~7;
+        }
+        const asOnline = parseQstFiles(online);
+        const asDownload = parseQstFiles(relabeled);
+        check(!asOnline.download && asDownload.download, 'relabeled newserv .qst is not parsed as a download');
+        check(asOnline.files.length === 2 && asDownload.files.length === 2, 'relabeled newserv .qst lost a file');
+        for (let i = 0; i < 2; i++) {
+          check(asDownload.files[i].filename === asOnline.files[i].filename && same(asDownload.files[i].compressed, asOnline.files[i].compressed), `BB relabeled A6 file ${i} differs from newserv's 44 file`);
+        }
+        console.log(`BB download cross-check: newserv's ${sample.stem} .qst relabeled to A6 / A7 parses to the same PRS files`);
+      }
+    }
+  } finally {
+    rmSync(dlTmp, { recursive: true, force: true });
+  }
+}
 
 // --- Assembler behaviour -------------------------------------------------------
 {
