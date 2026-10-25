@@ -1,5 +1,30 @@
 # Devlog
 
+## 2026-10-25: Revive HP / TP by source: the item's TP restore ported, Reverser and Moon Atomizer already on the exe rule
+
+**Question:** what HP and TP does a revive give, per source? The brief assumed the Reverser and the Moon Atomizer used 1/8 HP and no TP. Traced on the exe (Ephinea 1.25.13).
+
+**Exe evidence:**
+- Reverser sender: the cast is a support cast (6x47 target, DEVLOG 2026-10-23). Receiver: `entity_hit_by_tech` case `reverser` (dump `Psobb.exe-05112026.c` 748212) calls vtable `+0x108` with no argument, and the dead-target gate (747826) exempts `reverser`. Vtable `+0x108` is `PlayerResetDeadState_0068fdc8` (dump 571414): clears the dead flag, then `PlayerRestoreHealthAndTP_0068fddc`. Checked with a PE scan (not Ghidra): slot `+0x108` of the two vtables in `.data` that hold `0x0068fdc8` (VA `0x00b39460`, `0x00b3a3a0`) is `0x0068fdc8`.
+- `PlayerRestoreHealthAndTP_0068fddc` (dump 571426): if `g_QuestStarted != 1`, in an unsafe map, not in battle mode, invincibility != 3: `ClampEntityHP(max_hp1 / 2)` and TP untouched. Otherwise `ClampEntityHP(max_hp1)` and `tp2 = max_tp2`. **Proven** (the port's `reviveRestore` in `combat/buffs.ts` already does this; the battle and invincibility tests are folded into `quest`, ASSUMED as before).
+- Moon Atomizer: 6x33 receiver `HandlePacket0x60Subcommand0x1d_0069a1e0` (dump 580490): the caster and the target must be valid, the target `+0x33c & 4` clear and `+0x14 == g_pPlayerRoot`; then `CreateTechniqueEntity_006ef8a4(caster, pos, [target, 0xffff pad], 0x1d)`. The constructor (dump 652010..) takes its power, range and angle from `technique_data_array[0x11]`, which is the Reverser (TECH 0x11). **Proven:** the 0x1d object is the Reverser's data. Its hit group is ASSUMED `reverser` (the per-target hit call, `TechniqueEntity_Update_006ef3b8` +0x14, is not traced to its group argument). The receiver does no dead check: a live target would take the same `reverser` case (ASSUMED reachable only with a dead target, since the sender picks dead teammates). The port keeps its dead gate (`render/combat.ts` `onRevivePlayer`).
+- Automatic revival item: `Player_DisableMovement_0068fd74` runs `PlayerRestoreHealthAndTP_0068fda4` (dump 571402: `ClampEntityHP(max_hp1)`, `tp2 = max_tp2`, unconditional). This is the item path's full restore. **Proven** for HP (earlier entry). The TP side was missing in the port: `PlayerDamage.revive(hp, true)` set HP only.
+- Newserv: 6x33 is `on_forward_check_game` (`ReceiveSubcommands.cc` 5653, forwarded, no HP change); 6x4F `on_player_revived` forwards. The server sets no revive HP.
+
+**Port:**
+- `client/src/combat/playerdamage.ts`: new event `restoreTp?()`, called by `revive(.., autoItem = true)` before the 6x31 (the exe's Player_DisableMovement runs before the 6x29; the TP restore is not on the wire, so the order is not observable).
+- `client/src/render/combat.ts`: `restoreTp` sets `this.tp = progression.maxTp`.
+- No change to the Reverser / Moon Atomizer rule (already `reviveRestore`, DEVLOG 2026-10-23).
+- The web R key revive (1/8 HP, no TP) is a web convenience, not an exe source (ROADMAP 2026-10-23). Kept, pinned by the test.
+- `tests/revive.test.ts` (10 checks): the three rules, the item's TP restore and send order, the R key's 1/8.
+
+**ASSUMED / open:**
+- 6x4F and 6x31 on the Reverser / Moon Atomizer path: the exe's `PlayerResetDeadState` sends neither; the port sends 6x4F (`PlayerDamage.revive`). The exe's sender of 6x4F for the Reverser is not traced (the dispatch_action_0x4f transition is open, as in the 2026-10-25 entries).
+- The Reverser's invulnerability 300 and the 0x12 state on that path: not traced (the port sets them in `revive()`).
+- The 0x1d object's hit group (see above).
+
+**Checks:** `node tests/revive.test.ts` (10/10), `node tests/scapedoll.test.ts` (31), `node tests/returnprompt.test.ts` (62/62), `node tests/combatdepth.test.ts` (836, 0 failures), `NEWSERV=<main>/vendor/newserv node tests/combat.test.ts` (5859, 0 failures), `tsc --noEmit -p client` clean (Node 24). Not run in Chrome.
+
 ## 2026-10-25: Team invite layout: the 6xC1 invite is built inline, the global-copy sender is the 6xC2 answer
 
 **Question:** the Team Invite port (0x29) was to copy the global 0x00a9c8c0 into the 6xC1 body with +8 = 4. Is that the invite layout?
