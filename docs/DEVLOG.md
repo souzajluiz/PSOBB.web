@@ -206,6 +206,43 @@ beast's own copies); the local-player-only test; the heading as radians. NOT POR
 
 **Checks:** `client/node_modules/.bin/tsc --noEmit -p client` (Node 24) exit 0; `node tests/olgaflowai.test.ts` all
 checks passed; `node tests/bossrooms.test.ts` ALL PASS. Not run in Chrome.
+## 2026-10-25: Episode 2 watch: chained wave groups run (the kill starts the chain), the spawn-state kills that do not die
+
+**Question:** the 2026-10-24 watch entry found the section-placed groups that are chained waves (their wave starts from another wave's `trigger_event`) and left them unrun. Does the spec now run them, and what happens to the chain?
+
+**Spec (`client/e2e/ep2-floors-watch.spec.ts`):** a group with kind `chained` is placed on the first link of its chain that has a trigger object. Each link from there is killed in chain order (`killWave`: `c.applyEnemyHit(e, ..., 9999, ...)` on the living enemies of (room, wave)); `waitBuilt` waits up to 10 s for a built enemy of the link first. Then the watch. `EP2_FLOOR_CAP_S` (default 300 s) skips the groups that start after the cap (`notRun`). One JPEG per floor (`client/test-results/.../ep2-floor-<n>.jpg`).
+
+**Run:** `npx playwright test e2e/ep2-floors-watch.spec.ts` (webtest, local newserv and bridge), Chrome headless. `1 passed (22.9m)`, `page errors: 0`, no failed requests. Floors 1 / 5 / 7 / 10 ran 8 / 9 / 8 / 8 groups of 26 / 13 / 25 / 33; the 300 s cap skipped 18 / 4 / 17 / 25. The cap, not the code, limits coverage: the spec is a sampler, not a full pass.
+
+**Chained groups that ran (13 runs, 9 distinct waves):**
+
+| floor | group | chain (root first) | kill result per link (hit / alive after) |
+|---|---|---|---|
+| 1 | room 11 wave 2 | event 111 | 5 / 0 |
+| 1 | room 30 wave 2 | event 301 | 3 / 1 |
+| 1 | room 40 wave 2 | event 401 | 6 / 0 |
+| 5 | room 3 wave 2 | event 31 | 3 / 3 |
+| 5 | room 3 wave 3 | event 31, 311 | 3 / 3, then 2 / 2 |
+| 5 | room 3 wave 5 | event 32 | 3 / 3 |
+| 5 | room 5 wave 5 | event 52 | 1 / 1 |
+| 7 | room 3 wave 2 | event 31 | 2 / 2 |
+| 7 | room 5 wave 8, 9, 10 | event 51, 5104, 51041 | 4 / 4, 1 / 1, 1 / 1 |
+| 10 | room 20 wave 2 | event 202 | 5 / 0 |
+| 10 | room 21 wave 2 | event 212 | 3 / 0 |
+
+**States seen:**
+- Chained groups that were killed to 0 alive (f1 r11w2, f1 r40w2, f10 r20w2, f10 r21w2) had GRASS_ASSASSIN in `emerge`, DOLMOLM / DOLMDARL in `emerge`, LA_DIMENIAN `idle`. Their kills went through.
+- The chained groups with enemies still alive after the kill were all in `spawn` (GEE, SINOW_SPIGELL, MERILLIA), with no state change during the watch. `applyEnemyHit` with 9999 did not kill them.
+- In the room 3 chain (floor 5), link 31 was not killed, so link 311 did not start; the room 3 wave 2 and wave 3 groups stayed in `spawn`.
+- Direct-trigger groups behaved as before: states moved (`chase`, `lunge`, `recover`, `emerge`, `burrow`, `opened`/`closed`), changes per group in the tens for RECOBOX / RECON, and `dead` stayed 0 in every group, including the groups where the kill reported hits.
+
+**Port bug?** Not established. The pattern (kill works on `emerge` / `idle` enemies, fails on `spawn`-state enemies) fits the 2026-10-24 hypothesis that a `spawn`-state enemy is not yet a live target, but the exe's rule for that is not checked here. A `tools/refsrc.sh` / `tools/ghidra/decomp.sh` lookup of the spawn state's damage gate (the enemy FSM's spawn case, `0x005690f8` in the 2026-10-24 notes) is the next step. Not changed: no fix made, since the cause is not yet pinned to the exe.
+
+**Also open:** `dead` is 0 in every group even where the kill reported `hit N, alive 0`. The final list (`enemyStates` filtered to the group) drops the dead entries, so `dead` does not count the killed enemies. The spec's `dead` figure is therefore not a kill count; use `chainKilled` for that.
+
+**ASSUMED:** the chained link's enemies are the ones `waitBuilt` sees (`room` and `wave` of the set entry). The kill uses the same match.
+
+**Tests:** `npx tsc --noEmit -p .` in `client`: 0 errors. The spec run above (Chrome, headless).
 
 ## 2026-10-24: NPC attack AI: the cast eligibility of the head's chooser (CanPlayerCastTechnique)
 

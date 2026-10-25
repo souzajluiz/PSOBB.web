@@ -11,7 +11,14 @@
 //    states every 0.5 s: a state change is a tick that ran; it records per enemy type the states
 //    seen, the changes, the dead count, and the group's wave event flags before and after.
 // Floors: EP2_WATCH_FLOORS (default 1,5,7,10). The Lab warp is the reset; nothing is forced
-// (no 6x67, no kill). Against a local newserv (e2e/README.md).
+// (no 6x67, no kill) except for a chained group (label 'chained'): the group's wave event is started
+// by trigger_event from another wave event's action stream (the chain), so the spec places the player
+// on the first link of the chain that has a trigger object, then kills the built enemies of each link
+// in chain order (combat applyEnemyHit with 9999 damage: the kill flow, 6x76 and the wave's
+// enemies-dead flag), which runs the next link's trigger_event; then it watches.
+// Each floor has a time cap (EP2_FLOOR_CAP_S, default 300 s): a group that starts after the cap is not
+// run (counted in notRun). One screenshot per floor (client/test-results, JPEG).
+// Against a local newserv (e2e/README.md).
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { consoleLog, cursorTo, expectInGame, key, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
 
@@ -21,6 +28,15 @@ const WATCH_MS = Number(process.env.EP2_WATCH_SECONDS ?? 30) * 1000;
 const FLOORS = (process.env.EP2_WATCH_FLOORS ?? '1,5,7,10').split(',').map((s) => Number(s.trim()));
 const POLL_MS = 500;
 const LAB_FLOOR = 0;
+const FLOOR_CAP_MS = Number(process.env.EP2_FLOOR_CAP_S ?? 300) * 1000;
+
+// One wave event above the group in its chain: its room / wave and its trigger object, if any.
+interface ChainLink {
+  id: number;
+  room: number;
+  wave: number;
+  trigger: { x: number; y: number; z: number } | null;
+}
 
 interface GroupInfo {
   floor: number;
@@ -29,6 +45,11 @@ interface GroupInfo {
   wave: number;
   eventIds: number[];
   trigger: { index: number; x: number; y: number; z: number; radius: number; eventId: number } | null;
+  // trigger: the group's own event has a trigger object; chained: it is started by a trigger_event of
+  // the chain (chain = its links, root first); event-untriggered: it has a wave event but nothing
+  // starts it; section: no wave event at all.
+  kind: 'trigger' | 'chained' | 'event-untriggered' | 'section';
+  chain: ChainLink[];
   sectionCentre: [number, number, number] | null;
   enemiesOfGroup: number; // entries of the floor's set data in this (room, wave)
 }
@@ -43,7 +64,8 @@ interface TypeStat {
 }
 
 interface GroupResult extends GroupInfo {
-  placedBy: 'trigger' | 'section' | 'none';
+  placedBy: 'trigger' | 'section' | 'none' | 'chained';
+  chainKilled: string[];
   playerRoom: number;
   eventFlagsBefore: number[];
   eventFlagsAfter: number[];
@@ -69,7 +91,15 @@ const floorData = (page: Page) =>
     return {
       floor: v.debug().floor() as number,
       area: (f.viewer?.area ?? -1) as number,
-      events: (fw?.events ?? []).map((e: any) => ({ index: e.index, id: e.id, type: e.type, room: e.room, wave: e.wave, delay: e.delay })),
+      events: (fw?.events ?? []).map((e: any) => ({
+        index: e.index,
+        id: e.id,
+        type: e.type,
+        room: e.room,
+        wave: e.wave,
+        delay: e.delay,
+        actions: (e.actions ?? []) as Array<{ op: string; eventId?: number }>,
+      })),
       flags: fw ? [...fw.flags] : [],
       enemies: (fw?.enemies ?? []).map((e: any) => ({ key: e.key, room: e.room, wave: e.wave, flags: e.flags })),
       triggers: trig.map((t) => ({ index: t.index, x: t.x, y: t.y, z: t.z, radius: t.radius, eventId: t.eventId, fired: t.fired })),
@@ -123,7 +153,7 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
   await expectInGame(page, logs, name);
 
   const results: GroupResult[] = [];
-  const floorSummary: Record<number, { groups: number; noTrigger: string[]; states: Record<string, string[]> }> = {};
+  const floorSummary: Record<number, { groups: number; notRun: number; noTrigger: string[]; states: Record<string, string[]> }> = {};
 
   for (const floor of FLOORS) {
     // Discovery: the floor's groups, from one load.
@@ -140,29 +170,40 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
     expect(d.floor, `floor ${floor} reached`).toBe(floor);
     const groups = groupsOf(d, floor);
     console.log(`ep2w floor ${floor} (area 0x${d.area.toString(16)}): ${groups.length} groups, ${d.triggers.length} triggers, ${d.events.length} events, ${d.enemies.length} set entries ${discoveryError}`);
-    floorSummary[floor] = { groups: groups.length, noTrigger: [], states: {} };
+    floorSummary[floor] = { groups: groups.length, notRun: 0, noTrigger: [], states: {} };
+    const floorStart = Date.now();
 
     for (const g of groups) {
+      if (Date.now() - floorStart > FLOOR_CAP_MS) {
+        floorSummary[floor].notRun++;
+        continue;
+      }
       await test.step(`floor ${floor} room ${g.room} wave ${g.wave}`, async () => {
         const mark = { errors: errors.length, failed: failed.length, logs: logs.length };
         // A fresh load of the floor for each group: its events have not run yet.
         await warp(page, LAB_FLOOR).catch(() => {});
-        await page.waitForTimeout(1500);
+        await page.waitForTimeout(1000);
         let warpError = '';
         try {
           await warp(page, floor);
         } catch (e) {
           warpError = String((e as Error).message ?? e).slice(0, 300);
         }
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(2500);
         const before = await floorData(page);
         const trig = before.triggers.filter((t) => g.eventIds.includes(t.eventId));
         const t = trig[0] ?? null;
+        // A chained group: the first link of its chain with a trigger object is placed on it (the root
+        // when the root has one); the kill below starts the rest of the chain.
+        const startAt = g.kind === 'chained' ? g.chain.findIndex((l) => l.trigger) : -1;
+        const chainTrig = startAt >= 0 ? g.chain[startAt].trigger : null;
         const target = t
           ? { x: t.x, y: t.y + 5, z: t.z, by: 'trigger' as const }
-          : g.sectionCentre
-            ? { x: g.sectionCentre[0], y: g.sectionCentre[1] + 5, z: g.sectionCentre[2], by: 'section' as const }
-            : null;
+          : chainTrig
+            ? { x: chainTrig.x, y: chainTrig.y + 5, z: chainTrig.z, by: 'chained' as const }
+            : g.sectionCentre
+              ? { x: g.sectionCentre[0], y: g.sectionCentre[1] + 5, z: g.sectionCentre[2], by: 'section' as const }
+              : null;
         if (target) {
           await page.evaluate(
             ([x, y, z]) => {
@@ -173,6 +214,18 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
           );
         }
         await page.waitForTimeout(500);
+        const chainKilled: string[] = [];
+        if (target?.by === 'chained') {
+          for (const link of g.chain.slice(startAt)) {
+            if (!(await waitBuilt(page, link.room, link.wave, 10_000))) {
+              chainKilled.push(`event ${link.id} (room ${link.room} wave ${link.wave}): no enemy built within 10 s`);
+              continue;
+            }
+            const k = await killWave(page, link.room, link.wave);
+            chainKilled.push(`event ${link.id} (room ${link.room} wave ${link.wave}): hit ${k.hit}, alive after ${k.alive}`);
+            await page.waitForTimeout(1000); // the next link's trigger_event and its delay
+          }
+        }
         const playerRoom = (await floorData(page)).playerRoom;
         const eventFlagsBefore = before.flags.filter((_, i) => g.eventIds.includes(before.events[i]?.id));
 
@@ -229,6 +282,7 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
           pageErrors: newErrors,
           failed: failed.slice(mark.failed),
           consoleIssues: logs.slice(mark.logs).filter((l) => /^(error|warning|pageerror)/.test(l)).slice(0, 20),
+          chainKilled,
           warpError: discoveryError || warpError,
         };
         results.push(r);
@@ -240,6 +294,9 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
         console.log(`ep2w ${JSON.stringify(r)}`);
       });
     }
+    const secs = Math.round((Date.now() - floorStart) / 1000);
+    console.log(`ep2w floor ${floor} done in ${secs} s, ${floorSummary[floor].notRun} groups not run (cap ${FLOOR_CAP_MS / 1000} s)`);
+    await page.screenshot({ path: info.outputPath(`ep2-floor-${floor}.jpg`), type: 'jpeg', quality: 50 });
   }
 
   const summary = JSON.stringify({ results, floorSummary }, null, 1);
@@ -253,7 +310,8 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
 });
 
 // Wave groups of the floor: one per (room, wave) of its enemy entries, with the trigger object of
-// the group's wave events (type 1, the ones that construct enemies) and a section centre.
+// the group's wave events (type 1, the ones that construct enemies), its chain (the wave events
+// whose action streams trigger_event it) and a section centre.
 function groupsOf(d: Awaited<ReturnType<typeof floorData>>, floor: number): GroupInfo[] {
   const seen = new Map<string, GroupInfo>();
   for (const e of d.enemies) {
@@ -264,6 +322,7 @@ function groupsOf(d: Awaited<ReturnType<typeof floorData>>, floor: number): Grou
     }
     const eventIds = d.events.filter((ev) => ev.type === 1 && ev.room === e.room && ev.wave === e.wave).map((ev) => ev.id);
     const trig = d.triggers.find((t) => eventIds.includes(t.eventId)) ?? null;
+    const chain = trig ? [] : chainOf(d, eventIds);
     const sec = d.sections.find((s) => s.id === e.room);
     seen.set(k, {
       floor,
@@ -272,11 +331,55 @@ function groupsOf(d: Awaited<ReturnType<typeof floorData>>, floor: number): Grou
       wave: e.wave,
       eventIds,
       trigger: trig,
+      kind: trig ? 'trigger' : chain.length ? 'chained' : eventIds.length ? 'event-untriggered' : 'section',
+      chain,
       sectionCentre: sec ? (sec.position as [number, number, number]) : null,
       enemiesOfGroup: 1,
     });
   }
   return [...seen.values()];
+}
+
+// The chain above a group's wave events: the event whose action stream trigger_event()s the current
+// level, then its parent, and so on up to the root (up to 16 links). Returned root first.
+function chainOf(d: Awaited<ReturnType<typeof floorData>>, eventIds: number[]): ChainLink[] {
+  const links: ChainLink[] = [];
+  const seen = new Set(eventIds);
+  let level = eventIds;
+  for (let guard = 0; guard < 16; guard++) {
+    const parent = d.events.find((ev) => !seen.has(ev.id) && ev.actions.some((a) => a.op === 'triggerEvent' && level.includes(a.eventId ?? -1)));
+    if (!parent) break;
+    seen.add(parent.id);
+    const trig = d.triggers.find((t) => t.eventId === parent.id) ?? null;
+    links.unshift({ id: parent.id, room: parent.room, wave: parent.wave, trigger: trig ? { x: trig.x, y: trig.y, z: trig.z } : null });
+    level = [parent.id];
+  }
+  return links;
+}
+
+// Waits until (room, wave) has a built, living enemy (a chain link's trigger_event ran), or the timeout.
+async function waitBuilt(page: Page, room: number, wave: number, timeoutMs: number): Promise<boolean> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    if ((await enemyStates(page)).some((e) => e.room === room && e.wave === wave && !e.dead)) return true;
+    await page.waitForTimeout(POLL_MS);
+  }
+  return false;
+}
+
+// Kills the living enemies of (room, wave) through the combat's hit path (applyEnemyHit, the call
+// ep4-battle-smoke.spec.ts makes): 9999 damage, so the kill flow runs (6x76, the wave's enemies-dead flag).
+function killWave(page: Page, room: number, wave: number): Promise<{ hit: number; alive: number }> {
+  return page.evaluate(
+    ([r, w]) => {
+      const c = (window as any).classicGame.view.combat;
+      const living = () => [...c.enemies.values()].filter((e: any) => e.slot?.set?.section === r && e.slot?.set?.wave === w && !e.dead);
+      const live = living();
+      for (const e of live) c.applyEnemyHit(e, 0x20000000 | 0x00800000 | 0x00100000, 9999, false, 'e2e chain kill: ', true, {});
+      return { hit: live.length, alive: living().length };
+    },
+    [room, wave] as [number, number],
+  );
 }
 
 // Object sets the data folder does not have (see ep2-floors-smoke.spec.ts).
