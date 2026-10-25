@@ -77,8 +77,9 @@ import { CLASS_MAX_STATS } from './materials.ts';
 // 569856..569876), so a weapon / armour / shield / unit candidate never removes or adds a worn
 // mag: its effect stays in the file's stat block (ASSUMED, as the file model above), and the
 // compare does not apply magStatContribution; the elemental resists that armour, shields, units and
-// the set bonuses write (resist [1..5]) are not kept, as the compare list does not show them; the
-// set-bonus branches listed above handle_item_set_bonus are not ported; the
+// the set bonuses write (resist [1..5], the resist block at arg3, settled 2026-10-25) are not kept,
+// as the compare list does not show them; the set-bonus branches with only elemental effects are
+// not ported (see handle_item_set_bonus below); the
 // file is the save at login, so an equip made in this session is not in its stat block.
 
 // The file's displayed stats the compare list reads (PlayerDispData stats, net/charfile.ts).
@@ -430,9 +431,10 @@ export function defaultSetContext(worn: WornEquipment, beatTime: number = 0): Se
   };
 }
 
-// The team count term of the armour 0x55 (DFP) and the shield 0x95 (ATP) set bonuses
-// (handle_frame_weapon_set_bonus 0x005d53ac case 0x55, handle_barrier_and_weapon_set_bonus
-// 0x005d4e14 case 0x95; objdump 0x005d53fd..0x005d54d4 and 0x005d4e75..0x005d4f4a). The record is
+// The team count term of the armour 0x55 (DFP resist dword +0x1c) and the shield 0x95 (EVP resist
+// [0], both in the resist block: arg3) set bonuses (handle_frame_weapon_set_bonus 0x005d53ac case 0x55,
+// handle_barrier_and_weapon_set_bonus 0x005d4e14 case 0x95; objdump 0x005d53fd..0x005d54d4 and
+// 0x005d4e75..0x005d4f4a). The record is
 // found when its first four dwords are not all zero (the exe's test on the copied record; no
 // record zeroes the copy); then the byte +0x11 is taken, capped at 100, and doubled. Not found: 0.
 export function teamFrameBonus(ctx: SetContext): number {
@@ -605,11 +607,13 @@ export function applyColoredRing(item: ItemLike, barrier: number, t: CandidateBl
 
 // handle_item_set_bonus (FUN_005d4c38, dump 427136) and its handlers. Only the branches whose
 // effect is a stat or the compared resist (DFP / EVP) and whose condition is in the worn slots
-// are ported. Not ported (ASSUMED no effect in the compare): the branches that write the
-// elemental resists [1..5] (weapon 0xc5 / 0xac, armour 0x9b, shield 0x9b / 0x93 / 0x2a's armour
-// part, mag 'D'); the branches gated on param_6 (the float writes and the stat of a 0xe / 0xc
-// slot, null in PlayerRecalculateStats); the weapon-misc tail (party table). The armour 0x55 and
-// the shield 0x95 read the player's team record (teamFrameBonus, 2026-10-25).
+// are ported. Not ported (no effect in the compare, verified 2026-10-25): the branches that write
+// the elemental resists [1..5] of the resist block (arg3: weapon 0xc5 / 0xac and mag 'D' in the
+// weapon-misc handler, shield 0x9b / 0x93 / 0x2a's armour part); the branches gated on param_6
+// (arg5, null in PlayerRecalculateStats: the float writes and the 0xc / 0xe words of shields 0x86,
+// 0x8d, 0x90 and the weapon 0xb3 float writes). The armour 0x55 and the shield 0x95 read the
+// player's team record (teamFrameBonus, 2026-10-25). The resist-block claim of the header above
+// (resist [1..5] written, not the stat block) is settled: arg3 is the resist block.
 const PROOF_OF_SWORD_SAINT: readonly (readonly [number, number, number])[] = [
   [0x00, 0x03, 0x09], [0x00, 0x89, 0x00], [0x00, 0x89, 0x01], [0x00, 0x89, 0x02], [0x00, 0x89, 0x03],
   [0x00, 0xb8, 0x00], [0x00, 0x10, 0x00], [0x00, 0x10, 0x07], [0x00, 0x8a, 0x00], [0x00, 0x8a, 0x01],
@@ -676,6 +680,19 @@ function frameWeaponSetBonus(idx: number, ctx: SetContext, t: CandidateBlocks): 
 }
 
 // handle_barrier_and_weapon_set_bonus (FUN_005d4e14): keyed by the candidate shield's index (d[2]).
+// Its arguments are the dispatcher's: arg2 = the range block (0x888(%esp) in the callee), arg3 =
+// the resist block (0x88c(%esp)), arg5 = param_6 (0x894(%esp), null in the compare). The stat block
+// (arg4) is never written here (verified 2026-10-25, objdump 0x005d4e14..0x005d5360). Per branch:
+//   0x2a  weapon 0x14 / 1 -> range ATA +300; armour 0x45 -> resist EFR +2, EIC +2, ETH +2, ELT +5,
+//         EDK +5 (elementals, not compared).
+//   0x85  as below (range ATA; resist DFP -10 for 0x07 / 8).
+//   0x86, 0x8d, 0x90  writes param_6 only (0x894(%esp) +0xc / +0xe): nothing in the compare.
+//   0x87  weapon sub 0xbf -> resist [0] EVP +50 (0x005d5128 `addw $0x32, (%eax)`, eax = arg3).
+//   0x93  elemental pick by (beat time >> 1) & 3 (get_beat_time 0x0077bab4): one of EFR / EIC /
+//         ETH / EDK +50 (0x005d4f54..0x005d4fde). Elementals only: nothing in the compare.
+//   0x95  team count term on resist [0] EVP (0x005d4f47 `addw %ax, (%ecx)`, ecx = arg3); the
+//         player (arg1) gates it.
+//   0x9b  armour 0x56 -> resist EFR..EDK +20 each (0x005d5026..0x005d50c7). Elementals only.
 function barrierWeaponSetBonus(idx: number, ctx: SetContext, t: CandidateBlocks): void {
   const sub = slotByte(ctx.worn.weapon, 1);
   const wi = slotByte(ctx.worn.weapon, 2);
@@ -691,11 +708,11 @@ function barrierWeaponSetBonus(idx: number, ctx: SetContext, t: CandidateBlocks)
       else if (wi === 0xd) t.ataMin -= 300;
     }
   } else if (idx === 0x87) {
-    // The stat [0] word (ATP), not the EVP resist: objdump 0x005d5128 `add word [eax], 0x32`.
-    if (sub === 0xbf) t.atp += 50;
+    // The resist [0] word (EVP): objdump 0x005d5128 `addw $0x32, (%eax)`, eax = 0x88c(%esp) = arg3.
+    if (sub === 0xbf) t.resEvp += 50;
   } else if (idx === 0x95) {
-    // The team count term on the stat [0] word (ATP), objdump 0x005d4f47 `add word [ecx], ax`.
-    t.atp += teamFrameBonus(ctx);
+    // The team count term on the resist [0] word (EVP): objdump 0x005d4f47 `addw %ax, (%ecx)`, ecx = 0x88c(%esp).
+    t.resEvp += teamFrameBonus(ctx);
   }
 }
 

@@ -1,5 +1,34 @@
 # Devlog
 
+## 2026-10-25: Set bonus handlers decoded; the resist-write claim settled
+
+**Question.** The set-bonus handlers still open: shield 0x93 (beat time), 0x9b / 0x90 / 0x8d / 0x86, the armour 0x85 / 0x2a parts. Also: does the playerstats.ts header's claim that some branches write the elemental resists [1..5] hold, since the DEVLOG entry below said they index the stat block?
+
+**Answer.** Every open handler is decoded (objdump of PsoBB.exe, the jump tables read with tools/exedata.py). The port changes two earlier verdicts (below). `combat/playerstats.ts`, `tests/playerstats.test.ts`.
+
+**Argument blocks (PROVEN).** handle_item_set_bonus (0x005d4c38) takes its arguments from ApplyEquipmentBonuses (0x005d330c), which PlayerRecalculateStats (0x0068e030) calls with: arg1 = the player, arg2 = the range block (copied from +0x31c, the callee's 0x888(%esp)), arg3 = the resist block (copied from +0x320, 0x88c(%esp)), arg4 = the stat block (copied from +0x2b4), arg5 = null (param_6, 0x894(%esp)). The callees (the armour / shield / weapon-misc / frame / barrier helpers) pass them through unchanged. The stat block is never written by handle_item_set_bonus.
+- The resist block: shorts [0] EVP mod (+0x0), EFR (+0x2), EIC (+0x4), ETH (+0x6), ELT (+0x8), EDK (+0xa); dword +0x1c DFP mod. The writes at +0x1c confirm it (armour 0x55 team term, shield 0x85 weapon 8, unit P).
+- The range block: [0] atp_min, [1] atp_max, [2] ata_min (+0x4).
+
+**Changed verdicts.**
+- Shield 0x87 (weapon sub 0xbf): `addw $0x32, (%eax)` at 0x005d5128 with eax = 0x88c(%esp) = the resist block. The target is resist [0] (EVP), not ATP. The port now adds +50 to `resEvp`.
+- Shield 0x95 (team count): `addw %ax, (%ecx)` at 0x005d4f47 with ecx = 0x88c(%esp) (set at 0x005d4f0a). The target is resist [0] (EVP). The port now adds the team term to `resEvp`, not ATP. Armour 0x55 (DFP, +0x1c) was already right.
+- The header's claim "the set bonuses write the elemental resists [1..5]" is TRUE. The DEVLOG entry below ("they index param_4, the stat block") is FALSE: they index arg3.
+
+**Per handler (all PROVEN from objdump).**
+- Shield 0x2a (0x005d52ad): armour 0x45 -> resist EFR +2, EIC +2, ETH +2, ELT +5, EDK +5 (elementals, no compare effect, not ported). Weapon 0x14 / 1 -> range ATA +300 (ported, unchanged).
+- Shield 0x85 (0x005d5166): unchanged, verified (weapon 0x65 / 0x6a..0x6c: range ATA +300; sub 7 index 8: range ATA -200 and resist DFP -10; index 9..0xc: ATA -200; index 0xd: ATA -300).
+- Shield 0x86 (0x005d513d), 0x8d (0x005d50d1), 0x90 (0x005d5001): write param_6 only (+0xc / +0xe), gated on arg5 = null in the compare: no effect.
+- Shield 0x93 (0x005d4f54): the beat time (get_beat_time 0x0077bab4) gives `(beat >> 1) & 3`; the pick adds +50 to one of EFR / EIC / ETH / EDK (resist +0x2 / +0x4 / +0x6 / +0xa). Elementals only, so **the beat time is not needed** for the compare. Not ported.
+- Shield 0x9b (0x005d5026): armour 0x56 -> resist EFR..EDK +20 each. Elementals only. Not ported.
+- Shield 0x87 and 0x95: see the changed verdicts above.
+- Frame (armour, jump table at 0x0092c204 indexed by the raw armour index 0x37..0x56): cases 0x37, 0x3b, 0x40, 0x41, 0x45, 0x50, 0x56 re-derived; all range / ATA values match the port. Armour 0x85 and 0x2a are not frame cases (the frame table ends at 0x56): they are shield cases above.
+- Weapon-misc (0x005d583c, arg3 = the resist block): weapon 0xac and 0xc5 write resist EFR..EDK (+15 each; the mag 'D' 0xac path too); not ported (elementals). Weapon 0xb3 writes param_6 floats only. Weapon 0xbf (shield 0x87): range atp_min / atp_max +30 (ported). Weapon 0xb4 (unit H): range ATA +300 (ported). Weapon 0x06 (mag H, idx 8): stat LCK +100 (the stat block, ported).
+
+**Verdict on the header claim.** Settled: some set branches write the elemental resists [1..5] of the resist block. None of them changes the compared stats (EVP / DFP only), so the port leaves them out with a comment.
+
+**Tests.** `tests/playerstats.test.ts`: the 0x87 / 0x95 checks now expect EVP and zero ATP; new checks for shields 0x93 / 0x9b / 0x86 and shield 0x2a with an armour 0x45 (nothing compared). Passing: playerstats (ALL PASS), playerstatsatp, combatsetatp, playerresist, beattime, combat (NEWSERV, 5860 checks), `tsc --noEmit`. ITEMPMT was the real Sega table (not committed).
+
 ## 2026-10-25: Player elemental resists (EFR / EIC / ETH / ELT / EDK)
 
 **Question.** The Ill Gill specials on the local player assumed EIC / ETH / EDK = 0. Where does the exe keep the player's elemental resists, what fills them, and what reads them?
