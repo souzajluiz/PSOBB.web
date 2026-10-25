@@ -105,6 +105,34 @@
 - The stop's position is the logic position (`m.target`) and the marker's angle, the same values as the walk's stop (`sendStop` in the view).
 
 **Checks:** `node tests/emotes.test.ts` (stand-up keys: Alt+U / Alt+I by flag, no Alt, no edge; the 6x3E body: guard, floor, room, x, z). `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/motions.test.ts`, `tests/smoothrender.test.ts`, `tests/collision.test.ts` pass. Not run in Chrome or with two clients.
+## 2026-10-25: Home menu > Team > Team Log (0x27) ported: the show / hide rows drive the team chat window
+
+**Premise checked.** The 2026-10-23 entries left Team Log "traced in part": the rows' labels were identified (title 0x157, rows 0x158 / 0x159) but the answer was not. The answer and the rows' effect are now traced, and the effect is the team chat window (F9), not a team packet.
+
+**Exe (Ghidra, `tools/ghidra/decomp.sh`; the dump's names are wrong, the bodies are the reading):**
+- Process `FUN_0074d618` (vtable 0x00b41f30 slot 1, 0x74d618 read with `tools/exedata.py read 00b41f30 u 4`). State 0 builds the list: `FUN_0073ec50(0x16)` = (13, 256) (the static table), title `FUN_0079317c(0x157)`, rows `(0x158)` value 0 and `(0x159)` value 1, the size pair 302.0 / 148.0 (`FUN_00714ac8`; the pair's meaning ASSUMED as a width 302). Cursor: `FUN_00714e5c(FUN_00718eb0(slot) == 0)` sets the index (+0x94) to 1 when the window is hidden and 0 when shown.
+- State 2, every frame: the cursor's value decides the window: 0 -> `FUN_00716188` (sets 0x180 on the slot's element), 1 -> `FUN_00716198` (clears 0x180). `FUN_00716078` reads the shown bit 0x100 (`FUN_00718eb0` wraps it). When the list's decided flag (+0x84 bit 4) is set, the owner's callback runs (vtable +0x1c of the player menu, not traced) and the state goes to 3 (no code there).
+- The bits are the F9 window's bits: `classic/teamchat.ts` already says F9 sets 0x180 (visible and locked, `UIElement_SetLockAndVisibilityState_00716188`) when hidden, and clears it when shown, and that the shown bit is 0x100. So row 0 (show) = open and locked; row 1 (hide) = both clear.
+- The leaf is a child of the Home panel, which closes before `handle_player_menu_select` runs (DEVLOG 2026-10-23, the chosen-leaf rule), so the decision leaves nothing to return to.
+
+**Port changes:**
+- `client/src/classic/teamchat.ts`: `TeamChat.setWindow(on)` (both bits move together).
+- `client/src/classic/teammenu.ts`: `TeamLogWindow` (a `PickList` of the two rows; `show()` picks the cursor from the window's state; the cursor's row applies `setWindow` after each key; Decide and Cancel close). `TEAM_LOG_POS` (13, 256), `TEAM_LOG_MIN_WIDTH` 302, `TeamLogHost` (`shown()`, `window(on)`).
+- `client/src/classic/homeleaves.ts`: id 0x27 is a shared leaf (`HOME_LEAF_IDS`); it needs a team and a `teamChat` service (new optional `HomeLeafServices.teamChat`). Opens, keys, draws and closes like the Team Info window.
+- `client/src/classic/lobby.ts` (host `teamChat: hud.teamChat`) and `client/src/render/fieldhud.ts` (the field's home services get `opts.teamChat`) pass the chat.
+
+**Tests:** `tests/teammenu.test.ts` (new Team Log block: the cursor starts from the window's state, the preview rows, Decide keeps the window, Cancel keeps the last preview, F9 still clears both bits, a draw smoke), `tests/homeleaves.test.ts` (0x27 needs a team and the chat; the show row opens the window through the leaf). `node tests/teammenu.test.ts` ALL PASS (183 checks); `homeleaves`, `lobbymenu`, `chatline`, `fieldhud` pass (Node 24). `client` `tsc --noEmit -p .` clean (Node 24).
+
+**ASSUMED (not proven):**
+- The owner's callback (vtable +0x1c) after a decided row closes only the list (no reopen of the Home panel, which is already closed).
+- Cancel keeps the window as the cursor's last preview (the cancel branch of state 2 is not traced; the exe may set the flag 4 too).
+- The list's width 302 (the size pair's order and meaning are not checked against the list constructor `FUN_00714ac8`).
+- The owner-level sequence of the Team Log's keys (held keys, the page keys) is the list's own (`listKey`).
+- The labels 0x158 / 0x159 are the show / hide text by their order (the exe's value 0 = show, 1 = hide, from the handler calls); the strings themselves are read from the game's text table at run time, not checked here.
+
+**Not checked:** a Chrome view (the brief says no Playwright).
+
+**Left:** Invite (0x29, the 6x62 C1 17 sender), Point Regist (0x2d: the count and labels), the points window of Team Info (its header), and the owner callback's trace if it turns out to do more than close.
 
 ## 2026-10-25: the near-enemy flag (character_flags 0x100000): the setter is enemy-only, the NPC guard stays clear
 

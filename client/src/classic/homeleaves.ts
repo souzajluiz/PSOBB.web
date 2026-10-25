@@ -5,6 +5,7 @@
 //   0x12 Symbol Chat     (SymbolChatList, mode 'home', symbolchatlist.ts)
 //   0x13 Simple Mail     (SimpleMailMenu, simplemail.ts; Team Member List > Send Mail: MailCompose)
 //   0x25 Team Member List (TeamMemberListWindow, teammenu.ts; needs a team)
+//   0x27 Team Log        (TeamLogWindow, teammenu.ts; needs a team; the rows show / hide the team chat window)
 //   0x2B Team Info       (TeamInfoWindow, teammenu.ts; needs a team)
 // The lobby (classic/lobby.ts) and the field (classic/fieldmenu.ts) both open them through
 // this class, so the window glue is written once. The fkey path (input/shortcuts.ts,
@@ -21,10 +22,11 @@ import { ChatShortcutMenu } from './chatshortcutmenu.ts';
 import { MailCompose, SimpleMailMenu, type SimpleMailHost } from './simplemail.ts';
 import { SymbolChatList } from './symbolchatlist.ts';
 import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
-import { MEET_FRAMES, TeamInfoWindow, TeamMemberListWindow, type TeamHost } from './teammenu.ts';
+import { MEET_FRAMES, TeamInfoWindow, TeamLogWindow, TeamMemberListWindow, type TeamHost } from './teammenu.ts';
+import type { TeamChat } from './teamchat.ts';
 import type { WindowSkin } from './stage.ts';
 
-export const HOME_LEAF_IDS: ReadonlySet<number> = new Set([0x0e, 0x11, 0x12, 0x13, 0x25, 0x2b]);
+export const HOME_LEAF_IDS: ReadonlySet<number> = new Set([0x0e, 0x11, 0x12, 0x13, 0x25, 0x27, 0x2b]);
 
 // What the leaves read from the session: the local player and the other players come from
 // the lobby object (a Game is one: its connection, players and self).
@@ -41,6 +43,8 @@ export interface HomeLeafServices {
   meetUser?: (reply: GuildCardSearchResult) => void;
   // Sends the chat shortcut records (03ED) when the Chat > Shortcut leaf closes after an edit.
   sendShortcuts?: () => void;
+  // The team chat window the Team Log row shows or hides (classic/teamchat.ts). Optional: a host without it leaves the row a no-op.
+  teamChat?: () => TeamChat | null;
 }
 
 export interface HomeLeafHost extends HomeLeafServices {
@@ -54,6 +58,7 @@ export class HomeLeaves {
   private symbolList: SymbolChatList | null = null;
   private teamList: TeamMemberListWindow | null = null;
   private teamInfo: TeamInfoWindow | null = null;
+  private teamLog: TeamLogWindow | null = null;
   // Team Member List > Send Mail (exe states 0xb..0xe): the keyboard over the list.
   private teamMail: MailCompose | null = null;
   // Guild Card > Search > Send Mail (state 0x21): the keyboard for the result's card.
@@ -70,7 +75,7 @@ export class HomeLeaves {
   }
 
   get open(): boolean {
-    return !!(this.guildCard || this.shortcuts || this.mail || this.symbolList || this.teamList || this.teamInfo || this.teamMail || this.searchMail);
+    return !!(this.guildCard || this.shortcuts || this.mail || this.symbolList || this.teamList || this.teamInfo || this.teamLog || this.teamMail || this.searchMail);
   }
 
   // Opens the leaf for a Home menu id; false when this leaf cannot open here (no session, no team).
@@ -160,6 +165,18 @@ export class HomeLeaves {
         this.teamList.show();
         return true;
       }
+      case 0x27: {
+        // handle_player_menu_select team_log_option_menu (0x27): needs a team and the team chat window.
+        const team = h.team();
+        const chat = h.teamChat?.() ?? null;
+        if (!team || !chat) return false;
+        this.teamLog = new TeamLogWindow(
+          { shown: () => chat.open, window: (on) => chat.setWindow(on) },
+          (i) => text(11, i),
+        );
+        this.teamLog.show();
+        return true;
+      }
       case 0x2b: {
         const team = h.team();
         if (!team) return false;
@@ -225,6 +242,8 @@ export class HomeLeaves {
       else this.openTeamMail(h);
     } else if (this.teamInfo) {
       if (!this.teamInfo.key(e)) this.teamInfo = null;
+    } else if (this.teamLog) {
+      if (!this.teamLog.key(e)) this.teamLog = null;
     }
     this.settle();
   }
@@ -331,6 +350,7 @@ export class HomeLeaves {
   drawTeam(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
     this.teamList?.draw(ctx, skin, extra);
     this.teamInfo?.draw(ctx, skin, extra);
+    this.teamLog?.draw(ctx, skin, extra);
     this.teamMail?.draw(ctx, skin);
   }
 
@@ -360,6 +380,7 @@ export class HomeLeaves {
     this.mail = null;
     this.teamList = null;
     this.teamInfo = null;
+    this.teamLog = null;
     this.teamMail = null;
     this.searchMail = null;
     this.meetFrames = null;
