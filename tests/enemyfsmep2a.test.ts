@@ -5,7 +5,7 @@
 // are plausible stand-ins (a run with several lengths guards against a state
 // that waits on a length: nothing may hang).
 // Run: node tests/enemyfsmep2a.test.ts
-import { GEE, GIBBLES, GIGUE, GeeAi, GibblesAi, GiGueAi, GiGueBomb, GiGueSpit, GroundBlast, type GeeState } from '../client/src/combat/enemyfsmep2a.ts';
+import { GEE, GIBBLES, GIGUE, GeeAi, GibblesAi, GiGueAi, GiGueBomb, GiGueSpit, GroundBlast, type GeeState, type GibblesState } from '../client/src/combat/enemyfsmep2a.ts';
 import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
 import { STATUS } from '../client/src/combat/status.ts';
 
@@ -510,7 +510,7 @@ const gibLen = (long: number) => (i: number) => (i === 0 ? long : i === 4 ? 34 :
   const hidden: boolean[] = [];
   rig.run([player(0, 230)], 100, (r) => hidden.push(!!r.hidden));
   check(g.state === 'dormant' && g.invulnerable && hidden.every(Boolean), 'Gibbles: hidden and invulnerable while nobody is within 200');
-  check(g.untargetable, 'Gibbles: untargetable (off the radar and lock-on) while it lies in wait');
+  check(g.untargetable, 'Gibbles: untargetable (not drawn) while it lies in wait');
   const p = player(0, 150);
   const n = rig.until([p], 'arrive', 100);
   check(n >= 0, 'Gibbles: a player within 200 starts the drop-in');
@@ -657,6 +657,61 @@ for (const len of [10, 34, 70]) {
   near(liftAt250, -25, 1e-3, 'Gibbles sink: 25 units after the 250th tick');
   eq(removedAt, 251, 'Gibbles sink: removed on the tick after the 250-tick sink');
   eq(g.lift, liftAt250, 'Gibbles sink: the sink stops once it is removed');
+}
+
+// --- Gibbles radar / lock-on / hit, per state (the exe's call sites, see enemyfsmep2a.ts setGate / enterBox)
+// Each row: the state the handler ran in, the icon and reticle (the handler's calls), the box bit.
+// The port's states only; exe 10 (the pre-activation shuffle) is not a port state.
+{
+  type Priv = { busy: boolean; sub: number; boxOn: boolean; targetId: number | null };
+  const priv = (g: GibblesAi) => g as unknown as Priv;
+  const one = (state: GibblesState, p: Partial<Priv>, targets: readonly AiTarget[] = [], busy = true) => {
+    const g = gibbles();
+    g.state = state;
+    // The controller's search (every 30 frames) has picked the nearest player: targetId.
+    Object.assign(priv(g), { busy, targetId: targets.length ? 0 : null, ...p });
+    g.tick(targets, false);
+    return g;
+  };
+  const gate = (g: GibblesAi) => [g.radar, g.lockable, g.hittable];
+  // exe 0 / 1: no icon, no reticle, the box cleared.
+  eq(gate(one('dormant', { boxOn: true })), [false, false, false], 'Gibbles gate 0 / 1 (dormant): no icon, no reticle, box off');
+  // exe 2: icon and reticle; the box is cleared at entry.
+  eq(gate(one('arrive', { boxOn: true })), [true, true, false], 'Gibbles gate 2 (arrive): icon and reticle, box off');
+  // exe 3: the box is set before the target test; icon and reticle only with a target.
+  eq(gate(one('approach', { boxOn: false }, [])), [false, false, true], 'Gibbles gate 3 (approach, no target): no icon, no reticle, box on');
+  eq(gate(one('approach', { boxOn: false }, [player(0, 100)])), [true, true, true], 'Gibbles gate 3 (approach, target): icon, reticle, box on');
+  // exe 4 / 5: icon, reticle, box set.
+  eq(gate(one('combo', { boxOn: false })), [true, true, true], 'Gibbles gate 4 (combo): icon, reticle, box on');
+  eq(gate(one('rage', { boxOn: false })), [true, true, true], 'Gibbles gate 5 (rage): icon, reticle, box on');
+  // exe 6: icon and reticle; the box is kept through the windup, cleared by the launch and set by the landing.
+  eq(gate(one('leap', { sub: 4, boxOn: true })), [true, true, true], 'Gibbles gate 6 (leap windup): icon, reticle, box kept on');
+  const leap = one('leap', { sub: 4, boxOn: true }, [player(0, 60)]);
+  eq([priv(leap).sub, leap.hittable], [1, false], 'Gibbles gate 6 (launch): the box is cleared');
+  const rig = new Rig(leap, gibLen(60));
+  let airborneHit = false;
+  let landedHit: boolean | null = null;
+  for (let i = 0; i < 300 && landedHit === null; i++) {
+    rig.step([player(0, 60)]);
+    if (priv(leap).sub === 3) landedHit = leap.hittable;
+    else if (priv(leap).sub === 1 && leap.hittable) airborneHit = true;
+  }
+  eq([airborneHit, landedHit], [false, true], 'Gibbles gate 6: box off while airborne, on at the landing');
+  // exe 7 (guard): icon and reticle; the box is not written (kept).
+  eq(gate(one('guard', { boxOn: true })), [true, true, true], 'Gibbles gate 7 (guard): icon, reticle, box kept on');
+  eq(gate(one('guard', { boxOn: false })), [true, true, false], 'Gibbles gate 7 (guard): box kept off');
+  // exe 8 (stagger): icon and reticle; the box bit is kept (the exe clears only 0x4000000).
+  eq(gate(one('stagger', { boxOn: true })), [true, true, true], 'Gibbles gate 8 (stagger): icon, reticle, box kept on');
+  // exe 11 (wander): icon and reticle; the box is kept; a target starts the approach, which sets it.
+  eq(gate(one('wander', { boxOn: false }, [], false)), [true, true, false], 'Gibbles gate 11 (wander, no target): icon, reticle, box kept off');
+  const wander = one('wander', { boxOn: false }, [player(0, 100)], false);
+  eq([wander.state, gate(wander)], ['approach', [true, true, true]], 'Gibbles gate 11 (wander, target): approach, icon, reticle, box on');
+  // exe 9 (death): no icon; the reticle only in the windup (the death motion); no box write.
+  const dead = gibbles();
+  dead.kill();
+  eq([dead.radar, dead.lockable], [false, true], 'Gibbles gate 9 (death motion): no icon, reticle in the windup');
+  dead.tickDead(true);
+  eq(gate(dead), [false, false, false], 'Gibbles gate 9 (sink): no icon, no reticle, not hittable');
 }
 
 // Constants cited in the comments.

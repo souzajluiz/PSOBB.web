@@ -526,11 +526,16 @@ const BULCLAW_CLAWS = 4;
 //     +0x3f4 for the slime, +0x3e4 for the Pan Arms, +0x38c for the halves;
 //   - the hit only while the box is on: the slime's 0x28 bits (SetEnemyInvulnerableAndImmune);
 //     the halves' bit 0 of the box (+0x384, +0x18); the Pan Arms' hit is ASSUMED (its own box
-//     bits are not traced, see PanArmsAi.invulnerable).
-const isSplitPart = (ai: EnemyBrain | null): boolean => ai instanceof SlimeAi || ai instanceof PanArmsAi || ai instanceof PanHalfAi;
-export const splitRadarOk = (e: { ai: EnemyBrain | null }): boolean => !isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi).radar;
-export const splitLockOk = (e: { ai: EnemyBrain | null }): boolean => !isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi).lockable;
-export const splitStruckOk = (e: { ai: EnemyBrain | null }): boolean => !isSplitPart(e.ai) || !(e.ai as SlimeAi | PanArmsAi | PanHalfAi).invulnerable;
+//     bits are not traced, see PanArmsAi.invulnerable);
+// Gibbles (GibblesAi, the per-state gates of enemyfsmep2a.ts setGate / enterBox): the icon
+// and the reticle of the handler's frame, and bit 0 of its box as the hit (`hittable`).
+const isSplitPart = (ai: EnemyBrain | null): boolean => ai instanceof SlimeAi || ai instanceof PanArmsAi || ai instanceof PanHalfAi || ai instanceof GibblesAi;
+export const splitRadarOk = (e: { ai: EnemyBrain | null }): boolean => !isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi | GibblesAi).radar;
+export const splitLockOk = (e: { ai: EnemyBrain | null }): boolean => !isSplitPart(e.ai) || (e.ai as SlimeAi | PanArmsAi | PanHalfAi | GibblesAi).lockable;
+export const splitStruckOk = (e: { ai: EnemyBrain | null }): boolean => {
+  if (e.ai instanceof GibblesAi) return e.ai.hittable;
+  return !isSplitPart(e.ai) || !(e.ai as SlimeAi | PanArmsAi | PanHalfAi).invulnerable;
+};
 const techRecordOk = splitLockOk;
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   (e.ai instanceof SlimeControl && e.ai.untargetable) ||
@@ -543,7 +548,7 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   e.ai instanceof SaintMilionAi ||
   (e.ai instanceof SmChildAi && e.ai.untargetable) ||
   (e.ai instanceof SinowAi && e.ai.dormant) ||
-  ((e.ai instanceof MericarolAi || e.ai instanceof GibbonAi || e.ai instanceof GibblesAi) && e.ai.untargetable) ||
+  ((e.ai instanceof MericarolAi || e.ai instanceof GibbonAi) && e.ai.untargetable) ||
   (e.ai instanceof NanoDragonAi && e.ai.untargetable);
 
 // 6x47 / 6x48 subcommand numbers.

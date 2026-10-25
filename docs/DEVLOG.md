@@ -1,5 +1,40 @@
 # Devlog
 
+## 2026-10-25: Gibbles radar, lock-on and hit: the icon, the reticle and box bit 0 are read in every state; Gibbles leaves `concealed()`
+
+**Question:** Gibbles still used the generic `concealed()` rule. What do the exe's state handlers do for the radar icon, the reticle and the box (+0xa4 -> +0x18, bit 0)?
+
+**Exe evidence (Ephinea 1.25.13; `objdump -d -M intel` on PsoBB.exe; the state table is the jump table at 0x009258ac, read with `tools/exedata.py read`; the dispatcher 0x0056021c):**
+- The state -> handler map (table): 0 init 0x0054fcf0, 1 0x00562d24, 2 0x00562a98, 3 0x00562754, 4 0x00561798, 5 0x0056135c, 6 0x00560be8, 7 0x0056097c, 8 0x005607fc, 9 0x005606d4 (death), 10 0x00560534, 11 0x00560338 (wander). The dump's `DerolleHandle*` / `Derolle*` names are community labels; the dump body of state 9 omits its `enable_reticle` call, so the rows below come from the exe disassembly.
+- `enable_reticle` (0x007aa094) returns at once when entity +0xb0 bit 0x40 is set (ASSUMED never set in these states). `unknown_add_minimap_icon` (0x00805608) has a slot cap (0x80) and a range test (ASSUMED met).
+
+| exe state | port state | icon 0x805608 | reticle 0x7aa094 | box bit 0 | proof |
+|---|---|---|---|---|---|
+| 0 | dormant | no | no | cleared (0x54fd21) | proven |
+| 1 | dormant | no | no | cleared (0x562d37) | proven |
+| 2 | arrive | tail 0x562d0f | entry 0x562ac0 | cleared (0x562ab8) | proven; the only `ret` follows the icon |
+| 3 | approach | tail 0x5629b7, only with a target | entry 0x562776..0x56298c, only with a target | set (0x562763) before the target test | proven; no target: `je 0x5629c7` skips the tail |
+| 4 | combo | tail 0x5620b5 | tail 0x56207b | set (0x5617a9) | proven |
+| 5 | rage | tail 0x561520 | prologue 0x5613f1 | set (0x5613d9) | proven |
+| 6 | leap | tail 0x5610e2 | entry 0x560c5a | cleared at the launch (0x561072), set at the landing check (0x560e49) | the writes are proven; the sub-state mapping is ASSUMED |
+| 7 | guard | tail 0x560b47 | entry 0x560985 | no access | proven |
+| 8 | stagger | tail 0x56095d | entry 0x560802 | clears 0x4000000 only (0x5608a9) | proven |
+| 9 | death | no | sub 1 only (0x56074e) | no access | proven |
+| 10 | (not a port state: the pre-activation shuffle) | tail 0x5606b5 | entry 0x56056b | cleared (0x560563) | proven |
+| 11 | wander | tail 0x5603fb | entry 0x56033d | set in the target branch (0x560387); kept otherwise | proven |
+
+**Port** (`client/src/combat/enemyfsmep2a.ts`):
+- `tick()` records the state the handler runs in (`ran`, after the controller), calls `enterBox(ran)` (the entry writes: dormant / arrive clear, approach / combo / rage set), dispatches, then `setGate(ran)`: dormant off; approach = `engaged` (the target found this frame, state 3's gate); every other state on.
+- `leapFrame`: the launch (sub 4 -> 1) clears the box, the landing (sub 3) sets it.
+- Getters: `radar` (not dead and the gate), `lockable` (the gate; dead: the death motion, sinkPhase 'motion'), `hittable` (the box bit). `invulnerable`, `untargetable` and the AI's own uses are unchanged (the stagger, the guard and the drawing keep their rules).
+- `client/src/render/combat.ts`: `isSplitPart` covers Gibbles; `splitRadarOk` / `splitLockOk` read the getters; `splitStruckOk` reads `hittable` for Gibbles; `concealed()` no longer lists `GibblesAi`.
+
+**Behaviour change:** the drop-in (arrive, state 2) now shows the icon and the reticle, and is not struck during it (state 2 clears the box every frame). The old port hid it for the whole 40-frame hold. The exe calls both in every frame of state 2 (ASSUMED: the callees' tests pass during the drop-in). Visibility (`untargetable`) still hides the body during the hold.
+
+**Tests:** `tests/enemyfsmep2a.test.ts` (Gibbles gate block: one check per row above, the launch / landing of the leap, the wander's approach, the death windup and sink) and `tests/enemysplits.test.ts` (the Gibbles predicates through `splitRadarOk` / `splitLockOk` / `splitStruckOk`). Both pass; `combat.test.ts` (NEWSERV set) 5859, `combatdepth.test.ts` 836, `minimap.test.ts`, `enemyfsmep2b.test.ts`, `enemyfsm.test.ts` pass; `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome.
+
+**Still open:** Mericarol and Gibbon on `concealed()` (their radar is unresolved, DEVLOG 2026-10-25 Hidoom entry); the leap's landing check (exe 0x561214) is mapped to the port's landing by position only; the hit reader (the box bit) is ASSUMED, as for the halves.
+
 ## 2026-10-25: Saint-Milion laser: the draw writes the origin and aim (+0x38 / +0x44), the length is a ramp, 620 is a stand-in
 
 **Outcome.** The 2026-10-21 verdict "no writer of +0x38 / +0x44 in the exe" was wrong: its scan covered the ctor, the base, the spawner, the update and the wall cut, but not the draw. The writers are the laser's render (vtable slot 2) and its draw callback, through pointers the draw passes in. The length is a ramp (+100 an update) cut at the first wall; 620 is not an exe constant. Ported: the ramp, capped at 620 (ASSUMED, the wall stand-in). The 0x8000 sweep stays ASSUMED: its source (the heading from the boss node block) is located, not decoded.

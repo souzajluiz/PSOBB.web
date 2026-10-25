@@ -2159,6 +2159,11 @@ export class GibblesAi extends BrainBase {
   private sinkPhase: 'motion' | 'sink' | 'gone' | 'removed' | null = null; // enemy+0x330 once dead
   private sinkVelocity = 0; // enemy+0x3a8
   private sink = 0; // enemy+0x3c, how far it has gone into the ground
+  // The three gates the exe's handlers write (see enterBox and setGate). ASSUMED initial
+  // values: the box is off and no icon shows until the first frame (state 0 / 1 clear both).
+  private gateOn = false; // the radar icon and the reticle (the handler's own calls)
+  private engaged = false; // GetTargetableNPC != 0 in state 3 (the approach's gate)
+  private boxOn = false; // bit 0 of the box (+0xa4 -> +0x18): the hit
 
   constructor(opts: {
     x: number;
@@ -2193,8 +2198,9 @@ export class GibblesAi extends BrainBase {
     return this.state === 'dormant' || this.state === 'arrive' || this.immune;
   }
 
-  // Hidden (the flags of the lie-in-wait and the held drop-in: off the radar
-  // and the lock-on, see frame()).
+  // Hidden (the lie-in-wait and the held drop-in): the body is not drawn (see
+  // tick()). The radar, the lock-on and the hit follow the exe's per-state gates
+  // (setGate, enterBox), not this.
   get untargetable(): boolean {
     return this.state === 'dormant' || (this.state === 'arrive' && this.timer < GIBBLES.arriveHold);
   }
@@ -2341,11 +2347,58 @@ export class GibblesAi extends BrainBase {
     } else if (!this.busy && this.state !== 'dormant' && this.state !== 'arrive' && this.state !== 'stagger' && this.state !== 'guard') {
       this.control(out, targets);
     }
+    // Each exe handler writes the box at its entry, before its sub-states, and calls the
+    // icon / reticle of its own frame: `ran` is the state the handler ran in (the
+    // controller above has already chosen it).
+    const ran = this.state;
+    this.enterBox(ran);
     this.stateFrame(out, targets);
+    this.setGate(ran);
     out.lift = this.yOff;
     // States 0 / 1 (flags 0x6040000) and the held drop-in: not drawn.
     out.hidden = this.untargetable;
     return this.finish(out);
+  }
+
+  // The box at the handler's entry (+0xa4 -> +0x18 bit 0). Proven writes: 0 clears it
+  // (0x54fd21), 1 clears it (0x562d37), 2 clears it (0x562ab8), 3 sets it (0x562763,
+  // before the target test), 4 sets it (0x5617a9), 5 sets it (0x5613d9, the prologue).
+  // 7, 8, 9 and 11 do not write it in the frame (7 and 9 do not touch it; 8 clears
+  // 0x4000000 only; 11 sets it in its target branch, which is the approach that follows).
+  // 6 is in leapFrame (launch and landing).
+  private enterBox(ran: GibblesState): void {
+    if (ran === 'dormant' || ran === 'arrive') this.boxOn = false;
+    else if (ran === 'approach' || ran === 'combo' || ran === 'rage') this.boxOn = true;
+  }
+
+  // The radar icon and the reticle the handler calls (unknown_add_minimap_icon 0x805608,
+  // enable_reticle 0x7aa094): none in 0 / 1 (dormant); in 3 (approach) only with a target
+  // (the icon, the reticle and the rest of the frame sit behind GetTargetableNPC, 0x562776);
+  // in 2, 4, 5, 6, 7, 8, 11 unconditionally (every path reaches the tail / entry call).
+  // The dead one (9) has no icon, its reticle only in its windup (see `lockable`).
+  // ASSUMED: enable_reticle's own test on entity +0xb0 bit 0x40 and the icon's slot and range
+  // tests (0x805608) are not set / not hit for these frames.
+  private setGate(ran: GibblesState): void {
+    if (ran === 'dormant') this.gateOn = false;
+    else if (ran === 'approach') this.gateOn = this.engaged;
+    else this.gateOn = true;
+  }
+
+  // Off the radar while dead (the exe's state 9 has no icon call).
+  get radar(): boolean {
+    return this.state !== 'dead' && this.gateOn;
+  }
+
+  // The lock-on. The dead one's reticle is in its windup only (state 9 sub 1, the death
+  // motion: sinkPhase 'motion'; the combat code also drops a dead one from the lock-on).
+  get lockable(): boolean {
+    return this.state === 'dead' ? this.sinkPhase === 'motion' : this.gateOn;
+  }
+
+  // The hit: bit 0 of the box. ASSUMED reader (the hit test is not traced), as for the halves.
+  // Not the AI's own `invulnerable` (the stagger and the guard keep their rules).
+  get hittable(): boolean {
+    return this.boxOn;
   }
 
   // vtable +0x84 (0x00563fe8).
@@ -2496,6 +2549,7 @@ export class GibblesAi extends BrainBase {
   // State 3 (DerolleHandleTargetApproach_00562754).
   private approachFrame(targets: readonly AiTarget[]): void {
     const t = this.target(targets);
+    this.engaged = !!t;
     if (!t) return;
     if (this.sub === 0) this.sub = 1;
     this.walked += this.speed;
@@ -2656,6 +2710,8 @@ export class GibblesAi extends BrainBase {
         return;
       }
       this.sub = 1;
+      // The launch clears the box (state 6's block at 0x561052: or 0x6000000, the box bit off, vy set).
+      this.boxOn = false;
       const dx = t.x - this.x;
       const dz = t.z - this.z;
       const d = Math.hypot(dx, dz);
@@ -2681,6 +2737,8 @@ export class GibblesAi extends BrainBase {
         this.yOff = 0;
         this.sub = 3;
         this.immune = false;
+        // The landing check sets the box again (state 6's block at 0x560e32: or 1).
+        this.boxOn = true;
         const a = this.attack(2);
         out.shots = [new GroundBlast(this.x, this.z, a.distanceX, a.minAtp)];
         this.setRow(out, 6, true);
