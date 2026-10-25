@@ -90,6 +90,34 @@
 - The 0x118 vtable is `g_ChallengeEntityVtable` (loaded at 0x00602b6b from 0x009c3e50); the pointer is not in an initialised section of the file, so its entries are not read.
 
 **Tests:** `tests/npcs.test.ts` section 10: the offline ultimate NPC takes `_a`, the low-detail NPC takes the base BML, very hard takes the base BML. `enemies.test.ts` passes; `npcs.test.ts` ALL PASS; client `tsc --noEmit -p .` clean (Node 24). Not run in Chrome.
+## 2026-10-25: Scape Doll: the item class, the use effect and the death check traced; the revive on the fade's end is ported
+
+**Question:** the ROADMAP's Challenge line lists the Scape Doll revive as open. Which part of the exe does the doll touch, and what can the client port now?
+
+**The class (proven).** Tool subtype 9 is the Scape Doll (`03 09 00`; newserv `QuestScript.cc` "Scape Dolls (030900)"). The use table `init_item_tools` at 0x009c21e0 (read by `FUN_005caa50`, the tool dispatcher `get_init_item_tool_function`, with `group_2 < 0x18`) holds `0x005dfd50` at index 9. That constructor (`FUN_005dfd50`, dump `init_item_tool_9`) builds the 0x10c-byte object on `Tool0Base` and sets the primary vtable to `PTR_LAB_00b0ef60` (0x00b0ef60).
+
+**The use slot (proven).** vtable +0x74 (`unknown_use_item`, read from the exe at 0x00b0efd4) is `0x005de3fc`. The +0x70 slot is the bare `ret` at 0x0061cdb0. Reading `0x005de3fc` (decompiled with `tools/ghidra/decomp.sh`) does NOT arm a revive by itself:
+- item flag bit 0x400 set: clear it (`ClearItemFlag0x400_005c4860`), done;
+- else call the item's vtable +0xa8 (`FUN_005dfde4` at 0x005dfde4), which creates a 0x20-byte helper object for the owning player (`CreateItemInstance_005dfc54`, player id at +0x1c, countdown 3 at +0x1e, ticked by `ProcessItemInstance_005dfb78`: it ends when the player is gone or the count is 0; no revive in it);
+- then, when the item's +0x109 is still 0: SE 0x1af at the player (`FUN_005c3724`) and message 0x580 (`FUN_005c376c`);
+- item flag 0x10: `RemoveItemByIdFromInventory_005c46f8`.
+The header note "arm revive trigger" (`headers/items.h` ~805) is therefore not the use's effect in this pass. The 0x400 flag is named "wrapped" in the headers; newserv forbids wrapping Scape Dolls, so that branch is ASSUMED to be dead for the doll.
+
+**The death check (proven, with one ASSUMED reading).** `dispatch_actions_0x89_0x4d` (dump `.c:584055`): on the first death frame (`unknown_flags_invincibility == 1`) it calls `CheckForDropItemInInventory_0069248c` and sets death flag bit 2 (0x2) when the call returns 0 (`extraout_EAX`). That function's three `FindItemInInventory_006a4e50` calls use the compact triples `03 09 00`, `00 0D 03`, `01 02 52` in that order; the first hit's node is the return value (EAX). The Ghidra dump prints the function as void, so the EAX reading is from the caller's `extraout_EAX` (ASSUMED on that point only). The triples 2 and 3 are not identified (ASSUMED).
+
+**The fade's end (proven).** `unknown_dead_player_return_to_p2_related` (dump `.c:573511`, `0x006920ac` in the notes) clears bit 2 of 0x92c, then calls `HandleDropItemAction_006923dc` (`.c:573653`). When that returns non-zero the routine returns: no return to Pioneer 2, no 6x4E from this path. `HandleDropItemAction` disables movement, sets 0x92c bit 4, and (outside the lobby, unless `unknown_flags_invincibility == 2`) sends `checked_call_packet0x60_subcommand` with `remove_from_stackable_item` (41 = 0x29) and `{item id, 1}` (size 3 dwords): the 6x29 that `buildDeleteItem` already builds.
+
+**The revive (NOT proven).** The exe's HP restore, the state after the doll (the revive state 0x12 or the 6x4F send) are not found in this pass. `ForceExitSpecialState_0069db5c` sets the revive state with invulnerability 300 (already ported as `INVULN_TICKS_REVIVE`), but no caller from the doll path was traced. The port therefore uses `revive()` (6x4F, HP max(1, round(maxHp / 8)), invulnerability 300), all ASSUMED.
+
+**Port.**
+- `combat/playerdamage.ts`: `DROP_CHECK_ITEMS` (the three triples, in order), `SCAPE_DOLL_CLASS`, `dropCheckClass(data1)`. `die()` sets flag 2 only when the drop check finds nothing (it was always set). The fade's end: a Scape Doll found by the check is consumed (`sendConsumeItem`, 6x29 amount 1) and the player is revived through `revive()` instead of going revivable (6x4E). Other triples keep the old path (ASSUMED open).
+- `net/items.ts` (`GameItems`): `dropCheckItem()` (the first match, class order) and `consumeOne(itemId)` (6x29 + local inventory removal).
+- `render/combat.ts` / `render/gameview.ts`: the two events wired to `GameItems`.
+- `tests/scapedoll.test.ts` (27 checks): the triples, the flag 2 with and without the doll, the 6x29 once and no 6x4E with the doll, a non-doll triple, a doll gone at the fade's end.
+
+**Open.** The HP and state after the doll (the revive call, whether 6x4F is sent, the HP number); the triples 2 and 3 (what they are and whether the exe also revives on them); the 0x580 / 0x1af message and sound (the message text is not decoded); whether the local inventory's 6x29 echo arrives before the revive (a Chrome check was not run); the helper object's `TriggerItemTimer_005e6094` role.
+
+**Method.** Ghidra headless (`tools/ghidra/decomp.sh`) for `FUN_005de3fc`, `FUN_005dfd50`, `FUN_005de228`, `FUN_005caa50`, `FUN_0069248c`, `FUN_006a4e50`, `FUN_005dfde4`, `FUN_00689b44`; `tools/exedata.py read` for the table at 0x009c21e0 and the vtable at 0x00b0ef60.
 
 ## 2026-10-25: Challenge mode left: the material x5 is ported (stale ROADMAP item); the Scape Doll / dead-player rules traced, no port
 

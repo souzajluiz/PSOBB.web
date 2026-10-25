@@ -167,6 +167,25 @@ export const HEAVY_HIT_FRACTION = 0.25;
 export const DEATH_FLAG_DROPPED = 1;
 export const DEATH_FLAG_NO_DROP = 2;
 
+// The three items the death check looks for, in the exe's order
+// (CheckForDropItemInInventory_0069248c @ 0x0069248c: FindItemInInventory on the
+// compact triple group_1, group_2, group_idx). The first one found is the one
+// HandleDropItemAction_006923dc (0x006923dc) consumes. [3, 9, 0] is the Scape
+// Doll (tool subtype 9: newserv QuestScript "030900"; init_item_tools[9] =
+// 0x005dfd50). The other two are not identified (ASSUMED: the weapon 0x0D / 3
+// and the armour 0x52 of group 1 subtype 2).
+export const DROP_CHECK_ITEMS: readonly (readonly [number, number, number])[] = [
+  [3, 9, 0],
+  [0, 0xd, 3],
+  [1, 2, 0x52],
+];
+export const SCAPE_DOLL_CLASS = 0; // index into DROP_CHECK_ITEMS
+
+// The DROP_CHECK_ITEMS index of an item's data1 (its first three bytes), or -1.
+export function dropCheckClass(data1: ArrayLike<number>): number {
+  return DROP_CHECK_ITEMS.findIndex((t) => data1[0] === t[0] && data1[1] === t[1] && data1[2] === t[2]);
+}
+
 // The death fade: the dead helper object (player_death_class_countdown_helper,
 // vtable 0x00b44e88, update 0x00788a64) is created once the death motion has
 // played. Every frame its counter grows by 2 (0x0097a718) and the screen colour
@@ -216,6 +235,11 @@ export interface PlayerDamageEvents {
   sendHit(heavy: boolean, angle: number, hp: number, vx: number, vz: number): void;
   // 6x4A: the attack did no damage.
   sendShieldAttack(): void;
+  // The first DROP_CHECK_ITEMS match in the inventory: its item id and whether
+  // it is a Scape Doll. Absent (or null): no such item.
+  findDropCheckItem?(): { id: number; scapeDoll: boolean } | null;
+  // 6x29 of one item (amount 1): the Scape Doll used up by the revive.
+  sendConsumeItem?(itemId: number): void;
   // 6x89 + 6x4D.
   sendDeath(killerEntityId: number, deathFlags: number): void;
   // 6x4E / 6x4F.
@@ -404,10 +428,12 @@ export class PlayerDamage {
     this.vx = 0;
     this.vz = 0;
     this.fadeTicks = -1;
-    // The first death frame clears flag 4 and sets flag 2 when the inventory
-    // has nothing to drop; this client never drops items on death, so the
-    // "no drop" bit is always set and the "already dropped" bit stays clear.
-    this.deathFlags = DEATH_FLAG_NO_DROP;
+    // The first death frame clears flag 4 and sets flag 2 when the drop check
+    // finds none of DROP_CHECK_ITEMS (dispatch_actions_0x89_0x4d). This client
+    // never drops items on death, so the "already dropped" bit stays clear; the
+    // "no drop" bit follows the check (without an inventory: always set).
+    const found = this.events.findDropCheckItem?.() ?? null;
+    this.deathFlags = found ? 0 : DEATH_FLAG_NO_DROP;
     this.startMotion('death');
     this.events.sendDeath(this.killer, this.deathFlags);
     this.events.log('you died');
@@ -492,6 +518,20 @@ export class PlayerDamage {
         this.fadeTicks++;
         this.fade = Math.min(DEATH_FADE_MAX, this.fadeTicks * DEATH_FADE_STEP);
         if (this.fadeTicks >= DEATH_FADE_TICKS) {
+          // The return-to-Pioneer-2 routine (unknown_dead_player_return_to_p2_related)
+          // first runs HandleDropItemAction, which returns early when the drop
+          // check found an item. A Scape Doll is then used up (6x29) and the
+          // player does not go to the revivable marker.
+          // ASSUMED: the revive in place (6x4F, invulnerability 300, HP from
+          // revive()) is not traced in the exe yet; the exe's HP and state
+          // after the doll are open (DEVLOG).
+          const found = this.events.findDropCheckItem?.() ?? null;
+          if (found?.scapeDoll) {
+            this.events.sendConsumeItem?.(found.id);
+            this.events.log('a Scape Doll revives you');
+            this.revive();
+            break;
+          }
           // The return-to-Pioneer-2 routine: 6x4E, the revivable marker.
           this.state = 'revivable';
           this.events.sendRevivable();
