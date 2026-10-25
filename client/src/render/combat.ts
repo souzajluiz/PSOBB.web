@@ -780,6 +780,10 @@ export class CombatView {
         this.opts.onRevivable?.();
       },
       sendRevivalItemUsed: () => this.game.sendRevivalItemUsed(),
+      // PlayerRestoreHealthAndTP_0068fda4 (Player_DisableMovement): TP = max_tp2.
+      restoreTp: () => {
+        if (this.progression) this.tp = this.progression.maxTp;
+      },
       sendRevived: () => {
         this.game.sendPlayerRevived();
         this.showSoul(this.game.selfId, false);

@@ -255,6 +255,10 @@ export interface PlayerDamageEvents {
   // dispatch_action_0x4f when an automatic revival item revived the player
   // (player+0x92c & 4); sent right before the 6x4F. Absent: not sent.
   sendRevivalItemUsed?(): void;
+  // The automatic revival item's full restore (PlayerRestoreHealthAndTP_0068fda4:
+  // HP = max_hp1, TP = max_tp2), run by Player_DisableMovement before the 6x29.
+  // Only the TP side needs it here (the HP is set by revive()). Absent: TP kept.
+  restoreTp?(): void;
   log(msg: string): void;
   // A sound effect at the player (play_sound_effect_at_player).
   sound?(id: number): void;
@@ -464,7 +468,10 @@ export class PlayerDamage {
     this.fadeTicks = -1;
     this.startMotion('revive');
     this.events.fx?.({ kind: 'revive' });
-    if (autoItem) this.events.sendRevivalItemUsed?.();
+    if (autoItem) {
+      this.events.restoreTp?.();
+      this.events.sendRevivalItemUsed?.();
+    }
     this.events.sendRevived();
     this.events.log(`revived with ${this.hp}/${this.maxHp} HP`);
   }
