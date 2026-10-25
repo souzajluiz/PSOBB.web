@@ -4,6 +4,10 @@
 import {
   advancePhase,
   alphaByte,
+  barSweepByte,
+  beatClockDraw,
+  newBeatWindow,
+  stepBeatWindow,
   beatBarColor,
   beatBarLength,
   beatBarVertices,
@@ -91,5 +95,40 @@ eq(beatVisible(windowAlphas(165).beat), false, 'window: nothing draws at 165');
 eq(WINDOW_X, 650, 'window x is 650 (0x44228000)');
 eq(WINDOW_Y, 425, 'window y is 425 (0x43d48000)');
 
+// The window's update (0x00758480): x eases 0.1 toward its target, the counter steps in logged_in only.
+const w0 = newBeatWindow(true);
+eq({ x: w0.x, y: w0.y, target: w0.target, counter: w0.counter }, { x: 650, y: 425, target: 396, counter: 0 }, 'window: the constructor (target -220 + 616)');
+eq(newBeatWindow(false).target, 453, 'window: outside logged_in the target is -163 + 616');
+const w1 = stepBeatWindow(w0, true);
+near(w1.x, 650 + (396 - 650) * 0.1, 'window: x eases 10% of the way to the target');
+eq(w1.counter, 1, 'window: the counter steps to 1 in logged_in');
+const wOut = stepBeatWindow(w0, false);
+eq(wOut.counter, 0, 'window: the counter does not step outside logged_in');
+near(wOut.x, w1.x, 'window: the easing runs in every scene');
+let wc = { x: 396, y: 425, target: 396, counter: 1 };
+for (let i = 1; i < 300; i++) wc = stepBeatWindow(wc, true);
+eq(wc.counter, 300, 'window: the counter reaches 300');
+wc = stepBeatWindow(wc, true);
+eq(wc.counter, 1, 'window: 300 wraps to 1 (the reset to 0 and the +1)');
+eq(wc.x, 650, 'window: the wrap snaps x to 650');
+eq(wc.y, 425, 'window: y stays 425');
+
+// The 0.5 split: 2t up to 0.5, 2(1 - t) after it, scaled by 255 and truncated.
+eq(barSweepByte(0), 0, 'sweep: phase 0 is 0');
+eq(barSweepByte(0.25), 127, 'sweep: a quarter is 127');
+eq(barSweepByte(0.5), 255, 'sweep: the split is the peak 255');
+eq(barSweepByte(0.75), 127, 'sweep: three quarters is back to 127');
+eq(barSweepByte(0.99), 5, 'sweep: near the wrap it is nearly 0');
+
+// The draw: text at (x + 163, y - 1), bar from x to x + len at y + 18, colours from the beat alpha.
+const d = beatClockDraw({ x: 650, y: 425, target: 396, counter: 0 }, 1296, 0.5);
+eq(d?.text, '000', 'draw: frame 1296 is beat text 000');
+eq(d?.textOrigin, { x: 813, y: 424 }, 'draw: text origin x + 163, y - 1');
+eq(d?.textArgb, 0xffffffff, 'draw: full alpha text is opaque white');
+eq(d?.bar, { x0: 650, x1: 650 + 81.5, y: 443, argb: 0xff00ff00 }, 'draw: bar from x to x + 81.5 at y + 18, opaque green');
+eq(d?.sweep, 255, 'draw: the sweep byte at phase 0.5');
+const fade = beatClockDraw({ x: 650, y: 425, target: 396, counter: 151 }, 0, 0);
+eq(fade?.textArgb >>> 24, 238, 'draw: counter 151 fades the beat to 14/15 (238)');
+eq(beatClockDraw({ x: 650, y: 425, target: 396, counter: 165 }, 0, 0), null, 'draw: counter 165 draws nothing');
 console.log(`beatclock: ${checks - failures}/${checks} checks passed`);
 if (failures) process.exit(1);

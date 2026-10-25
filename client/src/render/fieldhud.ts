@@ -41,7 +41,9 @@ import { equipProblems, itemRowName, itemRows, undroppable, type ChallengeListEn
 import { menuRowSelectable } from '../quest/battleitems.ts';
 import { compareStatRows, type EquipStatRow, type StatBlock } from '../classic/itemdetail.ts';
 import { displayedStats, equippedCandidate, recalculateCandidate, wornEquipment, type CompareStats } from '../combat/playerstats.ts';
-import { liveBeatTime } from '../combat/beattime.ts';
+import { beatFrames, clockOf, liveBeatTime, phaseTimerBase } from '../combat/beattime.ts';
+import { advancePhase, BAR_DY, beatClockDraw, newBeatWindow, stepBeatWindow, type BeatWindow } from './beatclock.ts';
+import { drawGameText } from '../classic/gametext.ts';
 import type { ToolCheckContext } from '../classic/quickmenu.ts';
 import { magStats } from '../formats/itemnames.ts';
 import { techMenuOrder } from '../net/charfile.ts';
@@ -231,6 +233,10 @@ export class FieldHud {
   battleTeam: ((clientId: number) => number | null) | null = null;
   readonly menu: FieldMenu;
   private acc = 0;
+  // The beat clock window (render/beatclock.ts): stepped at the 30 Hz frame, drawn with the HUD. The
+  // phase timer advances only on a frame the beat draws (RenderChatShortcutMenuTimer_0077b5ac).
+  private beatWindow: BeatWindow = newBeatWindow(true);
+  private beatPhase = 0;
   private inventoryKey = '';
   private onKey = (e: KeyboardEvent) => this.key(e);
   private hook = (dt: number) => this.frame(dt);
@@ -1004,6 +1010,7 @@ export class FieldHud {
       this.opts.items.tickPickups();
       this.opts.items.tickDrops();
       this.counter?.tick();
+      this.beatWindow = stepBeatWindow(this.beatWindow, true);
       const src = this.opts.minimap;
       if (src) this.tickRaderHides(src.self());
       if (src && this.minimap.loaded) {
@@ -1057,6 +1064,22 @@ export class FieldHud {
     drawMenuPanel(pc, this.tex.skin.frame, this.menu.shift);
   }
 
+  private drawBeatClock(ctx: CanvasRenderingContext2D, extra: number, bottom: number): void {
+    const frames = beatFrames(clockOf(Date.now()), phaseTimerBase());
+    const d = beatClockDraw(this.beatWindow, frames, this.beatPhase);
+    if (!d) return;
+    this.beatPhase = advancePhase(this.beatPhase);
+    // The window x is 396..650 (never under 320), so it follows the right edge (anchorX).
+    const ox = anchorX(this.beatWindow.x, 0, extra) - this.beatWindow.x;
+    const y = this.beatWindow.y + bottom;
+    drawGameText(ctx, d.text, d.textOrigin.x + ox, d.textOrigin.y + bottom, '#ffffff', ((d.textArgb >>> 24) & 0xff) / 255);
+    ctx.save();
+    ctx.globalAlpha = ((d.bar.argb >>> 24) & 0xff) / 255;
+    ctx.fillStyle = '#00ff00';
+    ctx.fillRect(d.bar.x0 + ox, y + BAR_DY, d.bar.x1 - d.bar.x0, 1);
+    ctx.restore();
+  }
+
   private draw(): void {
     const host = this.host;
     const w = host.clientWidth;
@@ -1097,6 +1120,9 @@ export class FieldHud {
       const w = gameTextWidth(prompt) + 2 * INSET;
       drawTextWindow(ctx, this.tex.skin, { x: anchorX(PROMPT_POS[0], w, extra), y: PROMPT_POS[1], w, h: LINE + 2 * INSET }, prompt);
     }
+    // The beat clock (the player menu's ChatShortcutMenuWindow, render/beatclock.ts): the three digits
+    // and the sub-beat bar, shown while no menu is open (ASSUMED gate, see beatclock.ts).
+    if (!this.menu.isOpen && !this.counter) this.drawBeatClock(ctx, extra, bands.bottom);
     this.menu.draw(ctx, this.tex.skin, this.tex.menu, extra, bands.bottom);
     if (this.helpOpen && !this.menu.isOpen) this.drawHelp(ctx, extra, bands.bottom);
     if (this.opts.teamChat?.open) drawTeamLog(ctx, this.tex.skin, this.opts.teamChat.log);
