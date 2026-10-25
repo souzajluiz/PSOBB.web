@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-10-25: Shark and Dimenian spawn states: a state timer, not an animation
+
+**Outcome.** The Shark (`TObjEneShark`) and the Dimenian (`TObjEneDimedian`) brains run the same `spawn` state as the Booma, with their timer in place of the animation: sub 0 starts the timer and plays the sound and particles, sub 1 counts the timer, sub 2 is idle on the next tick. No animation, no invulnerability. The timer is `SpawnStateTimer` (combat/enemyai.ts), float32 as the exe runs it. Each profile has `spawnTimer` (divisor 10, start scale, sound, particle list); `AiFrame.spawnFx` carries the effects to render/combat.ts, which plays them through `playSeAt` and `particle`.
+
+**Proven (PsoBB.exe, Ephinea addresses; spot-checked with objdump).**
+- Shark spawn 0x00552704 (vtable 0x00aff860 +0x154): sub 1 calls the 0x3b0 object's +0x14, sub 2 writes state 1 and sub 0; sub 0 with +0x398 == 1 runs `InitializeEnemyStateTimer` (0x00576c48), `abeast_enemy_sfx_and_particle` (0x0057895c), sub 1; +0x398 == 0 goes to sub 2.
+- Timer class of the Shark: vtable 0x00b069b0. +4 (0x00576a64) step = 2.0 / arg (0x00927260 = 2.0); init (0x00576c48) acc = step * 0x0092720c (-30.0); +0x14 (0x00576b18) acc += step, done at acc >= 0x00927234 (2.0).
+- Dimenian spawn 0x005ad51c: sub 0 with +0x398 == 1 sets sub 1, runs the dark SFX (0x00578a20), and `InitializeParticleEffectSubEntity` (0x00512494) on the 0x3b0 object. That object is a different class, vtable 0x00aff758: +4 (0x00512314) step = 2.0 / arg (0x009205a8 = 2.0), init acc = step * 0x00920568 (-20.0), +0x14 (0x00512404) acc += step, done at acc >= 0x0092057c (2.0). The dump's name for 0x005ad51c, `DorphonProcessAttackPhase`, is a community label; the body matches.
+- Float32 counts (simulated in the test, `Math.fround` per step, as the x87 stores round): Shark 41 advancing ticks (exact math 40: -6.0 + 40 x 0.2 lands just under 2.0), Dimenian 30. With the init tick and the sub-2 tick, the brain is idle on tick 43 (Shark) and 32 (Dimenian).
+- Shark sound fallback 0x124 (table 0x009273e0, stride 8, index map), particles 0xea at the spot and 0xe9 at +30 (0x0092746c). Dimenian sound fallback 0x1d1 (table 0x009273e4), particle 0xe6 at +30 (0x00927468). The static image holds zeros in both tables, so the fallback is what the exe plays unless the map loader fills them.
+- The Shark's +0x398 == 1 writer is the constructor-family function at 0x00512ead (`movl $1, 0x398` at 0x00512ed4, unconditional on its path).
+
+**ASSUMED.**
+- The Dimenian's +0x398 == 1 is not proven. The Dimenian ctor 0x00551d3c writes no +0x398, and the base ctor 0x0052b6ec writes 0. The only nearby writer is the unnamed function containing 0x005ade89 (same shape as the Shark's 0x00512ead). Modelled as spawn true, like the Booma and the Shark.
+- Map sound tables: the port uses the fallback id for every map.
+- Particle args (0xa, 0x1e) of 0x0050a984 are not modelled (the port's `particle` takes the id and the spot).
+- The Shark's and Dimenian's radar icon: the spec's trace said "no change" for the Shark. The port keeps it shown during the timed spawn (`timedSpawn`). The exe's radar slot (+0x198) differs per class (0x00779df0 Shark, 0x00551918 Dimenian), so the Booma per-state table was not confirmed for them.
+- The Grass Assassin's emerge (enemyfsmcaves.ts) uses the same timer and the 0x124 sound but a particle Y offset of 0; the Shark's 0xe9 offset is +30 per the trace. Not changed here.
+
+**Tests.** `tests/enemyfsm.test.ts`: the float32 tick counts (41, 30) computed in the test, the first tick's sound and particles with no motion, no invulnerability, the idle tick, the idle motion after, the no-`0x398` branch, a Dimenian hit during the spawn. `tsc --noEmit` clean; enemyfsm, minimap, combatdepth, combat (with NEWSERV) and combatsetatp pass.
+
 ## 2026-10-25: Booma spawn gate is current_target == 1, set by the Booma ctor: every Booma animates
 
 **Outcome.** The spawn handler's "current_target == &g_ChallengeListWindowFlag" test is not a global. It is the integer 1 in the `current_target` slot (enemy +0x398), and the dump's `&g_ChallengeListWindowFlag` is a mis-resolved name for that constant (the same mis-resolution is noted in `client/src/combat/blooddecals.ts`). The Booma constructor writes 1 there on every spawn path, so every Booma takes the animation branch. The port's `spawn: true` is right; the port now also models the exe's else branch (spawn false: sub 2, no motion, not invulnerable, idle on the next tick).

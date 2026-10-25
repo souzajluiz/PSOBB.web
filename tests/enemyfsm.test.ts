@@ -852,8 +852,90 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
   eq(boomaSpawn(true, AI_PROFILES.TObjEneBeast as EnemyAiProfile).state, 'spawn', 'a Booma starts in the spawn state');
   eq(boomaSpawn(true).invulnerable, false, 'a fresh spawn is not invulnerable before its first tick');
   eq(boomaSpawn(true, AI_PROFILES.TObjEneMoja as EnemyAiProfile).state, 'idle', 'a family without a spawn profile starts idle');
-  eq(boomaSpawn(true, AI_PROFILES.TObjEneShark as EnemyAiProfile).state, 'idle', 'the Shark has no spawn state in the port');
-  eq(boomaSpawn(true, AI_PROFILES.TObjEneDimedian as EnemyAiProfile).state, 'idle', 'the Dimenian has no spawn state in the port');
+  eq(boomaSpawn(true, AI_PROFILES.TObjEneShark as EnemyAiProfile).state, 'spawn', 'the Shark starts in the spawn state');
+  eq(boomaSpawn(true, AI_PROFILES.TObjEneDimedian as EnemyAiProfile).state, 'spawn', 'the Dimenian starts in the spawn state');
+}
+
+// --- Shark / Dimenian timed spawn (exe 0x00552704 / 0x005ad51c, the 0x3b0 state timer) ---
+{
+  const f32 = Math.fround;
+  // The exe's float32 loop: acc = f32(step * scale), then acc = f32(acc + step) until acc >= 2.0.
+  const advancing = (divisor: number, scale: number): number => {
+    const step = f32(2 / divisor);
+    let acc = f32(f32(step * scale));
+    let n = 0;
+    do {
+      acc = f32(acc + step);
+      n++;
+    } while (acc < 2 && n < 1000);
+    return n;
+  };
+  // Shark: -6.0 start, 40 ideal steps, but float32 accumulation reaches 2.0 on the 41st add.
+  eq(advancing(10, -30), 41, 'the Shark timer takes 41 advancing ticks in float32');
+  // Dimenian: -4.0 start, 30 steps, exact.
+  eq(advancing(10, -20), 30, 'the Dimenian timer takes 30 advancing ticks');
+
+  const timed = (profile: EnemyAiProfile, spawn: boolean) =>
+    new EnemyAi({
+      x: 0,
+      z: 0,
+      angle: 0,
+      profile,
+      detect: 225,
+      turnRate: 1024,
+      attack: { minAtp: 0, maxAtp: 0, minAta: 0, maxAta: 0, distanceX: 12, angle: 0x1c71, distanceY: 0 },
+      speeds: { idleMove: 0.8, idleAnim: 0.8, engagedMove: 0.5, engagedAnim: 0.5 },
+      radius: 7,
+      wander: 0,
+      spawn,
+    });
+  const near: AiTarget = { clientId: 0, x: 50, z: 0, charClass: 0, dead: false };
+  const shark = AI_PROFILES.TObjEneShark as EnemyAiProfile;
+  const dimenian = AI_PROFILES.TObjEneDimedian as EnemyAiProfile;
+
+  // Profiles: no animation spawn, a timer with the exe's sound and particles.
+  eq([shark.spawn, shark.spawnTimer?.sound, shark.spawnTimer?.effects], [undefined, 0x124, [{ id: 0xea, dy: 0 }, { id: 0xe9, dy: 30 }]], 'Shark spawn: timer, sound 0x124 fallback, particles 0xea and 0xe9 +30');
+  eq([dimenian.spawn, dimenian.spawnTimer?.sound, dimenian.spawnTimer?.effects], [undefined, 0x1d1, [{ id: 0xe6, dy: 30 }]], 'Dimenian spawn: timer, sound 0x1d1 fallback, particle 0xe6 +30');
+
+  for (const [name, profile, ticks] of [
+    ['Shark', shark, 41],
+    ['Dimenian', dimenian, 30],
+  ] as const) {
+    const ai = timed(profile, true);
+    const first = ai.tick([near]);
+    eq([ai.state, first.motion, first.spawnFx], ['spawn', null, { sound: profile.spawnTimer!.sound, effects: profile.spawnTimer!.effects }], `${name}: the first tick plays the sound and particles, no motion`);
+    eq([ai.invulnerable, ai.timedSpawn], [false, true], `${name}: not invulnerable, a timed spawn`);
+    let motions = 0;
+    let fx = 0;
+    let idleAt = -1;
+    // Global tick numbers: tick 1 is the init (sub 0, already run above); ticks 2..ticks+1 advance the
+    // timer, the last one sets sub 2 (still spawn, no motion); tick ticks+2 is the sub-2 tick: idle.
+    let tickNo = 1;
+    while (idleAt < 0 && tickNo < ticks + 10) {
+      const r = ai.tick([near]);
+      tickNo++;
+      if (r.motion) motions++;
+      if (r.spawnFx) fx++;
+      if (ai.state === 'idle') idleAt = tickNo;
+    }
+    eq([motions, fx], [0, 0], `${name}: no motion and no second sound while spawning`);
+    eq(idleAt, ticks + 2, `${name}: idle on tick ${ticks + 2} (1 init, ${ticks} advancing, 1 sub-2 tick)`);
+    // Then idle is the normal brain: the idle motion plays on the next tick.
+    eq(ai.tick([]).motion, profile.idle, `${name}: the idle motion plays after the spawn`);
+  }
+
+  // The no-spawn branch (+0x398 == 0): sub 2 on the first tick, nothing played, idle on the next.
+  const none = timed(shark, false);
+  const n0 = none.tick([near]);
+  eq([none.state, n0.motion, n0.spawnFx], ['spawn', null, undefined], 'Shark without +0x398: the first tick plays nothing');
+  none.tick([near]);
+  eq(none.state, 'idle', 'Shark without +0x398: idle on the next tick');
+
+  // Hits during the timed spawn land (no invulnerability): the chase starts on the attacker.
+  const hit = timed(dimenian, true);
+  hit.tick([]);
+  hit.onDamage(4);
+  eq([hit.state, hit.targetId], ['chase', 4], 'a Dimenian hit during its spawn starts the chase');
 }
 
 if (failures) {

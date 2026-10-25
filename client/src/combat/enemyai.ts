@@ -113,9 +113,29 @@ export interface EnemyAiProfile {
   // animation 0xb, the spawn (unknown_booma_enemy_spawn_handler 0x00535a6c);
   // null / absent = the family has no spawn state in the port.
   spawn?: EnemyAiMotion | null;
+  // The timed spawn of the Shark and the Dimenian (no animation): the state timer
+  // of the 0x3b0 object, and the sound and particles of sub-state 0. Absent = none.
+  spawnTimer?: EnemySpawnTimer | null;
 }
 
-const loop = (index: number, speed: number): EnemyAiMotion => ({ index, speed, loop: true });
+// Shark (0x00552704) and Dimenian (0x005ad51c) spawn. The timer is the 0x3b0
+// object: 0x00576b18 (Shark, vtable 0x00b069b0) and 0x00512404 (Dimenian,
+// vtable 0x00aff758). Both add `step` per tick and end at acc >= 2.0
+// (0x00927234 / 0x0092057c); the setter gives step = 2.0 / divisor (divisor 10, the
+// constant 10 the init passes), and the init gives acc = step * scale (-30 Shark
+// 0x0092720c, -20 Dimenian 0x00920568).
+export interface EnemySpawnTimer {
+  divisor: number;
+  scale: number;
+  // Sub-state 0: the spawn sound and the particles (id, and the Y offset from the
+  // enemy). The sound is the per-map table's entry (0x009273e0 Shark, 0x009273e4
+  // Dimenian, stride 8); the static exe image holds zeros there, so this is the
+  // fallback id the exe uses when the entry is 0 (ASSUMED for every map).
+  sound: number;
+  effects: readonly { id: number; dy: number }[];
+}
+
+const loop =(index: number, speed: number): EnemyAiMotion => ({ index, speed, loop: true });
 const once = (index: number, speed: number): EnemyAiMotion => ({ index, speed, loop: false });
 
 // Read out of the animation tables of PsoBB.exe; the table address of each
@@ -128,8 +148,26 @@ export const AI_PROFILES: Record<string, EnemyAiProfile> = {
   // exe's spawn handler writes animation_id 0xb and leaves it on its end test.
   TObjEneBeast: { idle: loop(9, 0.6), walk: loop(11, 0.5), notice: once(10, 0.8), attacks: [once(1, 0.65), once(2, 0.85)], spawn: once(0, 0.5) },
   // 0x009bb300 (Evil / Pal / Guil Shark): same layout, different speeds.
-  TObjEneShark: { idle: loop(9, 0.6), walk: loop(11, 1), notice: once(10, 0.8), attacks: [once(1, 1), once(2, 1)] },
-  TObjEneDimedian: { idle: loop(9, 0.6), walk: loop(11, 1), notice: once(10, 0.8), attacks: [once(1, 1), once(2, 1)] },
+  // Shark spawn (0x00552704): no animation; the timer is 41 advancing ticks in float32
+  // (acc -6.0 + 0.2 per tick, end 2.0), then idle. Sound 0x124 fallback (ASSUMED),
+  // particles 0xea at the spot and 0xe9 raised by 30 (0x0092746c). Not invulnerable.
+  TObjEneShark: {
+    idle: loop(9, 0.6),
+    walk: loop(11, 1),
+    notice: once(10, 0.8),
+    attacks: [once(1, 1), once(2, 1)],
+    spawnTimer: { divisor: 10, scale: -30, sound: 0x124, effects: [{ id: 0xea, dy: 0 }, { id: 0xe9, dy: 30 }] },
+  },
+  // Dimenian spawn (0x005ad51c, the Dorphon-named dump function): the particle
+  // 0xe6 raised by 30 (0x00927468), the sound 0x1d1 fallback (ASSUMED); acc -4.0,
+  // 30 advancing ticks in float32 (end 2.0). Not invulnerable.
+  TObjEneDimedian: {
+    idle: loop(9, 0.6),
+    walk: loop(11, 1),
+    notice: once(10, 0.8),
+    attacks: [once(1, 1), once(2, 1)],
+    spawnTimer: { divisor: 10, scale: -20, sound: 0x1d1, effects: [{ id: 0xe6, dy: 30 }] },
+  },
   // 0x009bb420 (Hildebear / Hildeblue): 0 (9, 0.5, loop), 2 walk (10, 0.6,
   // loop), 3 (8, 0.7), 4 (5, 0.4), 5 (7, 0.5), 1 is the spawn row (6, 0.7).
   TObjEneMoja: { idle: loop(9, 0.5), walk: loop(10, 0.6), notice: null, attacks: [once(8, 0.7), once(5, 0.4)] },
@@ -255,8 +293,28 @@ export function enemySpeeds(movement: EnemyMovementData | null, fallback: number
   };
 }
 
+// The 0x3b0 state timer of the Shark and the Dimenian spawns, in float32 as the
+// exe runs it: the setter (vtable +4) stores step = 2.0 / divisor, the init
+// stores acc = step * scale, and each tick adds step. The tick reports done at
+// acc >= 2.0 (fcomps against 0x00927234 / 0x0092057c, both 2.0, jae).
+export class SpawnStateTimer {
+  private readonly step: number;
+  private acc: number;
+
+  constructor(divisor: number, scale: number) {
+    this.step = Math.fround(2 / divisor);
+    this.acc = Math.fround(this.step * scale);
+  }
+
+  tick(): boolean {
+    this.acc = Math.fround(this.acc + this.step);
+    return this.acc >= 2;
+  }
+}
+
 // 'spawn' is exe state 0 (unknown_booma_enemy_spawn_handler, 0x00535a6c): the
-// spawn animation, invulnerable, then idle.
+// spawn animation, invulnerable, then idle. The Shark and Dimenian use the same
+// state with their timer instead of the animation (EnemySpawnTimer).
 export type AiState = 'spawn' | 'idle' | 'notice' | 'chase' | 'attack' | 'recover' | 'dead';
 
 export interface AiTarget {
@@ -300,6 +358,8 @@ export interface AiFrame {
   hold?: { clientId: number; frames: number; particle: number; x: number; z: number; radius2: number } | null;
   // The model is hidden (a warping Sinow: vtable +0x174 / +0x178).
   hidden?: boolean;
+  // The Shark / Dimenian spawn's sound and particles, once, at the start of its timer.
+  spawnFx?: { sound: number; effects: readonly { id: number; dy: number }[] } | null;
   // The Chaos Bringer's TP drain: every player in sight loses floor(TP *
   // tpDrain) (modify_tp_value); the owner reports the total back.
   tpDrain?: number;
@@ -378,6 +438,8 @@ export class EnemyAi {
   private spawnSub = 0;
   // The current_target == 1 test of the spawn handler (set by the constructor's spawn option).
   private spawnAnimation = false;
+  // The Shark / Dimenian spawn timer (sub-state 1); null for the animation spawn.
+  private spawnTimer: SpawnStateTimer | null = null;
 
   constructor(opts: {
     x: number;
@@ -408,7 +470,7 @@ export class EnemyAi {
     this.wander = opts.wander ?? 0;
     this.reach = opts.attack && opts.attack.distanceX > 0 ? opts.attack.distanceX : 0;
     this.reachAngle = ((opts.attack?.angle ?? 0x2000) & 0xffff) * BAMS_TO_RAD;
-    if (opts.profile.spawn && opts.spawn !== undefined) {
+    if ((opts.profile.spawn || opts.profile.spawnTimer) && opts.spawn !== undefined) {
       // Exe state 0. current is null: the first tick plays the spawn motion
       // (play() emits it), or with spawn false takes the no-animation branch.
       this.state = 'spawn';
@@ -427,7 +489,12 @@ export class EnemyAi {
   // maybe_invuln (0x4000000) and a hit does nothing (render/combat.ts
   // applyEnemyHit). The flag is cleared at the end test, so sub-state 2 takes hits.
   get invulnerable(): boolean {
-    return this.state === 'spawn' && this.spawnSub === 1;
+    return this.state === 'spawn' && this.spawnSub === 1 && !!this.profile.spawn;
+  }
+
+  // The spawn is the timed one (Shark, Dimenian): no animation, and no invulnerability.
+  get timedSpawn(): boolean {
+    return !!this.profile.spawnTimer;
   }
 
   // The enemy died: state 8, the owner plays the death motion itself.
@@ -600,6 +667,8 @@ export class EnemyAi {
   // and nothing else writes +0x398 in the Booma family before that tick. Else
   // branch (0x00535ad9): sub 2 with no animation; the state stays 0 until the next tick.
   private tickSpawn(out: AiFrame, animationEnded: boolean): AiFrame {
+    const timer = this.profile.spawnTimer;
+    if (timer) return this.tickSpawnTimer(out, timer);
     const spawn = this.profile.spawn;
     if (!spawn) {
       this.state = 'idle';
@@ -617,6 +686,34 @@ export class EnemyAi {
       if (animationEnded) {
         this.spawnSub = 2;
         out.motion = this.play(this.profile.idle);
+      }
+    } else {
+      this.state = 'idle';
+    }
+    return out;
+  }
+
+  // The Shark (0x00552704) and Dimenian (0x005ad51c) spawn, same sub-states as
+  // the Booma one but timed. Sub 0 (+0x398 == 1, set by their constructors for
+  // the Shark at 0x00512ed4; ASSUMED for the Dimenian, see the notes in
+  // render/combat.ts): the timer init, the sound and particles, sub 1. The
+  // else branch (+0x398 == 0) goes to sub 2 with no effects. Sub 1: the tick
+  // (0x00576b18 / 0x00512404); when it reports done, +0x398 = 0 and sub 2. Sub 2:
+  // the next tick is state 1 (idle), no motion. No motion plays during the spawn.
+  private tickSpawnTimer(out: AiFrame, timer: EnemySpawnTimer): AiFrame {
+    if (this.spawnSub === 0) {
+      if (!this.spawnAnimation) {
+        this.spawnSub = 2;
+        return out;
+      }
+      this.spawnTimer = new SpawnStateTimer(timer.divisor, timer.scale);
+      this.spawnSub = 1;
+      out.spawnFx = { sound: timer.sound, effects: timer.effects };
+    } else if (this.spawnSub === 1) {
+      if (this.spawnTimer?.tick()) {
+        this.spawnAnimation = false;
+        this.spawnTimer = null;
+        this.spawnSub = 2;
       }
     } else {
       this.state = 'idle';
