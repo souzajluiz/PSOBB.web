@@ -33,6 +33,7 @@ import { MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, particleMapFile } from '../clie
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 import type { EnemyShot } from '../client/src/combat/enemyshots.ts';
+import { radarConcealed } from '../client/src/render/combat.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -177,6 +178,8 @@ eq(DRAGON_SLOTS[19].speed, 0.5, 'the run-time speed of the death motion');
   const ai = brain();
   eq(ai.sid, S.intro, 'starts in the entrance');
   check(ai.untargetable && ai.invulnerable, 'the entrance cannot be hit');
+  // The update's forced radar icon (0x00423b7c) has no state gate: the entrance is on the radar.
+  check(!radarConcealed({ ai }), 'the entrance shows on the radar (forced icon, no state gate)');
   const r = run(ai, [player(0, 100, 0)], 2000, () => ai.sid === S.walk);
   eq(ai.sid, S.walk, 'the first action is the walk');
   const sends = r.events.filter((e) => e.kind === 'send') as Extract<DragonEvent, { kind: 'send' }>[];

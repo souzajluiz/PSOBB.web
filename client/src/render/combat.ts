@@ -562,6 +562,13 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   (e.ai instanceof SmChildAi && e.ai.untargetable) ||
   (e.ai instanceof SinowAi && e.ai.dormant) ||
   (e.ai instanceof NanoDragonAi && e.ai.untargetable);
+// The radar test of concealed(). The Dragon's update (PsoBB.exe OlgaUpdateMainLoop_00423b7c,
+// 0x00423b7c) ends every live frame with enable_reticle_ and unknown_add_minimap_icon3(pos,
+// 0xffffa24c, 0x40000000, flag 1): a forced icon with no state and no distance gate (flag 1
+// skips the distance test). So the entrance (sid 0x1d, untargetable) is on the radar. Its
+// lock-on and hit still follow concealed() (ASSUMED: the hit boxes are off in the entrance,
+// SaintEmilionPart_DisableAll, not traced in the exe).
+export const radarConcealed = (e: { ai: EnemyBrain | null }): boolean => concealed(e) && !(e.ai instanceof DragonAi);
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -1890,7 +1897,7 @@ export class CombatView {
   minimapEnemies(): { x: number; z: number; type: string }[] {
     const out: { x: number; z: number; type: string }[] = [];
     for (const e of this.enemies.values()) {
-      if (e.dead || e.state === 'death' || !e.instance.root.visible || concealed(e) || !splitRadarOk(e)) continue;
+      if (e.dead || e.state === 'death' || !e.instance.root.visible || radarConcealed(e) || !splitRadarOk(e)) continue;
       if (BOOMA_BRAIN_TYPES.has(e.slot.type) && e.ai instanceof EnemyAi && !boomaBrainIconShown(e.ai.state)) continue;
       // Dark Falz forms 1 and 3 have their own forced icons (minimapIcons).
       if (e.ai instanceof DarkFalzPartAi && (e.ai.entity === DF_ID.form3 || e.ai.entity === DF_ID.form1)) continue;
