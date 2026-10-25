@@ -150,6 +150,36 @@ The header note "arm revive trigger" (`headers/items.h` ~805) is therefore not t
 **Open.** The HP and state after the doll (the revive call, whether 6x4F is sent, the HP number); the triples 2 and 3 (what they are and whether the exe also revives on them); the 0x580 / 0x1af message and sound (the message text is not decoded); whether the local inventory's 6x29 echo arrives before the revive (a Chrome check was not run); the helper object's `TriggerItemTimer_005e6094` role.
 
 **Method.** Ghidra headless (`tools/ghidra/decomp.sh`) for `FUN_005de3fc`, `FUN_005dfd50`, `FUN_005de228`, `FUN_005caa50`, `FUN_0069248c`, `FUN_006a4e50`, `FUN_005dfde4`, `FUN_00689b44`; `tools/exedata.py read` for the table at 0x009c21e0 and the vtable at 0x00b0ef60.
+## 2026-10-25: Episode 2 watch: chain links now wait for ready (built, visible, out of spawn) before the kill
+
+**Question:** the 10-25 watch entry killed chain links whose waves had not started, and `dead` read 0 because the final list drops dead entries. Does the spec wait per link, and does the chain run in order?
+
+**Spec (`client/e2e/ep2-floors-watch.spec.ts`, no port change):** `waitReady` waits (up to `EP2_READY_S`, 30 s) until a link's wave has a living enemy, every living enemy is visible and not `invulnerable` (the spawn state). `killWave` hits only the non-invulnerable enemies, repeats up to 8 passes, and returns the entity ids that died. A link not ready, or left alive after its kill, stops the chain. `dead` is now the size of the union of chain-killed ids and the ids seen dead in the watch's samples (no longer the final list).
+
+**Port bug?** Not found. The 10-25 "spawn-state enemies are not hit" verdict holds: the spec no longer hits a spawn-state enemy, and the kills that ran hit only ready enemies.
+
+**Run:** `PW_BASE_URL=http://127.0.0.1:5174 PSO_USER=webtest EP2_FLOOR_CAP_S=400`, Chrome headless, own vite on 5174.
+- Floor 5 (`EP2_WATCH_FLOORS=5`): `1 passed (7.3m)`, page errors 0, failed requests 0.
+- Floor 1 (`EP2_WATCH_FLOORS=1`): `1 passed (7.8m)`, page errors 0, failed requests 0.
+
+**Chain results (chained groups, root first):**
+
+| floor | group | chain | result |
+|---|---|---|---|
+| 5 | room 3 wave 2 (event 311) | 31 (3/1) | 31 ready 0.0 s, hit 2, dead 2, alive 0; 311 built 4 enemies, all still `spawn` through the 30 s watch (no change) |
+| 5 | room 4 wave 3 (event 411) | 41 (4/1) | 41 ready 5.9 s, hit 3, dead 3, alive 0; 411 built 2 SINOW_SPIGELL, still `spawn` in the watch |
+| 5 | room 5 wave 3 (event 511) | 51 (5/1) | 51 NOT ready in 30 s (3 of 3 still `spawn`); chain stopped, 511 never started (built 3, all `spawn`) |
+| 1 | room 11 wave 2 (event 1111) | 111 (11/1) | ready 2.9 s, hit 5, dead 5, alive 0 |
+| 1 | room 30 wave 2 (event 3011) | 301 (30/1) | ready 4.8 s, hit 3, dead 3, alive 0 |
+| 1 | room 40 wave 2 (event 4011) | 401 (40/1) | ready 0.02 s, hit 6, dead 6, alive 0 |
+| 1 | room 41 wave 2 (event 4111) | 411 (41/1) | ready 0.06 s, hit 5, dead 5, alive 0 |
+| 1 | room 50 wave 3 (event 5021) | 502 (50/2) | ready 0.02 s, hit 5, dead 5, alive 0 |
+
+The 5 / 3 chain (31 to 311) ran in order, and its last link's enemies were built. The 5 / 1 root (51) did not come out of spawn within 30 s, so the chain stopped there. This is the same stall the 10-25 entry reported, now at the root, not at a kill. The 311 / 411 enemies stayed in `spawn` through the watch: the chain's last link is the group's own wave, which the spec does not wait on before the watch.
+
+**Open:** why SINOW_BERILL / SINOW_SPIGELL enemies sit in `spawn` for 30 s+ in the port (5/1 root, 3/2, 4/3, 5/3) while Gee left `spawn` on its 4th tick (the 10-24 entry). Not traced in the exe; the spawn exit of the Sinow family is the next step. The spec does not force it.
+
+**Checks:** `cd client && npx tsc --noEmit -p .` exit 0.
 
 ## 2026-10-25: Challenge mode left: the material x5 is ported (stale ROADMAP item); the Scape Doll / dead-player rules traced, no port
 
