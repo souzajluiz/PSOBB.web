@@ -412,14 +412,17 @@ function parseVertexBufferModel(r: Reader, o: number): NjcmModel {
       if (vb >= count) throw new Error(`NJCM index buffer ${e}: vertex buffer ${vb} of ${count}`);
       let blend: NjcmPolyOp = { op: 'blend', src: 1, dst: 0 };
       let texId = -1;
+      let hasTexture = false;
       let lit = true;
       for (let a = 0; a < argCount; a++) {
         const rec = args + a * VB_RENDERARG_RECORD;
         const setter = r.u32(rec);
         const arg1 = r.i32(rec + 4);
         if (setter === SETTER_BLEND) blend = { op: 'blend', src: arg1, dst: r.i32(rec + 8) };
-        else if (setter === SETTER_TEXTURE) texId = arg1;
-        else if (setter === SETTER_LIGHTING) lit = arg1 !== 0;
+        else if (setter === SETTER_TEXTURE) {
+          texId = arg1;
+          hasTexture = true;
+        } else if (setter === SETTER_LIGHTING) lit = arg1 !== 0;
       }
       const strip: NjcmStrip = { indices: [], uvs: [], colors: null, flipped: false };
       for (let i = 0; i < indexCount; i++) {
@@ -430,7 +433,12 @@ function parseVertexBufferModel(r: Reader, o: number): NjcmModel {
         strip.uvs!.push(uvs[vb][local * 2], uvs[vb][local * 2 + 1]);
       }
       polys.push(blend);
-      polys.push({ op: 'texture', id: texId, flags: 0 });
+      // No texture setter in this renderargs list: the exe's draw loop calls no
+      // setter, so the device keeps the texture of the previous draw (PsoBB.exe
+      // RenderXjVariableBufferOpaqueUP_0083255d / Alpha 0x008327ba: only the
+      // listed setters run, select_nj_texture is not reached). No op is emitted,
+      // so the mesh builder keeps its current texture (render/njcmmesh.ts state).
+      if (hasTexture) polys.push({ op: 'texture', id: texId, flags: 0 });
       polys.push({ op: 'strips', type: 64, flags: (alpha ? STRIP_USE_ALPHA : 0) | (lit ? 0 : STRIP_IGNORE_LIGHT), strips: [strip] });
     }
   };

@@ -112,7 +112,7 @@ worktrees are left.
 6. Smaller leftovers of the day (each in its DEVLOG entry): particle tint 0x100 (no copy
    of the owner's tint into the particle found; the port keeps the multiply), Saint-Milion
    laser aim (the draw writes +0x38 / +0x44; the length is the exe's ramp, capped at 620 ASSUMED; the 0x8000 sweep stays ASSUMED, its heading source is the node block, see DEVLOG 2026-10-25), the
-   Savage Wolf / Yowie death side: the side and turn rule is decoded and ported (DEVLOG 2026-10-25, `SavageDeathMotion`); still open: the exe's writer of the velocity at the kill (+0x30c / +0x314 of a wolf; the port uses its last step, ASSUMED), and the Yowie's velocity (no model, +12 kept). The Held weapon's -1 texture ids.
+   Savage Wolf / Yowie death side: the side and turn rule is decoded and ported (DEVLOG 2026-10-25, `SavageDeathMotion`); still open: the exe's writer of the velocity at the kill (+0x30c / +0x314 of a wolf; the port uses its last step, ASSUMED), and the Yowie's velocity (no model, +12 kept). The Held weapon's -1 texture ids are done (DEVLOG 2026-10-25: the exe keeps the previous texture; one weapon's first strip stays ASSUMED untextured). The particle 0x100 item was re-read on 2026-10-25 (DEVLOG): the owner's spawn call sites never pass its +0x4c tint, so it stays open.
 
 ## State of `main`
 
