@@ -516,6 +516,9 @@ const BULCLAW_CLAWS = 4;
 // a technique or confused-enemy target (combat/enemysplits.ts untargetable).
 // Vol Opt's control object, its parts that are not up and its body before the
 // fight are hidden the same way.
+// A slime is in the technique targeting records only in its lock-on states (SlimeAi.lockable,
+// PsoBB.exe enable_reticle, called by the slime's update only while +0x3f4 is set).
+const techRecordOk = (e: { ai: EnemyBrain | null }): boolean => !(e.ai instanceof SlimeAi) || e.ai.lockable;
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   ((e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
   ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
@@ -7766,7 +7769,7 @@ export class CombatView {
     const half = data.angleH * BAMS_TO_RAD;
     const list: Array<{ e: EnemyRuntime; d: number }> = [];
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible || concealed(e)) continue;
+      if (e.dead || !e.instance.root.visible || concealed(e) || !techRecordOk(e)) continue;
       const p = e.instance.root.position;
       const dx = p.x - from.x;
       const dz = p.z - from.z;
@@ -7799,7 +7802,7 @@ export class CombatView {
     const cands: Candidate[] = [];
     const byId = new Map<number, EnemyRuntime>();
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible || concealed(e)) continue;
+      if (e.dead || !e.instance.root.visible || concealed(e) || !techRecordOk(e)) continue;
       const p = e.instance.root.position;
       cands.push({ id: e.index, x: p.x, y: p.y + this.aimHeightOf(e), z: p.z, radius: this.hitRadiusOf(e) });
       byId.set(e.index, e);

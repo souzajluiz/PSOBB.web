@@ -20277,3 +20277,25 @@ The stab pass left four placeholders (plane 0, axis 30, epsilon 0, range 20) bec
 
 **Checks:** `node tests/mechgun.test.ts` 22 checks, 0 failures. `node tests/gunbullet.test.ts` all passed. `cd client && npx tsc --noEmit -p .` (Node 24) clean. `tests/combat.test.ts` and `tests/weaponorigin.test.ts` need `vendor/newserv` (not in this worktree), not run. Not run in Chrome.
 
+
+## 2026-10-25: Pofuilly Slime: the exe's motion 4 is the stun's animation, +0x3f4 is the lock-on flag
+
+**Report.** Both open items of the Pofuilly clause are settled from the raw exe (objdump of `PsoBB.exe` over 0x596000..0x59a000 and the whole text, the Ghidra dump for names only, `tools/exedata.py motions`). Code: `client/src/combat/enemysplits.ts` (`SLIME_ANIM.stun`, `RETICLE_STATES`, `SlimeAi.lockable`), `client/src/render/combat.ts` (`techRecordOk`, used by `techTargets` and `pickFireTargets`), `tests/enemysplits.test.ts` (the stun motion, the lockable table).
+
+**Motion 4 (proven).** The only caller that loads animation id 4 is the stun entry 0x0059856c: `EnemyLoadAnimationOrModel_00599c7c(sub, 4)` (dump 381883; objdump 0x59856c..0x5985c4 holds the call). That loader (dump 382687) writes the sub-object's +4 = 4 (the morph / mesh set) and, for ids 0..6 with no NPC-animation flag, the slime's animation id +0xb8 = 4. The slime's motion table is set by 0x5984b2 / 0x59988d (`movl $0x9bfc80, 0xd8`), so +0xb8 indexes it: row 4 at 0x009bfc80 + 0x40 is `mode 3, next 0, motion 8, speed 0.8, flags 0`. So the stun plays BML motion 8 once at 0.8. The port played animation 5 (the flinch's hurt, motion 3); the flinch (0x005985c4) loads 5, unchanged. The row is read with `exedata motions`; the generic step that reads +0xb8 / +0xd8 was not re-traced here (ASSUMED the port's existing row convention, which the other slime animations already use: wait = row 0, spit = row 3, hurt = row 5).
+
+**+0x3f4 (proven writers, proven readers).**
+- Writers (objdump, one `movl $0 / $1, 0x3f4(reg)` per entry): 1 in search (6, 0x597f1a), confused (7, 0x597fb1), approach (8, 0x59801b), spit (9, 0x598061), arm (10, 0x598338: inside the arm entry 0x598070..0x598368, ASSUMED: no prologue marks the split), stun (11, 0x5985b5). 0 in puddle (0, 0x597b86), rise (1, 0x597bc5), sink (2, 0x597c24), crawl (3, 0x597d92), emerge (4, 0x597e0a), burrow (5, 0x597e6d), flinch (12, 0x59863a), dead (13, 0x5986f2), thrown (14, 0x5987bb). The dump has the same text for the flinch and stun writers (`SinowzoaTransitionToSpawnedState_005985c4` sets 0, `SinowzoaInitializeState_0059856c` sets 1).
+- Readers, slime-specific: `SinowzoaUpdate_00596104` at 0x596168: `if (+0x3f4 != 0) enable_reticle(this)` (the call is 0x6946a8 with pushes (this, -1); 0x6946a8 loops 4 players times 14 targeting records, the dump's `enable_reticle`). `SinowzoaClearControlFlag_00596248` at 0x596248: `if (+0x3f4 == 0) sub->flags(+0x18) &= ~1`; the flag is set again at the frame's start (0x5961d4). No other slime-range function reads it. Other `0x3f4` readers in the exe belong to other enemy classes (Canadine 0x54263b, Sinowberill, Olga and others), not to the slime.
+- Meaning: `enable_reticle` is the only producer of the players' targeting records (dump 575530..575571: `check_enemy_is_targetable` runs inside it, the comment says the results feed `find_targets_for_weapons_and_techs`). So +0x3f4 != 0 is "this slime is a lock-on and technique target this frame". The port's `untargetable` (hidden or puddle) is the radar / hit filter and was left as it is.
+
+**Changes.**
+- `SlimeAi.lockable` = state in {search, confused, approach, spit, arm, stun}. `render/combat.ts` `techRecordOk` gates the slime in `techTargets` and `pickFireTargets` (the technique targets). The port's old technique filter let emerge, burrow and the rise / flinch / thrown / dead slimes be picked; the exe does not (ASSUMED the technique lists take only the records; the Foie / Barta `pickTechTargets` path follows the same rule).
+- The stun motion is `SLIME_ANIM.stun = once(8, 0.8)`.
+
+**Not done / open.**
+- The lock-on cursor and the lock (`this.lockOn`), the radar icon and the hits still use the port's `concealed` (`untargetable`: hidden or puddle). The exe's lock-on uses the same records, so a lock on an emerging slime is still possible in the port. The radar in the exe is added every frame the state is not 13 (`unknown_add_minimap_icon` in `SinowzoaUpdate`), which the port does not follow for the puddle either.
+- Bit 0x1 of the sub-object's +0x18: its other readers were not traced (ASSUMED that it is the entity-type bit the targeting mask tests; the exe clears it in every state with +0x3f4 = 0).
+- The `0x3f4` value 1 in the arm state comes from the arm entry's code range (ASSUMED, not a separate function).
+
+**Checks.** `node tests/enemysplits.test.ts`: all checks passed. `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts`: 5859 checks, 0 failures. `node tests/combatdepth.test.ts`: 836 checks, 0 failures. `node tests/enemyfsmmines.test.ts`: all checks passed. `cd client && npx tsc --noEmit -p .` (Node 24): clean. Not run in Chrome (no Playwright).

@@ -549,6 +549,30 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   check(Math.abs(t.x - 1) < 1e-9 && Math.abs(t.z) < 1e-9, `the copy moves along (sin, cos) of its heading: ${t.x}, ${t.z}`);
 }
 
+// --- Pofuilly Slime's +0x3f4 (lockable) and the stun motion (animation 4) ----------------
+// The entries write +0x3f4 = 1 in states 6..11 and 0 in 0..5, 12, 13, 14 (PsoBB.exe
+// 0x597e7c .. 0x5987c8). SinowzoaUpdate calls enable_reticle only while it is nonzero, so
+// `lockable` is that set. The stun's entry 0x0059856c loads animation 4: row 4 of the motion
+// table 0x009bfc80 (mode 3, motion 8, speed 0.8), the only entry that loads slot 4.
+{
+  const LOCKABLE = ['search', 'confused', 'approach', 'spit', 'arm', 'stun'];
+  const ALL = ['puddle', 'rise', 'sink', 'crawl', 'emerge', 'burrow', 'search', 'confused', 'approach', 'spit', 'arm', 'flinch', 'thrown', 'dead', 'stun'];
+  for (const s of ALL) {
+    const st = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, rng: () => 0.5 });
+    (st as unknown as { state: string }).state = s;
+    eq(st.lockable, LOCKABLE.includes(s), `lockable (+0x3f4 != 0) in state ${s}`);
+  }
+  const sl = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, thrown: true, rng: () => 0.5 });
+  const pfs = (sl as unknown as { frame(): AiFrame }).frame();
+  sl.pendingHit(pfs);
+  eq(sl.motion, { index: 8, speed: 0.8, loop: false }, 'stun plays animation 4 = motion 8 at 0.8, once (0x59856c, row 4)');
+  eq(sl.view.morph, 4, 'stun: the sub-object form 4');
+  check(sl.lockable, 'stun: lockable');
+  const fl = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, thrown: true, rng: () => 0.5 });
+  fl.hitNoDamage();
+  check(fl.lockable === (fl.state === 'stun'), 'a no-damage hit (stun) makes the slime lockable');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);
