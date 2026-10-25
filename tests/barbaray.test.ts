@@ -14,6 +14,7 @@ import {
   BARBA_DWELL,
   BARBA_CAPTURE_OFFSETS,
   BARBA_HP,
+  BARBA_JUMP,
   BARBA_PACE,
   BARBA_PART_COUNT,
   BARBA_PART_RADIUS,
@@ -1040,23 +1041,45 @@ const runTicks = (b: BarbaRayAi, n: number) => {
 {
   // Enter: the gate open (0x100 set, 4 clear), the body to anchor 3 (one warp), slot 0xc.
   const b = brain({ leader: false });
+  // The idle first (slot 1 started from the spawn's slot 0: no blend), so the beam's id change blends.
+  b.applyPhase(0, null);
+  b.tick([]);
   const w = b.warps;
   b.applyPhase(BARBA_PHASE.beam, null);
   eq(b.warps, w + 1, 'beam enter: one warp');
   eq(b.tFrom, 3, 'beam enter: 0x6c8 = 3');
   eq(b.slot, 12, 'beam enter: slot 0xc (beam_a)');
   check((b.flags & 4) === 0 && (b.flags & 0x100) !== 0, 'beam enter: gate open (0x100 set, 4 clear)');
-  // The beam sound at timer 11 (the crossing of 10.0), once.
+  // The beam sound at the clock's crossing of 10.0 (FUN_007aaa30), once. The enter's id change blends
+  // on tick 1 (the clock is 0.7 then, below 1.0) and wraps on tick 2 to 0 at beam_a's stride (0.4): the
+  // clock is 0.4 * (n - 2) on tick n, and passes 10.0 (10.000000000000004) on the 25th step, tick 27.
   b.drain();
   let se = 0;
-  for (let k = 0; k < 12; k++) {
+  let seTick = -1;
+  for (let k = 0; k < 60; k++) {
     b.tick([]);
-    se += b.drain().filter((e) => e.kind === 'se' && e.id === 0x3ec).length;
+    const n = b.drain().filter((e) => e.kind === 'se' && e.id === 0x3ec).length;
+    if (n && seTick < 0) seTick = k + 1;
+    se += n;
   }
-  eq(se, 1, 'beam: the 0x3ec sound once at the timer 10 crossing');
+  eq(se, 1, 'beam: the 0x3ec sound once at the clock 10.0 crossing');
+  eq(seTick, 27, 'beam: the crossing is on tick 27 (blend wrap on tick 2, then 0.4 a tick)');
   // The motion's end chains beam_a (12) into beamwait (15): event 9 is then the table step.
   b.tick([], true);
   eq(b.slot, 15, 'beam: beam_a chains into beamwait (slot 15)');
+}
+{
+  // Straight from the spawn (slot 0, flags 0xc0000000): the id change to beam_a takes the else branch
+  // of StartNpc (no blend, no wrap), so the clock keeps the spawn's stride 0.7 and the 10.0 crossing
+  // is on tick 15 (10.5). PROVEN for the rule (0x007a9a6c: the old row's 0x40000000 test); the 0.7 is ASSUMED.
+  const b = brain({ leader: false });
+  b.applyPhase(BARBA_PHASE.beam, null);
+  let seTick = -1;
+  for (let k = 1; k <= 20 && seTick < 0; k++) {
+    b.tick([]);
+    if (b.drain().some((e) => e.kind === 'se' && e.id === 0x3ec)) seTick = k;
+  }
+  eq(seTick, 15, 'beam from the spawn: no blend from slot 0, the clock runs at the spawn stride 0.7');
 }
 {
   // The leader steps the table once beamwait is reached (the gate open).
@@ -1074,6 +1097,8 @@ const runTicks = (b: BarbaRayAi, n: number) => {
 for (const phase of [0x19, 0x1a]) {
   // Enter: the gate open, the body to anchor 3 (one warp), slot 0xe.
   const b = brain({ leader: false });
+  b.applyPhase(0, null); // the idle first (slot 1, no blend from the spawn's slot 0)
+  b.tick([]);
   const w = b.warps;
   b.applyPhase(phase, null);
   eq(b.warps, w + 1, `shot ${phase.toString(16)}: one warp`);
@@ -1081,12 +1106,18 @@ for (const phase of [0x19, 0x1a]) {
   eq(b.slot, 14, `shot ${phase.toString(16)}: slot 0xe (beam_c)`);
   check((b.flags & 4) === 0 && (b.flags & 0x100) !== 0, `shot ${phase.toString(16)}: gate open`);
   b.drain();
+  // The blend wraps on tick 2 (the clock 0 there), then 0.4 a tick: 8.000000000000002 on the 20th step,
+  // tick 22 (the crossing of 8.0 plays 0x3ed once).
   let se = 0;
-  for (let k = 0; k < 10; k++) {
+  let seTick = -1;
+  for (let k = 0; k < 40; k++) {
     b.tick([]);
-    se += b.drain().filter((e) => e.kind === 'se' && e.id === 0x3ed).length;
+    const n = b.drain().filter((e) => e.kind === 'se' && e.id === 0x3ed).length;
+    if (n && seTick < 0) seTick = k + 1;
+    se += n;
   }
-  eq(se, 1, `shot ${phase.toString(16)}: the 0x3ed sound once at the timer's 8.0 crossing`);
+  eq(se, 1, `shot ${phase.toString(16)}: the 0x3ed sound once at the clock's 8.0 crossing`);
+  eq(seTick, 22, `shot ${phase.toString(16)}: the crossing is on tick 22 (the wrap on tick 2, then 0.4 a tick)`);
   b.tick([], true);
   eq(b.slot, 1, `shot ${phase.toString(16)}: beam_c chains into idle (slot 1)`);
 }
@@ -1139,24 +1170,36 @@ for (const phase of [0x11, 0x12]) {
   eq(b.slot, side === 0 ? 7 : 8, `${tag}: slot 7 (side 0) / 8 at the 11th frame`);
   eq(b.f74c, dir, `${tag}: dir ${dir} (the sub 0 end)`);
   check(b.z < z0 && b.z < BARBA_ANCHORS[side]![2], `${tag}: z sank in the windup`);
-  // The sub-states run on the clock: the take-off at 6, the apex at 13, the descent at 20, the
-  // landing at 25 (no motion on the landing frame). The leader is off, so no step.
+  // The sub-states run on the clock (+0xc0): the take-off at 6, the apex at 13, the descent at 20, the
+  // landing at 25 (no motion on the landing frame). The slot 7 / 8 blend wraps the clock to 0 on the
+  // first tick after the windup (sub 1 ends there, PROVEN), then the clock is stride * (tick - 1) at
+  // r_bite's 0.28 (the row speed, slot 7 / 8). The leader is off, so no step.
+  const stride = BARBA_SLOTS[side === 0 ? 7 : 8]!.speed;
+  const at = (mark: number) => 1 + Math.ceil(mark / stride); // the tick (from the wrap tick) the clock passes it
   let ticks = 0;
   let se: number[] = [];
-  while (b.moveSub < 6 && ticks < 60) {
+  let seTick: Record<number, number> = {};
+  while (b.moveSub < 6 && ticks < 200) {
     b.tick([]);
     ticks++;
-    se = se.concat(b.drain().filter((e) => e.kind === 'se').map((e) => (e as Extract<BarbaEvent, { kind: 'se' }>).id));
+    for (const e of b.drain()) {
+      if (e.kind !== 'se') continue;
+      se.push(e.id);
+      seTick[e.id] ??= ticks;
+    }
   }
   eq(b.moveSub, 6, `${tag}: the landing (sub 6) is reached`);
-  eq(ticks, 25, `${tag}: 25 frames from slot 7 to the landing (sub 1 on frame 1, the clock 6 / 13 / 20 / 25)`);
+  eq(ticks, at(BARBA_JUMP.t5), `${tag}: the landing at the clock 25 (${at(BARBA_JUMP.t5)} ticks from the wrap)`);
   eq(se.filter((id) => id === 0x3ed).length, 1, `${tag}: 0x3ed once (the 8.5 mark)`);
   eq(se.filter((id) => id === 0x3ec).length, 1, `${tag}: 0x3ec once (the 15.0 mark)`);
+  eq(seTick[0x3ec], at(BARBA_JUMP.seAirMark), `${tag}: 0x3ec on the 15.0 crossing tick`);
   eq(se.filter((id) => id === 0x3ee).length, 1, `${tag}: 0x3ee once (the landing)`);
   check((b.flags & 0x200) !== 0, `${tag}: 0x200 set at the landing`);
-  eq(b.x, 135 * dir + (-7 * dir) * 4, `${tag}: x at the landing frame is 107 * dir (the t = 25 frame has no motion)`);
-  // The descent's yaw: -256 * dir a tick over 4 ticks.
-  eq(b.yaw, Math.round(4 * -256 * dir), `${tag}: yaw at the last descent frame`);
+  // The last motion frame is the one before the landing: the clock is stride * (ticks - 2) there.
+  const tLast = stride * (ticks - 2);
+  near(b.x, 135 * dir + (-7 * dir) * (tLast - 20), `${tag}: x at the landing frame (the last descent motion, clock ${tLast.toFixed(2)})`);
+  // The descent's yaw: -256 * dir a tick, u = clock - 20 on the last descent frame.
+  eq(b.yaw, Math.round((tLast - 20) * (-256 * dir)), `${tag}: yaw at the last descent frame`);
   eq(b.f750, 135 * dir, `${tag}: the descent (sub 5) starts from 135 * dir`);
 }
 // The keyboard (event 2, the leader): Left sends the followers, Right the swim.
