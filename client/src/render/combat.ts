@@ -1325,7 +1325,18 @@ export class CombatView {
           ai = ill;
         }
         // Merissa A / AA: the variant is the set param6 bit (+0x380, enemymodels 0x112).
-        else if (className === 'MerissaA') ai = new MerissaAi({ ...at, variant: subtype & 1, movement, rng: () => this.rng() });
+        else if (className === 'MerissaA') {
+          // The walk's loop length and the attack windows read the archive's frame count (Gibbon's counter).
+          const nodes = instance.animators[0]?.nodeCount ?? 0;
+          const motionFrames = (m: number): number => {
+            try {
+              return instance.archive.motion(m, nodes).frameCount;
+            } catch {
+              return 30;
+            }
+          };
+          ai = new MerissaAi({ ...at, variant: subtype & 1, movement, motionFrames, rng: () => this.rng() });
+        }
         else if (className === 'TObjEneMorfos') {
           const mor = new MorfosAi({ ...at, params: setParams, movement, attack, difficulty, radius, phase: head.index, rng: () => this.rng() });
           mor.health = () => stats.hp / Math.max(1, stats.maxHp);
