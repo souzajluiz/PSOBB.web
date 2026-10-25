@@ -78,6 +78,23 @@
 - `enemyTechHitsPlayer` passes defender state 0 (no challenge mode in the port), so an enemy freeze / shock never lands in normal play. That is the exe's gate for a normal player.
 
 **Left.** The Olga mine hits (no mine objects in the port). The Gi Gue bomb and spike groups.
+## 2026-10-25: Enemy drops: pick-up e2e (not reproduced; leads recorded)
+
+**Question.** The user reports that an item dropped by an enemy cannot be picked up, while an item the player dropped from the bag can. The path: the server's 6x5F (`parseBoxOrEnemyDrop`, net/items.ts) -> `addFloorItem` -> `FloorItemLayer.show` -> Enter (`interact`, PICKUP_RADIUS 15, HEIGHT_WINDOW 30) or the Middle key (`nearestInReach`) -> `GameItems.pickUp` (6x5A) -> the server's 6x59.
+
+**Answer.** Not reproduced. The Enter and Middle-key pick-ups of enemy drops work in the e2e (`client/e2e/enemydrop-pickup.spec.ts`, new): the webtest character kills the wave's enemies one at a time with `CombatView.killEnemy` (the wire kill: 6x0A, 6x76, the drop request 6x60), the server answers with a 6x5F, the player stands next to the drop and presses Enter, then the Middle key on the next drop. The newserv log shows the server side: `Added floor item CC000000 ...`, then `Player 0 picked up CC000000 (Monomate x1)` (and `(15 Meseta)`, `(Disk:Foie Lv.1)`, `(Autogun 20/0/5/0)` in the runs). The bag test's stack rule explains the one false failure seen while writing the spec: a stackable drop merges into the bag's stack and the drop's id is not kept, so the spec checks the bag's contents, not the id.
+
+**Checked.**
+- Floor items: every enemy drop of a Forest 1 wave and a cave floor (floor 5) was shown (`shown` has the node), with node y = ground + 6 (the drop's y is 0 in 6x5F, so the ground probe sets it: enemy y 17 -> node 23). The item-model probe over every class / type / subtype (10240 kinds on floor 0) shows all of them.
+- The 6x5F packet decodes as `FloorItem` (newserv CommandFormats.hh 0x24 at body +4): floor 05, source 1, entity 0x02C4, x/z at +8/+12, drop number, item at +0x14, id at +0x20 (the id `CC000000` of the user's log).
+- The server accepts the 6x5A from the leader (`on_pick_up_item_generic`, the distance test is XZ and 30).
+- Full bag (30 items) and the stack rule refuse a pick-up without a 5A: this is the exe's CanPlayerPickupItem too (`0x687c70`: the inventory count `movswl 0x1c` against 0x1e, the stack test in the same function).
+
+**Leads (not confirmed; the user's live case would decide).**
+- The drop's height. A bag drop's y is the player's own (6x2A), so `HEIGHT_WINDOW` (30, Enter) always passes for it. An enemy drop's y is the ground under the enemy (probe from 300), so an enemy on a ledge leaves its drop at the ledge's height; from the ground below, Enter refuses it silently. The 30 is not exe-traced (the note on `flooritems.ts` fits only PICKUP_RADIUS and BOX_RADIUS). Enter itself is a stand-in (the exe's pick-up is the Middle key's target slot, DEVLOG 2026-10-23 middle key entry).
+- The ground probe mask. `set_item_y_floating` (0x005c49a4) calls the ground probe with mask 0x41 (`pushl $0x41` at 0x005c49c7); the port's `ground` uses `PLAYER_GROUND_MASK` 0x5f (`groundHeight` default). The two differ on meshes with flag bits 0x1e. Not checked against a drop that lands on such a mesh.
+
+**Left.** No code change: no fix without a reproduction. The spec is the guard for the working path. Next step: a log of the player's and the drop's y in the user's case (the `interact` distance and the `HEIGHT_WINDOW` check) would show whether the height window is the refusal.
 
 ## 2026-10-25: Quick menu tools tab: the mag cell rule (can_use_030C_mag_cell)
 
