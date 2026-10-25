@@ -67,7 +67,8 @@ import { CLASS_MAX_STATS } from './materials.ts';
 // class and the worn items; displayedStats() gives the totals the compare list's current row shows.
 //
 // ASSUMED (marked in code): the buff multipliers m / md are 0 (no Shifta / Deband / Jellen /
-// Megid in the file); the set factors and the item set bonus read the beat time (0), the teammates
+// Megid in the file); the set factors and the item set bonus read the beat time (the caller's; the
+// live client passes liveBeatTime(), tests a fixed value), the teammates
 // close by (0), the colored ring count (0), the party (the worn armour only) and the movement bits
 // (standing), which the save does not hold (SetContext, defaultSetContext); the unit specials
 // 0x52 (beat time) and 0x5c (challenge data) add nothing; mags: magStatContribution is the mag's
@@ -393,13 +394,14 @@ export interface SetContext {
   movement: number; // player +0x328, the movement bits (standing = 0x2, moving = 0x1e & ~0x2)
 }
 
-// The compare list has no beat time, no other players and no movement state in the save, so the
-// defaults are ASSUMED: beat 0, nobody nearby, no colored ring count, the party is the worn armour
-// (the player's own), and the player stands still.
-export function defaultSetContext(worn: WornEquipment): SetContext {
+// The beat time is passed in: the live client reads the clock (liveBeatTime, combat/beattime.ts), a
+// test passes a fixed value. The other inputs are not in the save or the game, so the defaults are
+// ASSUMED: nobody nearby, no colored ring count, the party is the worn armour (the player's own),
+// and the player stands still.
+export function defaultSetContext(worn: WornEquipment, beatTime: number = 0): SetContext {
   return {
     worn,
-    beatTime: 0,
+    beatTime,
     nearby: 0,
     barrier: 0,
     party: worn.armour ? [worn.armour.data1[2]] : [],
@@ -728,10 +730,10 @@ export function magStatContribution(item: ItemLike): { atp: number; mst: number;
 // header), so the stat fields are taken as they are; the range (class + worn weapon and options)
 // and the resist (worn armour / shield and options) come from the class and the worn items. The
 // worn items' stat contributions are already in the file and are not added again.
-export function blocksFromFile(file: CompareStats, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateBlocks {
+export function blocksFromFile(file: CompareStats, worn: WornEquipment, charClass: number, pmt: ItemPMT, beatTime = 0): CandidateBlocks {
   const cls = PLAYER_CLASS_ATTACK[charClass] ?? PLAYER_CLASS_ATTACK[0];
   const wz = zeroBlocks();
-  const ctx = defaultSetContext(worn);
+  const ctx = defaultSetContext(worn, beatTime);
   for (const it of [worn.weapon, worn.armour, worn.shield, ...worn.units]) if (it) applyItem(wz, it, pmt, 1, ctx);
   return {
     atp: file.atp,
@@ -750,8 +752,8 @@ export function blocksFromFile(file: CompareStats, worn: WornEquipment, charClas
 
 // The totals the compare list's current row shows (UpdatePlayerDisplayStats, dump 728017):
 // CalculateChallengeDamage's six values for the worn state (no clamp: the save was clamped).
-export function displayedStats(file: CompareStats, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateStats {
-  return challengeOutputs(blocksFromFile(file, worn, charClass, pmt));
+export function displayedStats(file: CompareStats, worn: WornEquipment, charClass: number, pmt: ItemPMT, beatTime = 0): CandidateStats {
+  return challengeOutputs(blocksFromFile(file, worn, charClass, pmt, beatTime));
 }
 
 // CalculateChallengeDamage_0069807c's six outputs, with the ATP line of PlayerRecalculateStats
@@ -785,9 +787,9 @@ function clampToClass(s: CandidateBlocks, charClass: number): void {
 // 569766, the unit1..unit4 loop: the candidate is not given the units back), the candidate goes
 // in (ApplyEquipmentBonuses), the stat block is clamped, and CalculateChallengeDamage gives the
 // six values.
-export function recalculateCandidate(file: CompareStats, item: ItemLike, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateStats {
-  const s = blocksFromFile(file, worn, charClass, pmt);
-  const ctx = defaultSetContext(worn);
+export function recalculateCandidate(file: CompareStats, item: ItemLike, worn: WornEquipment, charClass: number, pmt: ItemPMT, beatTime = 0): CandidateStats {
+  const s = blocksFromFile(file, worn, charClass, pmt, beatTime);
+  const ctx = defaultSetContext(worn, beatTime);
   const slot = compareSlot(item);
   const old = slot ? worn[slot] : null;
   if (old) {
@@ -802,9 +804,9 @@ export function recalculateCandidate(file: CompareStats, item: ItemLike, worn: W
 // PlayerCalculateItemStats_0068e4e8, the cursor item worn: the item comes out of the copies
 // (and, for an armour, the worn units too; dump 569928), no candidate, no clamp, then
 // CalculateChallengeDamage.
-export function equippedCandidate(file: CompareStats, item: ItemLike, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateStats {
-  const s = blocksFromFile(file, worn, charClass, pmt);
-  const ctx = defaultSetContext(worn);
+export function equippedCandidate(file: CompareStats, item: ItemLike, worn: WornEquipment, charClass: number, pmt: ItemPMT, beatTime = 0): CandidateStats {
+  const s = blocksFromFile(file, worn, charClass, pmt, beatTime);
+  const ctx = defaultSetContext(worn, beatTime);
   applyItem(s, item, pmt, -1, ctx);
   if (isArmour(item)) for (const u of worn.units) applyItem(s, u, pmt, -1, ctx);
   return challengeOutputs(s);

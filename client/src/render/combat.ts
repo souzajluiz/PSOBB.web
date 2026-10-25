@@ -116,6 +116,7 @@ import {
   type DefenderStats,
 } from '../combat/formulas.ts';
 import { defaultSetContext, wornEquipment, type SetContext } from '../combat/playerstats.ts';
+import { liveBeatTime } from '../combat/beattime.ts';
 import { readItemData, type ItemData } from '../formats/itemnames.ts';
 import {
   castMotion,
@@ -6544,12 +6545,14 @@ export class CombatView {
     return this.equippedItem((d1) => d1[0] === 0);
   }
 
-  // The local player's SetContext from the worn equipment (the same sources as equippedItem). Beat
-  // time, the nearby players and the colored ring count stay at their defaults (ASSUMED, see
+  // The local player's SetContext from the worn equipment (the same sources as equippedItem). The beat
+  // time is the exe's clock (liveBeatTime, combat/beattime.ts: the local clock on the base the last B1
+  // set); the nearby players and the colored ring count stay at their defaults (ASSUMED, see
   // defaultSetContext).
   private liveSetContext(): SetContext {
+    const beat = liveBeatTime();
     const char = this.opts.character?.();
-    if (char) return defaultSetContext(wornEquipment(char.inventory.filter((i) => (i.flags & 8) !== 0).map((i) => i.data)));
+    if (char) return defaultSetContext(wornEquipment(char.inventory.filter((i) => (i.flags & 8) !== 0).map((i) => i.data)), beat);
     const inv = this.game.selfSnapshot.inventory;
     const count = Math.min(30, inv[0]);
     const worn: ItemData[] = [];
@@ -6558,7 +6561,7 @@ export class CombatView {
       const flags = new DataView(inv.buffer, inv.byteOffset).getUint32(o + 4, true);
       if (flags & 8) worn.push(readItemData(inv, o + 8));
     }
-    return defaultSetContext(wornEquipment(worn));
+    return defaultSetContext(wornEquipment(worn), beat);
   }
 
   // The first equipped item whose data1 matches (the equip flag 8 of the same two sources).
