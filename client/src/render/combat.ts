@@ -1299,6 +1299,14 @@ export class CombatView {
           const mv = (row: number) => (params ? params.movement(difficulty, row) : null);
           const hp = (row: number) => (params ? params.stats(difficulty, row).hp : 0);
           const ground = this.opts.ground;
+          // The laser's wall cut (cast_ray_at_map_collision_geometry, mask -1): the distance to the first wall hit.
+          const wallHit = this.opts.wallHit;
+          const wall = wallHit
+            ? (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) => {
+                const h = wallHit(from, to, -1);
+                return h ? Math.hypot(h.x - from.x, h.y - from.y, h.z - from.z) : null;
+              }
+            : undefined;
           ai = new SaintMilionAi({
             ...at,
             variant: v as 0 | 1 | 2,
@@ -1314,6 +1322,7 @@ export class CombatView {
             frames: this.motionFrames(instance, null),
             tentacleFrames: this.tentacleFrames(instance),
             ...(ground ? { ground: (x: number, z: number) => ground(x, z, 60) !== null } : {}),
+            ...(wall ? { wall } : {}),
             rng: () => this.rng(),
           });
           // The kill gives form 2's EXP (the stats row of the last form).
