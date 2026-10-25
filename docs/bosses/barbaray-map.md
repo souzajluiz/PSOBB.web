@@ -1054,3 +1054,34 @@ Ticks (port): the windup 20; the blend wrap on the 21st, the clock from 0 at 0.3
 **Ticks (port, after Pass 16):** windup 20; blend wrap, clock from 0 at 0.3, 13.0 about the 44th; sub 2 for 14 bodies (one hit on the first); sub 3 for 40 ticks; then sub 4.
 
 **Still ASSUMED:** the centre's origin and the map ray-cast (point 2); the hitbox records (point 3); the frame count off-by-one (point 4); the attack objects 0x208 / 0x209, the aura's particles, the 0x72c counter and the 0x18 / 0x19 packets (unchanged from Pass 15); the knockback unit (unchanged).
+
+## Pass 17: the aura origin, the area centre and the attacker's record (0x18), 2026-10-25
+
+**Question:** decode the aura origin (cast+0x84 / +0x90 via 0x004bae8c) and the map ray-cast that writes 0x780; port the centre as origin + dir * scale; decode the attacker's hitbox records for the 0x007b5e40 overlap (sweep 0x007b8618).
+
+**Constants (PROVEN, `tools/exedata.py read`):** 0x00907208 = 10.0 (the visual point's height), 0x00907210 = 5.0, 0x00907214 = 2.0, 0x00907218 = 500.0, 0x00907220 = 30.0, 0x00907224 = 80.0.
+
+**Origin (PROVEN form, 0x004bae8c, refsrc 240698):** `origin.x = P.x * 5 * 2 + C.x`, `origin.y = P.y * 5 + C.y`, `origin.z = P.z * 5 + C.z`, with C = cast+0x84 and P = cast+0x90. The refsrc comment reads as one scale for all three; the code gives x the 5 * 2 and y / z the 5 only.
+
+**Spawn point (PROVEN, 0x004bafc4, refsrc 240775):** `to = (origin.x + dir.x * scale, minY, origin.z + dir.z * scale)`. dir = aura +0x2c / +0x34 (normalize_xz), scale = aura +0x4c, minY = g_VisualEffectBoundsMinY (the bounds' +0x3c, set by 0x004bac98).
+
+**Visual point (PROVEN, 0x004bafec, refsrc 240790):** at height 10.0, `f = (10 - origin.y) / (minY - origin.y)`, `visual = origin + (dir.x * scale * f, ., dir.z * scale * f)`.
+
+**Ray-cast (PROVEN, sub 2 body, refsrc 237905):** `cast_ray_at_map_collision_geometry(visual, to, 0x16ef)`; a hit overwrites 0x780..0x788 with the hit point, no hit keeps the spawn point. The centre's xz is origin + dir * scale * g with `g = f + (1 - f) * (10 - h) / (10 - minY)` for a floor at height h; g = 1 (the spawn point) when the hit is at minY. The map's floor mesh is not reachable from `BarbaRayAi` (the port's `groundHit` lives in the render layer), so the port uses g = 1.
+
+**Aura scale (PROVEN):** 80.0 at the init, +30.0 a update, state 2 at >= 500.0 (Pass 16). Body k (1-based) of sub 2 sees k updates in either update order, so the scale at body k is 80 + 30 k (500 at body 14).
+
+**Direction (PROVEN, 0x004baec4, refsrc 240714):** +0x2c = 0x774 target point, minus origin (+0x20), normalize_xz. The sub 0 end stores 0x774..0x77c = 0 when FindAndProcessSinowberillTarget returns 0 (refsrc ~237830, the `uVar6 == 0` branch of the sub 0 end), so with no target the direction is the unit vector from the origin toward (0, 0).
+
+**Attacker record (PROVEN, 0x0051fc9c / 0x0051fcf4, refsrc 303366 / 303384):** the dispatch calls `DerolleInitializeItemDisplay` (Init, not Apply), which writes into g_pDerolleObject's list (+0xa4): kind +0x14 = 0 (Apply writes 1), radius +0xc = rec[2] = 120.0, flags +0x18 = 0x9d03. Kind 0 is the round (sphere) branch of 0x007b5e40 (Pass 16). So the attacker is a sphere of radius 120 and the box test is a sphere-sum test: `dist < 120 + r_player`. The sweep already requires `dist <= 120`, so the box test refuses only a player whose own record is an oriented box (not decoded here).
+
+**Port (`combat/barbaray.ts`):** the centre is `origin + dir * (80 + 30 k)` on xz at body k, with the origin = the body (ASSUMED, see below) and dir = the aura direction taken at the sub 1 end (`auraDirection`, from the 0x774 target point, 0,0 when none). The ground point's y-projection is not ported (the spawn point's xz, g = 1). `BARBA_ATTACK.auraStart / auraStep / auraEnd` (80 / 30 / 500, PROVEN). `tests/barbaray.test.ts`: the main block (the target 100 east: the body 1 hit at body + 110, the late player at body + 500 hit at body 12 with the centre at 440, the far player never), the no-target direction (toward the origin), and the target direction (0.6, -0.8) with the body 1 centre at 110 out.
+
+**ASSUMED (marked in the code):**
+- The origin: the writers of the leader's cast+0x84 / +0x90 are not in the Barba's code (refsrc: the only writes to `currently_casting_tech_info` 0x84 / 0x90 in the Sinowberill range are the reads of 0x004b6300 itself; the other writers are DeldepthHandleRollState 0x0054c1b8, SinowberillProcessWolfAttack 0x005382d8 and DorphonHandleState6 0x005a8290, and the generic struct writers were not traced), so the body stands in for the origin and the offset P * (5, 5, 5) is 0. This is the largest open point: the centre moves with the body in the port, not with the exe's cast vector.
+- The ray-cast's floor: g = 1 (the spawn point). A floor above minY moves the centre toward the visual point.
+- The target point stands in for the leader's 6xAA target (Pass 15); 0 when none (the exe's store, with the target-found mapping assumed).
+- The box test: the attacker is a sphere (PROVEN); the player's own record is not decoded, so the box test is not ported (ASSUMED: no oriented player box).
+- The attack objects, the aura's particles, the 0x72c counter and the 0x18 / 0x19 packets (Pass 15, unchanged).
+
+**Still open:** (1) the writer of the leader's cast+0x84 / +0x90 (the origin); (2) the map floor for the ray-cast (needs the arena's collision, a ground callback into `BarbaRayAi` or the render layer's `groundHit`); (3) the player's own hitbox record shape (the box test).
