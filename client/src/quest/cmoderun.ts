@@ -38,6 +38,7 @@ import {
   parseFailureOption,
   parseSetChallengeTime,
   parseStageListIndex,
+  RECORDS_OFFSET,
   recordGrave,
   resultLines,
   RECORDS_SIZE,
@@ -54,7 +55,6 @@ import { graveFadeStep, graveHeading, graveKillerId, graveKillerName, graveLines
 import type { QuestTown } from './town.ts';
 import type { QuestVM } from './vm.ts';
 
-const RECORDS_OFFSET = 0x2cb8; // PSOBBCharacterFile.challenge_records
 const HINT_TEXT = ['In Challenge Mode,', 'some stage areas', "require other user's", 'help to proceed.'];
 
 // A grave on this floor: the record it came from, its position and its text fade.

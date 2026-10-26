@@ -69,6 +69,14 @@ import {
   type ChallengeQuestDialog,
 } from '../client/src/quest/cmode.ts';
 import { graveDropPoints, graveMessage, recordGrave, saveGrave } from '../client/src/quest/cmode.ts';
+import {
+  challengeCurrentStage,
+  challengeHighestCommonStage,
+  CM_STAGE_COUNT,
+  CM_TIME_OFFSET,
+  ownChallengeRecords,
+  RECORDS_OFFSET,
+} from '../client/src/quest/cmode.ts';
 import { ChallengeQuestSelectionDialog, type ChallengeDialogHost } from '../client/src/quest/challengedialog.ts';
 import {
   decodeGraveDate,
@@ -944,6 +952,55 @@ if (newserv) {
   off();
   c3.receiveList(body([rec(0x01, 0x10, 'Episode 1')]), 1);
   eq(seen, 1, 'open() notifies once; after the unsubscribe nothing more');
+}
+
+// The stage counter (GetChallengeHighestCommonStage_004da300, GetCurrentChallengeStage_006d040c).
+// The tables: g_ChallengeStageData_009098a4 = 0, 9, 14 and uint32_t_ARRAY_009098b0 = 9, 5, 9 (exedata).
+{
+  eq(CM_TIME_OFFSET.join(','), '0,9,14', 'the episode time offsets are the exe table at 0x009098a4');
+  eq(CM_STAGE_COUNT.join(','), '9,5,9', 'the stage counts are the exe table at 0x009098b0');
+  const member = (visible: boolean, done: number[], ep = 0): { visible: boolean; records: ChallengeRecords } => {
+    const r = new ChallengeRecords();
+    for (const i of done) r.setTimeRaw(ep, i, 1);
+    return { visible, records: r };
+  };
+  const all = (ep: number) => Array.from({ length: CM_STAGE_COUNT[ep]! }, (_, i) => i);
+  eq(challengeHighestCommonStage(0, [member(true, [])]), 0, 'no stage times: the stage is 0');
+  eq(challengeHighestCommonStage(0, [member(true, [0, 1, 2, 3])]), 4, 'the first empty time is the stage (4 done -> 4)');
+  eq(challengeHighestCommonStage(0, [member(true, [0, 1, 2, 3]), member(true, [0, 1])]), 2, 'the least over the party');
+  eq(challengeHighestCommonStage(0, [member(true, all(0))]), 9, 'every Episode 1 stage done: the count 9');
+  eq(challengeHighestCommonStage(1, [member(true, all(1), 1)]), 5, 'Episode 2 counts 5 stages');
+  eq(challengeHighestCommonStage(0, [member(true, [], 1)]), 0, 'Episode 2 times do not count for Episode 1 (offset 9)');
+  eq(challengeHighestCommonStage(1, [member(true, [], 0)]), 0, 'Episode 1 times do not count for Episode 2');
+  eq(challengeHighestCommonStage(-1, [member(true, [0], 1)], 2), 1, 'param -1 is the current episode (Episode 2 = index 1)');
+  eq(challengeHighestCommonStage(-1, [member(true, [0])], 2), 0, 'the Episode 2 read of an Episode 1 record: no time there');
+  eq(challengeHighestCommonStage(-1, [member(true, [0, 1, 2, 3, 4, 5, 6, 7, 8])], 1), 9, 'param -1 with Episode 1 (index 0)');
+  eq(challengeHighestCommonStage(0, [member(true, all(0)), member(false, [])]), -1, 'a present player with no visibility flag gives -1');
+  eq(challengeHighestCommonStage(0, []), 9, 'no party: the count of the episode');
+  eq(challengeHighestCommonStage(1, []), 5, 'no party, Episode 2: 5');
+
+  const own = member(true, [0, 1, 2]);
+  const ep1Only = member(true, [], 0);
+  ep1Only.records.setTimeRaw(1, 0, 1);
+  eq(challengeCurrentStage({ challenge: true, selectionState: 0, party: [own], currentEpisode: 1, questFlag: () => false }), 3, 'challenge game, state 0: the highest common stage');
+  eq(challengeCurrentStage({ challenge: true, selectionState: 1, party: [own], currentEpisode: 1, questFlag: () => false }), 0, 'challenge game, state 1: Episode 2 times (none here)');
+  eq(challengeCurrentStage({ challenge: true, selectionState: 1, party: [ep1Only], currentEpisode: 1, questFlag: () => false }), 1, 'state 1 reads Episode 2 times');
+  eq(challengeCurrentStage({ challenge: true, selectionState: 2, party: [own], currentEpisode: 1, questFlag: () => true }), 0, 'other selection states give 0');
+  eq(challengeCurrentStage({ challenge: true, selectionState: 0, party: [member(false, [])], currentEpisode: 1, questFlag: () => false }), 0xff, 'the -1 of the common stage is sent as 0xff');
+  eq(challengeCurrentStage({ challenge: true, selectionState: 0, party: [], currentEpisode: 1, questFlag: () => false }), 9, 'no party: the count (9)');
+  const flags = (set: number[]) => (f: number) => set.includes(f);
+  eq(challengeCurrentStage({ challenge: false, selectionState: 0, party: [], currentEpisode: 1, questFlag: flags([0x33, 0x20]) }), 4, 'no challenge game: quest flag 0x33 gives 4 first');
+  eq(challengeCurrentStage({ challenge: false, selectionState: 0, party: [], currentEpisode: 1, questFlag: flags([0x2a]) }), 3, 'quest flag 0x2a gives 3');
+  eq(challengeCurrentStage({ challenge: false, selectionState: 0, party: [], currentEpisode: 1, questFlag: flags([0x20]) }), 2, 'quest flag 0x20 gives 2');
+  eq(challengeCurrentStage({ challenge: false, selectionState: 0, party: [], currentEpisode: 1, questFlag: flags([0x17]) }), 1, 'quest flag 0x17 gives 1');
+  eq(challengeCurrentStage({ challenge: false, selectionState: 0, party: [], currentEpisode: 1, questFlag: flags([]) }), 0, 'no flag: 0');
+
+  // The save's records sit at PSOBBCharacterFile + 0x2cb8 (cmoderun.ts's records()).
+  eq(ownChallengeRecords(null), null, 'no save: no records');
+  eq(ownChallengeRecords(new Uint8Array(RECORDS_OFFSET)), null, 'a short save: no records');
+  const full = new Uint8Array(RECORDS_OFFSET + RECORDS_SIZE);
+  full[RECORDS_OFFSET + 4] = 1;
+  eq(ownChallengeRecords(full)?.timeRaw(0, 0), 1, 'the records block starts at 0x2cb8; the first stage time is at +4');
 }
 
 console.log(failures ? `FAILED (${failures} problems)` : 'OK');

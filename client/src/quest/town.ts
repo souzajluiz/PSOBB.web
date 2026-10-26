@@ -55,7 +55,7 @@ import { followPoint, headStatusFlags, NO_LEADER, NpcAi, type NpcAttackRow, NpcH
 import { acquireClosestTargets, CHARACTER_FLAG_DEAD, headChainBranch, HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARGET_HIT, HEAD_OWNER_ACQUIRE, HEAD_STATE_ATTACK, HEAD_STATE_CAST, HEAD_STATE_IDLE, HEAD_STOP_DISTANCE, headProbeEnemies, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
 import { TECH, techTpCost } from '../combat/techniques.ts';
 import { QuestUi } from './questui.ts';
-import { timerText } from './cmode.ts';
+import { challengeCurrentStage, ownChallengeRecords, timerText } from './cmode.ts';
 import { GUI_POSITION, GUI_TIMER_NORMAL, guildCardFlags } from '../net/guildcardflags.ts';
 
 // Text centre of the quest timer box, from the GUI point (the exe's 42 in the element +8 formula).
@@ -596,9 +596,7 @@ export class QuestTown {
         requestInfo: (entry) => client.sendInfoRequest(entry),
         startQuest: (entry) => client.sendChoice(entry, 0),
         startable: () => this.challengeStartable(),
-        // ASSUMED: GetCurrentChallengeStage_006d040c needs the challenge object's records,
-        // which the town does not hold; 0 is sent.
-        stage: () => 0,
+        stage: () => this.challengeStage(),
       },
       0,
     );
@@ -646,10 +644,28 @@ export class QuestTown {
     }
   }
 
-  // unknown_maybe_num_players_to_start_quest (the party's start check, PsoBB.exe ~0x006cf...).
-  // ASSUMED port of it: a challenge game with one player gives 2; otherwise 1 when every other
-  // player is within 50 units (xz) of the leader (g_MaxStartDistanceSquared = 2500, 0x0096b9f0,
-  // read from the exe), else 0.
+  // GetCurrentChallengeStage_006d040c (cmode.ts challengeCurrentStage), the stage byte of the
+  // level 0 choice. The party is this player's save records: the other members' records come
+  // with the game's 0xED broadcasts, which the town does not hold (ASSUMED: the party is this
+  // player alone). The selection state is 0 (ASSUMED: the exe global's start value; it is set
+  // only by joining a game, which this path does not do).
+  private challengeStage(): number {
+    const recs = ownChallengeRecords(this.game.selfSnapshot.full);
+    return challengeCurrentStage({
+      challenge: !!this.game.info?.challenge,
+      selectionState: 0,
+      party: recs ? [{ visible: true, records: recs }] : [],
+      currentEpisode: this.game.info?.episode ?? 1,
+      questFlag: () => false,
+    });
+  }
+
+  // unknown_maybe_num_players_to_start_quest (dump .c:625904; the entry address was not read in
+  // objdump). A challenge game (or a battle) with one lobby player gives 2. Otherwise the exe
+  // scans the four slots for a present player NOT on Pioneer 2: one is found -> 0. When every
+  // present player is in the Pioneer 2 lobby, 1 unless a player is more than g_MaxStartDistanceSquared
+  // (2500, 0x0096b9f0, read from the exe) away on the xz plane from the leader -> 0. The dialog
+  // is only opened in the town, so the port's map scan is always "in the lobby" here.
   private challengeStartable(): number {
     const { game } = this.opts;
     const players = [...game.players.entries()].filter(([, p]) => p.npcTemplate === undefined);

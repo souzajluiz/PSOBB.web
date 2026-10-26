@@ -270,6 +270,74 @@ export class ChallengeRecords {
   }
 }
 
+// --- the stage counter (the quest selection dialog's stage byte) ------------------------
+
+// The record's offset in PSOBBCharacterFile (challenge_records).
+export const RECORDS_OFFSET = 0x2cb8;
+
+// The save's records, or null when the save is too short (cmoderun.ts's records()).
+export function ownChallengeRecords(full: Uint8Array | null): ChallengeRecords | null {
+  if (!full || full.length < RECORDS_OFFSET + RECORDS_SIZE) return null;
+  return new ChallengeRecords(full.subarray(RECORDS_OFFSET, RECORDS_OFFSET + RECORDS_SIZE));
+}
+
+// A present player of the game: its visibility flag (the header dword of its
+// g_ChallengeEntityVisibilityFlags element, DAT_00a48fe0 + slot * 0x144) and its records.
+export interface ChallengePartyMember {
+  visible: boolean;
+  records: ChallengeRecords;
+}
+
+// GetChallengeHighestCommonStage_004da300 (dump .c:257969). For each present player, the
+// index of the first empty stage time of the episode (the stage count when none is empty);
+// the result is the least of these and the episode's stage count. A present player whose
+// visibility flag is 0 gives -1. param -1 is the current episode (return_param1_or_is_curr_ep_2).
+export function challengeHighestCommonStage(
+  param: number,
+  party: readonly ChallengePartyMember[],
+  currentEpisode = 1,
+): number {
+  const e = param === -1 ? cmodeEpisodeIndex(currentEpisode) : param;
+  const count = CM_STAGE_COUNT[e] ?? 0;
+  let result = count;
+  for (const m of party) {
+    if (!m.visible) return -1;
+    let first = count;
+    for (let i = 0; i < count; i++) {
+      if (m.records.timeRaw(e, i) === 0) {
+        first = i;
+        break;
+      }
+    }
+    if (first < result) result = first;
+  }
+  return result;
+}
+
+// GetCurrentChallengeStage_006d040c (dump .c:629820). In a challenge game (g_ChallengeObject
+// set) the stage is the highest common stage of the selection state (0 or 1; other states give
+// 0). Otherwise the quest flags 0x33 / 0x2a / 0x20 / 0x17 give 4 / 3 / 2 / 1. The dialog sends
+// the low byte, so -1 reads as 0xff.
+export function challengeCurrentStage(o: {
+  challenge: boolean;
+  selectionState: number;
+  party: readonly ChallengePartyMember[];
+  currentEpisode: number;
+  questFlag: (flag: number) => boolean;
+}): number {
+  if (!o.challenge) {
+    if (o.questFlag(0x33)) return 4;
+    if (o.questFlag(0x2a)) return 3;
+    if (o.questFlag(0x20)) return 2;
+    if (o.questFlag(0x17)) return 1;
+    return 0;
+  }
+  if (o.selectionState === 0 || o.selectionState === 1) {
+    return challengeHighestCommonStage(o.selectionState, o.party, o.currentEpisode) & 0xff;
+  }
+  return 0;
+}
+
 // --- packets ----------------------------------------------------------------------------
 
 // DF subcommand n is the command 0x(n)DF with flag 0 (bytes 0xDF, n).

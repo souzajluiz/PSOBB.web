@@ -170,6 +170,32 @@
 - `client/src/render/weaponspin.ts`: the header note on the sincos is now PROVEN (the ASSUMED paragraph is replaced).
 
 **Tests.** `node tests/gunbullet.test.ts`: all checks passed (new section: the hook-shot kinds, the shared-factory kinds, the speeds, the families, the Rifle launcher for 0xb1 / 0xe9, the visuals). `node tests/weaponspin.test.ts`: 52 of 52 (new section 9: the spin matrix is the transpose of the exe's row mix G, for six angles, and the quarter-turn sign). `node tests/mechgun.test.ts` 22 checks, `node tests/weaponorigin.test.ts` all passed, `node tests/rangedaim.test.ts` all passed. `NEWSERV=vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures. `cd client && npx tsc --noEmit -p .`: clean. Not run in Chrome.
+## 2026-10-26: Challenge mode left: the stage counter byte, the Olga minion ids, the variant flags
+
+**Question.** The ROADMAP "Challenge mode left" line still had the Olga 0x55 / 0x56 killer kinds, the flag sources behind the variant kinds, the stage-selection dialog's open bits and the party start check open. Resolve what the exe settles; mark the rest ASSUMED. The grave's 3D model stays out (data not available).
+
+**Stage byte (PROVEN from the dump, arithmetic re-read from objdump).** `GetCurrentChallengeStage_006d040c` (0x6d040c, dump .c:629820): in a challenge game (`g_ChallengeObject` set) it returns `GetChallengeHighestCommonStage_004da300(state)` for state 0 or 1 (other states 0), sent as the low byte, so -1 becomes 0xff. The common stage is the least over the present players (`GetPlayer_0068d5a8`) of the index of the first empty stage time in the episode, capped at the episode's count; a present player whose visibility flag (element header dword, DAT_00a48fe0 + slot * 0x144) is 0 gives -1. Tables read with `tools/exedata.py`: `g_ChallengeStageData_009098a4` = 0, 9, 14 and `uint32_t_ARRAY_009098b0` = 9, 5, 9 (the port's `CM_TIME_OFFSET` / `CM_STAGE_COUNT`, equal). Non-challenge branch: quest flags 0x33 / 0x2a / 0x20 / 0x17 give 4 / 3 / 2 / 1.
+- Port: `quest/cmode.ts` `challengeHighestCommonStage`, `challengeCurrentStage`, `ownChallengeRecords`, `RECORDS_OFFSET` (moved from cmoderun.ts); `quest/town.ts` `challengeStage()` feeds the dialog's `stage()`.
+- ASSUMED: the selection state is 0 (the exe global's start value; only joining a game sets it, and the town path does not join); the party is this player's save records alone (the other members' records arrive with the game's 0xED broadcasts, not in the town).
+
+**Party start check (dump `unknown_maybe_num_players_to_start_quest`, .c:625904; entry address not read in objdump).** Challenge or battle with one lobby player: 2. Otherwise, if any present player is not on Pioneer 2: 0. When all present players are in the lobby: 1, unless a player is farther than `g_MaxStartDistanceSquared` (2500, exe 0x0096b9f0, re-read) on the xz plane from the leader: 0. `town.ts` `challengeStartable` matches; the comment now says PROVEN from the dump.
+
+**Olga minion ids 85 / 86 (PROVEN writer).** The Olga minion ctor (0x48a4b0, vtable 0xaf8c40) writes 0x55, or 0x56 when `[this+0x38c] == 1`. The only creator (0x48a400, called from 0x49da9b in the form-2 builder) passes a stack struct at `ebp-0xd0`; the loop index is stored at `[ebp-0x7c]` (0x49da71, `mov [ebp-0x7c], edi`, edi = 0 then 1, loop `cmp edi,2` at 0x49dab1), which is the struct's +0x54 the ctor reads. So index 0 is 85 and index 1 is 86. Not keyed: the port has no minion kind, and it is not traced that the minion is the last attacker a grave records (the minion's own range calls no Olga hit function; its vtable slots outside the range were not read).
+
+**Variant flags (set-A trace, objdump; PROVEN unless marked).** The creators' record-init (vtable slot +0x14c, 0x786848) copies record dword +0x2c to this+0x360 and word +0x3c to this+0x370; the set-file index that picks each creator was not traced.
+- Yowie / Satellite Lizard: this+0x3ec from helper 0x5aec2c (writers 0x5aec6f = 1, 0x5aec9a = 0), flag = float(record +0x2c) >= 1.0 (const 1.0 at 0x92ab70). PROVEN chain.
+- Sinow Zoa / Zele: this+0x408 from method 0x591658 (writer 0x5916ef), = this+0x370. PROVEN on the 0x5915b4 path; the 0x595240 path ASSUMED.
+- Sinow Spigell / Berill: this+0x3f8 from method 0x59e1a4 (writer 0x59e23b), = this+0x370. PROVEN on the 0x59e100 path; the 0x5a1bf4 caller ASSUMED.
+- Zu / Pazuzu: this+0x504 (esi), = (record word +0x3c & 1) OR P(this word +0x2c), P a 16-word table at `*[0xab0248]` (0x813038), runtime data not read. Formula PROVEN; the table ASSUMED.
+- Merissa: this+0x380 = P(this word +0x2c) ? 1 : (record word +0x3c & 1). Formula PROVEN; the table ASSUMED.
+- Boota / Ze Boota: this+0x33c (clamped 0..2) from this+0x370 (creator 0x5a5cd4). PROVEN. The port's "eax is the Ze flag" was wrong: eax is the record pointer.
+- Gibbon (Ul / Zol): this+0x46c = ([this+0x370] > 0) (writers 0x564f00 / 0x564f2d, method 0x564e98). Writer PROVEN; the source of +0x370 through callees not traced, ASSUMED.
+
+**Port:** comments in `quest/cmodegrave.ts` at each kind; no change to the killer ids. The kinds the port already picks from its set data are unchanged.
+
+**Left:** the set-file enemy id to creator dispatch (the 9-row table at 0x9fafb0, fn field = the Yowie wrapper 0x5ae7cc for id 273; the reader not found); the P table at 0x813038; the A2 menu flag (dialog +0x80, ASSUMED 0); the Gibbon's +0x370 callee chain; the 0x595240 and 0x5a1bf4 caller paths; the grave model; a Chrome check.
+
+**Checks:** `node tests/cmode.test.ts` OK (new block: the tables, 15 highest-stage cases, 5 current-stage cases with the 0xff rule, the records offset); `NEWSERV=... node tests/combat.test.ts` 5860 checks, 0 failures; `node tests/questflow.test.ts` ALL PASS; `node tests/townfield.test.ts`, `revive`, `scapedoll`, `srankname` pass; `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome or Playwright.
 
 ## 2026-10-26: Player movement: the camera input gate of the keyboard ramp (0x0070a6c4)
 
