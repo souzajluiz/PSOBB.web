@@ -951,9 +951,10 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     // Falling stalactite 0x038b (creator 0x00679f58, ctor 0x00679fd4, row 0x009c9fb8: sphere r15 at the origin, flags 0x10003).
     // The ctor ORs 0x1f00 into box 0 (0x007b52c4) and keeps bit 0, so the box is on while it hangs
     // (state 0) and while it falls (state 1; the box does not move with the fall, which is drawn
-    // from +0x340). Its state 2 (shattered) turns bit 0 off (0x007b52ec, mask 1) and is only reached
-    // with no set record; a placed one reports the break instead (0x007b5038). The fall and the
-    // shatter are not ported: the stalactite stays at its place, its box on (ASSUMED).
+    // from +0x340). Its state 2 (shattered) turns bit 0 off (0x007b52ec, mask 1). A placed one has its
+    // set record, so its landing only saves box status 1 and sends the 6x60 0x0b (0x00679ac4 record branch,
+    // render/fieldobjects.ts onStalactiteRecord); the break reaches it from another client's packet
+    // (0x00679ed8, breakStalactiteFromPacket). DEVLOG 2026-10-26 stalactite record branch.
     case 0x038b:
       return spec('__FALLING_STALACTITE__', 'bm_obj_ep4_syounyuuseki.bml', [{ model: 3 }], { collision: generatedBox(0x009c9fb8) });
     // Beehive 0x038f (creator 0x00676adc, ctor 0x00676b58): the box row is 0x009c9b60 + 0x2c * param4,

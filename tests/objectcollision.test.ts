@@ -401,6 +401,47 @@ check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag
   const ys = parts.map((d) => d.emitter.particles[0].pos[1]).join(',');
   check(parts.length === 5 && counts === '1,2,5,2,5' && chunks === '0,2,1,2,1', 'the stalactite shatter makes five emitters: particles 1, 2, 5, 2, 5 on chunks 0, 2, 1, 2, 1');
   check(ys === '29,29,29,14,14' && parts.every((d) => d.emitter.block.floor === 4) && STALACTITE_DEBRIS_TEMPLATE.length === 95, 'the stalactite parts sit at y + 25 (parts 0..2) or y + 10 (parts 3, 4); their floor is the stalactite y');
+// 6d. A placed stalactite has its set record (+0x80), so its landing takes the record branch (0x00679ac4): every
+// landed tick the saved box status of its index becomes 1 and the 6x60 0x0b goes out; the stalactite does not
+// shatter here. A packet from another client with status 1 breaks it (0x00679ed8: state 2, box off, debris).
+{
+  const stal = { kind: 'object', type: 0x038b, index: 4, params: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], group: 0, section: 0 };
+  const placed = [{ entity: stal, name: 'stalactite', category: 'object', world: [0, 100, 0], yaw: 0, sectionFound: true }];
+  const make = () => {
+    const f = new FieldObjects({ scene: { add() {}, remove() {} } } as any, placed as any, { episode: 1, floor: 0, area: 1 }, new Set<number>());
+    const col = { groundHeight: () => 90, obstacles: [] as unknown[] };
+    (f as any).collision = col;
+    const rec: number[] = [];
+    const se: number[] = [];
+    const parts: number[] = [];
+    f.onStalactiteRecord = (i) => rec.push(i);
+    f.onSe = (id) => se.push(id);
+    f.onParticles = (id) => parts.push(id);
+    return { f, col, rec, se, parts };
+  };
+  const player = { x: 0, y: 100, z: 0 };
+  const a = make();
+  a.f.tickStalactites(1, player, []); // the trigger (state 0 -> 1)
+  for (let t = 0; t < 60; t++) a.f.tickStalactites(1, null, []);
+  const stalState = (a.f as any).stalactites.get(4);
+  check(stalState.state === 1 && stalState.y === 90, 'a placed stalactite falls to the ground and stays in state 1 (no shatter on its own client)');
+  check(a.rec.length > 0 && a.rec.every((i) => i === 4), 'the landing runs the record branch on the landed ticks (index 4)');
+  check(!(a.f as any).shattered.has(4) && (a.f as any).debris.length === 0 && a.se.length === 0 && a.parts.length === 0, 'the record branch changes no box, state, debris, SE or particles');
+  const recorded = a.rec.length;
+  a.f.tickStalactites(3, null, []);
+  check(a.rec.length === recorded + 3, 'the record branch repeats on each landed tick (the landing flag is set every tick)');
+  check(a.f.breakStalactiteFromPacket(7, 1) === false && a.f.breakStalactiteFromPacket(4, 1) === true, 'a packet names a stalactite of the floor by its index only');
+  check(stalState.state === 2 && (a.f as any).shattered.has(4) && (a.f as any).debris.length === 5, 'a remote status-1 packet breaks it: state 2, the box off, five debris emitters');
+  check(a.parts.join() === '100,240' && a.se.join() === '175' && Array.isArray(a.col.obstacles), 'the remote break plays particles 100 and 0xf0 and SE 0xaf, and the collision obstacles are refreshed');
+  const afterBreak = a.rec.length;
+  a.f.tickStalactites(5, null, []);
+  check(a.rec.length === afterBreak, 'a broken stalactite (state 2) takes no more record branch');
+  const b = make();
+  b.f.tickStalactites(1, player, []);
+  for (let t = 0; t < 60; t++) b.f.tickStalactites(1, null, []);
+  const bState = (b.f as any).stalactites.get(4);
+  check(b.f.breakStalactiteFromPacket(4, 0) === true && bState.state === 1 && !(b.f as any).shattered.has(4), 'a packet with status 0 names the stalactite but breaks nothing');
+}
   // A chunk's draw list: the position and the radian angles (BAMS 16384 = a quarter turn).
   const cl = new DerolleEmitter({ ...rock, origin: [1, 2, 3], floor: 0, spin: [32768, 0, 0], count: 1, life: 0 }, half);
   cl.update();

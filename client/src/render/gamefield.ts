@@ -351,6 +351,17 @@ export class GameField {
       this.opts.log(`beam door ${d.index} unlocked`);
       this.game.sendObjectState(0x4000 + this.objectBase + d.index, 1, d.index);
     };
+    // A placed stalactite on the ground (0x00679ac4 record branch): the saved box status becomes 1 and the packet goes
+    // out; the stalactite itself is unchanged here.
+    this.objects.onStalactiteRecord = (index) => {
+      this.game.joinSync.recordObjectState(index, 1);
+      this.game.sendObjectState(0x4000 + this.objectBase + index, 1, index);
+    };
+    // Another client's 6x60 0x0b: a stalactite of this floor breaks on status 1 (0x00679ed8).
+    this.game.onObjectBreak = (entityId, status) => {
+      const index = entityId - 0x4000 - this.objectBase;
+      if (this.objects) this.objects.breakStalactiteFromPacket(index, status);
+    };
     // Saint-Milion's track depends on the boss variant (param6 & 1).
     const boss = e.enemySets.find((s) => s.type === 0x119);
     this.music?.enter(area, episode, boss ? Math.trunc(boss.params[5]) : 0);

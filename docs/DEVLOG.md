@@ -1,5 +1,39 @@
 # Devlog
 
+## 2026-10-26: round hitboxes, open parts: the stalactite's record branch, its remote break, the rock's vtable and restore
+
+**Question.** The ROADMAP "Round hitboxes of field objects" line left open: the break flag's restored state after a rejoin and its vtable binding; the stalactite's shatter for a placed one (the record branch, "which is open"); the NPC walk's use of the boxes; the 0xca state handlers; the three untyped boxes 0x0191 / 0x0193 / 0x0205. This pass closes the first two and the rock's vtable. The rest stay open or ASSUMED (below).
+
+**PROVEN (objdump of PsoBB.exe, `tools/exedata.py read` / `xref`; the dump names are used where they match the bytes).**
+
+- *The saved box status.* `g_SavedBoxStatusData` (dump 133986, struct `box_status` 68611) is 0xba0 entries of `{u16 was_hit, u16 box_id_in_quest}`; the pointer is at 0x00ab02bc. The join sync (6x6C) already loads it (`net/joinsync.ts`).
+- *The stalactite's shatter, 0x00679ac4.* With the record at `+0x80` null, the no-record branch (state 2, box 0 off via 0x007b52ec, debris 0x00679b70). With the record set (`0x679ad1 je`, `testl %eax` at 0x679ac9), the record branch: the index is `movswl 4(record)`; it must be in 0..0xb9f; `table[index].word0 = 1` (the stack copy's word0 is 1, `movw %bp,(%esp)` at 0x679b04; the store at 0x679b1a), word1 kept; then `NotifyDoorStateChange_007b5038(this, &{1, word1})`. No box change, no state change, no debris.
+- *The packet, 0x007b5038* (dump 799338, `NotifyDoorStateChange_007b5038`). Builds `{0x0b, 0x03, u16 this+0x1c, i32 status, i32 record+4}` and calls `checked_call_packet0x60_subcommand` when the record is set. It is the same 0x0C shape `sendObjectState` already sends for the beam door.
+- *Landing every tick.* The vertical step 0x00772b44 sets the landing flag 0x800000 (`orl`, 0x772bba) when `y + v <= ground`, and clears it (`andl 0xff7fffff`, 0x772be2) only on a falling tick. A stalactite on the ground lands again each tick, so the record branch runs each tick (the state never changes, so nothing stops it). Port: `FallingStalactite.step` already returns `landed` each such tick.
+- *The stalactite's vtable.* Vtable 0x00b37c00: slot 0 0x00679884, slot 1 (update) 0x00679948, slot 2 0x00679dfc, slot 4 (+0x10) **0x00679ed8**. Slot 4 is the box-break entry the receiver calls: `handle_packet0x60_0xb_box_break` (dump 799376) calls `vtable->+0x10(&status, 1)` on the entity its header names (`g_EntityArray` lookup by entity index, 0xc and up). 0x00679ed8 runs only when the status word (signed short) is 1: it calls 0x679ef4, which clears box 0 (0x007b52ec, mask 1), calls `mark_monster_initdata_as_dead` (0x008113bc: the record's `+2 |= 8` when the record is set, which the 6x6E set flags carry to late joiners), sets state 2, sets the entity's `+8 |= 1`, and calls the debris 0x00679b70 when the flag argument (1) is nonzero. The debris 0x00679b70 holds the five emitters, the particles 100 and 0xf0 and SE 0xaf.
+- *The rock's vtable.* Vtable 0x00b36980: slot 4 (+0x10) **0x00618a44** is `ret 8`: an empty stub. A remote box break does nothing to a destructible rock. Its break is the switch flag only: the update 0x00633734 reads `IsSwitchUnlockedOnCurrentFloor` and nothing from `g_SavedBoxStatusData` (no `+0x80` read in 0x633734..0x6337a0; the ctor 0x00675c74 has no `+0x80` read either).
+- *The restored state after a rejoin.* The stalactite's init 0x00679fd4 reads no `+0x80` (state 0, `+0x340` from the probe), and its update reads `+0x80` only in the shatter. So a `was_hit` of 1 restored by 6x6C does not stop a stalactite from hanging and falling again on a joiner. Its `dead` mark (record flag 8) is written by the remote path only; how the object loader treats set flag 8 on an object entry is NOT traced (ASSUMED: it is not read for objects). The rock's break comes back by its switch flag, which the 6x6E switch flags restore (copy_floor_switches), so it needs no saved state.
+
+**Port.**
+- `client/src/render/fieldobjects.ts`: `onStalactiteRecord(index)` (the record branch, once per landed tick). The landing no longer shatters a placed stalactite. `breakStalactiteFromPacket(index, status)`: the remote 0x679ed8 (status 1 runs `shatterStalactite`, state 2, box off, hidden, debris, particles, SE). `shatterStalactite` also refreshes the collision obstacles now.
+- `client/src/net/game.ts`: `onObjectBreak(entityId, status)` for a received 6x60 0x0b (the header's entity id at +2, the status at +4).
+- `client/src/render/gamefield.ts`: the record branch writes `joinSync.recordObjectState(index, 1)` and sends `sendObjectState(0x4000 + objectBase + index, 1, index)`. The received packet goes to `breakStalactiteFromPacket(entityId - 0x4000 - objectBase, status)`.
+- `client/src/formats/objectmodels.ts`: the stalactite comment (its shatter is now split as above).
+- `tests/objectcollision.test.ts`: section 6d (the fall to the ground, the record branch each landed tick, no box / state / debris change, the remote status-1 break and its effects, the status-0 packet breaks nothing).
+
+**Consequence (from the exe, not a guess).** On this client a placed stalactite that lands stays up as a solid (its box on, state 1) and sends 6x60 0x0b each tick. newserv forwards 6x0B to every client except the sender (`vendor/newserv` `on_update_object_state_t`, `lc != c`), so the others break it and the breaker never sees its own break. Each received status-1 packet runs 0x679ed8 again (debris each time), which the port does too. Not checked in a two-client session.
+
+**ASSUMED / still open.**
+- The hit: the port applies the 100 x difficulty hit each tick while the fall is under 10 (the existing code). The exe's `+0x33c` mask is read and never set in this function, so the same. The per-player `+0x400` gate and the hit's frequency are not re-traced in this pass.
+- The object loader's use of set flag 8 (dead) on an object entry after a rejoin: not traced. The port does not write the flag.
+- The three untyped boxes 0x0191 / 0x0193 / 0x0205: still ASSUMED to stay enabled (the earlier entry). Their vtables were not bound here.
+- The NPC walk's own use of the boxes and the 0xca state handlers: not traced (unchanged).
+- The 11 runtime-built rows (in-object and heap-block) from the 2026-10-25 collision entry: unchanged.
+
+**Checks.** `node tests/objectcollision.test.ts` ALL PASS (section 6d added); `tests/collision`, `townfield`, `drops`, `fieldhud`, `npcs`, `traps`, `joinsync` pass; `NEWSERV=vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures; `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` clean on Node 24. Not run in Chrome, no Playwright, no two-client session.
+
+**Left:** the two-client check of the breaker's view and the per-tick packet rate; the object loader's set flag 8; the untyped boxes' vtables; the NPC walk; the 0xca handlers.
+
 ## 2026-10-26: Player movement: the camera input gate of the keyboard ramp (0x0070a6c4)
 
 **Question.** The ROADMAP movement line left the camera gate open: `get_input_movement_speed` (0x0070a60c) was ported with the gate "camera_input_enabled ASSUMED on". Decode the gate from objdump and port it.
