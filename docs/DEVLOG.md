@@ -1,5 +1,31 @@
 # Devlog
 
+## 2026-10-25: Quick menu tools: the second challenge rule (F85D) and the armour rule
+
+**Question.** ROADMAP "Classic HUD: counter/menu leaf actions" left four quick menu tool items open: the armour rule (class 0x0f, vtable +0x94), the second challenge rule (g_ChallengeAllowedItemTypes 0x40), the material unit terms (CalculateSpecialAttackPower) and the state-4 tool slot action. This entry resolves the first two as far as the exe allows; the material unit terms stay open; the state-4 action was not traced.
+
+**PROVEN (objdump of PsoBB.exe, Ephinea 1.25.13; dump `Psobb.exe-05112026.c` for names).**
+- The second challenge rule, end of `CheckItemEquipConditions_005d5f40` (objdump 0x5d5f9a..0x5d5fdb): `cmpl $0, 0xa95624` (g_QuestStarted) jumps out unless set; `movzbl (%esi)` (the item's group) `== 3`; `movl 0xa8dafc` (g_ChallengeAllowedItemTypes) non-null; `testb $0x40, 0x1c(obj)`. All true -> `|= 0x10001` (blocked). The rule runs after every tool branch; the wrapped-item return (0x5d5f9a's caller path) is before it.
+- The setter is quest opcode F85D (`set_allow_item_flags`, dump line 607614 `opcode_unknownF85D` -> `CreateWeaponProjectile_005dd5dc(arg)`). objdump 0x5dd5dc..0x5dd650: the object is allocated when the global is 0 (`je` at 0x5dd603); arg 0 sets bit 0 of the word at +8 (`or $0xffff0001`); args 1..6 do `1 << arg` into the dword at +0x1c (`cmp $7; jae` at 0x5dd60f, `shll %cl` at 0x5dd63e); args 7 and up only allocate. So arg 6 gives 0x40.
+- The armour rule (class 0x0f, same function): `get_equipment_slot(&equipment, armor)` null -> blocked. With an armour, the vtable +0x94 byte above 3 -> blocked (`3 < bVar3`, decompile).
+- Material unit terms: `CalculateEffectiveHP_005c55b0` = `half_added_hp` minus the sum, over the equipment slots unit1..unit4 (the enum values 9..12, `eVar5 + mag` with mag = 1, loop while < 0xd), of the short at item +0x174 (`CalculateSpecialAttackPower_005d2458` returns item + 0x174). The TP variant (named `CalculateEffectiveDEF_005c5630`) subtracts the short at item +0x176 from +0x2c2. The port has no unit specials, so these stay open.
+
+**ASSUMED.**
+- The armour's vtable +0x94 is not named in the dump (`item_instance_vtable` field55_0x94 is undefined) and its function was not traced. The port takes it as the armour's slot count, data1[5] (the Slot line of `classic/itemdetail.ts`, 0x726cb0). Only the "no armour" block is proven.
+- The item-type object lives until the quest ends. Its destructor (which sets the global back to 0) and its call site were not traced; the port keeps the object in `ChallengeMode` for the whole quest run.
+- The port's "quest started" is the quest session (`gameview` `this.quest !== null`), the same as the other g_QuestStarted tests.
+
+**Port.**
+- `client/src/quest/cmode.ts` `ChallengeMode.setAllowItemFlags` (F85D) and `allowsItemBit` (the 0x40 test).
+- `client/src/quest/vm.ts`: the `set_allow_item_flags` case (it was an unimplemented opcode before).
+- `client/src/classic/quickmenu.ts` `toolCheckerBits`: the class 0x0f branch and the second rule; `ToolCheckContext` gains `questStarted` and `allowItemBit6`.
+- `client/src/render/fieldhud.ts` `toolChecks` and `client/src/render/gameview.ts` (`allowItemBit6` wired from `this.quest.vm.cmode`).
+- Tests: `tests/quickmenu.test.ts` (armour: no armour, shield only, slot 3 in, slot 4 blocked; the second rule: quest and bit on blocks, no quest or bit off does not, wrapped stays 0), `tests/cmode.test.ts` (F85D: arg 0 does not set the 0x40 bit, arg 6 sets it, arg 7 keeps the object without a bit).
+
+**Still open.** The material unit terms (the unit specials at item +0x174 / +0x176 are not modelled, so the port compares the bonus alone); the state-4 tool slot action (`UpdateQuickMenuToolTechSlotState`, 0x00741c08); the two-handed and traps tabs.
+
+**Checks.** `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). `tests/quickmenu.test.ts`: ALL PASS. `tests/cmode.test.ts`: OK. `tests/fieldhud.test.ts`, `tests/wordselectmenu.test.ts`, `tests/questflow.test.ts`, `tests/quests.test.ts`, `tests/questmisc.test.ts`: pass. `NEWSERV=.../vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures. Not run in Chrome.
+
 ## 2026-10-25: Minimap: the "Sinow Berill sub-entity" icons are the Barba Ray's (body 2.0, parts 1.2)
 
 **Question.** ROADMAP "Minimap left to do" lists the Sinow Berill sub-entity icons as traced but not ported, owners ASSUMED: dump 239865 `EnableSinowberillVisualIndicators_004b9198` (forced 2.0 when box flag bit 0 is set) and dump 240354 `UpdateSinowberillPositionAndState_004ba0ac` (forced 1.2). Which port object is each one?

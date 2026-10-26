@@ -1003,5 +1003,24 @@ if (newserv) {
   eq(ownChallengeRecords(full)?.timeRaw(0, 0), 1, 'the records block starts at 0x2cb8; the first stage time is at +4');
 }
 
+// F85D set_allow_item_flags (opcode_unknownF85D -> CreateWeaponProjectile_005dd5dc, dump 434083):
+// `1 << arg` into the object's dword +0x1c for arg 1..6 (`cmp $7` / `shll %cl`, objdump
+// 0x5dd60f..0x5dd63e); the second challenge rule reads bit 0x40 (`testb $0x40`, 0x5d5fd8).
+{
+  const cm = new ChallengeMode({});
+  eq(cm.allowsItemBit(6), false, 'F85D: no object before the first call');
+  cm.setAllowItemFlags(0);
+  eq(cm.allowsItemBit(6), false, 'F85D 0 sets the +8 word (not the 0x1c mask): bit 6 stays off');
+  cm.setAllowItemFlags(6);
+  eq(cm.allowsItemBit(6), true, 'F85D 6 sets 0x40 (1 << 6)');
+  eq(cm.allowsItemBit(5), false, 'F85D 6 does not set 0x20');
+  cm.setAllowItemFlags(7);
+  eq(cm.allowsItemBit(6), true, 'F85D 7 keeps the object and the earlier bits');
+  const cm2 = new ChallengeMode({});
+  cm2.setAllowItemFlags(7);
+  eq(cm2.allowsItemBit(6), false, 'F85D 7 alone: the object exists, no 0x40');
+  eq(cm2.allowsItemBit(7), false, 'F85D 7 sets no bit (arg must be below 7)');
+}
+
 console.log(failures ? `FAILED (${failures} problems)` : 'OK');
 process.exit(failures ? 1 : 0);

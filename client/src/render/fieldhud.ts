@@ -152,6 +152,9 @@ export interface FieldHudOptions {
   statusSlot0Type?: () => number;
   // Whether a challenge game runs (the tools tab's g_ChallengeObject rule; ASSUMED mapping).
   challengeObject?: () => boolean;
+  // g_ChallengeAllowedItemTypes has the bit 0x40 (F85D arg 6; quest/cmode.ts allowsItemBit), for the
+  // tools tab's second challenge rule.
+  allowItemBit6?: () => boolean;
   // The material use check (combat/materials.ts materialUsable), for the tools tab's class 0x0b rule.
   materialUsable?: (kind: number) => boolean;
   // The Moon Atomizer's target (render/combat.ts atomizerTarget), null when none.
@@ -536,6 +539,8 @@ export class FieldHud {
       magStage: hasMag ? 0 : null,
       telepipe: this.opts.telepipeAllowed?.() ?? false,
       challengeObject: this.opts.challengeObject?.() ?? false,
+      questStarted: this.opts.questStarted(),
+      allowItemBit6: this.opts.allowItemBit6?.() ?? false,
       mst,
       techLevels: c.techLevels,
       statusType: this.opts.statusSlot0Type?.() ?? 0,

@@ -676,6 +676,26 @@ export class ChallengeMode {
     if (this.env.isLeader?.() ?? true) this.env.sendDf?.(sub, payload);
   }
 
+  // F85D set_allow_item_flags (opcode_unknownF85D, dump 607614) -> CreateWeaponProjectile_005dd5dc
+  // (dump 434083, objdump 0x5dd5dc..0x5dd650). The first call allocates the object behind the
+  // global g_ChallengeAllowedItemTypes (0xa8dafc, `je` at 0x5dd603/0x5dd651 when it is 0). Its dword
+  // at +0x1c gets `1 << arg` for an arg below 7 (`cmp $7; jae` at 0x5dd60f, `shll %cl` at 0x5dd63e);
+  // arg 0 sets bit 0 of the word at +8 instead (`or $0xffff0001`), which the item rule does not read,
+  // so it is not kept here. ASSUMED: the object lives until the quest ends (its destructor's call
+  // site, which sets the global back to 0, was not traced).
+  private allowItemObject = false;
+  private allowItemBits = 0;
+  setAllowItemFlags(arg: number): void {
+    const v = arg >>> 0;
+    this.allowItemObject = true;
+    if (v >= 1 && v < 7) this.allowItemBits |= 1 << v;
+  }
+  // The second challenge rule's test (CheckItemEquipConditions_005d5f40 at 0x005d5f9a..0x005d5fdb):
+  // g_ChallengeAllowedItemTypes != 0 and `testb $bit, 0x1c(obj)`.
+  allowsItemBit(bit: number): boolean {
+    return this.allowItemObject && (this.allowItemBits & (1 << bit)) !== 0;
+  }
+
   // F820 cmode_stage: a stage at or past the last one is stage 0
   // (opcode_cmode_stage, then send_packet0xdf_subcommand1 clamps again).
   setStage(n: number): void {
