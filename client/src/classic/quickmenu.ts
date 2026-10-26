@@ -480,6 +480,8 @@ export interface ToolCheckContext {
   magStage: number | null; // the equipped mag's evolution stage (null: no mag equipped)
   telepipe: boolean; // SinowberillChallengePlayer_IsTelepipeEnabled (0x0068bfa0): class 7
   challengeObject: boolean; // g_ChallengeObject is set (ASSUMED: the port's challenge game)
+  questStarted: boolean; // g_QuestStarted (0xa95624) != 0: a quest runs (the port's quest session)
+  allowItemBit6: boolean; // g_ChallengeAllowedItemTypes + 0x1c has 0x40 (F85D arg 6; quest/cmode.ts)
   mst: number; // the stat block's MST (player +0x2b4, the battle params)
   techLevels: readonly (number | null)[]; // the learned techniques, 1-based (null: not learned)
   statusType: number; // the status slot 0 type (player +0x25c): 0x0f poison, 0x10 paralysis, 0 none
@@ -628,10 +630,16 @@ function techniqueScrollUsable(data1: Uint8Array, ctx: ToolCheckContext): boolea
 //     is the weapon's data1[3]: the dump's compact copy is not decoded, ASSUMED);
 //   class 0x0b (material): materialUsable(variant) for variants 0..6;
 //   class 0x0c (mag cell): magCellUsable (below).
-// Not ported (ASSUMED off): the second challenge rule (g_QuestStarted, g_ChallengeAllowedItemTypes
-// +0x1c bit 0x40, dump end of the function); the armour rule (class 0x0f: no armour, or the item's
-// vtable +0x94 above 3; the vtable slot is not named); the unit terms of the material variants 3 / 4
-// (CalculateEffectiveHP / TP subtract CalculateSpecialAttackPower; the port keeps the bonus alone).
+// Class 0x0f (armour rule, 0x005d5f9a's tool branch): no armour equipped blocks (proven); with an
+// armour, the exe blocks when the armour's vtable +0x94 byte is above 3 (`cmp $3` on the byte). The
+// slot is not named in the dump, so the value is ASSUMED to be the armour's slot count (data1[5],
+// the Slot line of itemdetail.ts at 0x726cb0).
+// The second challenge rule (end of the function, objdump 0x005d5f9a..0x005d5fdb): a group 3 item
+// blocks when a quest runs and g_ChallengeAllowedItemTypes has the bit 0x40 (F85D arg 6). It applies
+// after every branch above (the wrapped return is before it).
+// Not ported (OPEN): the unit terms of the material variants 3 / 4 (CalculateEffectiveHP / TP subtract
+// CalculateSpecialAttackPower of the four unit slots, +0x174 / +0x176 of the item; the port has no
+// unit specials, so the bonus alone is compared).
 export function toolCheckerBits(data1: Uint8Array, ctx: ToolCheckContext): number {
   if (data1[0] !== GROUP_TOOLS_TECHS) return 0;
   if (((data1[4] ?? 0) & 0x40) !== 0) return 0;
@@ -676,7 +684,12 @@ export function toolCheckerBits(data1: Uint8Array, ctx: ToolCheckContext): numbe
   } else if (cls === 0x0c) {
     const mag = ctx.equipped.find((e) => e.data1[0] === 2) ?? null;
     if (!magCellUsable(variant, mag)) bits |= ATTACK_BIT_BLOCKED;
+  } else if (cls === 0x0f) {
+    const armour = ctx.equipped.find((e) => e.data1[0] === 1 && e.data1[1] === 1);
+    if (!armour) bits |= ATTACK_BIT_BLOCKED;
+    else if ((armour.data1[5] ?? 0) > 3) bits |= ATTACK_BIT_BLOCKED; // ASSUMED: vtable +0x94 = data1[5]
   }
+  if (ctx.questStarted && ctx.allowItemBit6) bits |= ATTACK_BIT_BLOCKED; // the second challenge rule
   return bits;
 }
 

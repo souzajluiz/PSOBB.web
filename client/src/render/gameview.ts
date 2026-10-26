@@ -253,6 +253,7 @@ export class GameView {
       statusFlags: () => this.combat.status.flags,
       statusSlot0Type: () => this.combat.status.slot0Type,
       challengeObject: () => !!game.info?.challenge,
+      allowItemBit6: () => this.quest?.vm.cmode.allowsItemBit(6) ?? false,
       materialUsable: (kind) => this.combat.materialUsable(kind),
       atomizerTarget: () => this.combat.atomizerTarget(),
       starTargets: () => this.combat.starTargets(),

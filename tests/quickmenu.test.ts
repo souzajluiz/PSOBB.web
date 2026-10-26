@@ -387,7 +387,7 @@ const TOOL_INV = [weapon(0x100, true), toolItem(0x200), toolItem(0x201, true), t
 function toolFixture(over: Partial<ToolCheckContext> = {}): ToolCheckContext {
   return {
     pmt: fakePmt({ '0.0': 0x7f, '3.0': 0x7f, '12.0': 0x7f, '13.0': 0xfa, '10.0': 0x7b }), safeMap: true, bossMap: false, level: 10, charClass: 0, equipped: [], magStage: null,
-    telepipe: true, challengeObject: false, mst: 0x7fff, techLevels: [], statusType: 0, materialUsable: () => true,
+    telepipe: true, challengeObject: false, questStarted: false, allowItemBit6: false, mst: 0x7fff, techLevels: [], statusType: 0, materialUsable: () => true,
     ...over,
   };
 }
@@ -499,6 +499,19 @@ check('tools bits: a mag cell variant 6 is blocked even with a strong mag', !too
   check('material: a usable material is in', !blocked(toolCheckerBits(new Uint8Array([3, 11, 0, 0, 0]), toolFixture({ materialUsable: () => true }))));
   check('material: an unusable material is blocked', blocked(toolCheckerBits(new Uint8Array([3, 11, 3, 0, 0]), toolFixture({ materialUsable: () => false }))));
   check('material: a variant above 6 is not tested', !blocked(toolCheckerBits(new Uint8Array([3, 11, 9, 0, 0]), toolFixture({ materialUsable: () => false }))));
+  // Class 0x0f: the armour rule. No armour equipped blocks (proven: the get_equipment_slot null path).
+  // With armour, the slot count (ASSUMED data1[5]) must be 3 or less (vtable +0x94 above 3 blocks).
+  const armour = (slots: number) => ({ data1: new Uint8Array([1, 1, 0, 0, 0, slots]), magLevel: 0 });
+  const armourTool = new Uint8Array([3, 0x0f, 0, 0, 0]);
+  check('armour: no armour equipped blocks the slot tool', blocked(toolCheckerBits(armourTool, toolFixture({ equipped: [] }))));
+  check('armour: a shield alone does not count as armour (class 2)', blocked(toolCheckerBits(armourTool, toolFixture({ equipped: [{ data1: new Uint8Array([1, 2, 0, 0, 0, 0]), magLevel: 0 }] }))));
+  check('armour: slot count 3 is in', !blocked(toolCheckerBits(armourTool, toolFixture({ equipped: [armour(3)] }))));
+  check('armour: slot count 4 is blocked', blocked(toolCheckerBits(armourTool, toolFixture({ equipped: [armour(4)] }))));
+  // The second challenge rule (0x005d5f9a): a quest running, a group 3 item, and F85D arg 6 (0x40).
+  check('challenge rule: a tool with a quest running and bit 0x40 is blocked', blocked(toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture({ questStarted: true, allowItemBit6: true }))));
+  check('challenge rule: no quest running does not block', !blocked(toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture({ questStarted: false, allowItemBit6: true }))));
+  check('challenge rule: bit 0x40 clear does not block', !blocked(toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture({ questStarted: true, allowItemBit6: false }))));
+  check('challenge rule: a wrapped tool stays out (returns before the rule)', toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0x40]), toolFixture({ questStarted: true, allowItemBit6: true })) === 0);
   // Class 2: the technique scroll. The MST needs the requirement, a learned level blocks an equal or
   // lower scroll, the class maximum caps the level (0xff: cannot learn).
   const tech = 3;

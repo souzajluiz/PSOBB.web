@@ -1525,6 +1525,11 @@ export class QuestVM {
         this.cmode.setExpMultiplier(R[base], R[(base + 1) & 0xff], R[(base + 2) & 0xff]);
         return;
       }
+      case 'set_allow_item_flags':
+        // F85D (opcode_unknownF85D): the item-type object the tool rule reads (cmode.ts).
+        this.cmode.setAllowItemFlags(this.uint(a, 0));
+        clearArgs();
+        return;
       case 'cmode_check_all_players_dead':
         R[this.reg(a, 0)] = this.cmode.allPlayersDead();
         return;
