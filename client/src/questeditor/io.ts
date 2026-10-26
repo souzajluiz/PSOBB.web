@@ -64,6 +64,7 @@ export function openQuestFiles(files: NamedBytes[]): QuestDocument {
 
 export interface QuestPackage {
   name: string; // the quest's name (header)
+  questNumber: number; // the header's quest number (the server names the files q<number>-bb)
   stem: string; // file name without extension
   qst: Uint8Array; // BB .qst
   bin: Uint8Array; // PRS-compressed, as the server stores them
@@ -79,6 +80,7 @@ export function buildPackage(doc: QuestDocument): QuestPackage {
   const name = doc.header.name || stem;
   return {
     name,
+    questNumber: doc.header.questNumber,
     stem,
     qst: packQst(doc.toQuestBin(), doc.toQuestDat(), { name }),
     bin: prsCompressOptimal(binRaw),

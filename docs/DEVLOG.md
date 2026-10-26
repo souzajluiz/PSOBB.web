@@ -23263,3 +23263,18 @@ Not checked: the `MapObject` state table for the menu scroll (`144485`) is only 
 **Environment.** The disk filled during the run (ENOSPC on Playwright writes and newserv). newserv crashed around that time and the login stalled at "Connecting..." (a server state, not a client bug). Rerun after the restart; Playwright was run with `--trace off` to save space.
 
 **Bugs fixed.** None in this pass; the failures seen were environmental.
+## 2026-10-26: quest editor on a real quest and the admin Quests tab, seen in Chrome (local)
+
+**What ran.** `client/e2e/questeditor-real.spec.ts` opens newserv's `extermination/q101` (.bin + .dat, from the file input) in the editor on Vite (port 5181). It drags an entity with the mouse in the 3D view (a new `EditorScene.screenPointOf` projects the marker), undoes the drag, applies a script edit in the Script tab and a broken script (refused, the bytes unchanged), then Test in game: "No game target" without a handler, and the package reaches a registered handler. `client/e2e/admin-quests.spec.ts` runs the whole loop against its own newserv and bridge (random ports, a copy of `system/`): Open in editor on quest 101 from the Quests tab, Publish to server as `hidden/q9101-bb-e.bin` (typed confirmation), a 409 for the same number in another category, Test in game answered by the panel, Open in editor again for quest 9101. Both pass; `admin-characters.spec.ts` still passes; `tests/admin.test.ts` and `tests/questeditor.test.ts` pass; `tsc --noEmit` is clean.
+
+**What broke and what was fixed.**
+- The admin opened the editor with `noopener`, so the editor had no opener and Test in game never reached the panel (the panel had no handler either). Fixed: `bridge/admin-ui/admin.js` opens the editor and the "New quest (editor)" link without `noopener`, and the panel handles `questeditor:test` (publishes the package to `hidden`, see docs/ADMIN.md).
+- The admin pages sent `Cross-Origin-Opener-Policy: same-origin`, which cut that opener even without `noopener` (the editor page has no COOP). Fixed: `bridge/admin.mjs` sends `same-origin-allow-popups`.
+- Publishing a quest into a category while its basename (`q9001-bb`) already sat in another category made newserv refuse the whole quest at load ("file ... exists in multiple categories", `vendor/newserv/src/Quest.cc`, `QuestIndex` constructor). Fixed: `bridge/admin-quests.mjs` `checkNoOtherCategory` answers 409 before anything is written.
+- Smaller, in the spec's own assumptions: the assembler's comment is `//` (not `;`), and the package's `name` is the quest's name (not a file name). `QuestPackage` now carries `questNumber`.
+
+**Still open (not done here).**
+- "Test in game enters a game with the quest" is not verified. The classic client logs in on port 12000 (hard-coded in `client/src/net/bbsession.ts`), so a second newserv cannot take it while the shared one runs; and newserv's `$quest <n>` chat command only starts a quest that allows it (`AllowStartFromChatCommand` in the quest's `.json`, which the publish route cannot write) or an account with debug on. So the test-in-game step stops at the publish and the chat command's text.
+- Publish to a deployed host and login on production: not done (no production access here).
+- Category-less quests: a quest whose category id is not in the server's categories (the Quests tab's "Category 18/19" cards) has no directory, so no Open in editor button. Only seen with the local config; noted, not changed.
+- Quest numbers are not checked for duplicates across categories beyond the basename rule (newserv's `quests_by_number` silently keeps the first).

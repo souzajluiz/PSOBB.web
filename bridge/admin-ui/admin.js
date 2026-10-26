@@ -691,12 +691,41 @@ function questFiles(files, number) {
 }
 
 // The editor opens in a new tab on the same origin, so it shares the session
-// cookie (Path=/admin) and fetches the files from the authenticated route.
+// cookie (Path=/admin) and fetches the files from the authenticated route. No
+// 'noopener': the editor's "Test in game" answers its opener (questeditor:test).
 function openInEditor(dir, found) {
   const url = (name) => `/admin/api/quests/file/${encodeURIComponent(dir)}/${encodeURIComponent(name)}`;
   const params = found.qst ? `qst=${encodeURIComponent(url(found.qst))}` : `qst=${encodeURIComponent(url(found.bin))}&dat=${encodeURIComponent(url(found.dat))}`;
-  window.open(`/questeditor.html?${params}&admin=1`, '_blank', 'noopener');
+  window.open(`/questeditor.html?${params}&admin=1`, '_blank');
 }
+
+// "Test in game" from the editor: the package (see client/src/questeditor/io.ts) is
+// published to the server's hidden category as q<number>-bb-e.bin + q<number>-bb.dat,
+// so newserv loads it (the hidden category is in no menu). A quest number that another
+// category already holds is refused by the server (docs/ADMIN.md, Quests).
+function base64Bytes(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+async function testInGame(pkg) {
+  const n = pkg.questNumber;
+  if (!Number.isInteger(n) || n < 0 || n > 0xffff) throw new Error('the quest has no valid number: set the Quest number in the editor first');
+  const name = `q${n}-bb-e.bin`;
+  const res = await api('POST', '/quests/publish', { category: 'hidden', name, confirm: `hidden/${name}`, bin: base64Bytes(pkg.bin), dat: base64Bytes(pkg.dat) });
+  const replaced = res.files.some((f) => f.replaced);
+  toast(`Test quest ${res.quest.questNumber} "${res.quest.name}" is on the server as hidden/${name}${replaced ? ' (the previous files are in the backups)' : ''}. Quests reloaded. In a game, the chat command $quest ${res.quest.questNumber} starts it when the quest allows chat starts (AllowStartFromChatCommand) or the account has debug on; see docs/ADMIN.md.`);
+}
+
+window.addEventListener('message', (e) => {
+  if (e.origin !== location.origin || e.data?.type !== 'questeditor:test' || !e.data.package) return;
+  if (!csrf) {
+    toast('Log in to the admin panel to test a quest in game', 'bad');
+    return;
+  }
+  run(() => testInGame(e.data.package));
+});
 
 views.quests = async (root, _arg, select) => {
   const [q, f] = await Promise.all([api('GET', '/quests'), api('GET', '/quests/files').catch(() => ({ directories: [] }))]);
@@ -704,7 +733,7 @@ views.quests = async (root, _arg, select) => {
   root.append(
     h('div', { class: 'card' }, h('h2', null, `Quests (${q.total})`), h('p', { class: 'muted' }, `Loaded from ${q.directory}. Edit a quest in the quest editor and use its Publish to server action, or add or remove the files on the server and reload. ENABLED expressions are quest-flag conditions: a quest shows in the menu only when its category is listed and its expression is true for the player.`),
       h('button', { class: 'primary', onclick: () => run(async () => { await api('POST', '/reload', { items: ['quests'] }); toast('Quests reloaded'); select('quests'); }) }, 'Reload quests'),
-      ' ', h('a', { class: 'btn', href: '/questeditor.html?admin=1', target: '_blank', rel: 'noopener' }, 'New quest (editor)')),
+      ' ', h('a', { class: 'btn', href: '/questeditor.html?admin=1', target: '_blank' }, 'New quest (editor)')),
     ...q.categories.map((c) => h('details', { class: 'card' }, h('summary', null, `${c.name} `, h('span', { class: 'pill' }, `${c.quests.length} quests`), h('span', { class: `pill ${c.listed ? 'ok' : 'bad'}` }, c.listed ? 'listed in menus' : 'hidden'), c.directory ? h('span', { class: 'muted mono' }, c.directory) : null),
       table(['#', 'Name', 'Episode', 'Players', 'Enabled when', 'Drops', 'Versions', ''], c.quests.map((x) => {
         const found = c.directory ? questFiles(filesByDir.get(c.directory) ?? [], x.number) : null;

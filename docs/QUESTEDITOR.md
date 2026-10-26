@@ -90,7 +90,9 @@ import { registerTestInGame, testInGame } from './questeditor/testhook.ts';
 registerTestInGame(async (pkg) => { /* pkg: name, stem, qst, bin, dat (compressed), binRaw, datRaw */ });
 ```
 
-or, from another page: `window.questEditor.registerTestInGame(fn)` / `window.questEditor.buildPackage()` when embedded, and `postMessage` otherwise: send `{ type: 'questeditor:get-package' }` to the editor window and it answers `{ type: 'questeditor:package', package }`; send `{ type: 'questeditor:open', name, bytes }` to make it open a quest. When no handler is registered, the **Test in game** button posts `{ type: 'questeditor:test', package }` to the window that opened the editor (same origin only).
+or, from another page: `window.questEditor.registerTestInGame(fn)` / `window.questEditor.buildPackage()` when embedded, and `postMessage` otherwise: send `{ type: 'questeditor:get-package' }` to the editor window and it answers `{ type: 'questeditor:package', package }`; send `{ type: 'questeditor:open', name, bytes }` to make it open a quest. When no handler is registered, the **Test in game** button posts `{ type: 'questeditor:test', package }` to the window that opened the editor (same origin only). The package has `questNumber` (the header's), `name`, `stem`, `qst`, `bin` / `dat` (PRS) and `binRaw` / `datRaw`.
+
+The admin panel's Quests tab does this: its handler publishes the package as a test quest in the `hidden` category (docs/ADMIN.md, "Test in game"). The editor's scene has `screenPointOf(entity)` for tests: the client coordinates of an entity's marker, which the e2e specs use to drag it with the mouse.
 
 ## Code map
 

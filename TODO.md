@@ -13,8 +13,8 @@ only part of them has matching C (psobb-client-source).
 - [x] Ship / block change and team menus at the counter (e2e: `client/e2e/lobby-counter-menus.spec.ts`; Leave Team as a non-master member is still open, see DEVLOG 2026-10-26)
 - [ ] Boss fixes (De Rol Le, Vol Opt, Dragon, Belra) (partial 2026-10-26: `e2e/boss-fights.spec.ts` runs to the end; Dragon and De Rol Le pass (phases change, hits land); Vol Opt's hits land only on some presses and Dark Belra stays hidden next to the player; kill and exit not checked, see DEVLOG 2026-10-26)
 - [ ] Movement: two-client check, slowed / guard animation tie (remote copy scales its leg and animation by slow / guard in code, unit test passes; `two-client-move.spec.ts` not passing yet, see DEVLOG)
-- [ ] Quest editor: open a real quest, drag, Script tab, "Test in game", publish to a deployed host
-- [ ] Admin: Quests tab live (open in editor, publish), login on production
+- [ ] Quest editor: open a real quest, drag, Script tab, "Test in game", publish to a deployed host (partial 2026-10-26: local run in client/e2e/questeditor-real.spec.ts and admin-quests.spec.ts; Test in game reaches the panel and publishes a test quest, but entering a game with it is not seen (port 12000 is the shared newserv, and $quest needs AllowStartFromChatCommand); deployed host not done)
+- [ ] Admin: Quests tab live (open in editor, publish), login on production (partial 2026-10-26: the whole Quests loop passes locally in client/e2e/admin-quests.spec.ts; production login not done, no production access here)
 - [ ] Phones: soft keyboard, rotation lock, adaptive resolution (real iOS / Android)
 
 ## B. Screens and menus
