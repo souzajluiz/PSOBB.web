@@ -1,5 +1,18 @@
 # Devlog
 
+## 2026-10-25: Quest editor: copy, cut and paste of entities between floors and quests
+
+**Question.** ROADMAP "Quest editor left to do" lists copy / paste between floors and quests first. The editor had Ctrl+D (duplicate on the same floor) but no clipboard.
+
+**Change.** `client/src/questeditor/clipboard.ts` keeps the copied entities in memory for the page, so they survive opening another quest. Ctrl+C copies the selection, Ctrl+X copies and deletes it (one undo step, as Delete), Ctrl+V pastes onto the current floor as one undo step ("Paste"), selects the pasted entities and reports the count. A paste keeps the copied local positions and rooms, so the entities stay in their room of the target floor. Pasting again onto the floor the entities were copied from shifts each paste by the Duplicate offset (10, 0, 10), so the copy does not sit on the original. Copies are clones (raw record bytes and home floor included), so the byte-exact writer keeps the fields the editor does not model.
+
+**Not checked.** A paste into an area whose palette does not hold the type is not refused: the entity is written as copied. Not run in Chrome (no browser check in this session).
+
+**Tests.** `tests/questeditor-clipboard.test.ts` (22 checks): copies are independent of the originals, the same-floor offset per paste, the other-floor position and room kept, a mixed-floor copy keeps its first floor, a paste into another document with undo and redo. `tests/questeditor.test.ts` still passes (1424 checks, 333 real quests byte for byte).
+
+**Still open** from the same ROADMAP line: the script positions and radii in the 3D view, deleting a published quest (needs a server route with backup and mirror, not done), editing a quest's `.json` from the panel, and a browser check of the open / publish flow.
+
+
 ## 2026-10-25: NPCs drawn: the 0x118 texture load has no reader in the dump; the 0x118 dispatcher plays only row 0
 
 **Question.** ROADMAP "NPCs: drawn now" lists the open parts: the 0x118 texture setup (`plAsmp.rel` by class into obj+0x3ec, its use not traced), the 0x118 walk row (the town walk stands in), the 0x118 weapon (not ported), the 0x33 slot's per-class motion id (ASSUMED), and the talk reach (ASSUMED). This pass re-traces the first two from `PsoBB.exe` (dump `Psobb.exe-05112026.c`, line numbers below; addresses from the dump names).
