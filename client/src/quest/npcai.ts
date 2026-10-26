@@ -408,13 +408,18 @@ export class NpcAttackAi {
 
 // --- the head's status flags (SinowberillCheckHeadRotation_007af694, .c:795008) ---------
 //
-// Each record's +0x90 (status) and +0x8c (need) words are set from the player's HP and TP
-// ratios: HP (cur +0x334 / max +0x2bc) <= 0.75 sets 0x8 and need 4, <= 0.1 also 0x800 (ratio
-// thresholds 0xddd8 / 0xddd0); the player's state 0x30 & 0x13 sets 0x2 and need 4; TP (cur
-// +0x336 / max +0x2be) <= 0.2 (0xddcc) with a max above 0 sets 0x10 and need 4.
-// ASSUMED: the exe ORs these bits into the words and clears them elsewhere; here each tick
-// starts from zero and the flags are recomputed from the current ratios. ASSUMED: the state
-// word 0x30 is 0 for an NPC's owner (not read).
+// Each record's +0x90 (status) and +0x8c (need) words, re-derived 2026-10-26 from objdump
+// (0x007af694..0x007af7ec): the HP ratio is cur +0x334 / max +0x2bc, tested against 0x97ddd4 (0.25),
+// 0x97ddd8 (0.75) and 0x97ddd0 (0.1); the TP ratio is cur +0x336 / max +0x2be against 0x97ddcc (0.2),
+// with the max against 0x97ddc8 (0). The words start at 0 every tick (ResetEntityHitboxes_007b34e8
+// clears B +0x8c / +0x90), so nothing is ORed into an older value.
+//  - no target (B +0x8c & 2 clear): HP ratio <= 0.75 sets 0x8 and need 4; above 0.75 the HP block ends.
+//  - target (B +0x8c & 2): HP ratio in (0.25, 0.75] sets the strong bit 0x1000; <= 0.25 sets 0x8, need 4
+//    and 0x1000; above 0.75 the HP block ends. The strong bit is what SinowberillHead_CastTechnique reads.
+//  - the HP block's write of +0x90 happens unless the block ended: ratio > 0.1 writes it, else 0x800 and
+//    need 4. An ended block writes no +0x90 (the tail below still applies).
+//  - the player's state 0x30 & 0x13 sets 0x2 and need 4; TP ratio <= 0.2 with a max above 0 sets 0x10 and need 4.
+// The owner's words are read with no target (`targetAcquired` unset: the owner's own +0x8c bit 2 is ASSUMED clear).
 
 export const HEAD_FLAG_STATUS = 0x2;
 export const HEAD_FLAG_NEED_HEAL = 0x8;
@@ -432,18 +437,35 @@ export interface PlayerRatioStatus {
   stateFlags30: number; // the player's +0x30 word (ASSUMED 0 when not known)
 }
 
-export function headStatusFlags(s: PlayerRatioStatus): { f90: number; f8c: number } {
+const STRONG_BIT = 0x1000; // B +0x90 & 0x1000: the strong bit (CastTechnique's roll skip; HEAD_FLAG_STRONG in npchead.ts)
+
+export function headStatusFlags(s: PlayerRatioStatus & { targetAcquired?: boolean }): { f90: number; f8c: number } {
   let f90 = 0;
   let f8c = 0;
-  if (s.hpMax > 0) {
-    const r = s.hp / s.hpMax;
-    if (r <= 0.75) {
-      f90 |= HEAD_FLAG_NEED_HEAL;
+  // The HP block (.c:795008 .. 795060). Float division by a zero max follows IEEE, as the exe's fdiv does.
+  const r = s.hp / s.hpMax;
+  const target = s.targetAcquired === true;
+  let pending = 0; // uVar5: what the block would write to +0x90
+  let ended = false; // goto LAB_007af758: the block ends and +0x90 is not written
+  if (!target) {
+    if (r > 0.75) ended = true;
+    else {
+      pending |= HEAD_FLAG_NEED_HEAL;
       f8c |= HEAD_NEED_BIT;
-      if (r <= 0.1) {
-        f90 |= HEAD_FLAG_CRITICAL;
-        f8c |= HEAD_NEED_BIT;
-      }
+    }
+  } else if (r > 0.25) {
+    if (r > 0.75) ended = true;
+  } else {
+    pending |= HEAD_FLAG_NEED_HEAL;
+    f8c |= HEAD_NEED_BIT;
+  }
+  if (!ended) {
+    if (target) pending |= STRONG_BIT;
+    if (r > 0.1) {
+      f90 = pending;
+    } else {
+      f90 = pending | HEAD_FLAG_CRITICAL;
+      f8c |= HEAD_NEED_BIT;
     }
   }
   if ((s.stateFlags30 & 0x13) !== 0) {
@@ -455,6 +477,48 @@ export function headStatusFlags(s: PlayerRatioStatus): { f90: number; f8c: numbe
     f8c |= HEAD_NEED_BIT;
   }
   return { f90, f8c };
+}
+
+// --- the head's anim-timing states (SinowberillHead_CheckAnimationState_007affc4, .c:795435) ----
+//
+// Re-derived 2026-10-26 from objdump (0x007affc4..0x007b00bc): the HP is +0x334 and the max +0x2bc of
+// B's player record; the bands are 0x97ddbc (0.3), 0x97ddb8 (0.2) and 0x97ddb4 (0.01). B +0x88 is the
+// counter (a short). Each call copies the HP into the counter, so the bits only come from an HP change:
+// with a steady HP the counter equals the HP and nothing is set (the state never fires).
+//  - counter < 1: the counter takes the HP, no bits, returns 0.
+//  - counter < HP - 1 (the HP rose by more than 1): 0x200.
+//  - else d = counter - HP (the HP fell by d): d > 0.3 max 0x40; (0.2 max, 0.3 max] 0x80; (0.01 max, 0.2 max] 0x100.
+//  - returns 1 when the counter differed from the HP.
+// The bits are B +0x90's 0x40 / 0x80 / 0x100 / 0x200 (the status word is cleared every tick).
+export const HEAD_ANIM_BIG_DROP = 0x40;
+export const HEAD_ANIM_DROP = 0x80;
+export const HEAD_ANIM_SMALL_DROP = 0x100;
+export const HEAD_ANIM_HEAL = 0x200;
+
+export interface HeadAnimResult {
+  counter: number; // the new B +0x88
+  bits: number; // the B +0x90 bits this call sets
+  changed: boolean; // the return value (the counter differed from the HP)
+}
+
+export function headAnimationState(counter: number, hp: number, maxHp: number): HeadAnimResult {
+  if (counter < 1) return { counter: hp, bits: 0, changed: false };
+  let bits = 0;
+  if (counter < hp - 1) {
+    bits |= HEAD_ANIM_HEAL;
+  } else {
+    const d = counter - hp;
+    if (d <= Math.fround(Math.fround(0.3) * maxHp)) {
+      if (d <= Math.fround(Math.fround(0.2) * maxHp)) {
+        if (Math.fround(Math.fround(0.01) * maxHp) < d) bits |= HEAD_ANIM_SMALL_DROP;
+      } else {
+        bits |= HEAD_ANIM_DROP;
+      }
+    } else {
+      bits |= HEAD_ANIM_BIG_DROP;
+    }
+  }
+  return { counter: hp, bits, changed: counter - hp !== 0 };
 }
 
 // --- the head's action chooser (SinowberillHead_AIProcessState_007b0a7c, .c:795871) ----
@@ -588,6 +652,10 @@ export interface NpcCastEligibility {
 
 // ASSUMED: the NPC's tp2 is not in the port. The u16 maximum keeps the TP test from refusing a cast.
 export const NPC_TP_ASSUMED = 0xffff;
+
+// ASSUMED: the NPC's HP is full and never moves (the port has no NPC damage). The ratio is then 1, above every HP band
+// of CheckHeadRotation (0.75), so the NPC's status words are 0 apart from the state word and TP.
+export const NPC_HP_ASSUMED = { hp: 1, hpMax: 1 };
 
 export function npcCanCastTech(e: NpcCastEligibility): boolean {
   if (!e.stateClear) return false;

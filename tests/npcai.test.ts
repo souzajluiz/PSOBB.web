@@ -26,6 +26,8 @@ import {
   NPC_TP_ASSUMED,
   npcCanCastTech,
   pickAttackTarget,
+  headAnimationState,
+  NPC_HP_ASSUMED,
 } from '../client/src/quest/npcai.ts';
 import { techTpCost } from '../client/src/combat/techniques.ts';
 import { inUnsafeMap } from '../client/src/render/playermove.ts';
@@ -759,11 +761,11 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
   check(!new NpcHeadChooser().choose(1, hubInput).attack, 'eligibility: on a hub map the chooser gives no Anti for the owner\'s status (no cast)');
   check(new NpcHeadChooser().choose(1, { ...hubInput, canCast: () => npcCanCastTech(elig) }).attack, 'eligibility: on a field map the same status gives Anti');
   const townSrc2 = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
-  check(townSrc2.includes('unsafeMap: area === null ? true : inUnsafeMap(area)') && townSrc2.includes('canCast: (tech: number) => {'), 'town: the chooser\'s canCast is the NPC eligibility with the area\'s unsafe test');
+  check(townSrc2.includes('unsafeMap: area === null ? true : inUnsafeMap(area)') && townSrc2.includes('canCast: (tech: number) => this.npcCastEligible(tech),'),'town: the chooser\'s canCast is the NPC eligibility with the area\'s unsafe test');
 
   // The state-2 cast's gates and the field wiring in town.ts.
   const src = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
-  check(src.includes('(head.head34 & 0x40) !== 0') && src.includes('headTwoTech(head.head34, false, (Math.floor(Math.random() * 32768) / 32768) * 10, head.need53)'), 'town: the state-2 cast is off for the 0x40 table word and rolls with the need byte +0x53');
+  check(src.includes('(head.head34 & 0x40) !== 0') && src.includes('headTwoTech(head.head34, strong, (Math.floor(Math.random() * 32768) / 32768) * 10, head.need53)'), 'town: the state-2 cast is off for the 0x40 table word and rolls with the need byte +0x53');
   check(src.includes('if (this.isPioneer2()) {') && src.includes('head.fieldUpdate({') && src.includes('head.afterDispatch();'), 'town: the field branch runs fieldUpdate off Pioneer 2, and the 2764 resets run after the dispatch');
   const combatSrc2 = readFileSync(join(HERE, '../client/src/render/combat.ts'), 'utf8');
   check(/npcCastTechnique[\s\S]*?if \(isFireTech\(tech\)\)[\s\S]*?this\.spawnFire\(tech, level, from, me\.angle, listed, first/.test(combatSrc2), 'npcCastTechnique: the Foie family makes its object at the NPC and hits through spawnFire / techHitEnemy');
@@ -799,6 +801,61 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
   const townSrc3 = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
   check(townSrc3.includes('headChainBranch(this.ownerDead(leader) ? CHARACTER_FLAG_DEAD : 0, npcFlags)') && townSrc3.includes("if (branch === 'owner-dead') return;") && townSrc3.includes("if (branch === 'npc-dead') {"), 'town: the chain gate picks the owner-dead return and the NPC-dead branch');
   check(townSrc3.includes('const npcFlags = 0; // ASSUMED'), 'town: the NPC flags stay ASSUMED alive (no port source)');
+}
+
+// --- 2026-10-26: CheckHeadRotation's target branch (strong bit), CheckAnimationState, the cast's order
+// (objdump 0x007af694: HP ratio against 0x97ddd4 0.25, 0x97ddd8 0.75, 0x97ddd0 0.1; 0x007affc4: 0x97ddbc 0.3,
+// 0x97ddb8 0.2, 0x97ddb4 0.01; the arithmetic below re-derived from those, not copied from the port)
+{
+  const full = { hp: 100, hpMax: 100, tp: 100, tpMax: 100, stateFlags30: 0 };
+  const tgt = { ...full, targetAcquired: true };
+  check(headStatusFlags({ ...full, hp: 75 }).f90 === 0x8, 'rotation: HP exactly 75% (no target) is still need heal, 0x8');
+  check(headStatusFlags({ ...full, hp: 80 }).f90 === 0, 'rotation: HP 80% without a target: the block ends, no bits');
+  check(headStatusFlags({ ...tgt, hp: 50 }).f90 === 0x1000 && headStatusFlags({ ...tgt, hp: 50 }).f8c === 0, 'rotation: target, HP 50%: strong 0x1000 only, no need');
+  check(headStatusFlags({ ...tgt, hp: 75 }).f90 === 0x1000, 'rotation: target, HP exactly 75%: strong (the band is not above 0.75)');
+  check(headStatusFlags({ ...tgt, hp: 80 }).f90 === 0, 'rotation: target, HP 80%: the block ends, no strong bit');
+  check(headStatusFlags({ ...tgt, hp: 20 }).f90 === 0x1008 && headStatusFlags({ ...tgt, hp: 20 }).f8c === 0x4, 'rotation: target, HP 20%: 0x8 and 0x1000, need 4');
+  check(headStatusFlags({ ...tgt, hp: 10 }).f90 === 0x1808, 'rotation: target, HP 10%: 0x1000 | 0x800 | 0x8');
+  check(headStatusFlags({ ...tgt, hp: 50, tp: 20 }).f90 === 0x1010, 'rotation: the TP tail still applies with the strong bit');
+  check(NPC_HP_ASSUMED.hp === NPC_HP_ASSUMED.hpMax, 'rotation: the NPC HP is ASSUMED full (ratio 1, no strong bit)');
+
+  // CheckAnimationState: the counter takes the HP each call; the bits need an HP change
+  let an = headAnimationState(0, 300, 300);
+  check(!an.changed && an.counter === 300 && an.bits === 0, 'anim: the first call copies the HP, no bits, returns 0');
+  an = headAnimationState(an.counter, 300, 300);
+  check(!an.changed && an.bits === 0, 'anim: a steady HP never sets a bit (the state stays dormant)');
+  check(headAnimationState(300, 200, 300).bits === 0x40, 'anim: a fall of a third of max (100 > 0.3 x 300) sets 0x40');
+  check(headAnimationState(300, 210, 300).bits === 0x80, 'anim: a fall of exactly 0.3 x max sets 0x80 (not above)');
+  check(headAnimationState(300, 239, 300).bits === 0x80, 'anim: a fall of 61 (above 0.2 x max) sets 0x80');
+  check(headAnimationState(300, 240, 300).bits === 0x100, 'anim: a fall of exactly 0.2 x max sets 0x100');
+  check(headAnimationState(300, 297, 300).bits === 0, 'anim: a fall of 3 (not above 0.01 x max) sets nothing');
+  const heal = headAnimationState(200, 205, 300);
+  check(heal.bits === 0x200 && heal.changed && heal.counter === 205, 'anim: a rise of more than 1 sets 0x200');
+  check(headAnimationState(200, 201, 300).bits === 0, 'anim: a rise of 1 sets nothing');
+
+  // the head's dispatch of the bits (UpdateState_007af7ec): steady HP leaves the input alone
+  const ah = headWith(13);
+  ah.animStep({ hp: 300, hpMax: 300 });
+  const before = ah.inputState;
+  ah.animStep({ hp: 300, hpMax: 300 });
+  check(ah.inputState === before && ah.npcAnimBits === 0, 'anim head: steady HP leaves the input state and the bits alone');
+  ah.animStep({ hp: 200, hpMax: 300 });
+  check(ah.inputState === 0xe && ah.npcAnimBits === 0x40, 'anim head: a big fall sets input 0xe');
+  const ah2 = headWith(13);
+  ah2.animStep({ hp: 300, hpMax: 300 });
+  ah2.animStep({ hp: 305, hpMax: 300 });
+  check(ah2.inputState === 0x11, 'anim head: a rise sets input 0x11 when no second target (+0x84 clear)');
+  const ah3 = headWith(13, { lockedSecond: 4 });
+  ah3.animStep({ hp: 300, hpMax: 300 });
+  ah3.animStep({ hp: 305, hpMax: 300 });
+  check(ah3.inputState !== 0x11, 'anim head: a rise with a second target does not set 0x11');
+
+  // the cast's gates in the port follow the exe's order (town.ts stepNpcTwoTech)
+  const townSrc4 = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
+  check(townSrc4.includes('if ((npcStatus.f90 & 0x10) !== 0) return;'), 'town: the cast stops on the NPC TP need (B +0x90 & 0x10)');
+  check(townSrc4.indexOf('head.flags &= ~HEAD_FLAG_TOO_CLOSE;') > 0 && townSrc4.indexOf('head.flags &= ~HEAD_FLAG_TOO_CLOSE;') < townSrc4.indexOf('if (!this.npcCastEligible(tech)) return;') && townSrc4.indexOf('if (!this.npcCastEligible(tech)) return;') < townSrc4.indexOf('head.castInput(tech); // HandlePlayerTechCastState'), 'town: the cast clears 0x2000, then the eligibility, then the input');
+  check(townSrc4.includes("canCast: (tech: number) => this.npcCastEligible(tech),"), 'town: the chooser and the cast share one eligibility');
+  check(townSrc4.includes('npcStatus8: (this.npcHeadStatus(head).f90 & 0x8) !== 0'), 'town: the NPC status 8 is read from the status word (CheckHeadRotation)');
 }
 
 if (failures) {
