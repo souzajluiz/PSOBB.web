@@ -7,6 +7,9 @@
 import { WindowAnim, withElementWipe } from '../client/src/classic/windowanim.ts';
 import { EquipMenu, equipSlots, equipSwap, slotCandidates } from '../client/src/classic/equipmenu.ts';
 import { MagMenu } from '../client/src/classic/magmenu.ts';
+import { MAIN_MENU, MAIN_MENU_ANDROID, type MenuEntry } from '../client/src/classic/mainmenu.ts';
+import { HOME_LEAF_IDS } from '../client/src/classic/homeleaves.ts';
+import { FIELD_SHORTCUT_LEAVES, LOBBY_SHORTCUT_LEAVES } from '../client/src/input/shortcuts.ts';
 import { validateMenuEntry, isSafeMap, paletteWindowsShown, type MenuRules } from '../client/src/classic/fieldmenu.ts';
 import { MENU_LAYER, STATUS_LAYER } from '../client/src/classic/hud.ts';
 import {
@@ -731,6 +734,25 @@ if (failures) {
   eq(RESIST_LABELS, [0xa2, 0xa3, 0xa4, 0xa5, 0xa6], 'resist: labels EFR..ELT are 0xa2..0xa6');
   eq(SLOT_LABEL, 0xbf, 'slot: label 0xbf');
   eq(slotValue(d(1, 1, 0, 0, 0, 4)), 4, 'slot: value is data1[5] (the armour slot count)');
+}
+
+// Player Status (menu id 0x19, ChatShortcutMenuWindow_Constructor_00756ff4): no route in the exe.
+// PsoBB.exe 2026-10-25 (DEVLOG "Status window"): no 8-byte layout row holds 0x19 in .rdata /
+// .data (the Home layouts 0x009f2f40 / 0x009f3020 and their subs 0x009f2f80 / 0x009f2fb8 /
+// 0x009f2ff0); no keyboard control maps to it (shortcut controls 20..27 map to 0x09, 0x03, 0x17,
+// 0x0e, 0x13, 0x12, 0x25); the only list item with value 0x19 is the title challenge menu's
+// (CreateChallengeMenuListWindow_0073e12c, unitxt 0x10 / 0x1c), whose value is a title BGM index.
+{
+  const ids = (m: MenuEntry[]): number[] => m.flatMap((x) => [x.id, ...ids(x.sub ?? [])]);
+  const home = [...ids(MAIN_MENU), ...ids(MAIN_MENU_ANDROID)];
+  eq(home.includes(0x19), false, 'status: no Home / field menu row is 0x19');
+  eq(home.includes(0x17), true, 'status: the Item Pack row 0x17 (MAG) is in the table, the scan is not empty');
+  eq(MAIN_MENU[0].sub?.map((x) => x.id), [0x09, 0x0b, 0x17, 0x1a, 0x0c, 0x0f], 'status: Item Pack sub 0x009f2f80 rows');
+  eq(MAIN_MENU[3].sub?.map((x) => x.id), [0x11, 0x12, 0x0e, 0x13, 0x16, 0x15], 'status: Chat sub 0x009f2fb8 rows');
+  eq(MAIN_MENU[4].sub?.map((x) => x.id), [0x25, 0x27, 0x29, 0x2b, 0x2d], 'status: Team sub 0x009f2ff0 rows');
+  eq(FIELD_SHORTCUT_LEAVES.has(0x19), false, 'status: no field shortcut key opens 0x19');
+  eq(LOBBY_SHORTCUT_LEAVES.has(0x19), false, 'status: no lobby shortcut opens 0x19');
+  eq(HOME_LEAF_IDS.has(0x19), false, 'status: no Home leaf is 0x19');
 }
 
 console.log('fieldhud: all checks passed');
