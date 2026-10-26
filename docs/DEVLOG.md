@@ -15,6 +15,37 @@
 **Still open (unchanged):** the 0x33 slot's per-class id (the u16 at njm+8 of each of the 61 `RegisterStageNpcModelData_00608470` call sites, .c:294936 .. .c:334896, each with its own njm struct built on the stack; the decompiled struct is not reliable, DEVLOG 2026-10-24), the 0x118 weapon's per-floor table, and the talk reach.
 
 **Verified:** `node tests/npcs.test.ts` ALL PASS; `NEWSERV=... node tests/combat.test.ts` 5860 checks, 0 failures; `cd client && npx tsc --noEmit -p .` exit 0. No code changed.
+## 2026-10-25: Equipment stat recalculation: the open parts re-read in the exe (no code change)
+
+**Question.** The ROADMAP item "Equipment stat recalculation" lists open or ASSUMED parts: the mags' stat effect in the compare, the set-bonus table at the tail of `handle_item_set_bonus` (0x005d4c38), the elemental set branches, the set factor on the combat range, and the bare-handed remote. Which of them the exe settles, and does the port match?
+
+**Method.** objdump of PsoBB.exe (per instruction, `--start-address` / `--stop-address` ranges), the Ghidra decompile (`refsrc` `Psobb.exe-5-10-2026.c`) for names, `tools/exedata.py read` / `xref` for the data.
+
+**PROVEN: PlayerRecalculateStats_0068e030 reads the equipment slots, and the mag only for a mag candidate.**
+- The candidate type dispatch (asm 0x68e1ac..0x68e1d5): type 0 (weapon) reads slot 6; type 1 sub 1 (armour) reads slot 2 (0x68e458 push 2); type 1 sub 2 (shield) reads slot 3 (0x68e43d push 3); type 2 (mag) reads slot 1 (0x68e1d5 push 1). Any other type returns with no slot read (0x68e22c).
+- The old item of the slot is subtracted through vtable +0x5c (0x68e219). The armour unit loop (0x68e473..0x68e4bd) runs only when that old item has group_1 = 1 and group_2 = 1 (armour, `0xf2` / `0xf3` bytes); it subtracts slots 9, 10, 11, 12 (`movl $0x9`, `cmpl $0xc`, `jle`). No other candidate type reads the unit slots, and no candidate type reads the mag slot except the mag candidate itself.
+- So for a weapon / armour / shield / unit candidate the worn mag is never removed or re-added. This matches `recalculateCandidate` and `equippedCandidate` in `combat/playerstats.ts` (the armour unit loop there is `isArmour(old)` = type 1 sub 1, the same test). A unit candidate has no old-slot dispatch (type 1 sub 3 falls to 0x68e22c), so the port's `compareSlot` = null for units (no removal) is right.
+- The mag's own stat write: ApplyItemStatBonuses_005d3fa4 (asm 0x5d3fa4) takes its stat pointer from its 4th stack argument, which ApplyEquipmentBonuses_005d330c passes as its own param_4 (asm 0x5d33b3 pushes `edi` = 0x58(%esp) at entry = param_4, the stat block). So a mag writes ATP / MST / DFP / ATA into the stat block, and the compare never re-applies it. The remaining ASSUMED part is only that the save's stat block (the file) already holds the worn mag's effect from equip time; no equip-time call was traced here.
+
+**PROVEN: the set-bonus table at the tail of handle_item_set_bonus is the Proof of the Sword Saint table, and the port has it.**
+- The tail (decompile 427405..427441, asm 0x005d4c9a `movl $0x92c280`): for a candidate type 1 sub 3 with byte 2 = 'P' (0x50), the 27 triples at 0x0092c280 (81 bytes, 0x51 limit, 27 entries, the loop checks all of them) are compared with the worn weapon's (group_1, group_2, group_idx). On a match: range ATA +300 (param_2[2]), resist EVP +60 (`*param_3 += 0x3c`), resist DFP -20 (dword +0x1c, `-0x14`). Then `return`.
+- Byte check: `tools/exedata.py read 0092c280 b 81` equals the 27 triples of `PROOF_OF_SWORD_SAINT` in `combat/playerstats.ts` (line 617), in order. The dispatch (`itemSetBonusDelta`, the `d[0] === 1 && d[1] === 3 && d[2] === 0x50` branch) and the three writes match. Test: `tests/playerstats.test.ts` (unit P with the proof weapon: ATA +300, EVP +60, DFP -20).
+- So the roadmap's "the table at handle_item_set_bonus's tail not ported" is stale: it is ported.
+
+**PROVEN: the elemental set branches are not in the compare, and they are ported for combat.**
+- The writes go to resist [1..5] (EFR..EDK, the resist block arg3), not to EVP or DFP, and the compare shows only EVP / DFP / ATP / ATA / MST / LCK. So the compare is unaffected. The combat side is ported in `combat/playerresist.ts` (`setBonusElementDeltas`, DEVLOG 2026-10-25 "Enemy technique hits on the player"). The compare comment's "not ported" wording is about the compare only.
+
+**PROVEN: the set factor on the combat range is live.**
+- `formulas.ts` `weaponForCombat` takes a `SetContext` and calls `weaponRangeContribution` (the set factor and the item set in the range). `render/combat.ts` passes `liveSetContext()` for the local player (8938). The remote call (9702) passes no SetContext, so a remote's range has no set factor. That is ASSUMED, since a remote's worn armour / shield / units / colored rings are not known to the client.
+
+**Still ASSUMED (not changed).**
+- The bare-handed remote (no 6x25 / 6x26 weapon yet): the exe's attack path for a null weapon was not re-read here.
+- The save's stat block holds the worn mag's effect (equip-time write not traced).
+- Teammates close by (set factors), the movement bits (standing), and the colored ring count of the remote: the `SetContext` defaults.
+
+**Port.** No code change. The compare, the table and the combat range match the exe as re-read.
+
+**Checks.** `ITEMPMT=~/Downloads/psobb-master/tethealla/ItemPMT.prs node tests/playerstats.test.ts` ALL PASS; `tests/playerstatsatp.test.ts` 25/25; `tests/combatsetatp.test.ts` 10/10; `tests/playerresist.test.ts` ALL PASS; `NEWSERV=vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures; `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). Not run in Chrome.
 
 ## 2026-10-25: Minimap: the "Sinow Berill sub-entity" icons are the Barba Ray's (body 2.0, parts 1.2)
 
