@@ -19,6 +19,7 @@
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, nearest, once, turnToward } from './enemyfsm.ts';
+import { STATUS } from './status.ts';
 
 // PROVEN: the vtable is 0x00b0b6a0 (written by the constructor at 0x005b6c32). Its +0 is
 // 0x005b50fc (not traced), +4 is the update 0x005b66ec, +8 the lock-on render 0x005b6864.
@@ -253,6 +254,9 @@ export const MERISSA = {
   lungeReach: 20, // PROVEN: the landing point is 20 units from the target (0x005b586b writes 20.0)
   lungeTurn: 0x4000, // PROVEN: row 3 turns by 0x4000 BAMS per frame (EnemyAI_UpdateRotation 0x4000)
   deathFront: 0x4000, // PROVEN: on_merissa_dead picks motion 9 when the attacker is within 0x4000 BAMS
+  stabLo: 12, // PROVEN: the B callback 0x005b64fc hits while 12 < elapsed < 14 (0x0092afd8, 0x0092afd4)
+  stabHi: 14,
+  freezeReset: 90, // PROVEN: the freeze callback 0x005b63e4 sets elapsed to 90 (0x42b40000) when the hold ends
   backstabDefault: 45, // ASSUMED: the N angle when the MovementData row is absent (degrees)
   turnDefault: 5, // ASSUMED: the chase turn when the MovementData row is absent (degrees)
 };
@@ -308,6 +312,10 @@ export class MerissaAi extends BrainBase {
   private count = MERISSA.appearFrames;
   private record: MerissaAttackRecord | null = null;
   private recordHit = false;
+  // +0x3d0: the freeze stab's target (set on its first callback, cleared at the attack's entry).
+  private freezeTarget: number | null = null;
+  // The map ray of the path tests (ASSUMED clear when no wall test is given).
+  private readonly lineClear: (ax: number, az: number, bx: number, bz: number) => boolean;
   // The lunge's stored speed (3d8) and heading (3d4).
   private lungeSpeed = 0;
   private lungeHeading = 0;
@@ -334,6 +342,8 @@ export class MerissaAi extends BrainBase {
     rng?: () => number;
     // The archive frame count of a motion (the loop length of the walk). Default 30 (ASSUMED).
     motionFrames?: (index: number) => number;
+    // The map ray from (ax, az) to (bx, bz) at height 10 (EnemyCheckLineOfSight_005b5eb4): true when clear.
+    clear?: ((ax: number, az: number, bx: number, bz: number) => boolean) | undefined;
   }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
     this.variant = opts.variant & 1;
@@ -345,6 +355,7 @@ export class MerissaAi extends BrainBase {
     this.turnStep = degToBams(turnDeg) * BAMS_TO_RAD;
     this.nearAngle = degToBams(nearDeg);
     this.motionFrames = opts.motionFrames ?? (() => 30);
+    this.lineClear = opts.clear ?? (() => true);
     // The ctor: +0x37c = 0, then EnemySetStateFlag(row 0) and the row 0 mask (PROVEN): 0x5.
     this.flags = merissaFlagsAfterRow(0, MERISSA_STATE_ROWS[0]);
     this.current = MERISSA_SLOTS[0];
@@ -353,6 +364,11 @@ export class MerissaAi extends BrainBase {
   // The plain radar icon (the update's icon call is skipped while +0x37c bit 0x8 is set).
   get radar(): boolean {
     return merissaRadarIconShown(this.flags);
+  }
+
+  // The animation elapsed (+0xc0) for the owner's and the tests' reads.
+  get elapsed(): number {
+    return this.anim;
   }
 
   // The flags word as the exe keeps it (+0x37c), for the owner's and the tests' reads.
@@ -538,24 +554,30 @@ export class MerissaAi extends BrainBase {
     const dSq = sq(t.x - this.x) + sq(t.z - this.z);
     const diff = this.facingDiff(t);
     const v = this.variant;
-    // The N lunge (0x005b5818): dist^2 < 1600, the angle below iparam2, and the path test 0x005b5eb4
-    // (ASSUMED always clear: the obstacle test 0x0077fffc is not traced).
+    // The N lunge (0x005b5818): dist^2 < 1600 and the angle below iparam2, then the path test
+    // 0x005b5eb4 to the landing point (PROVEN: blocked falls through to the A branch, 0x005b58bd).
     if (dSq < MERISSA.nearDistSq && diff < this.nearAngle) {
-      this.beginLunge(t, out);
-      return true;
+      const p = this.landing(t);
+      if (this.lineClear(this.x, this.z, p.x, p.z)) {
+        this.beginLunge(p, out);
+        return true;
+      }
     }
     // Record A (0x005b5974): the gate, then the flagged or the rolled stab / freeze (always an attack).
     const near = merissaAttackRecord(MERISSA_ATTACK_SELECT[v].near);
     if (near && merissaInAttackRange(near, dSq, diff)) {
-      // ASSUMED: the target never carries the 0x20 flag in the port (AiTarget has no +0x30 word).
-      const p = merissaPickNearAttack(v, this.rollWord(), false);
+      // A target with flag 0x20 (frozen) stabs without the roll (PROVEN, 0x005b5977; the roll is not drawn).
+      const frozen = !!t.frozen;
+      const p = merissaPickNearAttack(v, frozen ? 0 : this.rollWord(), frozen);
       this.startAttack(p.record, p.freeze, out);
       return true;
     }
-    // Record B (0x005b5a52): the gate, the path test (ASSUMED clear), then a roll of 3. A failed
-    // roll ends the pick (the C branch is not reached once the B gate passed: 0x005b5bee / 0x005b5ac5).
+    // Record B (0x005b5a52): the gate, the path test to the target point (PROVEN: blocked ends the
+    // pick, 0x005b5abd..0x005b5ac5), then a roll of 3. A failed roll ends the pick too (the C branch
+    // is not reached once the B gate passed: 0x005b5bee / 0x005b5ac5).
     const mid = merissaAttackRecord(MERISSA_ATTACK_SELECT[v].mid);
     if (mid && merissaInAttackRange(mid, dSq, diff)) {
+      if (!this.lineClear(this.x, this.z, t.x, t.z)) return false;
       if (merissaRngBucket(this.rollWord(), 3) === 0) {
         this.startAttack(mid.id, false, out);
         return true;
@@ -577,10 +599,14 @@ export class MerissaAi extends BrainBase {
   // The N lunge (state 3): the landing point P = target + 20 units along target y_rot + 180
   // (0x005b5c58 / 0x82d7b0 / 0x830aa0: the matrix of the target's +0x60 + 0x8000, PROVEN the
   // offset; ASSUMED the axis convention), the speed |P - pos| / 21 and the heading kept.
-  private beginLunge(t: AiTarget, out: AiFrame): void {
+  // The landing point of the N lunge (20 units behind the target's facing).
+  private landing(t: AiTarget): { x: number; z: number } {
     const ang = (t.angle ?? 0) + Math.PI;
-    const px = t.x + Math.sin(ang) * MERISSA.lungeReach;
-    const pz = t.z + Math.cos(ang) * MERISSA.lungeReach;
+    return { x: t.x + Math.sin(ang) * MERISSA.lungeReach, z: t.z + Math.cos(ang) * MERISSA.lungeReach };
+  }
+
+  private beginLunge(p: { x: number; z: number }, out: AiFrame): void {
+    const { x: px, z: pz } = p;
     this.lungeSpeed = Math.fround(Math.hypot(px - this.x, pz - this.z)) / MERISSA.lungeDivisor;
     this.lungeHeading = this.angle;
     this.enter('lunge', MERISSA_SLOTS[6], out);
@@ -602,6 +628,12 @@ export class MerissaAi extends BrainBase {
     const rec = merissaAttackRecord(recordId);
     if (!rec) return;
     if (freeze) this.flags = (this.flags | MERISSA_FREEZE_MASK) >>> 0;
+    // The attack entry hook (0x005b5294, PROVEN): with the freeze bit it clears the stored target and
+    // flag 0x20 (the freeze stab's once-per-attack gate).
+    if ((this.flags & MERISSA_FREEZE_MASK) !== 0) {
+      this.freezeTarget = null;
+      this.flags = (this.flags & ~0x20) >>> 0;
+    }
     this.record = rec;
     this.recordHit = false;
     const slot = MERISSA_SLOTS[rec.kind];
@@ -621,9 +653,15 @@ export class MerissaAi extends BrainBase {
     const rec = this.record;
     if (rec) {
       if (a < rec.start && t) this.faceTowards(t, this.turnStep);
-      if (t && !this.recordHit && this.windowHit(rec, a)) {
+      if (rec.id === MERISSA_FREEZE_RECORD) {
+        if (this.windowHit(rec, a)) this.freezeStab(out, t);
+      } else if (t && !this.recordHit && this.windowHit(rec, a)) {
+        // The B callback (0x005b64fc, records 2 and 3) hits only while 12 < elapsed < 14 (PROVEN);
+        // the A and C callbacks have no elapsed gate of their own.
+        const inB = rec.kind === 4;
+        const inside = !inB || (MERISSA.stabLo < a && a < MERISSA.stabHi);
         const dSq = sq(t.x - this.x) + sq(t.z - this.z);
-        if (dSq < rec.rangeSq) {
+        if (inside && dSq < rec.rangeSq) {
           this.recordHit = true;
           // The melee path the Ill Gill uses (knockback 0, mult 1).
           out.hit = { clientId: t.clientId, knockback: 0, mult: 1 };
@@ -634,6 +672,42 @@ export class MerissaAi extends BrainBase {
       this.record = null;
       this.enter('chase', MERISSA_SLOTS[2], out);
     }
+  }
+
+  // The freeze stab's callback (0x005b63e4, PROVEN flow). The first call of the attack (flag 0x20
+  // clear): the target (the acquired one) inside the arc takes the hit and the freeze (freeze_entity,
+  // vtable +0xc8, which is the status the render applies), and the target is stored. Later calls:
+  // while the stored target is frozen the elapsed steps back by a stride (the stab holds); otherwise
+  // the stored target is dropped and the elapsed is set to 90 (the window's end).
+  private freezeStab(out: AiFrame, t: AiTarget | null): void {
+    if ((this.flags & 0x20) === 0) {
+      this.flags = (this.flags | 0x20) >>> 0;
+      if (t && this.freezeArc(t)) {
+        this.freezeTarget = t.clientId;
+        out.hit = { clientId: t.clientId, knockback: 0, mult: 1 };
+        out.status = { clientId: t.clientId, type: STATUS.freeze };
+      }
+      return;
+    }
+    const stored = this.freezeTarget === null ? undefined : this.seen.find((x) => x.clientId === this.freezeTarget);
+    if (stored && stored.frozen) {
+      this.anim -= this.stride();
+    } else {
+      this.freezeTarget = null;
+      this.anim = MERISSA.freezeReset;
+    }
+  }
+
+  // The facing arc of the freeze stab (EnemyAI_CheckFacingArc_00772c08 with the Merissa as the
+  // attacker: the bearing to the target within the record's angle, and the range). ASSUMED: the exe
+  // reads the attack row's distanceX (+0x8, taken to the 4th power) and angle (+0xc) at +0x31c; the
+  // port uses the freeze record's range and angle, and the Merissa's own heading.
+  private freezeArc(t: AiTarget): boolean {
+    const rec = merissaAttackRecord(MERISSA_FREEZE_RECORD);
+    if (!rec) return false;
+    const dSq = sq(t.x - this.x) + sq(t.z - this.z);
+    const diff = bamsDiff(toBams(this.angle), toBams(Math.atan2(t.x - this.x, t.z - this.z)));
+    return merissaInAttackRange(rec, dSq, diff);
   }
 
   // The hit reaction (vtable +0x100, 0x005b69f4, PROVEN): a hit does nothing while +0x37c bit

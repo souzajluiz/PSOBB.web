@@ -1,5 +1,32 @@
 # Devlog
 
+## 2026-10-25: Merissa A / AA, part 5: the freeze stab, the path tests, the B window and the frozen target
+
+**Question.** Resolve the part 4 ASSUMED items, most gameplay-relevant first: the freeze effect, the path and wall tests, the hit count, the target flag 0x20.
+
+**Answer.** `combat/enemyfsmmerissa.ts` now runs the freeze stab (record 6, the callback 0x005b63e4) with the freeze on the player (`out.status`, STATUS.freeze), the two path tests (the N lunge and the B branch, the map ray at height 10), the B callback's own elapsed gate (12 < elapsed < 14), and the frozen target's stab (the A branch without the roll). Tests: `tests/enemyfsmmerissa.test.ts` (new blocks: path tests, B window, frozen target, freeze hold). The render passes the map ray (`wallHit`, mask -1) as `clear`, and `AiTarget.frozen` (the self player's freeze slot) into the brain.
+
+**PROVEN (objdump, the float constants read with `tools/exedata.py read`).**
+- Target flag 0x20 is the FROZEN flag. The entity +0x30 low bits are the status flags (status.ts: 1 poisoned, 2 paralyzed, 4 shocked, 8 slowed, 0x10 confused, 0x20 frozen). The A branch (0x005b5977 `andl $0x20`) therefore stabs a frozen target without the roll (`merissaPickNearAttack` with the flag, the roll is not drawn).
+- Path test 0x005b5eb4 (EnemyCheckLineOfSight_005b5eb4, dump 401644): a ray at height 10 (0x41200000) from the Merissa's (+0x38, +0x40) to the landing point (N) through `cast_ray_at_map_collision_geometry` 0x0077fffc, mask -1. Clear = no hit. The N lunge is gated by it: a blocked ray falls through to the A branch (0x005b58bd: `je 0x5b5974`).
+- The B branch's own ray (0x005b5ab5, not through the helper): from the Merissa to the aim point +0x2a4 / +0x2ac (the target's point from the acquire, 0x0077070c), height 10, mask -1. A blocked ray ends the pick (0x005b5abf `je 0x5b5bee`, else `xorl eax` = return 0), so the C branch is not reached. The C branch has no ray.
+- Freeze callback 0x005b63e4 (record 6, window 28..90). Flag 0x20 (+0x37c) is the once gate, cleared by the attack entry hook 0x005b5294 only when the freeze bit 0x10 is set (`andl $-0x21`, 0x005b52a8, also `movl $0, 0x3d0`). First call with 0x20 clear: the target is the acquired one (0x770738); with a target that passes the facing arc (0x00772c08) it takes try_hit (vtable +0x5c, damage) and then freeze_entity (vtable +0xc8, the status; the freeze lands whatever the damage roll), and the target is stored at +0x3d0; then 0x20 is set. Later calls: if the stored target has flag 0x20 (frozen), elapsed -= the stride (+0xc8), so the animator's add holds the stab; else the stored target is dropped and elapsed = 90 (0x42b40000).
+- B callback 0x005b64fc (records 2 and 3, window 6..15): the hit body runs only while `12.0 < elapsed < 14.0` (0x0092afd8 = 12.0, 0x0092afd4 = 14.0; `fcoms` / `fcomps` with `jbe` / `jae` as the skips), and only when flag 0x80 is clear; the hit sets 0x80, which the 6.0 and 14.0 crossings clear. So the B hit is once per attack and in the window 12..14 (the port had the whole 6..15 window). The range test is dist^2 < (+0x10 of the attack row)^2 (the port's rangeSq, unchanged).
+- The attack row is the enemy's weapon-stats pointer +0x31c (refsrc headers/battle.h:256), an EnemyAttackData: +0x8 distanceX, +0xc angle, +0x10 distanceY. The arc test (EnemyAI_CheckFacingArc_00772c08, dump 747177) is: the bearing from the Merissa to the target within the Merissa's own heading (+0x60) under the angle +0xc, and out of range when (distanceX)^4 < dist^2. The A stab's callback (0x005b6384) has no range gate of its own: the target's vtable +0x50 (should_push_defender, 1.0) decides, then try_hit (+0x5c) and the 0x400 flag.
+
+**ASSUMED (what is still open).**
+- The freeze arc: the port uses the freeze record's range (1600) and angle (1820) against the Merissa's heading. The exe's values are the attack row's distanceX (to the 4th power) and angle, not read for this attack; the attack-row pointer is not set in the port.
+- A stab's should_push_defender (vtable +0x50) is not traced; the port keeps the record gate (already the pick's gate).
+- The C callback 0x005b667c calls 0x006e38e0 (the area hit, not named in the dump): the port keeps the once-at-16 hit with the record gate.
+- Remote players: the frozen flag is known only for the local player (the render's PlayerStatus); a remote frozen player takes the roll (ASSUMED false).
+- The target flag 0x4000000 on the freeze callback (not in the port's targets) is ASSUMED clear.
+- Stride: unchanged from part 4 (the motion's table speed; the MovementData override via RemoveEnemyFromList_0052ad44 is not modelled).
+- The appear countdown (30 frames), the caller of vtable +0x100 / +0x104, and the hit callbacks' own target-list gate remain as in part 4.
+
+**Files.** `client/src/combat/enemyfsmmerissa.ts` (the path tests, the B window, `freezeStab` / `freezeArc`, the frozen A branch, `elapsed` getter, `STATUS` import), `client/src/combat/enemyai.ts` (`AiTarget.frozen`), `client/src/render/combat.ts` (`clear` from `wallHit` at height 10; `frozen` for self), `tests/enemyfsmmerissa.test.ts`.
+
+**Checks.** `node tests/enemyfsmmerissa.test.ts` (all pass), `enemyfsm`, `enemyfsmcaves`, `enemyfsmep2`, `enemyfsmep4`, `enemyfsmillgill`, `enemyfsmmines`, `minimap`, `meleereach` (all pass), `combatdepth` (836 checks, 0 failures), `NEWSERV=... node tests/combat.test.ts` (5860 checks, 0 failures), `npx tsc --noEmit -p client` (exit 0).
+
 ## 2026-10-25: NPCs drawn: the 0x118 texture load has no reader in the dump; the 0x118 dispatcher plays only row 0
 
 **Question.** ROADMAP "NPCs: drawn now" lists the open parts: the 0x118 texture setup (`plAsmp.rel` by class into obj+0x3ec, its use not traced), the 0x118 walk row (the town walk stands in), the 0x118 weapon (not ported), the 0x33 slot's per-class motion id (ASSUMED), and the talk reach (ASSUMED). This pass re-traces the first two from `PsoBB.exe` (dump `Psobb.exe-05112026.c`, line numbers below; addresses from the dump names).
