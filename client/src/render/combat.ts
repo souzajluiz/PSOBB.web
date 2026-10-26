@@ -6637,9 +6637,14 @@ export class CombatView {
       bestSq = d;
     }
     this.lockOn = best;
+    // The point moves toward the camera by the target's hit box radius (PROVEN: init_reticle
+    // copies the box's radius into the reticle, create_target_reticles_for_weapon_or_tech
+    // `fVar9 = pcVar8[sVar3].radius`; PositionAndRenderReticlePrimitives calls
+    // CalculatePositionTowardsCamera with it). The point's height (+22) stays ASSUMED.
     this.overlay.setTarget(best ? { x: best.instance.root.position.x, y: best.instance.root.position.y + 22, z: best.instance.root.position.z } : null, {
       row: reticleRow('enemy'),
       camera: this.viewer.camera,
+      radius: best ? this.hitRadiusOf(best) : 0,
     });
     if (this.hud) this.hud.targetCard = best ? this.targetCardOf(best) : null;
     this.updateAllyLock(from);

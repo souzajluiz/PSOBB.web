@@ -50,6 +50,38 @@
 **Tests.** `tests/techfire.test.ts`: the 19 record addresses from the table formula and their nodes (the values read from the exe), the out-of-range clamp, the provider asked for body node `techCastNode(group)`, Barta never asks, a refused provider and no provider fall back to feet + WEAPON_HEIGHT. `node tests/techfire.test.ts`, `tests/combat.test.ts` (5860 checks), `tests/weaponorigin.test.ts`, `tests/techlightning.test.ts`, `tests/techniques.test.ts` pass with Node 24 and `NEWSERV`. `cd client && npx tsc --noEmit -p .` exit 0. Not run in Chrome, no Playwright.
 
 **Still open (ROADMAP "Player damage left").** The weapon group setter's caller (the +4 writer), the bloodstain's initial value, PLAYER_AIM_HEIGHT 10 (the enemy shots and `techlightning.ts` PLAYER_POINT), the NPC head's and remote copies' cast point, and the Gibbon's Megid aim (`field_0x39c`).
+## 2026-10-25: Lock-on cursor and target card: the exe's reticle rules, the card's layout
+
+**Question.** The ROADMAP "damage numbers over a hit enemy" line lists four open parts of the lock-on cursor and the target card: one cursor per record against the port's one ally cursor, the section icon's colours and shape, the cursor colour per record, and the card's box position and padding.
+
+**Answer.** The card's box position, its width and the value's offset are PROVEN and ported. The cursor's radius is PROVEN and ported. The one-cursor-per-record rule and the colour rows are mapped in the exe but not ported (the gates are not fully traced). The section icon is not in the card's builder.
+
+**PROVEN (Ghidra decompile of `Psobb.exe` via `tools/ghidra/decomp.sh`; constants with `tools/exedata.py read`).**
+- Target card `ui_target_window_attribute` (dump 699426; decompiled at 0x00731e4c, the name's address in the dump is not given). Height 93.0 (0x42ba0000). Top y = `get_gui_position_y(0x1f)` (437) minus 93 times the scale at +0x6c, so y 344..437. Value line x = label width + 10.0 (0x009710a0). Width = max(name width, label + 10 + value) + 40.0 (0x0097109c, the border spacing). The `g_TargetWindowMargin` pair (0x00971058 = 0.0, 0x0097105c = 2^32) is the int-to-float unsigned correction, so it adds 0 for a width that is not negative.
+- The attribute colours: `monster_attribute_color` (0x009f2ed0) by the same index as before; the value's colour is the index's entry.
+- Player card `ChallengeMenuObject_UpdatePlayerTarget_0073220c` (dump 699599; decompiled at 0x0073220c): height 49.0 (0x42440000), top 437 - 49, width = 34.0 (0x00971074) + name width + 40.0 (0x0097106c).
+- Reticle `init_reticle` (dump 786633): notch 8.75, colour from `GetReticleColorIndex_006aba4c` over the record's 14 (type, subtype) entries. The fallback row is only for a target `CanReticleTargetBePickedUp_007a4180` flags (an item the player cannot pick up), so no enemy or ally uses it.
+- The reticle's `hitbox_radius` (+0x2c) is the target hit box's radius (create_target_reticles_for_weapon_or_tech, dump 785414: `fVar9 = pcVar8[sVar3].radius`). `CalculatePositionTowardsCamera` moves the point toward the camera by it (PositionAndRenderReticlePrimitives, dump 786069). The port passed 0.
+- `render_reticle` (dump 786013) draws every reticle object; the only skips are the flags 2 (hit box enabled) and 8, and the position mode (+0x1c: 0 is the target's hit box position, the mode the reticle is created with).
+- One reticle object is made per target of each record (`create_target_reticles_for_weapon_or_tech`, the loop over `targets`, dump 785268..785462), so the exe can show several cursors for one record. A new one is made only when the target's hit box is not yet enabled (`IsHitboxEnabled_007b9f70` == 0) and its `target_type_flags` bit 2 is clear, and not when it equals the previous lock (`some_entity_idx2`, `field3916_0x1090`).
+
+**ASSUMED (still open).**
+- The one-cursor-per-record rule: the port still shows one ally cursor (the nearest in range). The exe draws one per target that passes the hit-box gate above; what sets `IsHitboxEnabled` for a player target was not traced, so the port does not add cursors.
+- The cursor's colour row: the exe's row is the index of the record's (type, subtype) entry in its 14-entry table (`GetReticleColorIndex_006aba4c`, dump 597907; the table is at the record's +4 or +0x3c). That table's fill was not traced (the record's PMT-driven writers, dump 784764). The port keeps row 0 for the enemy and row 4 for a support target.
+- The enemy cursor's point: the exe's position is the target's hit box `position2` (GetReticlePosition, dump 786040); the port uses the root + 22 (kept).
+- The ally cursor's radius is 0 (the player's hit box radius was not located).
+- The card's text origin (10 in from the box's left), the line gap (10) and the window's scale (+0x6c = 1) are not traced.
+- The section icon: the exe's `QuickMenuUpdatePlayerInfo_00742454` (dump 712821) sets only the name, the wide-text width and the death colour; the icon's texture and colour are drawn elsewhere and were not found. The colours in `SECTION_ARGB` and the hexagon shape stay ASSUMED. The shop string table at 0x0096c6ec is not an icon colour table.
+
+**Port.**
+- `client/src/combat/targetcard.ts`: `TARGET_CARD_TOP` (344), `TARGET_CARD_VALUE_GAP` (10), `TARGET_CARD_BORDER` (40), `targetCardValueX`, `targetCardWidth`; `PLAYER_CARD_ICON_BAND` (34), `PLAYER_CARD_BORDER` (40), `playerCardWidth`.
+- `client/src/render/playerhud.ts`: `drawTargetCard` uses the box (y 344, height 93, the value at label + 10, width from `targetCardWidth`) instead of the screenshot box (369, 97). `drawAllyCard` uses the 34 band and `playerCardWidth`; its icon is centred in the band.
+- `client/src/render/combat.ts` `updateLockOn`: the enemy cursor's `radius` is `this.hitRadiusOf(best)` (the enemy's round hit box, the same radius the tech hits use).
+- `client/src/render/combatoverlay.ts`: the `setTarget` comment now says which radius is passed.
+
+**Tests.** `tests/reticle.test.ts`: section 11 (the enemy card's top, value gap, border, value x and width; the player card's band, border and width). `node tests/reticle.test.ts` ALL PASS (9 new checks). `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures. `cd client && npx tsc --noEmit -p .` clean. No Playwright (not run).
+
+**Left.** The one-cursor-per-record gate (`IsHitboxEnabled` for a player target), the colour row of each record (the table's fill), the section icon's texture, and the card's text origin and line gap.
 
 ## 2026-10-26: Player movement: the camera input gate of the keyboard ramp (0x0070a6c4)
 
