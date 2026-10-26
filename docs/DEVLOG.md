@@ -23187,3 +23187,17 @@ Not checked: the `MapObject` state table for the menu scroll (`144485`) is only 
 **Port:** a dying wolf (`playDeath`) builds `SavageDeathMotion(root yaw, killVelocity)`; `deathPoint` uses `savage.side` for the points marked `killSide` (the gensei and the red 7.5 pool at the motion's end), else the plan's `side`. `deathSteps` applies the turn and the slide after the frame's steps, while the motion runs.
 
 **Tests:** `tests/deathfx.test.ts` (new block): the side for the four cases (cross < 0, cross >= 0, zero, facing +x), the settled target for (1,1) -> -45 deg, (-1,1) -> +45 deg, (0,-1) -> +90 deg, the zero velocity keeps 0.3, the first tick's 0x300 BAMS, the slide 2 / 1.6 / 1.28 then nothing after the motion's end, and the end pool's `killSide` with the +12 fallback. `node tests/deathfx.test.ts`: all checks passed. `tests/enemyfsm.test.ts`: all checks passed. `tests/combat.test.ts` (with `NEWSERV`): 5859 checks, 0 failures. `tests/combatdepth.test.ts`: 836 checks, 0 failures. `npx tsc --noEmit -p .` (client, Node 24): clean. Not run in Chrome.
+
+## 2026-10-26: Technique visuals run in Playwright (Forest 1, 17 casts)
+
+**What ran.** `client/e2e/techvisuals.spec.ts`, rewritten to cast 17 techniques at the nearest enemy on Forest 1: Foie, Gifoie, Rafoie, Barta, Gibarta, Rabarta, Zonde, Gizonde, Razonde, Grants, Deband, Jellen, Zalure, Shifta, Resta, Anti and Megid. A fresh account is made and patched offline (`bridge/admin-chars.mjs`, the new `patch` option of `e2e/fresh-field.ts`): `charClass` 6 (FOmarl, a Force) and the 17 techniques at level 30. The spec checks that the save gave those levels before the first cast. Per cast it samples the effect objects every 20 ms in the page (`TechObjects` grants / orbs / pending, `TechEffects` bolts / rings / balls, `TechFire` objects, `FieldParticles` bursts) and checks: created (the peak is above the baseline), animated (the three JPEG frames differ), disposed (the counts are back at the baseline after the effect).
+
+**Result.** 17 of 17 casts: created, animated and disposed. Peak counts: Foie 6, Gifoie 17, Rafoie 15, Barta 13, Gibarta 16, Rabarta 16, Zonde 31, Gizonde 20, Razonde 38, Grants 19, Megid 10, Resta / Anti / Jellen / Zalure / Shifta / Deband 1 to 2 (particle bursts only). No effect object outlived its cast.
+
+**Not cast.** Reverser (needs a dead party member in range) and Ryuker (needs a telepipe). The weapon specials (Shock, Storm, Burning: `render/techlightning.ts` `shock` / `storm` / `burning`) are not in the spec.
+
+**Not checked.** The exe's look of these effects: the screenshots are one set of JPEG frames per cast, not compared with an exe capture. Razonde at 1000 ms (the caster 8 units from the enemy) shows wide horizontal yellow streaks across the screen: the bolts are 5 world units thick, and the layout offsets them in view space (`render/techlightning.ts` `TechEffects.layout`), so a close-range bolt covers most of the screen. Whether the exe draws it the same way is not decided (ASSUMED as is).
+
+**Harness notes.** The first runs failed at login while newserv was down after the disk filled; that is not a client bug. Gizonde once cast with no target in range after earlier casts had thinned the wave; the spec now reloads the wave below 3 live enemies and casts the enemy-picked techniques from 8 units (`dist` per cast).
+
+**Code.** No combat code changed: the counters found no lifecycle bug in `TechObjects` / `TechEffects` / `TechFire`.

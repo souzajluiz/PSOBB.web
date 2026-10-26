@@ -8,7 +8,7 @@ only part of them has matching C (psobb-client-source).
 ## A. Verification debt (built, never seen running in a browser)
 - [ ] Challenge mode in a real game (all stages)
 - [ ] Battle mode in a real game
-- [ ] Technique visuals (Foie, Barta, Zonde, Gizonde, Razonde, Grants, Megid, supports, specials)
+- [ ] Technique visuals (Foie, Barta, Zonde, Gizonde, Razonde, Grants, Megid, supports, specials) (partial 2026-10-26: `e2e/techvisuals.spec.ts` casts 17 techniques, all created / animated / disposed; left: the exe look of the effects (Razonde's bolts cover the screen at close range), Reverser and Ryuker, the weapon specials)
 - [ ] Episode 2 enemy FSMs on Seabed, Mines, Tower (animation lengths for groups a / d are stand-ins)
 - [ ] Ship / block change and team menus at the counter
 - [ ] Boss fixes (De Rol Le, Vol Opt, Dragon, Belra)

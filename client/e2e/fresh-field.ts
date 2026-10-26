@@ -54,7 +54,9 @@ export const MAG_ITEM = { data1: '020000000000000000000000', data2: '00000000' }
 
 // From the login to a party field (Pioneer 2, floor 0). `meseta`: fund the character first.
 // PSO_USER / PSO_PASSWORD override the account (then it is not fresh: `meseta` still applies).
-export async function enterFreshField(page: Page, logs: string[], opts: { prefix: string; meseta?: number; weapon?: boolean; mag?: boolean }): Promise<{ user: string; name: string }> {
+// `patch`: an admin character patch (bridge/admin-chars.mjs) applied to slot 0 while offline, before the
+// login that enters the field (e.g. { charClass: 6, techniques: { Foie: 30 } }).
+export async function enterFreshField(page: Page, logs: string[], opts: { prefix: string; meseta?: number; weapon?: boolean; mag?: boolean; patch?: Record<string, unknown> }): Promise<{ user: string; name: string }> {
   const user = process.env.PSO_USER ?? freshUser(opts.prefix);
   const password = process.env.PSO_PASSWORD ?? user;
   const name = `ps${Date.now() % 100000}`;
@@ -66,7 +68,8 @@ export async function enterFreshField(page: Page, logs: string[], opts: { prefix
     await makeCharacter(page);
     await expect.poll(() => slotFilled(page, 0), { timeout: 30_000 }).toBe(true);
   }
-  if (opts.meseta !== undefined || opts.mag) {
+  if (opts.meseta !== undefined || opts.mag || opts.patch) {
+    if (opts.patch) await patchOffline(page, user, opts.patch);
     if (opts.mag) await patchOffline(page, user, { inventory: { add: [MAG_ITEM] } });
     if (opts.meseta !== undefined) await fundOffline(page, user, opts.meseta, opts.weapon);
     await logIn(page, user, password);

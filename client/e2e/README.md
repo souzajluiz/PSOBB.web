@@ -57,3 +57,4 @@ installed Google Chrome (`channel: 'chrome'`), so no browser download is needed.
   floor on a search ring (6 * r, r 1..6) from the player, on the ground (+6), with no wall between
   the eye and the spot (`collision.segmentHit`, mask -1); it left the bag; a held W (300 ms) moves
   the player again.
+- `techvisuals.spec.ts`: a fresh Force (`charClass` 6) patched offline with 17 techniques at level 30 (`fresh-field.ts` `patch`), in Forest 1 with a wave. Each of the 17 casts (Foie family, Zonde family, Grants, Megid, the supports Deband / Jellen / Zalure / Shifta / Resta / Anti) is checked for an effect object created, the frames changing (three JPEGs under `test-results/`), and the counters back at the baseline after the effect. Reverser and Ryuker are not cast; the weapon specials are not covered.
