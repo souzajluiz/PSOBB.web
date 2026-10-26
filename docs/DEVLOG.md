@@ -1,5 +1,30 @@
 # Devlog
 
+## 2026-10-26: Counter Change SHIP / BLOCK and Team menus: e2e
+
+**What changed:** `client/e2e/lobby-counter-menus.spec.ts` drives the lobby counter's
+Transport and Team menus against local newserv (one test, passes in about 2.6 min).
+It covers Transport > Change BLOCK (the ship list comes back, Enter on Go to lobby
+rebuilds the lobby object), Team with no team (Create Team enabled, Ranking / Master
+Menu / Leave greyed), Create Team (name, Registration, Yes; the 12EA makes the
+membership master), the master's greyed rows (Create and Leave), the Master Menu rows
+(Master Transfer and the rewards row greyed), and Dissolve Team (the local membership
+clears).
+
+**Dissolve and the membership:** `TeamClient.disband()` does not clear the membership
+itself, unlike `removeMember` for the own card. The run shows it is not needed: newserv's
+10EA handler sends the master a 12EA after the disband (`ReceiveCommands.cc` 0x10EA ->
+`send_team_metadata_change_notifications`), its membership is zeroed because the team is
+already off the indexes, and `parseMembershipUpdate` accepts it (the zeroed fields are
+`inTeam` false). No client change.
+
+**Not covered:** Leave Team as a non-master member (needs a second member in the
+team; the spec runs on one account), and Member Expulsion (same reason).
+
+**Ship select timing:** the first Enter on the ship list after Change BLOCK can land
+before the screen takes input. The spec waits a second and repeats Enter while the
+lobby object is still the old one (a busy screen ignores it).
+
 ## 2026-10-25: Quest editor: copy, cut and paste of entities between floors and quests
 
 **Question.** ROADMAP "Quest editor left to do" lists copy / paste between floors and quests first. The editor had Ctrl+D (duplicate on the same floor) but no clipboard.
