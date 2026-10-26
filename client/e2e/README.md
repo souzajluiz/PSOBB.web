@@ -93,3 +93,4 @@ Quest editor and admin panel (no game server needed):
   number in another category, Test in game answered by the panel (a toast), and Open in editor again
   for the published quest. The editor is built into the temp folder unless `EDITOR_DIST` names a dist
   built with `vite build --outDir <dir>` (about 40 s; set it to save the build).
+- `techvisuals.spec.ts`: a fresh Force (`charClass` 6) patched offline with 17 techniques at level 30 (`fresh-field.ts` `patch`), in Forest 1 with a wave. Each of the 17 casts (Foie family, Zonde family, Grants, Megid, the supports Deband / Jellen / Zalure / Shifta / Resta / Anti) is checked for an effect object created, the frames changing (three JPEGs under `test-results/`), and the counters back at the baseline after the effect. Reverser and Ryuker are not cast; the weapon specials are not covered.

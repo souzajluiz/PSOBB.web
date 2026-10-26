@@ -23297,3 +23297,16 @@ Not checked: the `MapObject` state table for the menu scroll (`144485`) is only 
 - Publish to a deployed host and login on production: not done (no production access here).
 - Category-less quests: a quest whose category id is not in the server's categories (the Quests tab's "Category 18/19" cards) has no directory, so no Open in editor button. Only seen with the local config; noted, not changed.
 - Quest numbers are not checked for duplicates across categories beyond the basename rule (newserv's `quests_by_number` silently keeps the first).
+## 2026-10-26: Technique visuals run in Playwright (Forest 1, 17 casts)
+
+**What ran.** `client/e2e/techvisuals.spec.ts`, rewritten to cast 17 techniques at the nearest enemy on Forest 1: Foie, Gifoie, Rafoie, Barta, Gibarta, Rabarta, Zonde, Gizonde, Razonde, Grants, Deband, Jellen, Zalure, Shifta, Resta, Anti and Megid. A fresh account is made and patched offline (`bridge/admin-chars.mjs`, the new `patch` option of `e2e/fresh-field.ts`): `charClass` 6 (FOmarl, a Force) and the 17 techniques at level 30. The spec checks that the save gave those levels before the first cast. Per cast it samples the effect objects every 20 ms in the page (`TechObjects` grants / orbs / pending, `TechEffects` bolts / rings / balls, `TechFire` objects, `FieldParticles` bursts) and checks: created (the peak is above the baseline), animated (the three JPEG frames differ), disposed (the counts are back at the baseline after the effect).
+
+**Result.** 17 of 17 casts: created, animated and disposed. Peak counts: Foie 6, Gifoie 17, Rafoie 15, Barta 13, Gibarta 16, Rabarta 16, Zonde 31, Gizonde 20, Razonde 38, Grants 19, Megid 10, Resta / Anti / Jellen / Zalure / Shifta / Deband 1 to 2 (particle bursts only). No effect object outlived its cast.
+
+**Not cast.** Reverser (needs a dead party member in range) and Ryuker (needs a telepipe). The weapon specials (Shock, Storm, Burning: `render/techlightning.ts` `shock` / `storm` / `burning`) are not in the spec.
+
+**Not checked.** The exe's look of these effects: the screenshots are one set of JPEG frames per cast, not compared with an exe capture. Razonde at 1000 ms (the caster 8 units from the enemy) shows wide horizontal yellow streaks across the screen: the bolts are 5 world units thick, and the layout offsets them in view space (`render/techlightning.ts` `TechEffects.layout`), so a close-range bolt covers most of the screen. Whether the exe draws it the same way is not decided (ASSUMED as is).
+
+**Harness notes.** The first runs failed at login while newserv was down after the disk filled; that is not a client bug. Gizonde once cast with no target in range after earlier casts had thinned the wave; the spec now reloads the wave below 3 live enemies and casts the enemy-picked techniques from 8 units (`dist` per cast).
+
+**Code.** No combat code changed: the counters found no lifecycle bug in `TechObjects` / `TechEffects` / `TechFire`.
