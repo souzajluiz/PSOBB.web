@@ -19,9 +19,11 @@
 //   Barta   AntiTechEntity_Constructor_006dd7e4 (heading) / 006dddac (a point);
 //   Gibarta unknown_create_sorc_tech 0x006e38e0 (heading) / 0x006e4058 (a point);
 //   Rabarta CreateRabartaEntity_006ec2d0 (the caster) / RabartaInit_006ec8ec (a point).
-// The cast point is the weapon model node's position (unknown_get_tech_cast_location
-// 0x0068c2f4: GetWeaponModelData +0x10 into the player's vtable +0x10c);
-// the web client has no weapon node: ASSUMED a point WEAPON_HEIGHT above the feet.
+// The cast point is a body node's position (unknown_get_tech_cast_location 0x0068c2f4:
+// GetWeaponModelData +0x10 into the player's vtable +0x10c; the node is 35 or 48 for the
+// weapons, TECH_CAST_NODE_BY_GROUP, not a height). techCastPoint takes it from the caster's
+// skeleton when the caster has one (the local player); without one the point is WEAPON_HEIGHT
+// above the feet (ASSUMED).
 //
 // Every object is a 30 Hz update. The shared base (TechniqueEntity_Constructor
 // _006efe50 / EffectEntityBaseConstructor_006f0138, EffectEntity_Constructor
@@ -37,6 +39,7 @@ import { enemyBoxTable } from '../formats/enemyboxes.ts';
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import type { AiTarget } from './enemyai.ts';
+import type { Point, WeaponOriginProvider } from './weaponorigin.ts';
 import { TECH, techData, techGroup, techPower } from './techniques.ts';
 
 const TAU = Math.PI * 2;
@@ -106,6 +109,38 @@ const KIND_OF: Record<number, FireKind> = {
 // which the port keeps at WEAPON_HEIGHT above the feet (ASSUMED, see WEAPON_HEIGHT).
 export function castOriginY(tech: number, feetY: number): number {
   return tech === TECH.barta ? feetY : feetY + WEAPON_HEIGHT;
+}
+
+// The body node unknown_get_tech_cast_location reads for each weapon group (0..18). The exe:
+// GetWeaponModelData (dump 599197) = table[k] + g * 0x14 with g = GetPlayerWeaponGroup (the
+// animation object's +4, 0 when >= 0x13) and k = g when g < 6 else 0; the table is the 6
+// pointers at 0x009cc4a4 + 4k (0x009677e0, 0x00967960, 0x00967ae0, 0x00967c60, 0x00967960,
+// 0x00967960). The record's int at +0x10 is the node (exedata read of the 19 records, all
+// values read, 2026-10-25): 48 (the hand) for groups 0, 3, 13, 15; 8 for group 8; 35 for the rest.
+// The group is the port's weaponClass (the ItemPMT weapon kind), ASSUMED to be the exe's +4 value.
+export const TECH_CAST_NODE_BY_GROUP: readonly number[] = [48, 35, 35, 48, 35, 35, 35, 35, 8, 35, 35, 35, 35, 48, 35, 48, 35, 35, 35];
+
+// The cast node of a weapon group (out of range: group 0, the exe's clamp).
+export function techCastNode(group: number): number {
+  return TECH_CAST_NODE_BY_GROUP[group >= 0 && group < TECH_CAST_NODE_BY_GROUP.length ? group : 0];
+}
+
+// unknown_cast_tech's start point for a technique object (Barta: the feet, `&caster->x`; the
+// others: the cast point of unknown_get_tech_cast_location). `origin` is the caster's skeleton
+// provider (combat/weaponorigin.ts): the body node techCastNode(group) when it answers. Without
+// one, the feet plus WEAPON_HEIGHT (ASSUMED, castOriginY). Writes and returns `out`.
+export function techCastPoint(tech: number, feet: Point, group: number, origin: WeaponOriginProvider | undefined, out: Point): Point {
+  if (tech === TECH.barta) {
+    out.x = feet.x;
+    out.y = feet.y;
+    out.z = feet.z;
+    return out;
+  }
+  if (origin && origin({ part: 'body', node: techCastNode(group) }, out)) return out;
+  out.x = feet.x;
+  out.y = castOriginY(tech, feet.y);
+  out.z = feet.z;
+  return out;
 }
 
 export function isFireTech(tech: number): boolean {

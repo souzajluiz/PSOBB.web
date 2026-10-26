@@ -153,7 +153,7 @@ import {
 import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MECHGUN_KIND, MUZZLE_PARTICLE, movedTowards, pelletAllowed, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, RIFLE_HOOK_MUZZLE_ATTACH, rifleHookMuzzle, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, slotSetType, slotVariant, VOLOPT_SET_TYPE } from '../formats/enemyboxes.ts';
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
-import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, type Candidate, type TechTarget } from '../combat/techfire.ts';
+import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, techCastPoint, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { gunBulletStart, SECOND_START_BODY_NODE, weaponPositionY, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, SUPPORT_ORIENT, SUPPORT_PARTICLE, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { STATUS_ICON_BLAST_FIRST } from '../classic/hud.ts';
@@ -8184,7 +8184,7 @@ export class CombatView {
           const from = view.playerPositions().get(npc.clientId);
           if (!from) return;
           const first = targetIds.map((id) => this.enemies.get(id & 0xfff)).find((e) => !!e && !e.dead && this.enemies.has(e.index));
-          this.spawnFire(tech, level, from, me.angle, listed, first, (e) => this.techHitEnemy(tech, level, mst, npc.charClass, e));
+          this.spawnFire(tech, level, from, me.angle, listed, first, null, (e) => this.techHitEnemy(tech, level, mst, npc.charClass, e));
         },
       });
     }
@@ -8326,11 +8326,12 @@ export class CombatView {
   }
 
   // unknown_cast_tech for the Foie / Barta families: the object is made at the cast
-  // point, aimed at the first 6x47 target's hit box when there is one (its position
-  // now), straight ahead when there is none; a listed target that is gone makes
+  // point `cast` (techCastPoint; null: feet + WEAPON_HEIGHT, ASSUMED, for the NPC and the
+  // other players' copies), aimed at the first 6x47 target's hit box when there is one (its
+  // position now), straight ahead when there is none; a listed target that is gone makes
   // nothing. Rafoie needs the target and follows it. `onHit` null: another
   // player's copy (its damage comes with their 6x0A).
-  private spawnFire(tech: number, level: number, from: THREE.Vector3, heading: number, listed: boolean, first: EnemyRuntime | undefined, onHit: ((e: EnemyRuntime) => void) | null): boolean {
+  private spawnFire(tech: number, level: number, from: THREE.Vector3, heading: number, listed: boolean, first: EnemyRuntime | undefined, cast: { x: number; y: number; z: number } | null, onHit: ((e: EnemyRuntime) => void) | null): boolean {
     const name = TECH_NAMES[tech];
     // unknown_cast_tech makes no attack technique object where is_current_map_safe
     // is 0 (the cities: Pioneer 2).
@@ -8343,13 +8344,14 @@ export class CombatView {
     const tp = aimed && first ? first.instance.root.position : null;
     const aim = tp && first ? { x: tp.x, y: tp.y + this.aimHeightOf(first), z: tp.z } : null;
     const rafoie = tech === TECH.rafoie;
+    const org = cast ?? { x: from.x, y: castOriginY(tech, from.y), z: from.z };
     const obj = makeFireObject({
       tech,
       level,
-      x: rafoie && aim ? aim.x : from.x,
-      y: rafoie && aim ? aim.y : castOriginY(tech, from.y),
-      z: rafoie && aim ? aim.z : from.z,
-      heading: aim && !rafoie ? Math.atan2(aim.x - from.x, aim.z - from.z) : heading,
+      x: rafoie && aim ? aim.x : org.x,
+      y: rafoie && aim ? aim.y : org.y,
+      z: rafoie && aim ? aim.z : org.z,
+      heading: aim && !rafoie ? Math.atan2(aim.x - org.x, aim.z - org.z) : heading,
       aim: rafoie ? null : aim,
       targetId: rafoie && first ? first.index : null,
       ground: this.opts.ground ?? null,
@@ -8575,7 +8577,8 @@ export class CombatView {
     if (isFireTech(c.tech)) {
       const first = c.targets.find((e) => !e.dead && this.enemies.has(e.index));
       const listed = c.targets.length > 0;
-      if (this.spawnFire(c.tech, c.level, from, first ? Math.atan2(first.instance.root.position.x - from.x, first.instance.root.position.z - from.z) : me.angle, listed, first, (e) => this.techHitEnemy(c.tech, c.level, mst, me.charClass, e)))
+      const cast = techCastPoint(c.tech, from, this.weaponClass(), this.weaponOriginOfSelf(me.clientId), { x: 0, y: 0, z: 0 });
+      if (this.spawnFire(c.tech, c.level, from, first ? Math.atan2(first.instance.root.position.x - from.x, first.instance.root.position.z - from.z) : me.angle, listed, first, cast, (e) => this.techHitEnemy(c.tech, c.level, mst, me.charClass, e)))
         this.opts.log(`${name} Lv${c.level + 1}: the object flies${first ? ` at E-${first.index.toString(16)}` : ' straight ahead'}`);
       return;
     }
@@ -8857,7 +8860,7 @@ export class CombatView {
     const level = remoteTechLevel(sentLevel, this.techOverride.get(clientId) ?? 0);
     const ids = cast.targets.filter((id) => id >= 0x1000).map((id) => id - 0x1000);
     const first = ids.map((id) => this.enemies.get(id)).find((e) => e && !e.dead);
-    this.spawnFire(tech, level, from, p.angle, ids.length > 0, first, null);
+    this.spawnFire(tech, level, from, p.angle, ids.length > 0, first, null, null);
   }
 
   // Another player's Resta: the green "HP+n" over every healed player but this

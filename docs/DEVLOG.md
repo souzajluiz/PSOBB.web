@@ -25,6 +25,31 @@
 - The consumer of +0xdc (the record lookup), so what the two BSS tables hold is not decoded.
 
 **Checks.** `node tests/emotes.test.ts` all checks passed. `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures. `node tests/motions.test.ts` OK, `node tests/players.test.ts` ALL PASS. `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). Not run in Chrome or with two clients.
+## 2026-10-25: Player damage left: the technique cast point is the weapon's body node
+
+**Question.** ROADMAP "Player damage left" listed the technique cast point as WEAPON_HEIGHT 20 above the feet, with `unknown_get_tech_cast_location` unresolved. Resolve the node, the weapon group and the record table from the exe, and port the cast point.
+
+**PROVEN (objdump of PsoBB.exe, re-read by hand; `tools/exedata.py read` for the data; the Ghidra dump for names).**
+- The function is at **0x0068c358**, not 0x0068c2f4 as the ROADMAP had it (0x68c2f4 is mid-instruction). Its body: `push ebx; mov ebx, ecx; push ebx; call 0x006ac778` (GetWeaponModelData), then `push [esp+8]` (the output vector), `push [eax+0x10]` (the record's int), `mov edx,[ebx]; mov ecx,ebx; call [edx+0x10c]`, `ret 4`. The name suffix in the dump (`SinowberillChallengePlayer_ProcessTechCastValidation_0068c378`) is the next function, which confirms the start.
+- GetWeaponModelData 0x006ac778 (objdump 0x6ac778..0x6ac79e): the first call (0x687670) gives the group g (GetPlayerWeaponGroup, `movsx edx, si` after `esi = eax`), the second (0x687660) gives the table index k (PlayerGetClampedWeaponGroupId). Then `edx = g * 20` (`lea edx,[edx+4*edx]; add edx,edx; add edx,edx`) and `edx += [4*k + 0x9cc4a4]`. So the record is `T[k] + 0x14 * g`, `k = g < 6 ? g : 0`, `g = (anim+4) < 0x13 ? anim+4 : 0` (ClampWeaponGroupIdToFive 0x006a7b64 and GetClampedWeaponGroupIdFromStruct 0x006a7b80 were read by objdump: `cmp 6 / jae -> 0`, `cmp 0x13 / jae -> 0`).
+- The table `T[0..5]` = 0x009677e0, 0x00967960, 0x00967ae0, 0x00967c60, 0x00967960, 0x00967960 (`exedata read 009cc4a4 u 6`).
+- The record's int at +0x10, all 19 groups (`exedata read`): node **48** (0x30, the hand) for groups 0, 3, 13, 15; **8** for group 8; **35** (0x23) for the other 14 groups (1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 14, 16, 17, 18).
+- The body getter at vtable +0x10c is the same one the gun's attach -1 / -2 uses (weaponorigin.ts, field67_0x10c), so the cast point is the world point of that body node.
+- Barta is not at the cast point: it is `CreateAntiTechEntity` with `&caster->x` (the feet), as before.
+- The bloodstain offset (player +0xe3c): `LoadPlayerEntityBattleParams_006960e4` (dump 577511, 0x006960e4) writes `+0xe3c = param_2[8]` and then restores the old value (dump 577520 / 577529 / 577534), so the battle load never sets it. The earlier "no writer" is now "the only write is undone by the load". Its value is whatever the player allocation leaves (not traced), so it stays ASSUMED 0.
+
+**ASSUMED.**
+- The group the port uses is the port's `weaponClass` (ItemPMT weapon kind, `render/combat.ts` `weaponClass()`). The exe's group is the animation object's +4, written by a setter (`ClampAndSetWeaponGroup_006a777c`, vtable +0x12c) whose caller is not traced. So the group, and therefore the node, is ASSUMED to match.
+- Other casters (the NPC head's Foie, another player's copy through `remoteFire`) have no skeleton and no group in the port, so they keep the feet + WEAPON_HEIGHT (ASSUMED).
+- `WEAPON_HEIGHT` stays the fallback for a caster without a skeleton, and for the gun fallback (`combat/weaponorigin.ts`).
+
+**Port.**
+- `combat/techfire.ts`: `TECH_CAST_NODE_BY_GROUP` (the 19 nodes above), `techCastNode(group)` (out of range: group 0, the exe's clamp), `techCastPoint(tech, feet, group, origin, out)`: Barta the feet; the others the body node through the caster's skeleton provider, else `castOriginY` (feet + WEAPON_HEIGHT, ASSUMED).
+- `render/combat.ts`: `spawnFire` takes the cast point (`cast`, null = the old fallback). The local caster's release (`releaseTechnique`) uses `techCastPoint` with `weaponClass()` and the player's skeleton (`weaponOriginOfSelf`). The Foie's object and its directed heading start from that point (the x / z too, not only the y). The NPC head's cast and the remote copy keep the fallback (null).
+
+**Tests.** `tests/techfire.test.ts`: the 19 record addresses from the table formula and their nodes (the values read from the exe), the out-of-range clamp, the provider asked for body node `techCastNode(group)`, Barta never asks, a refused provider and no provider fall back to feet + WEAPON_HEIGHT. `node tests/techfire.test.ts`, `tests/combat.test.ts` (5860 checks), `tests/weaponorigin.test.ts`, `tests/techlightning.test.ts`, `tests/techniques.test.ts` pass with Node 24 and `NEWSERV`. `cd client && npx tsc --noEmit -p .` exit 0. Not run in Chrome, no Playwright.
+
+**Still open (ROADMAP "Player damage left").** The weapon group setter's caller (the +4 writer), the bloodstain's initial value, PLAYER_AIM_HEIGHT 10 (the enemy shots and `techlightning.ts` PLAYER_POINT), the NPC head's and remote copies' cast point, and the Gibbon's Megid aim (`field_0x39c`).
 
 ## 2026-10-26: Player movement: the camera input gate of the keyboard ramp (0x0070a6c4)
 
