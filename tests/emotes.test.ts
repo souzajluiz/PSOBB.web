@@ -17,6 +17,8 @@ import {
   EMOTE_SLOTS,
   EmoteQueue,
   emotePayload,
+  emoteInterruptSends,
+  emoteMotionTable,
   emoteRecord,
   emoteSlot,
   parseEmoteKeys,
@@ -185,6 +187,26 @@ eq(chatSendValue('{f1}{f2}ab'), 0, 'chat value: two tokens: 10 - 8 - 2 = 0 (not 
   const body = stopBody({ x: 1, y: 2, z: 3 }, 0, 4, { guard: true, room: 2 });
   const sdv = new DataView(body.buffer);
   eq([body.length, sdv.getUint16(0, true), sdv.getInt16(4, true), sdv.getInt16(6, true), sdv.getFloat32(8, true), sdv.getFloat32(16, true)], [0x14, 1, 4, 2, 1, 3], 'stand-up 6x3E body: guard, floor, room, x, z');
+}
+
+// The motion table of +0xdc (0x00691b30, objdump-checked): bodies 1, 2, 4, 5 take
+// 0x00a945a0; 0, 3, and 6 and up (clamped to 0) take 0x00a943e0. The sender's
+// option flag is not an input (the receiver's own body picks the table).
+{
+  const expect: Record<number, 'a943e0' | 'a945a0'> = { 0: 'a943e0', 1: 'a945a0', 2: 'a945a0', 3: 'a943e0', 4: 'a945a0', 5: 'a945a0', 6: 'a943e0', 7: 'a943e0', 255: 'a943e0' };
+  for (const b of Object.keys(expect)) {
+    eq(emoteMotionTable(Number(b)), expect[Number(b)], `motion table: body ${b}`);
+  }
+}
+
+// Step 3 of the emote state (0x0069c7bc): the 6x3F every tick while confused and
+// not under the 0x20000000 flag. The option flag (0x80000) is not an input.
+{
+  eq(emoteInterruptSends(0x10, 0), true, 'emote step 3: confused sends the 6x3F');
+  eq(emoteInterruptSends(0x00, 0), false, 'emote step 3: not confused, no send');
+  eq(emoteInterruptSends(0x10, 0x20000000), false, 'emote step 3: flag 0x20000000 skips the send');
+  eq(emoteInterruptSends(0x1f, 0x10000), true, 'emote step 3: other status bits do not hide the confusion bit');
+  eq(emoteInterruptSends(0x20, 0), false, 'emote step 3: frozen (0x20) is not confusion');
 }
 
 if (failures) {

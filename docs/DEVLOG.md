@@ -1,5 +1,31 @@
 # Devlog
 
+## 2026-10-25: Emotes: the motion table of +0xdc (opposite gender has no sender input), the emote's step 3 (confused 6x3F), the lock
+
+**Question.** The ROADMAP Emotes line left open: the opposite-gender motion, the emote's end, the step-3 6x3F (bit 0x10 of +0xb0), the palette route to the sit, the lock rules, and the sitter's state after the stand-up.
+
+**PROVEN (objdump of PsoBB.exe, read per instruction; dump names checked against the bytes).**
+- `HandlePlayerStatusCheckAndUpdate_00691b30` (0x00691b30, dump 573077; the name is wrong, it picks +0xdc). `a = vtable+0x24(set) ? 1 : 0`, then `+0xdc = getter(a)`. The flag `unknown_flags_2 & 0x8000000` only triggers this call (the emote's per-tick dispatcher, the 0x8000000 receive, the sit).
+- vtable +0x24 = 0x006a74e0: `!helper(clamp6(set+4))`. clamp6 (0x006a7b64) is the value when below 6, else 0. Helper 0x006a7508 is 1 for 1, 2, 4, 5 and 0 otherwise.
+- Getter 0x006a7794 (arg a): `helper(a) ? 0x00a943e0 : 0x00a945a0`.
+- So the table is `0x00a945a0` for bodies 1, 2, 4, 5 and `0x00a943e0` for 0, 3, and 6 and up. Correction: DEVLOG 2026-10-23 said the predicate is true for 1, 2, 4, 5; it is the opposite (the getter is called with 1 for the bodies outside that set).
+- The sender's option flag (dword bit 0x10000 -> `+0x33c |= 0x8000000`) is not an input of this table. The receiver's own body picks it. So the "opposite gender" bit has no effect in the traced code, and the port's "flag read, not used" is the exe's behaviour.
+- Emote state 0x17, step 2 (`handle_input_state_emote` case 2, dump 582309): it zeroes `g_MovementSpeed_ForwardsBackwards` / `movement_speed_left_right`, fills them from `get_input_movement_speed` (when `field_0x634` is set and not `movement_disabled`), and returns. The globals are read only by the move-start handlers (581558..581718, the idle / move states) and the sit's step 2 (581992..582130, the 0xAF / 0xB0 sends). Nothing reads them in state 0x17. So a movement key does not move the emote's player and sends nothing. The lock is the exe's behaviour for the local player.
+- Emote step 3 (`HandleEmoteAction0x3fCheck_0069c7bc`, 582388): returns when `unknown_flags_2 & 0x20000000`, else `dispatch_action_0x3f` when `field_0xb0 & 0x10`. `+0xb0` is `character_flags` (the struct's type at dump 76268), and 0x10 is `confused` (enum 70177). `dispatch_action_0x3f_` (583247) has no gate of its own, so a confused player's emote sends 6x3F on every tick the interrupt runs (the unknown_handle_movement_inputs step 3 runs each tick unless flags 0x30 are set).
+
+**Port.**
+- `client/src/formats/emotes.ts`: `emoteMotionTable(body)` (the table choice, the sender's flag not an input), `emoteInterruptSends(characterFlags, unknownFlags2)` (the step-3 test, pure).
+- `tests/emotes.test.ts`: the table for bodies 0..7 and 255, the step-3 cases (confused, not confused, the 0x20000000 skip, other bits, frozen).
+- Not wired: the lobby's players have no confusion (the lobby has no status), so `emoteTick` does not call `emoteInterruptSends`. The field's status (`combat/status.ts`, 0x10 = confusion in the slot word) is not connected to the emote here.
+
+**Still open.**
+- The emote's end. State 0x17 has no exit in its own per-tick code (step 2 reads input and returns; step 3 sends only the 6x3F; the dispatcher handles the step-6 end only when another state takes over). The exits are the other states' transitions (hits, attacks, dead, NPC dialog), which the emote's per-tick path does not call. The port keeps its motion-end rule (ASSUMED).
+- The palette-slot exit of the sit (`PlayerHasPaletteSlotEquipped_006a7c24`), not ported (the port's action palette has no sit type).
+- The sitter's state after the stand-up (ASSUMED as before).
+- The consumer of +0xdc (the record lookup), so what the two BSS tables hold is not decoded.
+
+**Checks.** `node tests/emotes.test.ts` all checks passed. `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures. `node tests/motions.test.ts` OK, `node tests/players.test.ts` ALL PASS. `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). Not run in Chrome or with two clients.
+
 ## 2026-10-26: Player movement: the camera input gate of the keyboard ramp (0x0070a6c4)
 
 **Question.** The ROADMAP movement line left the camera gate open: `get_input_movement_speed` (0x0070a60c) was ported with the gate "camera_input_enabled ASSUMED on". Decode the gate from objdump and port it.
