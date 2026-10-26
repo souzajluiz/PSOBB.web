@@ -1337,7 +1337,11 @@ export class CombatView {
               return 30;
             }
           };
-          ai = new MerissaAi({ ...at, variant: subtype & 1, movement, motionFrames, rng: () => this.rng() });
+          // The map ray of the path tests (EnemyCheckLineOfSight_005b5eb4 and the B branch's own ray):
+          // from the Merissa to the aim point at height 10, mask -1; clear when nothing is hit.
+          const wallHit = this.opts.wallHit;
+          const clear = wallHit ? (ax: number, az: number, bx: number, bz: number) => !wallHit({ x: ax, y: 10, z: az }, { x: bx, y: 10, z: bz }, -1) : undefined;
+          ai = new MerissaAi({ ...at, variant: subtype & 1, movement, motionFrames, clear, rng: () => this.rng() });
         }
         else if (className === 'TObjEneMorfos') {
           const mor = new MorfosAi({ ...at, params: setParams, movement, attack, difficulty, radius, phase: head.index, rng: () => this.rng() });
@@ -2103,7 +2107,7 @@ export class CombatView {
       if (!p) continue;
       if (id === this.game.selfId && this.damage.dead) continue;
       const attacking = id === this.game.selfId ? !!this.attack?.active : this.attacking.has(id);
-      out.push({ clientId: id, x: pos.x, y: pos.y, z: pos.z, charClass: p.charClass, dead: false, angle: id === this.game.selfId ? (this.game.self?.angle ?? p.angle) : p.angle, attacking });
+      out.push({ clientId: id, x: pos.x, y: pos.y, z: pos.z, charClass: p.charClass, dead: false, angle: id === this.game.selfId ? (this.game.self?.angle ?? p.angle) : p.angle, attacking, frozen: id === this.game.selfId && this.status.has(STATUS.freeze) });
     }
     return out;
   }

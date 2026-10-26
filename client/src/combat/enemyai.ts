@@ -363,6 +363,9 @@ export interface AiTarget {
   // The player is in an attack action (player +0x328 & 0xE0; the Delsaber's
   // guard check).
   attacking?: boolean;
+  // The player is frozen (entity +0x30 flag 0x20, status.ts: the freeze slot). Merissa's A stab
+  // takes a frozen target without the roll (0x005b5977). Remote players: not known, false (ASSUMED).
+  frozen?: boolean;
 }
 
 // A weapon special carried by an attack (Ill Gill's scythe, IllgillHandleCombatState_0052fb78):

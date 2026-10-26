@@ -145,7 +145,7 @@ const movement = (fparam4: number, turn: number, nearDeg: number): EnemyMovement
 const tgt = (x: number, z: number, angle = 0, clientId = 1): AiTarget => ({ clientId, x, z, charClass: 0, dead: false, angle });
 // The facing that points the target at the Merissa at (mx, mz): the bearing from the target.
 const facing = (tx: number, tz: number, mx = 0, mz = 0): number => Math.atan2(mx - tx, mz - tz);
-const brain = (opts: { rng?: () => number; angle?: number; mv?: EnemyMovementData | null; frames?: number } = {}) =>
+const brain = (opts: { rng?: () => number; angle?: number; mv?: EnemyMovementData | null; frames?: number; clear?: () => boolean } = {}) =>
   new MerissaAi({
     x: 0,
     z: 0,
@@ -154,6 +154,7 @@ const brain = (opts: { rng?: () => number; angle?: number; mv?: EnemyMovementDat
     variant: 0,
     rng: opts.rng ?? (() => 0.5),
     motionFrames: () => opts.frames ?? 30,
+    clear: opts.clear,
   });
 const toIdle = (m: MerissaAi) => {
   for (let i = 0; i < 40 && m.state === 'appear'; i++) m.tick([]);
@@ -393,6 +394,97 @@ eq(brain().deathMotion.index, MERISSA_SLOTS[8].index, 'no attacker: death motion
   }
   eq(moved, 19, 'the lunge steps on the 19 frames 14 < elapsed < 34');
   check(dist({ x: 0, z: z0 }, { x: m.x, z: m.z }) > 30, 'the lunge closes most of the 30 units');
+}
+
+// Path tests (EnemyCheckLineOfSight_005b5eb4, the map ray at height 10): a blocked N lunge falls
+// through to the A stab (no lunge); a blocked B ray ends the pick (no attack, no C).
+{
+  const m = brain({ mv: movement(2, 10, 45), frames: 60, clear: () => false });
+  toIdle(m);
+  const t = tgt(0, 30, facing(0, 30));
+  m.tick([t]);
+  for (let i = 0; i < 6 && m.state === 'chase'; i++) m.tick([t]);
+  check(m.state !== 'lunge', 'a blocked N ray does not lunge');
+}
+{
+  const blocked = new MerissaAi({ x: 0, z: 0, angle: 0, movement: movement(2, 10, 0), variant: 0, rng: () => 0.1, motionFrames: () => 60, clear: () => false });
+  toIdle(blocked);
+  const t = tgt(0, 50, facing(0, 50));
+  blocked.tick([t]);
+  for (let i = 0; i < 6; i++) blocked.tick([t]);
+  check(blocked.state !== 'attack', 'a blocked B ray ends the pick (no attack)');
+}
+{
+  const open = new MerissaAi({ x: 0, z: 0, angle: 0, movement: movement(2, 10, 0), variant: 0, rng: () => 0.1, motionFrames: () => 60, clear: () => true });
+  toIdle(open);
+  const t = tgt(0, 50, facing(0, 50));
+  open.tick([t]);
+  for (let i = 0; i < 4 && open.state !== 'attack'; i++) open.tick([t]);
+  eq(open.state, 'attack', 'a clear B ray attacks');
+}
+
+// B hit window (0x005b64fc): one hit, only while 12 < elapsed < 14.
+{
+  const m = brain({ mv: movement(2, 10, 0), rng: () => 0.1, frames: 60 });
+  toIdle(m);
+  const t = tgt(0, 50, facing(0, 50));
+  m.tick([t]);
+  let hits = 0;
+  let hitAt = -1;
+  for (let i = 0; i < 80; i++) {
+    const before = m.elapsed;
+    const f = m.tick([t]);
+    if (f.hit) {
+      hits++;
+      hitAt = before;
+    }
+  }
+  eq(hits, 1, 'the B stab hits once');
+  check(hitAt > 12 - 2 && hitAt <= 14, 'the B hit lands near the 12..14 gate');
+}
+
+// Frozen target: the A stab takes it without the roll (rng 0.1 would be the freeze), speed 2.
+{
+  const m = brain({ mv: movement(2, 10, 0), rng: () => 0.1, frames: 60 });
+  toIdle(m);
+  const t = { ...tgt(0, 30, facing(0, 30)), frozen: true };
+  m.tick([t]);
+  for (let i = 0; i < 4 && m.state !== 'attack'; i++) m.tick([t]);
+  eq(m.state, 'attack', 'a frozen target is stabbed');
+  eq(m.motion?.speed, 2, 'a frozen target gets the plain stab (no freeze roll, speed 2)');
+  eq(m.flagsWord & MERISSA_FREEZE_MASK, 0, 'no freeze bit for a frozen target');
+}
+
+// Freeze stab (record 6): the first callback hits and freezes (status), then holds while the target
+// is frozen, and ends (elapsed 90) once it is free.
+{
+  const m = brain({ mv: movement(2, 10, 0), rng: () => 0.1, frames: 200 });
+  toIdle(m);
+  const t = tgt(0, 30, facing(0, 30));
+  m.tick([t]);
+  let freezes = 0;
+  let hits = 0;
+  for (let i = 0; i < 4 && m.state !== 'attack'; i++) m.tick([t]);
+  eq(m.state, 'attack', 'the freeze stab starts');
+  // The first callback (elapsed 28 crossing) freezes; the target is then frozen (status) for the hold.
+  const frozenT = { ...t, frozen: true };
+  for (let i = 0; i < 30 && freezes === 0; i++) {
+    const f0 = m.tick([t]);
+    if (f0.status && f0.status.type === 2) freezes++;
+    if (f0.hit) hits++;
+  }
+  const e0 = m.elapsed;
+  for (let i = 0; i < 5; i++) {
+    const f = m.tick([frozenT]);
+    if (f.status && f.status.type === 2) freezes++;
+    if (f.hit) hits++;
+  }
+  eq(m.elapsed, e0, 'a frozen target holds the stab (elapsed does not advance)');
+  // Free target: the hold ends, elapsed is set to 90 (then the stride is added).
+  for (let i = 0; i < 2; i++) m.tick([{ ...t, frozen: false }]);
+  check(m.elapsed >= 90, 'a free target ends the hold: elapsed set to 90');
+  eq(freezes, 1, 'the freeze lands once');
+  eq(hits, 1, 'the freeze stab hits once');
 }
 
 if (failures) {
