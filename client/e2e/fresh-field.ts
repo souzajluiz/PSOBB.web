@@ -52,13 +52,9 @@ export async function patchOffline(page: Page, user: string, patch: Record<strin
 // stats, colour 0 (data2[3]). Equip it in the field (GameItems.equip).
 export const MAG_ITEM = { data1: '020000000000000000000000', data2: '00000000' };
 
-// From the login to a party field (Pioneer 2, floor 0). `meseta`: fund the character first.
-// PSO_USER / PSO_PASSWORD override the account (then it is not fresh: `meseta` still applies).
-export async function enterFreshField(page: Page, logs: string[], opts: { prefix: string; meseta?: number; weapon?: boolean; mag?: boolean }): Promise<{ user: string; name: string }> {
-  const user = process.env.PSO_USER ?? freshUser(opts.prefix);
-  const password = process.env.PSO_PASSWORD ?? user;
-  const name = `ps${Date.now() % 100000}`;
-
+// The login and, when slot 0 is empty, the character creation: the account is on the
+// character select screen with a character in slot 0 when this returns.
+export async function ensureCharacter(page: Page, user: string, password: string): Promise<void> {
   await logIn(page, user, password);
   await expect.poll(() => peek(page, (w) => !!w.classicSelect), { timeout: 90_000 }).toBe(true);
   if (!(await slotFilled(page, 0))) {
@@ -66,6 +62,16 @@ export async function enterFreshField(page: Page, logs: string[], opts: { prefix
     await makeCharacter(page);
     await expect.poll(() => slotFilled(page, 0), { timeout: 30_000 }).toBe(true);
   }
+}
+
+// From the login to a party field (Pioneer 2, floor 0). `meseta`: fund the character first.
+// PSO_USER / PSO_PASSWORD override the account (then it is not fresh: `meseta` still applies).
+export async function enterFreshField(page: Page, logs: string[], opts: { prefix: string; meseta?: number; weapon?: boolean; mag?: boolean }): Promise<{ user: string; name: string }> {
+  const user = process.env.PSO_USER ?? freshUser(opts.prefix);
+  const password = process.env.PSO_PASSWORD ?? user;
+  const name = `ps${Date.now() % 100000}`;
+
+  await ensureCharacter(page, user, password);
   if (opts.meseta !== undefined || opts.mag) {
     if (opts.mag) await patchOffline(page, user, { inventory: { add: [MAG_ITEM] } });
     if (opts.meseta !== undefined) await fundOffline(page, user, opts.meseta, opts.weapon);

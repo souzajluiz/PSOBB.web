@@ -302,6 +302,9 @@ export class LobbyView {
   // The local player's slow and guard inputs (render/combat.ts in the field;
   // the lobby has no status effects and no target, so 0.5 / 0.75 never apply).
   legState: () => LegState = () => ({ slowed: false, target: null, confused: false });
+  // A remote player's slow (its 6x0C / 6x0D status as this client has it, render/combat.ts attach).
+  // Its guard is the 6x3E / 6x3F flag (net/lobby.ts). Both scale its legs, as the local ones.
+  remoteLegState: (clientId: number) => { slowed: boolean } = () => ({ slowed: false });
   // The room a 6x3E / 6x3F sends at a point (get_player_room_id; the field passes its own).
   private roomOf: (pos: { x: number; y: number; z: number }) => number;
 
@@ -966,6 +969,10 @@ export class LobbyView {
       const pos = m.group.position;
       const p = this.lobby.players.get(id);
       const run = p?.gait !== 'walk';
+      // The remote player's leg speed (the same rule as its own mover, playermove.ts legSpeed):
+      // the follower steps at it and the walk / run motion plays at it.
+      const remoteSlowed = this.remoteLegState(id).slowed;
+      const legScale = legSpeed(1, remoteSlowed, p?.guard ?? false);
       m.moveTicks += dt * 30;
       let ticks = Math.min(Math.floor(m.moveTicks), 30);
       m.moveTicks -= Math.floor(m.moveTicks);
@@ -984,7 +991,7 @@ export class LobbyView {
       while (ticks-- > 0) {
         m.lastX = m.follow.x;
         m.lastZ = m.follow.z;
-        if (!remoteStep(m.follow, m.target, run, !!p?.moving, m.legDir)) break;
+        if (!remoteStep(m.follow, m.target, run, !!p?.moving, m.legDir, legScale)) break;
         moved = true;
       }
       if (moved || Math.hypot(m.target.x - m.follow.x, m.target.z - m.follow.z) > 0.5) {
@@ -999,7 +1006,10 @@ export class LobbyView {
       // The pose follows the packets: a walking or running player keeps its gait while
       // the follower waits for the next packet (no idle between the legs).
       if (p?.moving || Math.hypot(m.target.x - pos.x, m.target.z - pos.z) > 0.5) {
-        this.setGait(m, run ? 'run' : 'walk');
+        const gait: Locomotion = run ? 'run' : 'walk';
+        this.setGait(m, gait);
+        // The step follows the leg speed too (0x006a2061 / 0x006a1a10), as the local player's.
+        if (!this.attacking(id) && !this.emoting(id)) m.animator?.setRate(legSpeed(LOCOMOTION_FACTOR[gait], remoteSlowed, p?.guard ?? false));
       } else {
         pos.y = m.target.y;
         // Arrived: face the angle of the last stop (6x3E / 6x3F / 6x20).

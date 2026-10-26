@@ -36,6 +36,8 @@ export interface LobbyPlayer {
   position: { x: number; y: number; z: number };
   angle: number; // radians
   moving: boolean;
+  // The guard stance (in_guard_stance) of the last 6x3E / 6x3F (+4): a walk's packets do not carry it.
+  guard: boolean;
   gait: 'walk' | 'run'; // last 6x40 (walk) or 6x42 (run)
   floor: number;
   visible?: boolean; // games: 6x22 (invisible while changing floors) / 6x23
@@ -145,6 +147,7 @@ function parseEntry(data: Uint8Array, o: number): LobbyPlayer {
     position: { x: 0, y: 0, z: 0 },
     angle: 0,
     moving: false,
+    guard: false,
     gait: 'run',
     floor: 0,
   };
@@ -422,6 +425,7 @@ export class Lobby {
             p.angle = dv.getUint16(6, true) * BAMS_TO_RAD;
             p.floor = dv.getInt16(8, true);
             p.position = { x: dv.getFloat32(12, true), y: dv.getFloat32(16, true), z: dv.getFloat32(20, true) };
+            p.guard = dv.getUint16(4, true) !== 0;
             p.moving = false;
             this.emit('moved', p);
             if (sub === 0x3e) this.emit('stopped', p);

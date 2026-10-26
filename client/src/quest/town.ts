@@ -1072,6 +1072,7 @@ export class QuestTown {
       position: pos ? { x: pos.x, y: pos.y, z: pos.z } : { ...(existing?.position ?? me?.position ?? { x: 0, y: 0, z: 0 }) },
       angle: pos ? pos.angle * DEG_TO_RAD : (existing?.angle ?? 0),
       moving: false,
+      guard: false,
       gait: 'walk',
       floor: me?.floor ?? 0,
       npcTemplate: t.index,

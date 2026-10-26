@@ -12,7 +12,7 @@ only part of them has matching C (psobb-client-source).
 - [ ] Episode 2 enemy FSMs on Seabed, Mines, Tower (animation lengths for groups a / d are stand-ins)
 - [ ] Ship / block change and team menus at the counter
 - [ ] Boss fixes (De Rol Le, Vol Opt, Dragon, Belra)
-- [ ] Movement: two-client check, slowed / guard animation tie
+- [ ] Movement: two-client check, slowed / guard animation tie (remote copy scales its leg and animation by slow / guard in code, unit test passes; `two-client-move.spec.ts` not passing yet, see DEVLOG)
 - [ ] Quest editor: open a real quest, drag, Script tab, "Test in game", publish to a deployed host
 - [ ] Admin: Quests tab live (open in editor, publish), login on production
 - [ ] Phones: soft keyboard, rotation lock, adaptive resolution (real iOS / Android)

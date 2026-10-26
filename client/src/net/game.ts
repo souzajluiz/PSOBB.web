@@ -314,6 +314,7 @@ function blankPlayer(clientId: number, guildCardNumber: number, name: string): L
     position: { x: 0, y: 0, z: 0 },
     angle: 0,
     moving: false,
+    guard: false,
     gait: 'run',
     floor: 0,
   };

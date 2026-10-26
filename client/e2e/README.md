@@ -34,6 +34,12 @@ installed Google Chrome (`channel: 'chrome'`), so no browser download is needed.
   `PSO_USER_A` / `PSO_PASSWORD_A`) creates a party and enters it; B (the test
   account) opens Join a PARTY, picks A's game and enters it; both see two
   players, then both go back to the lobby.
+- `two-client-move.spec.ts`: two fresh accounts (`freshUser`, or `PSO_USER_A` / `PSO_USER_B`,
+  password = name or `PSO_MOVE_PASSWORD`). Hitch windows of A in the lobby and in Forest 1, alone and
+  with B. Then A is slowed (status 0x11): both A's mover and B's copy of A walk and run at half the
+  leg speed (run step 0.75). Then A guards near an enemy: B's copy runs at 0.75 of the run and the
+  step is 1.125; out of range the plain run comes back. Needs newserv and the bridge; use `--trace off`
+  unless debugging. Known flake: a party create can time out waiting for the game join (64).
 - `battle-traps.spec.ts`: a Battle party (EPISODE 1, mode Battle, Normal), the Hunter's Guild's
   Battle category (b88001 first). ba_initial_floor moves the player to Temple, whose floor handler
   runs ba_start; then a trap from palette slot 2 (ArrowRight), the 6x83 (type 0, count 5), the
