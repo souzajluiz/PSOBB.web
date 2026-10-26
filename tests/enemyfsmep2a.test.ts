@@ -1,13 +1,25 @@
 // Episode 2 FSMs, part 2 (combat/enemyfsmep2a.ts): Gee (hovering spike
 // shooter), Gi Gue (barrier, spits, bomb, Jellen / Zalure, hop) and Gibbles
 // (waiting, drop-in, triple slam, guard, rage swing, leap).
-// The Episode 2 archives are not on this machine, so the motion lengths below
-// are plausible stand-ins (a run with several lengths guards against a state
-// that waits on a length: nothing may hang).
+// The motion lengths are the stand-ins of the loops below, plus the real frame
+// counts of the .njm files in data.gsl (tests/lib/motionframes.ts) when present:
+// a run with several lengths guards against a state that waits on a length.
+// Nothing may hang.
 // Run: node tests/enemyfsmep2a.test.ts
 import { GEE, GIBBLES, GIGUE, GeeAi, GibblesAi, GiGueAi, GiGueBomb, GiGueSpit, GroundBlast, type GeeState, type GibblesState } from '../client/src/combat/enemyfsmep2a.ts';
 import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
 import { STATUS } from '../client/src/combat/status.ts';
+import { motionFrames, realLen } from './lib/motionframes.ts';
+
+// The motion files' lengths (tests/lib/motionframes.ts) run next to the stand-in lengths when data.gsl is present.
+const REAL = -1;
+const lens = (stand: number[], real: unknown): number[] => (real ? [...stand, REAL] : stand);
+const lenOf = (len: number, real: ((i: number) => number) | null, stand: (n: number) => (i: number) => number): ((i: number) => number) =>
+  len === REAL && real ? real : stand(len);
+const tag = (len: number): string => (len === REAL ? 'real' : String(len));
+const GEE_REAL = realLen(motionFrames('bm_ene_me1_gee.bml', 2));
+const GIGUE_REAL = realLen(motionFrames('bm_ene_gi_gue.bml', 3));
+const GIBBLES_REAL = realLen(motionFrames('bm_ene_gibbles.bml', 1));
 
 let failures = 0;
 const check = (ok: boolean, what: string) => {
@@ -266,10 +278,10 @@ const gee = (params: number[], rng: () => number = () => 0.3, o = {}) => new Gee
   }
 
   // No hang: players come and go, hits land, for a long time.
-  for (const len of [10, 30, 70]) {
+  for (const len of lens([10, 30, 70], GEE_REAL)) {
     const r = mulberry(len);
     const g11 = gee([r() < 0.5 ? 0 : 1, r() < 0.5 ? 0 : 1, 0, 0], r);
-    const rig11 = new Rig(g11, () => len);
+    const rig11 = new Rig(g11, lenOf(len, GEE_REAL, (n) => () => n));
     let stuck = 0;
     let lastState = '';
     let worst = 0;
@@ -287,7 +299,7 @@ const gee = (params: number[], rng: () => number = () => 0.3, o = {}) => new Gee
         break;
       }
     }
-    check(worst < 900, `Gee (motions ${len}): no state hangs with a target (${worst})`);
+    check(worst < 900, `Gee (motions ${tag(len)}): no state hangs with a target (${worst})`);
   }
 }
 
@@ -470,10 +482,10 @@ const gigue = (params: number[], rng: () => number = () => 0.3) => new GiGueAi({
   }
 
   // No hang.
-  for (const len of [10, 30, 70]) {
+  for (const len of lens([10, 30, 70], GIGUE_REAL)) {
     const r = mulberry(len + 100);
     const g9 = gigue([r() < 0.5 ? 0 : 1, 0, 0, r(), r()], r);
-    const rig9 = new Rig(g9, () => len);
+    const rig9 = new Rig(g9, lenOf(len, GIGUE_REAL, (n) => () => n));
     let stuck = 0;
     let lastState = '';
     let worst = 0;
@@ -494,7 +506,7 @@ const gigue = (params: number[], rng: () => number = () => 0.3) => new GiGueAi({
       }
       g9.events.length = 0;
     }
-    check(worst < 600, `Gi Gue (motions ${len}): no state hangs (${worst})`);
+    check(worst < 600, `Gi Gue (motions ${tag(len)}): no state hangs (${worst})`);
   }
 }
 
@@ -610,10 +622,10 @@ const gibLen = (long: number) => (i: number) => (i === 0 ? long : i === 4 ? 34 :
   check(peak > 20, `Gibbles: leaps (peak ${peak.toFixed(1)})`);
   check(landed >= 1, 'Gibbles: lands with a shockwave');
 }
-for (const len of [10, 34, 70]) {
+for (const len of lens([10, 34, 70], GIBBLES_REAL)) {
   const r = mulberry(len + 200);
   const g = gibbles([r() * 3, 0, 0.5, 0.5], r);
-  const rig = new Rig(g, gibLen(len));
+  const rig = new Rig(g, lenOf(len, GIBBLES_REAL, gibLen));
   let stuck = 0;
   let lastState = '';
   let worst = 0;
@@ -632,7 +644,7 @@ for (const len of [10, 34, 70]) {
       break;
     }
   }
-  check(worst < 700, `Gibbles (motions ${len}): no state hangs (${worst})`);
+  check(worst < 700, `Gibbles (motions ${tag(len)}): no state hangs (${worst})`);
 }
 // The sink of a dead Gibbles (0x005606d4): the death motion runs out, then 250
 // ticks of a tenth of a unit, and it is removed on the tick after.

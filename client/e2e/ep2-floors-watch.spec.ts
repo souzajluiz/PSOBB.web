@@ -23,10 +23,12 @@
 // run (counted in notRun). One screenshot per floor (client/test-results, JPEG).
 // Against a local newserv (e2e/README.md).
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
-import { consoleLog, cursorTo, expectInGame, key, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
+import { consoleLog, cursorTo, expectInGame, key, openPartyMenu, peek, reachLobby } from './classic.ts';
+import { freshUser, logInWithCharacter } from './fresh-field.ts';
 
-const USER = process.env.PSO_USER ?? 'webep2';
-const PASSWORD = process.env.PSO_PASSWORD ?? 'webep2';
+// A fresh account per run (wep prefix) unless PSO_USER names one; its password is the user name.
+const USER = process.env.PSO_USER ?? freshUser('wep');
+const PASSWORD = process.env.PSO_PASSWORD ?? USER;
 const WATCH_MS = Number(process.env.EP2_WATCH_SECONDS ?? 30) * 1000;
 const FLOORS = (process.env.EP2_WATCH_FLOORS ?? '1,5,7,10').split(',').map((s) => Number(s.trim()));
 const POLL_MS = 500;
@@ -143,7 +145,7 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
   page.on('requestfailed', (r) => failed.push(`failed ${r.failure()?.errorText ?? '?'} ${r.url()}`));
   const name = `e2w${Date.now() % 100000}`;
 
-  await logIn(page, USER, PASSWORD);
+  await logInWithCharacter(page, USER, PASSWORD);
   await reachLobby(page);
   await openPartyMenu(page);
   await key(page, 'ArrowDown'); // Create a PARTY

@@ -23,6 +23,7 @@ import {
 } from '../client/src/combat/enemyfsmep2d.ts';
 import type { AiFrame, AiTarget, EnemyBrain } from '../client/src/combat/enemyai.ts';
 import type { EnemyShot } from '../client/src/combat/enemyshots.ts';
+import { motionFrames, realLen } from './lib/motionframes.ts';
 
 let failures = 0;
 const check = (ok: boolean, what: string) => {
@@ -47,26 +48,28 @@ interface Rig {
 function rig(ai: Rig['ai']): Rig {
   return { ai, frames: 0, last: null, shots: [] };
 }
-function step(r: Rig, targets: AiTarget[], len = 30): AiFrame {
+// `len`: the frames a one-shot motion lasts, or a callback of the motion index (the real lengths).
+type Len = number | ((index: number) => number);
+function step(r: Rig, targets: AiTarget[], len: Len = 30): AiFrame {
   const m = r.ai.motion;
   if (m !== r.last) {
     r.last = m;
     r.frames = 0;
   }
-  const ended = !!m && !m.loop && r.frames >= len;
+  const ended = !!m && !m.loop && r.frames >= (typeof len === 'number' ? len : len(m.index));
   const f = r.ai.tick(targets, ended);
   r.frames++;
   if (f.shots) r.shots.push(...f.shots);
   return f;
 }
-function run(r: Rig, targets: AiTarget[], n: number, len = 30, each?: (f: AiFrame, i: number) => void): void {
+function run(r: Rig, targets: AiTarget[], n: number, len: Len = 30, each?: (f: AiFrame, i: number) => void): void {
   for (let i = 0; i < n; i++) {
     const f = step(r, targets, len);
     each?.(f, i);
   }
 }
 // The Epsilon with its four Epsigards, each ticked like its own runtime.
-function runGroup(e: EpsilonAi, rigs: Rig[], targets: AiTarget[], n: number, len = 30, each?: (f: AiFrame, i: number) => void): void {
+function runGroup(e: EpsilonAi, rigs: Rig[], targets: AiTarget[], n: number, len: Len = 30, each?: (f: AiFrame, i: number) => void): void {
   for (let i = 0; i < n; i++) {
     const f = step(rigs[0], targets, len);
     for (let k = 1; k < rigs.length; k++) step(rigs[k], targets, len);
@@ -1021,6 +1024,40 @@ const epsilon = (o: { params?: number[]; rng?: () => number } = {}) =>
   run(r, [player(0, 100)], 100);
   e.kill();
   void near;
+}
+
+// The real motion lengths (data.gsl, the .njm frame counts of each enemy's BML): every brain runs 3000
+// ticks with a player in reach and the one-shot motions end after the frames their files have. Nothing
+// may hang: more than one state is visited, and no position goes non-finite.
+{
+  const real = (bml: string, models: number) => realLen(motionFrames(bml, models));
+  const visited = (name: string, states: Set<string>, ok: boolean) => check(ok && states.size >= 2, `${name} (real motion lengths): visits ${states.size} states`);
+  const inReach = [player(0, 40)];
+  const mo = real('bm_ene_morfos.bml', 3);
+  if (mo) {
+    const m = morfos();
+    const r = rig(m);
+    const states = new Set<string>();
+    run(r, inReach, 3000, mo, () => states.add(String(m.state)));
+    visited('Morfos', states, Number.isFinite(m.x) && Number.isFinite(m.z));
+  }
+  const rb = real('bm_ene_recobox.bml', 6);
+  if (rb) {
+    const b = new RecoboxAi({ x: 0, z: 0, angle: 0, params: [0, 0, 0, 3, 0, 0], cloneCount: 8, movement: rmv, attack: atk(25, 768, 15), difficulty: 0, rng: () => 0.5 });
+    const r = rig(b);
+    const states = new Set<string>();
+    run(r, inReach, 3000, rb, () => states.add(String(b.state)));
+    visited('Recobox', states, Number.isFinite(b.x) && Number.isFinite(b.z));
+  }
+  const ep = real('bm_ene_epsilon.bml', 7);
+  if (ep) {
+    const e = epsilon();
+    const rigs = groupRigs(e);
+    const states = new Set<string>();
+    runGroup(e, rigs, inReach, 3000, ep, () => states.add(String(e.state)));
+    visited('Epsilon', states, Number.isFinite(e.x) && Number.isFinite(e.z));
+    e.kill();
+  }
 }
 
 if (failures) {

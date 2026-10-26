@@ -9,7 +9,7 @@ only part of them has matching C (psobb-client-source).
 - [ ] Challenge mode in a real game (all stages)
 - [ ] Battle mode in a real game
 - [ ] Technique visuals (Foie, Barta, Zonde, Gizonde, Razonde, Grants, Megid, supports, specials)
-- [ ] Episode 2 enemy FSMs on Seabed, Mines, Tower (animation lengths for groups a / d are stand-ins)
+- [ ] Episode 2 enemy FSMs on Seabed, Mines, Tower (partial 2026-10-26: smoke spec passes on floors 1..17; watch passes on floor 10 but only 2 of 33 groups ran; Seabed Lower and Mines open; real motion lengths for groups a / d in the tests, Gi Gue barrier 5 frames; lobby ping on a closed socket open)
 - [ ] Ship / block change and team menus at the counter
 - [ ] Boss fixes (De Rol Le, Vol Opt, Dragon, Belra)
 - [ ] Movement: two-client check, slowed / guard animation tie

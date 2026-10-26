@@ -14,10 +14,12 @@
 // Nothing is forced; the floor's own waves decide when the enemies start.
 // Screenshots go to the test's output folder. Against a local newserv (e2e/README.md).
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
-import { consoleLog, cursorTo, expectInGame, key, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
+import { consoleLog, cursorTo, expectInGame, key, openPartyMenu, peek, reachLobby } from './classic.ts';
+import { freshUser, logInWithCharacter } from './fresh-field.ts';
 
-const USER = process.env.PSO_USER ?? 'webep2';
-const PASSWORD = process.env.PSO_PASSWORD ?? 'webep2';
+// A fresh account per run (wep prefix) unless PSO_USER names one; its password is the user name.
+const USER = process.env.PSO_USER ?? freshUser('wep');
+const PASSWORD = process.env.PSO_PASSWORD ?? USER;
 
 // Episode 2 floors (questeditor/areas.ts floorToArea(2)): floor index 0 is the
 // Lab, where the game starts (warpTo(0) is a no-op), so the walk is 1..17.
@@ -103,7 +105,7 @@ test('Episode 2: every floor loads, its enemies are modeled and their FSMs tick 
   page.on('requestfailed', (r) => failed.push(`failed ${r.failure()?.errorText ?? '?'} ${r.url()}`));
   const name = `e2${Date.now() % 100000}`;
 
-  await logIn(page, USER, PASSWORD);
+  await logInWithCharacter(page, USER, PASSWORD);
   await reachLobby(page);
   await openPartyMenu(page);
   await key(page, 'ArrowDown'); // Create a PARTY
