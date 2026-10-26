@@ -15,18 +15,34 @@
 //   0x13 Barta      : (100 - EIC) * 0.002 * base; no status.
 // Other groups are not damage groups here (the support groups act on the player's buffs).
 //
+// THE LAST ATTACKER (+0x2d8, VERIFIED objdump 0x00773d19 -> 0x0077327c; store 0x0077328c). entity_hit_by_
+// tech calls set_last_attacker_idx_(defender, attacker) (0x00773264) before the groups run: the defender's
+// +0x2d8 becomes the attacker's entity id (+0x1c; 0xffff is not stored). So every group reads the ENEMY's
+// id (0x1000 | index), not the player's previous killer. The write is skipped by the early returns (the
+// invulnerability block, the +0x30 0x4000000 block, the room gate below).
+//
+// THE ROOM GATE (VERIFIED objdump 0x00773afc..0x00773b40). In Episode 2 (DAT_00aafdb8 == 2), for a group
+// outside 6..10, the hit is refused (return 0, no roll drawn) unless the defender's and the attacker's
+// +0x28 section words are equal (movswl / cmpw: signed). The defender is the player, the attacker the enemy.
+//
 // THE BASE (ASSUMED the attacker is a monster, id >= 0xc, so the player-attacker boost branch is
 // skipped): base = max(0, bpMst) * 0.5 (0x00978278) + max(0, power). The MST term is dropped when the
-// defender's +0x2d8 (its last killer's entity id, network.h) is >= 0x4000. power is the caller's
+// stored attacker id (+0x2d8) is >= 0x4000 (never for an enemy, 0x1000..0x3fff). power is the caller's
 // argument: the technique's power (techPower(tech, level), e.g. Zonde level * 20 + 240, 0x0092092c /
 // 0x00920930, the level from the enemy's battleparams) or the enemy's fixed row value.
 //
 // THE STATUS ROLLS. The freeze (group 2) and the shock (group 3) need the defender's state (+0x32c)
 // to be 1, or CheckPlayerInvincibility(attacker) (CheckPlayerInvincibility_0077524c, called with the
 // attacker in eax, dump 748478: 0 for any entity id above 0xfff, so an enemy attacker never passes it).
-// A normal player's +0x32c is 0 (the challenge modes set 1..7, SinowberillChallengePlayer_SetChallengeType,
-// dump 552703); so the enemy's freeze / shock lands only in state 1 (VERIFIED in the disassembly: the
-// group-2 test at 0x774b22..0x774b30, the group-3 test at 0x774872..0x774880 use ebp = defender).
+// The defender's +0x32c (u16) is the control state (playerdamage.ts controlState). The writers (VERIFIED
+// objdump 0x0068699b..0x0068700f, 0x00685f39, 0x007b47dd; dump 552703 / 552936 / 798770): 1, 2,
+// 3, 6, 7 are set only on the SinowberillChallengePlayer objects (the other players of a challenge session,
+// SetChallengeType: type < 4 -> 1, 4 -> 2, 5 -> 3, 6 -> 6, 7 -> 7) and the takeover (3, the local player
+// takes a remote challenge player's role when its owner is gone); a normal local player is 0. The dump's
+// field name (unknown_flags_invincibility) is a misnomer: state 1 is a challenge-session player, not an
+// invincibility flag (CheckPlayerInvincibility_0077524c only tests it for a player attacker).
+// The freeze (group 2) and the shock (group 3) need the defender's +0x32c == 1 (VERIFIED in the disassembly:
+// the group-2 test at 0x774b22..0x774b30, the group-3 test at 0x774872..0x774880 use ebp = defender).
 // The chances, for an enemy attacker (id 0x1000..0x3fff): max(0, resist / -100 + 0.75) with the
 // resist EIC (group 2) or ETH (group 3) (0x00978264 = -100, 0x00978268 = 0.75; the quadratic branch of
 // the group-2 chance is for player attackers only).
@@ -59,8 +75,14 @@ export interface EnemyTechInput {
   power: number;
   // The attacker's battleparams MST (bpMst, the +0x2 short of the enemy's battleparams).
   mst: number;
-  // The defender's +0x2d8 (the last killer's entity id). ASSUMED 0 when the port does not keep it.
-  lastKiller?: number;
+  // The attacker's entity id (0x1000 | index for an enemy). entity_hit_by_tech stores it in the
+  // defender's +0x2d8 before the groups read it (see the header). Default 0x1000 (any enemy).
+  attackerId?: number;
+  // Episode 2's room gate (DAT_00aafdb8 == 2): the episode, the defender's (player's) section and the
+  // attacker's (enemy's) section. Omitted: no gate (the caller is not in Episode 2).
+  episode?: number;
+  defenderSection?: number;
+  attackerSection?: number;
   // DAT_00a9cd68 == 3 (Ultimate).
   ultimate?: boolean;
   // current_map_is_boss_map() (the map class of the current map is 0xb, unknown_map_data; the port's
@@ -109,12 +131,23 @@ function groupResist(group: number, el: PlayerElements): number | undefined {
 }
 
 // The damage of one enemy technique on the local player (the groups' damage, before the status rolls).
+// The Episode 2 room gate (entity_hit_by_tech 0x00773afc..0x00773b40): true when the hit is refused.
+export function enemyTechRoomRefused(i: Pick<EnemyTechInput, 'group' | 'episode' | 'defenderSection' | 'attackerSection'>): boolean {
+  if (i.episode === undefined || i.episode !== 2) return false;
+  if (i.group >= 6 && i.group <= 10) return false;
+  return (i.defenderSection ?? 0) << 16 >> 16 !== (i.attackerSection ?? 0) << 16 >> 16;
+}
+
 export function enemyTechOnPlayer(i: EnemyTechInput): EnemyTechOutcome {
   const none: EnemyTechOutcome = { handled: false, damage: 0, freeze: false, shock: false, megidKill: false, megidChance: 0 };
   const group = i.group;
   if (!(group === 0 || group === 1 || group === 2 || group === 3 || group === 4 || group === 5 || group === 0x13)) return none;
+  // The room gate returns before any roll (no draw, no damage, no status).
+  if (enemyTechRoomRefused(i)) return { handled: true, damage: 0, freeze: false, shock: false, megidKill: false, megidChance: 0 };
   const power = Math.max(0, f32(i.power));
-  const mstTerm = (i.lastKiller ?? 0) < 0x4000 ? Math.max(0, i.mst) : 0;
+  // The attacker's id is in +0x2d8 when the groups run (the header's THE LAST ATTACKER).
+  const attackerId = i.attackerId ?? 0x1000;
+  const mstTerm = attackerId < 0x4000 ? Math.max(0, i.mst) : 0;
   const base = f32(f32(mstTerm * 0.5) + power);
   const state = i.defenderState ?? 0;
   const r1 = i.rng(); // FUN_007751b0 before the switch (dump line 83)
@@ -129,7 +162,7 @@ export function enemyTechOnPlayer(i: EnemyTechInput): EnemyTechOutcome {
     // roll is drawn before the switch (FUN_007751b0) either way.
     const edk = i.elements.edk;
     const chance = f32(f32(power - wrap16(edk)) * f32(0.01));
-    const killBlock = !(i.bossMap === true) || (i.ultimate === true && (i.lastKiller ?? 0) >= 0x1000);
+    const killBlock = !(i.bossMap === true) || (i.ultimate === true && attackerId >= 0x1000);
     const kill = killBlock && r1 < chance;
     return { handled: true, damage: 0, freeze: false, shock: false, megidKill: kill, megidChance: chance };
   }

@@ -4755,7 +4755,7 @@ export class CombatView {
         this.overlay?.techEffect(ev.tech === 'rabarta' ? 'support' : 'light', ev.x, 0, ev.z, 20);
         return;
       case 'megid':
-        if (ev.clientId === this.game.selfId && !this.damage.dead) this.enemyMegidHitsPlayer(Math.max(0, techPower(TECH.megid, ev.level)), ev.what);
+        if (ev.clientId === this.game.selfId && !this.damage.dead) this.enemyMegidHitsPlayer(Math.max(0, techPower(TECH.megid, ev.level)), ev.what, e);
         return;
       case 'resta':
         this.opts.log(`${what}: form 2 casts Resta (level ${ev.level})`);
@@ -4969,7 +4969,7 @@ export class CombatView {
           this.enemyHitsPlayer(s.owner, hit.clientId, fx.knockback, fx.mult, undefined, fx.attack);
           if (fx.status && this.rng() < fx.status.chance) this.inflictStatus(fx.status.type as StatusType, what);
         } else if (fx.kind === 'blast') this.enemyBlastHitsPlayer(s.owner, fx.damage, s.shot.x, s.shot.z, what, fx.knockback);
-        else if (fx.kind === 'megid') this.enemyMegidHitsPlayer(fx.power, what);
+        else if (fx.kind === 'megid') this.enemyMegidHitsPlayer(fx.power, what, s.owner);
         else this.inflictStatus(fx.status as StatusType, what);
       }
     }
@@ -4982,24 +4982,32 @@ export class CombatView {
     this.shots = this.shots.filter((x) => !x.shot.done);
   }
 
+  // The Episode 2 room gate's inputs for an enemy caster (enemytechplayer.ts): the episode, the local
+  // player's section (self +0x28 in the exe) and the enemy's section (its set's section).
+  private enemyTechContext(e: EnemyRuntime): { episode: number; defenderSection: number; attackerSection: number } {
+    return { episode: this.game.info?.episode ?? 1, defenderSection: this.game.self?.sectionId ?? 0, attackerSection: (e.slot.set as EnemySet).section };
+  }
+
   // entity_hit_by_tech (0x00773afc) with the local player as the defender and this enemy as the attacker
   // (combat/enemytechplayer.ts has the groups, the resists they read and the status rolls). `group` is the
   // technique_group of the cast (0 = the fixed damage, the default). The enemy's MST is its battleparams
   // MST; the player's resists are selfElements() (EFR / EIC / ETH / ELT / EDK, playerresist.ts).
-  // ASSUMED: the defender state is 0 (a normal player; the freeze / shock need 1) and the last-killer id
-  // (player +0x2d8) is 0; knockback 0 (try_knockdown_player's threshold, 0x25% of max HP, sets a flag only).
+  // The defender state is the player's controlState (+0x32c, 0 for the local player: the freeze / shock need
+  // 1). The attacker id (0x1000 | index) is stored in the player's +0x2d8 before the groups run (VERIFIED,
+  // enemytechplayer.ts). The Episode 2 room gate compares the player's section with the enemy's section.
+  // Knockback 0 (try_knockdown_player's threshold, 0x25% of max HP, sets a flag only).
   private enemyTechHitsPlayer(e: EnemyRuntime, power: number, fromX: number, fromZ: number, what: string, knockback = 0, group = 0): void {
     const view = this.view;
     if (!view || this.damage.dead) return;
     if (group === ENEMY_HIT_GROUP.megid) {
-      this.enemyMegidHitsPlayer(power, what);
+      this.enemyMegidHitsPlayer(power, what, e);
       return;
     }
     const me = view.playerPositions().get(this.game.selfId);
     const ctx = this.difficultyParams;
     const def = ENEMY_TYPE_PARAMS[e.slot.type];
     const mst = ctx?.params && def?.stats.length ? Math.max(0, ctx.params.stats(ctx.difficulty, def.stats[0]).mst) : 0;
-    const out = enemyTechOnPlayer({ group, power, mst, ultimate: ctx?.difficulty === 3, bossMap: this.inBossArea(), elements: this.selfElements(), rng: () => this.rng() });
+    const out = enemyTechOnPlayer({ group, power, mst, attackerId: 0x1000 | e.index, ...this.enemyTechContext(e), ultimate: ctx?.difficulty === 3, bossMap: this.inBossArea(), elements: this.selfElements(), defenderState: this.damage.controlState, rng: () => this.rng() });
     if (!out.handled) {
       this.opts.log(`${what}: technique group ${group} not a damage group here`);
       return;
@@ -5186,10 +5194,13 @@ export class CombatView {
   // player's +0x2fc (playerresist.ts). No tech-resist roll: an enemy cast passes tech_id -1 (the early
   // miss test is skipped). Off a boss map (inBossArea) there is no kill unless Ultimate and the last killer
   // id (+0x2d8) is 0x1000 or more (enemytechplayer.ts, objdump 0x007744e2..0x00774f8a).
-  private enemyMegidHitsPlayer(power: number, what: string): void {
+  // owner: the casting enemy (its id and section feed the +0x2d8 store and the Episode 2 room gate); a trap
+  // has none (no gate, the attacker id is taken as an enemy's 0x1000).
+  private enemyMegidHitsPlayer(power: number, what: string, owner?: EnemyRuntime): void {
     if (this.damage.dead) return;
     const ctx = this.difficultyParams;
-    const out = enemyTechOnPlayer({ group: ENEMY_HIT_GROUP.megid, power, mst: 0, ultimate: ctx?.difficulty === 3, bossMap: this.inBossArea(), elements: this.selfElements(), rng: () => this.rng() });
+    const attacker = owner ? { attackerId: 0x1000 | owner.index, ...this.enemyTechContext(owner) } : {};
+    const out = enemyTechOnPlayer({ group: ENEMY_HIT_GROUP.megid, power, mst: 0, ...attacker, ultimate: ctx?.difficulty === 3, bossMap: this.inBossArea(), elements: this.selfElements(), defenderState: this.damage.controlState, rng: () => this.rng() });
     const chance = out.megidChance;
     if (out.megidKill) {
       this.opts.log(`${what}: Megid (${Math.round(chance * 100)}%) killed you`);

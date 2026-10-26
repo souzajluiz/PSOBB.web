@@ -4,7 +4,7 @@
 // draws the exe makes (FUN_007751b0 once before the switch). Verified against the exe's
 // entity_hit_by_tech (0x00773afc) in the dump (see the module header).
 // Run: node tests/enemytechplayer.test.ts
-import { enemyTechOnPlayer, ENEMY_HIT_GROUP, type EnemyTechInput } from '../client/src/combat/enemytechplayer.ts';
+import { enemyTechOnPlayer, enemyTechRoomRefused, ENEMY_HIT_GROUP, type EnemyTechInput } from '../client/src/combat/enemytechplayer.ts';
 import { BOSS_AREAS } from '../client/src/net/telepipe.ts';
 import { MAP_CLASS } from '../client/src/formats/playerroom.ts';
 
@@ -33,7 +33,7 @@ function hit(over: Partial<EnemyTechInput>, values: number[] = [0.5, 0.5]) {
 // Group 0 (fixed damage): (MST * 0.5 + power) * 0.2, truncated; no resist, no roll of its own.
 eq(hit({ group: 0, power: 50, mst: 100 }).out.damage, 20, 'fixed: (50 + 50) * 0.2 = 20');
 eq(hit({ group: 0, power: 50, mst: 100, elements: { ...ZERO, efr: 90 } }).out.damage, 20, 'fixed: no element resist');
-eq(hit({ group: 0, power: 50, mst: 100, lastKiller: 0x4000 }).out.damage, 10, 'lastKiller 0x4000: the MST term is dropped (50 * 0.2)');
+eq(hit({ group: 0, power: 50, mst: 100, attackerId: 0x4000 }).out.damage, 10, 'attacker id 0x4000: the MST term is dropped (50 * 0.2)');
 eq(hit({ group: 0, power: -30, mst: 0 }).out.damage, 0, 'a negative power is clamped at 0');
 
 // Group 1 (Foie family): (100 - EFR) * 0.002 * base; base = 100 (MST 100 * 0.5 + 50).
@@ -77,14 +77,28 @@ const m2 = hit({ group: ENEMY_HIT_GROUP.megid, power: 30, mst: 0, elements: { ..
 eq([m2.out.megidKill, m2.out.megidChance], [false, Math.fround(Math.fround(20) * Math.fround(0.01))], 'Megid, EDK 10: chance 0.2, roll 0.25 misses');
 // The megid case's gate (objdump 0x007744e2..0x00774f8a): the kill block runs off a boss map; on a
 // boss map only in Ultimate with the last killer (+0x2d8, u16) at 0x1000 or more. Verified 2026-10-26.
-eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, ultimate: true, lastKiller: 0x1000 }, [0.5]).out.megidKill, true, 'Megid, not a boss map, Ultimate, killer 0x1000: the kill block runs (not blocked)');
-eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, ultimate: false, lastKiller: 0x1000 }, [0.5]).out.megidKill, true, 'Megid, not a boss map, outside Ultimate: kill');
+eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, ultimate: true, attackerId: 0x1000 }, [0.5]).out.megidKill, true, 'Megid, not a boss map, Ultimate, killer 0x1000: the kill block runs (not blocked)');
+eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, ultimate: false, attackerId: 0x1000 }, [0.5]).out.megidKill, true, 'Megid, not a boss map, outside Ultimate: kill');
 eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true }, [0.5]).out.megidKill, false, 'Megid on a boss map: no kill');
 const bm = hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true }, [0.5]);
 eq([bm.out.damage, bm.calls], [0, 1], 'Megid on a boss map: no damage, the first roll is still drawn');
-eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true, ultimate: true, lastKiller: 0xfff }, [0.5]).out.megidKill, false, 'Megid, boss map, Ultimate, killer 0xfff: no kill');
-eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true, ultimate: false, lastKiller: 0x1000 }, [0.5]).out.megidKill, false, 'Megid, boss map, not Ultimate, killer 0x1000: no kill');
-eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true, ultimate: true, lastKiller: 0x1000 }, [0.5]).out.megidKill, true, 'Megid, boss map, Ultimate, killer 0x1000: kill');
+eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true, ultimate: true, attackerId: 0xfff }, [0.5]).out.megidKill, false, 'Megid, boss map, Ultimate, killer 0xfff: no kill');
+eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true, ultimate: false, attackerId: 0x1000 }, [0.5]).out.megidKill, false, 'Megid, boss map, not Ultimate, killer 0x1000: no kill');
+eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true, ultimate: true, attackerId: 0x1000 }, [0.5]).out.megidKill, true, 'Megid, boss map, Ultimate, killer 0x1000: kill');
+
+// The attacker id is the stored +0x2d8 when the groups run: an enemy (0x1000 | index) keeps the MST term.
+eq(hit({ group: 0, power: 50, mst: 100, attackerId: 0x1005 }).out.damage, 20, 'enemy id 0x1005: MST term kept ((100 * 0.5 + 50) * 0.2)');
+eq(hit({ group: 0, power: 50, mst: 100 }).out.damage, 20, 'default attacker (an enemy): MST term kept ((50 + 50) * 0.2)');
+
+// Episode 2 room gate (entity_hit_by_tech 0x00773afc): groups outside 6..10 need equal sections; a refused
+// hit returns before any roll (no draw) and does no damage.
+const gated = hit({ group: 1, power: 50, mst: 100, episode: 2, defenderSection: 3, attackerSection: 4, elements: ZERO }, [0.5, 0.5]);
+eq([gated.out.damage, gated.out.handled, gated.calls], [0, true, 0], 'Episode 2, sections 3 and 4: refused, no roll drawn');
+eq(hit({ group: 1, power: 50, mst: 100, episode: 2, defenderSection: 4, attackerSection: 4 }, [0.5]).out.damage > 0, true, 'Episode 2, equal sections: the hit lands');
+eq(hit({ group: 1, power: 50, mst: 100, episode: 1, defenderSection: 3, attackerSection: 4 }, [0.5]).out.damage > 0, true, 'Episode 1: no room gate');
+eq(enemyTechRoomRefused({ group: 7, episode: 2, defenderSection: 3, attackerSection: 4 }), false, 'groups 6..10 are exempt from the gate');
+eq(enemyTechRoomRefused({ group: 0x13, episode: 2, defenderSection: 3, attackerSection: 4 }), true, 'Barta (0x13) is gated');
+eq(enemyTechRoomRefused({ group: 0, episode: 2, defenderSection: 0x10000, attackerSection: 0 }), false, 'section words compare as 16-bit (0x10000 is 0)');
 
 // Groups the path does not handle (the support groups, the Olga / Dark Falz fixed hits are group 0).
 eq(hit({ group: 6, power: 50, mst: 100 }).out.handled, false, 'resta (6) is not a damage group here');
