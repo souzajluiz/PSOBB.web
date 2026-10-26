@@ -4999,7 +4999,7 @@ export class CombatView {
     const ctx = this.difficultyParams;
     const def = ENEMY_TYPE_PARAMS[e.slot.type];
     const mst = ctx?.params && def?.stats.length ? Math.max(0, ctx.params.stats(ctx.difficulty, def.stats[0]).mst) : 0;
-    const out = enemyTechOnPlayer({ group, power, mst, ultimate: ctx?.difficulty === 3, elements: this.selfElements(), rng: () => this.rng() });
+    const out = enemyTechOnPlayer({ group, power, mst, ultimate: ctx?.difficulty === 3, bossMap: this.inBossArea(), elements: this.selfElements(), rng: () => this.rng() });
     if (!out.handled) {
       this.opts.log(`${what}: technique group ${group} not a damage group here`);
       return;
@@ -5065,8 +5065,9 @@ export class CombatView {
     this.opts.log(`${what}: blast hit for ${total}`);
   }
 
-  // Whether the current area is a boss area (safe_create refuses a trap there). ASSUMED: the
-  // web's BOSS_AREAS list stands for the exe's current_map_is_boss_map, which was not traced.
+  // Whether the current area is a boss area (safe_create refuses a trap there, the Megid kill is off).
+  // BOSS_AREAS is the exe's current_map_is_boss_map: the map class 0xb rows of unknown_map_data
+  // (tests/enemytechplayer.test.ts checks the list against playerroom.ts MAP_CLASS).
   inBossArea(): boolean {
     return BOSS_AREAS.includes(this.area);
   }
@@ -5183,11 +5184,12 @@ export class CombatView {
   // entity_hit_by_tech's Megid case on the local player (an enemy Megid: the Chaos Sorcerer's in
   // Ultimate, the Del Lily's): death when the roll < (power - EDK) * 0.01 (0x0097826c), EDK = the
   // player's +0x2fc (playerresist.ts). No tech-resist roll: an enemy cast passes tech_id -1 (the early
-  // miss test is skipped). Blocked in Ultimate when the last killer id (+0x2d8) is above 0xfff.
+  // miss test is skipped). Off a boss map (inBossArea) there is no kill unless Ultimate and the last killer
+  // id (+0x2d8) is 0x1000 or more (enemytechplayer.ts, objdump 0x007744e2..0x00774f8a).
   private enemyMegidHitsPlayer(power: number, what: string): void {
     if (this.damage.dead) return;
     const ctx = this.difficultyParams;
-    const out = enemyTechOnPlayer({ group: ENEMY_HIT_GROUP.megid, power, mst: 0, ultimate: ctx?.difficulty === 3, elements: this.selfElements(), rng: () => this.rng() });
+    const out = enemyTechOnPlayer({ group: ENEMY_HIT_GROUP.megid, power, mst: 0, ultimate: ctx?.difficulty === 3, bossMap: this.inBossArea(), elements: this.selfElements(), rng: () => this.rng() });
     const chance = out.megidChance;
     if (out.megidKill) {
       this.opts.log(`${what}: Megid (${Math.round(chance * 100)}%) killed you`);

@@ -10,7 +10,8 @@
 //   2 Gibarta/Rabarta: (100 - EIC) * 0.002 * base; EIC = +0x2fa; then the freeze roll.
 //   3 Zonde family  : (100 - ETH) * 0.002 * base; ETH = +0x2f8; then the shock roll.
 //   4 Grants        : (100 - ELT) * 0.002 * base; ELT = +0x2fe.
-//   5 Megid         : no damage; instant kill when the roll < (power - EDK) * 0.01; EDK = +0x2fc.
+//   5 Megid         : no damage; instant kill when the roll < (power - EDK) * 0.01; EDK = +0x2fc, and
+//                     only off a boss map (see the Megid branch below).
 //   0x13 Barta      : (100 - EIC) * 0.002 * base; no status.
 // Other groups are not damage groups here (the support groups act on the player's buffs).
 //
@@ -62,6 +63,9 @@ export interface EnemyTechInput {
   lastKiller?: number;
   // DAT_00a9cd68 == 3 (Ultimate).
   ultimate?: boolean;
+  // current_map_is_boss_map() (the map class of the current map is 0xb, unknown_map_data; the port's
+  // BOSS_AREAS, net/telepipe.ts). Only the Megid kill reads it.
+  bossMap?: boolean;
   // The defender's +0x32c (1 is the challenge state that lets a status land). A normal player is 0.
   defenderState?: number;
   // The local player's resist block (playerresist.ts).
@@ -116,13 +120,17 @@ export function enemyTechOnPlayer(i: EnemyTechInput): EnemyTechOutcome {
   const r1 = i.rng(); // FUN_007751b0 before the switch (dump line 83)
 
   if (group === ENEMY_HIT_GROUP.megid) {
-    // The kill is taken on (power - EDK) * 0.01 (0x0097826c) against the roll, no damage otherwise. The
-    // gate (FUN_00807db8 = 1 blocks Megid) reads a table at 0x0097f040 indexed by the attacker's entity id;
-    // for the monster ids the table holds no 0xb, so the gate is open (ASSUMED from the register flow).
+    // entity_hit_by_tech's megid case (0x00773afc; objdump 0x007744e2..0x00774f8a, dump names
+    // current_map_is_boss_map / DAT_00a9cd68 / last_attacker_entity_idx). The kill block runs when
+    // the current map is not a boss map (0x007744e9 `je` to the kill block), or in Ultimate
+    // (DAT_00a9cd68 == 3) when the defender's u16 +0x2d8 (last killer) is >= 0x1000 (0x00774f8a
+    // `jge` to the kill block). Otherwise (a boss map, not that Ultimate case) the hit is a no-op: no
+    // kill and no damage. The kill block rolls against (power - EDK) * 0.01 (0x0097826c). The first
+    // roll is drawn before the switch (FUN_007751b0) either way.
     const edk = i.elements.edk;
     const chance = f32(f32(power - wrap16(edk)) * f32(0.01));
-    const blocked = i.ultimate === true && (i.lastKiller ?? 0) > 0xfff;
-    const kill = !blocked && r1 < chance;
+    const killBlock = !(i.bossMap === true) || (i.ultimate === true && (i.lastKiller ?? 0) >= 0x1000);
+    const kill = killBlock && r1 < chance;
     return { handled: true, damage: 0, freeze: false, shock: false, megidKill: kill, megidChance: chance };
   }
 

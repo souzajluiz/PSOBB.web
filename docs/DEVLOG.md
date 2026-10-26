@@ -71,6 +71,33 @@
 **Checks.** `node tests/fieldhud.test.ts` ALL PASS (new block). `node tests/shortcuts.test.ts`, `tests/quickmenu.test.ts`, `tests/chatshortcutmenu.test.ts` pass. `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures. Not run in Chrome (no Playwright).
 
 **Left (Field HUD line, unchanged by this entry):** the Options > Pad Button Config right analog camera, the Keyboard Config overwrite prompt and Escape / text-edit keys, mouse controls and auto disconnect, the MAG window's row spacing and element size, the MAG picture (entry 0xC) size and position, the page slide's drawn axis (`ChatShortcutMenu_UpdatePosition_0073e5f8` scales the float at slide+8; the draw that reads it is not traced), the equipment stat panel's frame and row spacing, the attribute / resist / slot pages of weapons and armour, automatic / manual sort (`6xC4`), saving a switched palette (`07ED`), the item list's scroll bar, the photon row's exe size, and the Status window's other lists row by row.
+## 2026-10-26: Megid's gate is the boss map (0x0097f040 is the map class table, not an entity table)
+
+**Question.** ROADMAP "Combat left to do: Megid" lists the open parts. `combat/enemytechplayer.ts` said the enemy Megid gate (FUN_00807db8) reads the table at 0x0097f040 indexed by the attacker's entity id, with the table's 0xb rows as the blocking case, and ASSUMED the gate open for monster ids. Re-derive it from PsoBB.exe.
+
+**PROVEN (objdump of PsoBB.exe; dump names from the reference source).**
+- 0x0097f040 is `unknown_map_data` (the 46-row map class table; `formats/playerroom.ts` `MAP_CLASS`). It is indexed by the map id, not by an entity id. `current_map_is_boss_map` (0x00807db8) loads `current_map` from 0x00aafc9c and tests `unknown_map_data[current_map] == 0xb` (the body at 0x00807dcc, the same as the dump's `map_is_boss_map_optcall`). The stack-argument variant 0x00807dc8 has one caller (0x0064aae1, not Megid).
+- The Megid case of `entity_hit_by_tech` (0x00773afc, group 5, reached through the jump table after the `je` at 0x00773e3f dispatch):
+  - `flags & 0x10000000` and state (+0x32c) == 2: the rounded path, no gate (0x007744a5).
+  - otherwise `call 0x807db8` (0x007744e2). Not a boss map (eax == 0): the kill block (`je 0x0077450f`).
+  - Boss map: `DAT_00a9cd68 == 3` (Ultimate) and the defender's u16 last killer (+0x2d8) >= 0x1000 (`cmp edx, 0x1000` / `jge 0x0077450f` at 0x00774f8a): the kill block. Otherwise the no-op path at 0x007744fa (no kill, no damage).
+  - Kill block (0x0077450f): the spark when `flags & 0x2000000` is clear, `+0x2e0 |= 4`, chance = (power - EDK) * 0.01 (0x0097826c, EDK = i16 +0x2fc), then when the second flag (`esi`, the dump's `some_bool`) is 0 the roll is compared against the chance (`fcomp`, `jb` taken on roll < chance) and a kill sets flags `|= 0xa00` and HP to 0. With `esi` != 0 only the damage is computed (no roll).
+- So the dump's `(BVar3 == 0) || (ultimate && last killer > 0xfff)` is the same test as the objdump: the kill block runs off a boss map, or on a boss map in Ultimate with killer >= 0x1000. The port had inverted the Ultimate test and ignored the boss map.
+- The boss-map list: the rows of the table with value 0xb are 0x0b, 0x0c, 0x0d, 0x0e, 0x1e, 0x1f, 0x20, 0x21, 0x2c. That is exactly `BOSS_AREAS` in `net/telepipe.ts`, which the port had marked as "not traced" (`render/combat.ts` `inBossArea`). Now verified by test.
+
+**Port.**
+- `combat/enemytechplayer.ts`: `EnemyTechInput.bossMap` (new). The Megid branch: `killBlock = !bossMap || (ultimate && lastKiller >= 0x1000)`, `kill = killBlock && roll < chance`. The first roll is still drawn before the switch. Header and branch comments carry the addresses.
+- `render/combat.ts`: `enemyTechHitsPlayer` and `enemyMegidHitsPlayer` pass `bossMap: this.inBossArea()`. The `inBossArea` comment no longer says ASSUMED.
+- Behaviour change: an enemy Megid on a boss map no longer kills (it kills only in Ultimate with a last killer >= 0x1000, which the port does not track, so it never kills there). Dark Falz's Megid (`darkfalz3.ts` DMAGIC, `VoloptExecuteMegidAttack` (dump line 199652) -> `create_megid`) goes through the same `enemyMegidHitsPlayer`, so it follows the same gate (ASSUMED: the Megid object's player hit is the same entity_hit_by_tech call as the one traced here).
+
+**Tests.**
+- `tests/enemytechplayer.test.ts`: the two old Ultimate lines (which encoded the inverted rule) are replaced by the boss-map cases (no kill, no damage, first roll drawn, killer 0xfff / 0x1000 combinations); the new check `BOSS_AREAS` = the class 0xb rows of `MAP_CLASS` (46 rows).
+- Run: `node tests/enemytechplayer.test.ts` ALL PASS; `techniques`, `techlightning`, `enemyfsmep2b`, `enemyfsmruins`, `flinch`, `pvp`, `darkfalz`, `battle`, `battletraps`, `techfire`, `telepipe`, `volopt` pass. `NEWSERV=.../vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures. `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). Not run in Chrome.
+
+**ASSUMED / still open.**
+- The defender's +0x2d8 (last killer) is not kept by the port (0 by default), so the Ultimate branch of the gate is reachable only through a tracked killer. The port's enemy hits still pass `lastKiller` as undefined.
+- `esi` (the dump's `some_bool`, set from the defender's state and the attacker's invincibility flag) is taken as 0 for an enemy attacker on a normal player (dump lines 747870..747910). The state-2 rounded path (0x007744a5) is not modelled.
+- Megid's ray hit point (`combat/techlightning.ts` `MegidFlight.tick`, "the object's x/y/z") is still ASSUMED. Not traced in this entry.
 
 ## 2026-10-25: Damage to HP is chop (truncation) on every exe path checked, not round
 

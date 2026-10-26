@@ -5,6 +5,8 @@
 // entity_hit_by_tech (0x00773afc) in the dump (see the module header).
 // Run: node tests/enemytechplayer.test.ts
 import { enemyTechOnPlayer, ENEMY_HIT_GROUP, type EnemyTechInput } from '../client/src/combat/enemytechplayer.ts';
+import { BOSS_AREAS } from '../client/src/net/telepipe.ts';
+import { MAP_CLASS } from '../client/src/formats/playerroom.ts';
 
 let failures = 0;
 const eq = (a: unknown, b: unknown, what: string) => {
@@ -73,8 +75,16 @@ eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 30, mst: 0 }, [0.5]).out.megidKill
 eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 30, mst: 0 }, [0.2]).out.megidKill, true, 'Megid power 30: roll 0.2 kills');
 const m2 = hit({ group: ENEMY_HIT_GROUP.megid, power: 30, mst: 0, elements: { ...ZERO, edk: 10 } }, [0.25]);
 eq([m2.out.megidKill, m2.out.megidChance], [false, Math.fround(Math.fround(20) * Math.fround(0.01))], 'Megid, EDK 10: chance 0.2, roll 0.25 misses');
-eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, ultimate: true, lastKiller: 0x1000 }, [0.5]).out.megidKill, false, 'Megid in Ultimate with a last killer above 0xfff: blocked');
-eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, ultimate: false, lastKiller: 0x1000 }, [0.5]).out.megidKill, true, 'Megid outside Ultimate: not blocked');
+// The megid case's gate (objdump 0x007744e2..0x00774f8a): the kill block runs off a boss map; on a
+// boss map only in Ultimate with the last killer (+0x2d8, u16) at 0x1000 or more. Verified 2026-10-26.
+eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, ultimate: true, lastKiller: 0x1000 }, [0.5]).out.megidKill, true, 'Megid, not a boss map, Ultimate, killer 0x1000: the kill block runs (not blocked)');
+eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, ultimate: false, lastKiller: 0x1000 }, [0.5]).out.megidKill, true, 'Megid, not a boss map, outside Ultimate: kill');
+eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true }, [0.5]).out.megidKill, false, 'Megid on a boss map: no kill');
+const bm = hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true }, [0.5]);
+eq([bm.out.damage, bm.calls], [0, 1], 'Megid on a boss map: no damage, the first roll is still drawn');
+eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true, ultimate: true, lastKiller: 0xfff }, [0.5]).out.megidKill, false, 'Megid, boss map, Ultimate, killer 0xfff: no kill');
+eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true, ultimate: false, lastKiller: 0x1000 }, [0.5]).out.megidKill, false, 'Megid, boss map, not Ultimate, killer 0x1000: no kill');
+eq(hit({ group: ENEMY_HIT_GROUP.megid, power: 300, mst: 0, bossMap: true, ultimate: true, lastKiller: 0x1000 }, [0.5]).out.megidKill, true, 'Megid, boss map, Ultimate, killer 0x1000: kill');
 
 // Groups the path does not handle (the support groups, the Olga / Dark Falz fixed hits are group 0).
 eq(hit({ group: 6, power: 50, mst: 100 }).out.handled, false, 'resta (6) is not a damage group here');
@@ -83,3 +93,9 @@ eq(hit({ group: ENEMY_HIT_GROUP.foie, power: 50, mst: 100 }).out.handled, true, 
 
 console.log(failures === 0 ? 'ALL PASS' : `${failures} FAILED`);
 if (failures) process.exitCode = 1;
+
+// The boss-map list is unknown_map_data's class 0xb rows (0x0097f040, read with tools/exedata.py
+// 2026-10-26; current_map_is_boss_map (0x00807db8) reads the row of the current map id): the port's
+// BOSS_AREAS must be exactly those ids.
+eq(MAP_CLASS.flatMap((c, i) => (c === 0xb ? [i] : [])), [...BOSS_AREAS].sort((a, b) => a - b), 'BOSS_AREAS = the map class 0xb rows');
+eq(MAP_CLASS.length, 46, 'unknown_map_data has 46 map rows in the port (map 46 is the test map)');
