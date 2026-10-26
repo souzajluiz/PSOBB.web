@@ -7,7 +7,7 @@ only part of them has matching C (psobb-client-source).
 
 ## A. Verification debt (built, never seen running in a browser)
 - [ ] Challenge mode in a real game (all stages)
-- [ ] Battle mode in a real game
+- [ ] Battle mode in a real game (partial 2026-10-26: client/e2e/battle-game.spec.ts passes, two players: start, HUD timer, traps, death and respawn, time up; the results screen is not drawn yet, PvP strikes (6x2F) and sonar are not covered; see DEVLOG 2026-10-26)
 - [ ] Technique visuals (Foie, Barta, Zonde, Gizonde, Razonde, Grants, Megid, supports, specials)
 - [ ] Episode 2 enemy FSMs on Seabed, Mines, Tower (animation lengths for groups a / d are stand-ins)
 - [ ] Ship / block change and team menus at the counter

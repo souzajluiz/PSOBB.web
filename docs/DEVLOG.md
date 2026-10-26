@@ -1,5 +1,25 @@
 # Devlog
 
+## 2026-10-26: Battle mode in a real game: a two-player run (battle-game.spec.ts)
+
+**What ran.** `client/e2e/battle-game.spec.ts` (new): two fresh accounts in two browser contexts. A makes a Battle party (EPISODE 1, mode Battle, Normal), B joins it from the list, both stand at the Hunter's Guild clerk, A takes the first Battle quest (Battle1). The battle starts on both (`battle: start`), the HUD timer counts down on both (527 to 46 seconds left over the run, then `battle: time up` on both), A's Right-key trap is placed (6x83, count before the decrement), its blast (6x80 what 2) hits B and A, both die (6x4D flags 0x2) and respawn at (800, -240), and the result line is logged on both. The run passes: 1 passed (12.1 min), no failed requests, no page errors.
+
+**Single player.** A battle with one player ends by itself (battle.ts `ALONE_FRAMES` = 300, the 6x7D phase 5 abort, `battle: exit (aborted)`). So the spec needs B.
+
+**What broke and how it was fixed.**
+- The first two-player runs: B stood 20 units off A's trap and was never in the blast radius. Test setup only; the spec now puts B 20 units from A before the press.
+- `client/src/quest/run.ts` now exposes the BattleRun as `window.classicBattle` (the e2e hook; the HUD timer and the controller state are read through it).
+
+**Still open.**
+- The results screen is not drawn: `quest/battlerun.ts` `showResults` logs `battle result: ...` only. Not implemented, so the spec checks the log line.
+- The result line reads `1st Tallie -2500 | 1st Tallie -2500`: both characters are named Tallie (the spec's `makeCharacter` default) and the points are negative. Neither is checked against the exe here.
+- PvP strikes (6x2F, `combat/pvp.ts`), sonar, the lives respawn rule (not checked which rule set has lives), and the rematch prompt (`askRematch`, not reached: the spec does not answer it) are not covered.
+- Chrome: the spec runs headless on the local newserv; a real-game look next to the original client is not done.
+
+**Infrastructure.** newserv crashed around 09:15 (disk full) and the first two-player attempts stalled at "Connecting..." on login. That is not a client bug. Runs were made with `--trace=off`.
+
+**Checks.** `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). `PW_BASE_URL=http://127.0.0.1:5175 npx playwright test e2e/battle-game.spec.ts --trace=off`: 1 passed (12.1m).
+
 ## 2026-10-25: Quest editor: copy, cut and paste of entities between floors and quests
 
 **Question.** ROADMAP "Quest editor left to do" lists copy / paste between floors and quests first. The editor had Ctrl+D (duplicate on the same floor) but no clipboard.

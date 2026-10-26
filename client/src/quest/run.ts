@@ -110,6 +110,8 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
       },
       battleStart: (setup) => {
         battle ??= new BattleRun({ game, view, ui: town.ui, canvas: town.canvasElement, files: town.clientFiles, log });
+        // Development hook for the e2e tests (the HUD timer, the controller state).
+        Object.assign(window, { classicBattle: battle });
         battle.start(setup);
       },
       battlePlace: (i) => battle?.placeAt(i) ?? { place: 0, points: 0 },

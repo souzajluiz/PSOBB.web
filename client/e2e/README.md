@@ -34,6 +34,13 @@ installed Google Chrome (`channel: 'chrome'`), so no browser download is needed.
   `PSO_USER_A` / `PSO_PASSWORD_A`) creates a party and enters it; B (the test
   account) opens Join a PARTY, picks A's game and enters it; both see two
   players, then both go back to the lobby.
+- `battle-game.spec.ts`: two fresh accounts (`wba...`, `wbb...`) in two browser contexts. A makes a
+  Battle party (EPISODE 1, mode Battle, Normal), B joins it, both stand at the Hunter's Guild clerk and A
+  takes the first Battle quest. Checks: `battle: start` on both, the HUD timer counts down
+  (`window.classicBattle.hud.state.timer`), A's Right-key trap (6x83, count before the decrement) blasts
+  B and A, both die and respawn, `battle: time up` on both, the result line. A's palette slot 2 is set to a
+  trap while A is offline (file 0x3f8). About 12 minutes (the battle's time limit). Not covered: the results
+  screen (not drawn yet), PvP strikes, sonar.
 - `battle-traps.spec.ts`: a Battle party (EPISODE 1, mode Battle, Normal), the Hunter's Guild's
   Battle category (b88001 first). ba_initial_floor moves the player to Temple, whose floor handler
   runs ba_start; then a trap from palette slot 2 (ArrowRight), the 6x83 (type 0, count 5), the
