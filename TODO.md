@@ -7,7 +7,7 @@ only part of them has matching C (psobb-client-source).
 
 ## A. Verification debt (built, never seen running in a browser)
 - [ ] Challenge mode in a real game (all stages) (partial 2026-10-26: the Challenge party entry and the clerk's challenge dialog run in `e2e/challenge-mode.spec.ts`; picking stage 1 and the stage start are open: no stage-start log after Enter on the list)
-- [ ] Battle mode in a real game
+- [ ] Battle mode in a real game (partial 2026-10-26: client/e2e/battle-game.spec.ts passes, two players: start, HUD timer, traps, death and respawn, time up; the results screen is not drawn yet, PvP strikes (6x2F) and sonar are not covered; see DEVLOG 2026-10-26)
 - [ ] Technique visuals (Foie, Barta, Zonde, Gizonde, Razonde, Grants, Megid, supports, specials)
 - [ ] Episode 2 enemy FSMs on Seabed, Mines, Tower (partial 2026-10-26: smoke spec passes on floors 1..17; watch passes on floor 10 but only 2 of 33 groups ran; Seabed Lower and Mines open; real motion lengths for groups a / d in the tests, Gi Gue barrier 5 frames; lobby ping on a closed socket open)
 - [x] Ship / block change and team menus at the counter (e2e: `client/e2e/lobby-counter-menus.spec.ts`; Leave Team as a non-master member is still open, see DEVLOG 2026-10-26)
@@ -15,7 +15,7 @@ only part of them has matching C (psobb-client-source).
 - [ ] Movement: two-client check, slowed / guard animation tie (remote copy scales its leg and animation by slow / guard in code, unit test passes; `two-client-move.spec.ts` not passing yet, see DEVLOG)
 - [ ] Quest editor: open a real quest, drag, Script tab, "Test in game", publish to a deployed host (partial 2026-10-26: local run in client/e2e/questeditor-real.spec.ts and admin-quests.spec.ts; Test in game reaches the panel and publishes a test quest, but entering a game with it is not seen (port 12000 is the shared newserv, and $quest needs AllowStartFromChatCommand); deployed host not done)
 - [ ] Admin: Quests tab live (open in editor, publish), login on production (partial 2026-10-26: the whole Quests loop passes locally in client/e2e/admin-quests.spec.ts; production login not done, no production access here)
-- [ ] Phones: soft keyboard, rotation lock, adaptive resolution (real iOS / Android)
+- [ ] Phones: soft keyboard, rotation lock, adaptive resolution (real iOS / Android; checked by the owner on real devices, not emulated)
 
 ## B. Screens and menus
 - [ ] Character creation and Input UserID: SSIM needs captures of the original (title 0.77 and select character 0.92 are measured)
