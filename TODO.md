@@ -11,7 +11,7 @@ only part of them has matching C (psobb-client-source).
 - [ ] Technique visuals (Foie, Barta, Zonde, Gizonde, Razonde, Grants, Megid, supports, specials)
 - [ ] Episode 2 enemy FSMs on Seabed, Mines, Tower (animation lengths for groups a / d are stand-ins)
 - [ ] Ship / block change and team menus at the counter
-- [ ] Boss fixes (De Rol Le, Vol Opt, Dragon, Belra)
+- [ ] Boss fixes (De Rol Le, Vol Opt, Dragon, Belra) (partial 2026-10-26: `e2e/boss-fights.spec.ts` written, never reached the game: newserv was down; run it, then check spawns, phases, hits, and the kill / exit)
 - [ ] Movement: two-client check, slowed / guard animation tie
 - [ ] Quest editor: open a real quest, drag, Script tab, "Test in game", publish to a deployed host
 - [ ] Admin: Quests tab live (open in editor, publish), login on production

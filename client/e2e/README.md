@@ -57,3 +57,8 @@ installed Google Chrome (`channel: 'chrome'`), so no browser download is needed.
   floor on a search ring (6 * r, r 1..6) from the player, on the ground (+6), with no wall between
   the eye and the spot (`collision.segmentHit`, mask -1); it left the bag; a held W (300 ms) moves
   the player again.
+- `boss-fights.spec.ts`: a fresh account (`wbo...`) with an offline patch through `fresh-field.ts`'s `patch` option
+  (level 100, a high stat block, the equipped weapon swapped for a grind-44 DB'S SABER). It warps to the Dragon
+  (floor 11), De Rol Le (12), Vol Opt (13) and the first Ruins / Mines floor (6..10) with a Dark Belra, and for each
+  one checks the brain is built, its sid changes over 60 s, and key attacks log hits (`hit ... for N`). The kill and
+  the exit are not checked. Needs a running newserv (see the top of this file).
