@@ -12,7 +12,7 @@ import {
   NpcHeadChooser,
   type HeadChooseInput,
   headStatusFlags,
-  NPC_FLAG_CREATED,
+  NPC_FLAG_REMOTE,
   NPC_TECH_ANTI,
   NPC_TECH_RESTA,
   NPC_TECH_REVERSER,
@@ -90,14 +90,15 @@ const cmd = (param1: number, param2: number, command: number, param3 = 0) => ({ 
 // --- creation (commands 0 / 3) -----------------------------------------------------
 {
   const ai = new NpcAi();
-  // The exe's constructor: flag 7, leader none.
+  // The dispatcher creates the NPC with leader none; its flag depends on the owner (below).
   check(ai.apply(cmd(2, 1, 0, 5), 2) === 'follower NPC in slot 1', 'command 0 creates a follower in the slot');
   const s = ai.get(1);
-  check(!!s && s.flag === NPC_FLAG_CREATED && s.leader === NO_LEADER, 'a new NPC has flag 7 and no leader');
+  // The owner's copy is flag 3 (type 5, the dispatcher's owner branch), the leader none.
+  check(!!s && s.flag === NPC_FLAG_FOLLOWER && s.leader === NO_LEADER, 'the owner copy has flag 3 and no leader');
   // param1 names this client: this client owns the NPC's AI.
   check(s?.owner === true, 'param1 == own slot makes this client the owner');
   ai.apply(cmd(0, 3, 3, 5), 2);
-  check(ai.get(3)?.owner === false, 'a non-owner NPC (command 3) has no AI on this client');
+  check(ai.get(3)?.owner === false && ai.get(3)?.flag === NPC_FLAG_REMOTE, 'a non-owner NPC (command 3) is flag 2 and has no AI on this client');
   // The sender's own slot is never an NPC slot (exe: param2 != g_CurrentPlayerSlotIndex).
   check(ai.apply(cmd(2, 2, 0, 5), 2) === null && ai.get(2) === undefined, 'an NPC cannot take the own slot');
   check(ai.apply(cmd(2, 0xffff, 0, 5), 2) === null, 'slot 0xffff creates nothing');
@@ -106,18 +107,20 @@ const cmd = (param1: number, param2: number, command: number, param3 = 0) => ({ 
 // --- commands 1 / 2 on the flag ----------------------------------------------------
 {
   const ai = new NpcAi();
-  ai.create(1, false);
-  ai.create(3, false);
-  // command 2 follows for the NPCs made by command 0 / 3 too (ASSUMED, FOLLOW_CREATED_NPCS).
-  check(ai.follow(0) === 2, 'command 2 reaches the created NPCs (ASSUMED)');
-  check(ai.get(1)?.leader === 0 && ai.get(3)?.leader === 0, 'the leader is the param1 client');
+  ai.create(1, false); // a non-owner copy: flag 2
+  ai.create(3, true); // the owner's copy: flag 3
+  // command 2 leads only the flag-3 copies (exe loop 0x007b3f5b: `cmp flag, 3`); the flag-2 copy does not follow.
+  check(ai.follow(0) === 1, 'command 2 leads only the flag 3 NPCs (one of two)');
+  check(ai.get(1)?.leader === NO_LEADER && ai.get(3)?.leader === 0, 'the flag 2 copy keeps no leader; the flag 3 copy follows the param1 client');
   // command 1 stops the NPC named by param1 when it is a follower (flag 3 in the exe).
-  check(ai.stop(1) === false, 'command 1 on a flag 7 NPC does not stop it (exe gate: flag 3)');
-  const f = ai.get(3);
-  if (f) f.flag = NPC_FLAG_FOLLOWER;
+  check(ai.stop(1) === false, 'command 1 on a flag 2 NPC does not stop it (exe gate: flag 3)');
   check(ai.stop(3) === true && ai.get(3)?.leader === NO_LEADER, 'command 1 stops a flag 3 follower (exe: 0x750 = 0xffff)');
   check(ai.apply(cmd(3, 0, 1), 0) === 'NPC 3 stops following', 'command 1 is logged through apply');
-  check(ai.get(1)?.leader === 0, 'command 1 leaves the other NPCs following');
+  check(ai.apply(cmd(2, 0, 2), 0) === '1 NPC(s) follow client 2' && ai.get(1)?.leader === NO_LEADER, 'command 2 through apply: only the flag 3 NPC is led');
+  // A taken-over NPC (flag 3 by the takeover, npcai.ts) is led by command 2 too.
+  const t = ai.get(1);
+  if (t) t.flag = NPC_FLAG_FOLLOWER;
+  check(ai.apply(cmd(2, 0, 2), 0) === '2 NPC(s) follow client 2' && ai.get(1)?.leader === 2, 'a flag 3 NPC (taken over) is led by command 2');
   ai.remove(1);
   check(ai.get(1) === undefined && ai.slots().length === 1, 'remove drops the NPC');
 }

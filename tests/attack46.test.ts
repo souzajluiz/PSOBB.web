@@ -61,5 +61,20 @@ const framed = (targets: Array<{ entityId: number; hitbox?: number }>) => {
   eq(parsed, { clientId: 7, targets: [] }, 'parseAttackTargets: empty strike');
 }
 
+// The header's client id is the attacker's: an NPC player's strike names the NPC's slot (the exe's
+// player_idx +0x1c), not this client's. The default stays this client's id.
+{
+  const sent: Uint8Array[] = [];
+  const game = {
+    selfId: 0x0007,
+    conn: { send: (_cmd: number, _flags: number, body: Uint8Array) => sent.push(body) },
+    sendSubcommand: Lobby.prototype.sendSubcommand,
+  } as unknown as Game;
+  Game.prototype.sendAttackTargets.call(game, [], 0x0003);
+  eq(sent[0] ? hex(sent[0]) : '', '46020300' + '00000000', 'NPC strike: header client id 3, count 0');
+  Game.prototype.sendAttackTargets.call(game, [{ entityId: 0x1005 }], 0x0003);
+  eq(sent[1] ? hex(sent[1]) : '', '4603' + '0300' + '01000000' + '05100000', 'NPC strike with one target: header id 3');
+}
+
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);

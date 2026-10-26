@@ -56,6 +56,36 @@
 - Screen-recording drift: not reproduced in Chrome; no exe cause found in this pass.
 
 **Tests.** `node tests/playermove.test.ts` ok (new: the exe table order, a held autorun / autowalk counts, none held passes). `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures. `node tests/shortcuts.test.ts`: all pass. `cd client && npx tsc --noEmit -p .`: exit 0 (Node 24). Not run in Chrome, no Playwright.
+## 2026-10-25: NPC follow gate: command 2 leads only the flag-3 copies; the 6x46 sender takes the attacker's id; NPC melee not ported
+
+**Question.** ROADMAP "Combat: NPC melee strikes": (1) fix the `npcai.ts` follow gate (the flag-2 copies on non-owner clients must not follow; the port gave every created NPC flag 7 and `FOLLOW_CREATED_NPCS` made them follow); (2) trace the exe NPC melee and the 6x46 it sends (`send_0x60_0x46_attack_end`, 0x00699248), and port it if feasible.
+
+**Exe evidence (PsoBB.exe, objdump; addresses are virtual).**
+- **The 6x69 dispatcher (0x007b3f04), re-read.** Body `{69, 03, u16 unused, u16 param1 (+4), u16 param2 (+6), u16 command (+8), u16 param3 (+10)}`. The command is dispatched on +8: 0 at 0x7b40eb, 1 at 0x7b40a4, 2 at the loop 0x7b3f5b, 3 at 0x7b3f9c.
+- **Command 2 (0x7b3f5b..0x7b3f97):** for slots 0..3, `GetPlayer(slot)`, then `cmp word [+0x32c], 3`; only then `+0x750 = param1`. **Flag 2 and flag 7 are not led.**
+- **Command 0 / 3 create (type from the owner test `param1 == [0xa9c4f4]`):** command 3 at 0x7b3fc4 (owner, `push 5`) and 0x7b406e (other, `push 4`); command 0 at 0x7b412e (owner, `push 5`, then the AI object 0x7aea10 at 0x7b41b6) and 0x7b41c7 (other, `push 4`, no AI). Each calls the player constructor 0x00686258, whose SetChallengeType call (0x686858, `call 0x686984`) makes the flag: 5 -> 3, 4 -> 2 (SetChallengeType: `type < 4 -> 1, 4 -> 2, 5 -> 3, 6 -> 6, 7 -> 7`, re-read at 0x686984..0x686a18). So an owner copy is flag 3 and a non-owner copy is flag 2. Flag 7 is not produced by the 6x69 create path.
+- **Correction to the 2026-10-23 and 2026-10-25 notes:** `SinowberillChallengePlayer_Constructor_00686258` does not write +0x32c itself. Its body (0x6862e8, reached through the wrapper 0x686258) gets the flag only through `SetChallengeType` at 0x686858. The 7 of `..._006859cc` is not on this path, as the earlier note already says.
+- **6x46 sender (0x00699248), re-derived:** (a) `+0x32c == 2` runs the unsafe-map test (0x0068a3fc) and returns when it is false; (b) `+0x32c != 3` runs the targeting refresh (0x006a3004, `update_player_targeting_info` on `this + 0x8a4`) and returns when that is 0; `== 3` skips the refresh; (c) 0x00689b44 must be 0 (not traced further); (d) `+0x32c == 2` returns (the defensive re-check). Payload: `buf[0] = 0x46`, `buf[1] = size_dwords`, `buf[2..3] = u16 [this + 0x1c]` (the player's slot, the header id), `buf[4..7] = u32 [this + 0x8d0]` (the count as read, not clamped), then 10 dwords from `[this + 0x8d4..0x8f8]`. **size_dwords** is computed from the clamped count `c` (`c` in 0..10, else 0; the compare at 0x69935a..0x699361): `neg, add, add, neg, add 8, shr 2` gives `c + 2`. So a count of 0..10 gives 8..48 bytes, and the packet has the raw count in its u32.
+- **Who sends it.** The 6x46 sender is called at 0x6990b0, 0x699137, 0x6991af, all in the attack handler at 0x00699058 (the per-tick attack state of a player object). That handler is run by the player action dispatch (the `+0x330` switch at 0x698f..): state 3 calls 0x699058, then 0x699384 and 0x69941c.
+- **The NPC's melee is not on the head's path.** `SinowberillHead_ExecuteAttack_007b2ae8` (.c:797151) dispatches action 0, 2 and 3 to Resta / Anti / Reverser, and action 1 only with the item flag. It has no melee branch. The writer of the NPC object's `+0x330 = 3` (the state that reaches 0x699058) was not found: a scan of the `.text` for `mov word [reg + 0x330], reg` gives about 250 sites, so it was not resolved in this pass.
+
+**Port.**
+- `client/src/quest/npcai.ts`: `NpcAi.create(slot, owner)` gives flag 3 for the owner's copy and flag 2 (`NPC_FLAG_REMOTE`, `TAKEOVER_REMOTE_FLAG`) otherwise. `follow()` and `stop()` gate on flag 3 only. `NPC_FLAG_CREATED` (7) and `FOLLOW_CREATED_NPCS` are removed. The header now cites the dispatcher addresses above. The non-owner flag-2 copies get no leader, so `stepNpcFollowers` does not walk them; their moves come from the owner's sent 6x40 / 6x42.
+- `client/src/net/lobby.ts`: `sendSubcommand(sub, payload, command, clientId = this.selfId)`.
+- `client/src/net/game.ts`: `sendAttackTargets(targets, clientId = this.selfId)`; the header id is the attacker's.
+- **Not ported: the NPC melee strike.** The head has no melee action to drive, and the 0x699058 driver needs the NPC object's `+0x330` writer and the weapon's damaging-frame timing for the NPC, neither traced. No caller was added for `sendAttackTargets(…, npcSlot)`.
+- `tests/npcai.test.ts`: the creation and command 1 / 2 assertions follow the flag gate (owner flag 3, non-owner flag 2, command 2 leads flag 3 only, a taken-over flag-2 copy is led after its flag becomes 3).
+- `tests/attack46.test.ts`: a 6x46 with an explicit client id (3) writes that id in the header.
+
+**Found, not changed.**
+- `sendAttackTargets` cuts the list to 10 (size 12). The exe's size clamp (0x69935a) gives size 2 when the count is above 10. The list the port passes is never above 10 in practice, so the difference is latent.
+- `town.ts` `npcCreated` sends `param1 = npc.state` (0 alive, 1 dead, 2 invisible), not the owner's slot. So a remote client's `NpcTakeover.noteCreate` reads the owner from the state word. `NpcAi` still takes the local creation as owner (`local || param1 == self`, the note of 2026-10-25). Left as is; the flag of an NPC created by this client is 3 through `local`.
+
+**ASSUMED.**
+- The non-owners' NPCs stand until the owner's 6x40 / 6x42 arrive (the exe's flag-2 copy has no AI and is not led).
+- The `0x689b44` test in 0x699248 (not traced).
+
+**Tests.** `node tests/npcai.test.ts`, `node tests/npctakeover.test.ts`, `node tests/attack46.test.ts` (all pass); `NEWSERV=... node tests/combat.test.ts` (5860 checks, 0 failures); `cd client && npx tsc --noEmit -p .` (clean).
 
 ## 2026-10-25: NPCs drawn: the 0x118 texture load has no reader in the dump; the 0x118 dispatcher plays only row 0
 

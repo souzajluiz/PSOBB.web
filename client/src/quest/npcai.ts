@@ -6,41 +6,42 @@
 // NPC's player slot), u16 command (+8), u16 param3 (+10, template)}.
 //
 // Traced (exe):
-//  - command 0 / 3 (create): the NPC is a player object built with
-//    SinowberillChallengePlayer_Constructor_00686258, whose constructor sets
-//    unknown_flags_invincibility (+0x32c) = 7 and the leader (+0x750) = 0xffff
-//    (.c:552273, .c:552337). The client named by param1 == its own slot is the
-//    owner: it also builds the AI object (SinowberillChallengeBoss_Constructor_
-//    007aea10, .c:798404); the others build only the player (.c:798452). Command 3
-//    also runs Player_ProcessActionPacket on the new player (the action state).
+//  - command 0 / 3 (create): the NPC is a player object built by
+//    SinowberillChallengePlayer_Constructor_00686258 (objdump 0x686258 -> 0x6862e8 ->
+//    player body; its SetChallengeType call at 0x686858 gives the flag, see
+//    quest/npctakeover.ts). The dispatcher (007b3f04) passes type 5 (flag 3) when
+//    param1 == its own slot, else type 4 (flag 2): command 3 at 0x7b3fc4 (push 5) /
+//    0x7b406e (push 4), command 0 at 0x7b412e (push 5) / 0x7b41c7 (push 4). The owner also
+//    builds the AI object (SinowberillChallengeBoss_Constructor_007aea10, .c:798404);
+//    the others build only the player (.c:798452). Command 3 also runs
+//    Player_ProcessActionPacket on the new player (the action state).
 //  - command 1 (stop acting): the player at slot param1 with flag 3 gets its
-//    leader cleared (+0x750 = 0xffff, .c:798425).
-//  - command 2 (start acting): every player in slots 0..3 with flag 3 gets
-//    +0x750 = param1 (the leader to follow, .c:798433).
+//    leader cleared (+0x750 = 0xffff, dispatcher 0x7b40a4..0x7b40cd).
+//  - command 2 (start acting): the loop over slots 0..3 (0x7b3f5b) gives +0x750 =
+//    param1 only to the players whose flag word is 3 (`cmp edx, 3` at 0x7b3f6f).
+//    A flag-2 copy (a non-owner's NPC) is not led, so it does not follow.
 //  - flag 3 is set on an NPC when its owner leaves and the next client takes over
 //    (SinowberillChallenge_CheckAndReassignPlayer_007b46f8, .c:798808), and the
 //    leader it follows is the taking-over client's slot.
 //  - a follower with a leader (+0x750 != 0xffff) moves to the leader's floor
 //    when the leader changes floor (MapObject_ChangeFloor_00669bf8, .c:533036).
 //
-// ASSUMED (not traced): that command 2 reaches the NPCs made by command 0 / 3
-// too (their flag is 7 in the constructor; what sets flag 3 for them is in the
-// vtable init, not traced), so the quest's npc_play follows them here; the
-// follow distance of the non-owner clients (FOLLOW_DISTANCE, followPoint); the owner's
-// follow is the head's spawn range and move target (quest/npchead.ts, traced 2026-10-23);
-// the walk path of the non-owners (a straight line with the render-side followTick); who
-// syncs the NPC's position to the other clients (every client simulates the followers from
-// the leaders' synced positions). The attack AI (below) runs on the owner's client only, as
-// the exe's AI object does.
+// ASSUMED (not traced): the follow distance of the non-owner clients (FOLLOW_DISTANCE,
+// followPoint); the owner's follow is the head's spawn range and move target (quest/npchead.ts,
+// traced 2026-10-23); the walk path of the non-owners (a straight line with the render-side
+// followTick); who syncs the NPC's position to the other clients (the owner's 6x40 / 6x42 moves
+// and the followers' render-side walk). The attack AI (below) runs on the owner's client only,
+// as the exe's AI object does. The flag-2 copies of the non-owners never follow (the exe gate),
+// so their walk is the owner's sent moves only.
 
-export const NPC_FLAG_CREATED = 7; // SinowberillChallengePlayer_Constructor_00686258 (.c:552337)
-export const NPC_FLAG_FOLLOWER = 3; // 007b46f8 (.c:798808); the 6x69 command 1 / 2 gate (.c:798425, .c:798433)
+import { TAKEOVER_REMOTE_FLAG } from './npctakeover.ts';
+
+export const NPC_FLAG_FOLLOWER = 3; // the owner's copy (type 5) and a taken-over NPC; the 6x69 command 1 / 2 gate (dispatcher 0x7b40a4, 0x7b3f5b)
+export const NPC_FLAG_REMOTE = TAKEOVER_REMOTE_FLAG; // a non-owner copy (type 4): no AI, never led by command 2
 export const NO_LEADER = 0xffff; // player +0x750 (.c:552273)
 // ASSUMED: the distance a non-owner client keeps its follower from the leader, in units. The
 // owner's client uses the head's spawn range instead (quest/npchead.ts headSpawnRange).
 export const FOLLOW_DISTANCE = 3.0;
-// ASSUMED: command 2 also starts the NPCs made by command 0 / 3 (see above).
-export const FOLLOW_CREATED_NPCS = true;
 
 export interface NpcControlCommand {
   param1: number;
@@ -67,9 +68,10 @@ export class NpcAi {
     return [...this.states.keys()];
   }
 
-  // Command 0 / 3: a new NPC player in `slot`; `owner` when the sender named this client.
+  // Command 0 / 3: a new NPC player in `slot`; `owner` when the sender named this client. The flag is the
+  // SetChallengeType of the dispatcher's type (owner 5 -> 3, other 4 -> 2; quest/npctakeover.ts).
   create(slot: number, owner: boolean): void {
-    this.states.set(slot, { flag: NPC_FLAG_CREATED, leader: NO_LEADER, owner });
+    this.states.set(slot, { flag: owner ? NPC_FLAG_FOLLOWER : NPC_FLAG_REMOTE, leader: NO_LEADER, owner });
   }
 
   remove(slot: number): void {
@@ -88,11 +90,12 @@ export class NpcAi {
     return true;
   }
 
-  // Command 2: every follower takes `leader` as its leader (exe: flag 3 only; see FOLLOW_CREATED_NPCS).
+  // Command 2: every flag-3 NPC takes `leader` as its leader (exe loop 0x007b3f5b: flag 3 only, so a flag-2
+  // copy on a non-owner client does not follow).
   follow(leader: number): number {
     let n = 0;
     for (const s of this.states.values()) {
-      if (s.flag !== NPC_FLAG_FOLLOWER && !(FOLLOW_CREATED_NPCS && s.flag === NPC_FLAG_CREATED)) continue;
+      if (s.flag !== NPC_FLAG_FOLLOWER) continue;
       s.leader = leader;
       n++;
     }

@@ -935,7 +935,9 @@ export class Game extends Lobby {
 
   // 6x46 (G_AttackFinished_Header_6x46): the targets of one strike, at most
   // 10 {u16 entity id, u16 hit box}. newserv marks each enemy as last hit by us.
-  sendAttackTargets(targets: Array<{ entityId: number; hitbox?: number }>): void {
+  // `clientId` is the header's id: the attacker's player slot (this client's by default; an NPC
+  // player's strike names the NPC's slot, the exe's player_idx +0x1c at send_0x60_0x46_attack_end).
+  sendAttackTargets(targets: Array<{ entityId: number; hitbox?: number }>, clientId = this.selfId): void {
     const list = targets.slice(0, 10);
     const p = new Uint8Array(4 + list.length * 4);
     const dv = new DataView(p.buffer);
@@ -944,7 +946,7 @@ export class Game extends Lobby {
       dv.setUint16(4 + i * 4, t.entityId, true);
       dv.setUint16(6 + i * 4, t.hitbox ?? 0, true);
     });
-    this.sendSubcommand(0x46, p);
+    this.sendSubcommand(0x46, p, 0x60, clientId);
   }
 
   // --- Photon blasts (combat/photonblast.ts) -------------------------------
