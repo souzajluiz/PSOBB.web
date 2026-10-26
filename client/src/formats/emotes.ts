@@ -193,6 +193,37 @@ export function sitStandsUp(chair: boolean, alt: boolean, edge: (key: string) =>
   return alt && edge(sitEndKey(chair));
 }
 
+// The emote's motion table (HandlePlayerStatusCheckAndUpdate_00691b30, 0x00691b30;
+// the dump's name is wrong, it picks +0xdc). It runs when the player's +0x38c
+// motion set's predicate (vtable +0x24 = 0x006a74e0) says so, and the table is
+// the getter 0x006a7794 of that answer. Proven from objdump: the body is
+// clamp6(set+4) (0x006a7b64: the value below 6, else 0), the helper 0x006a7508
+// is 1 for 1, 2, 4 and 5 and 0 for the rest, the predicate is the helper's
+// negation, the getter gives 0x00a943e0 when the helper of its argument is 1
+// and 0x00a945a0 when it is 0. So the table is 0x00a943e0 for a body of 0 or 3
+// (or 6 and up) and 0x00a945a0 for 1, 2, 4 and 5. The sender's flag never
+// reaches this function: the receiver's own body picks the table.
+export function emoteMotionTable(body: number): 'a943e0' | 'a945a0' {
+  const clamped = body >>> 0 < 6 ? body >>> 0 : 0;
+  const helper = clamped === 1 || clamped === 2 || clamped === 4 || clamped === 5;
+  // predicate (vtable +0x24) = !helper; getter arg = predicate ? 1 : 0; getter -> helper(arg) ? a943e0 : a945a0
+  const arg = helper ? 0 : 1;
+  return arg === 1 ? 'a943e0' : 'a945a0';
+}
+
+// The emote state's step 3 (HandleEmoteAction0x3fCheck_0069c7bc, 0x0069c7bc):
+// nothing when unknown_flags_2 & 0x20000000; else dispatch_action_0x3f (6x3F,
+// no gate in dispatch_action_0x3f_) when character_flags (+0xb0) & 0x10 (the
+// dump's name for 0x10 is `confused`). Runs every tick while the emote holds.
+// ASSUMED: the port has no confusion on the lobby's players, so the lobby never
+// sends it; the field's status (combat/status.ts) is not wired here.
+export const CHARACTER_CONFUSED = 0x10;
+export const UNKNOWN_FLAG_0X20000000 = 0x20000000;
+export function emoteInterruptSends(characterFlags: number, unknownFlags2: number): boolean {
+  if ((unknownFlags2 & UNKNOWN_FLAG_0X20000000) !== 0) return false;
+  return (characterFlags & CHARACTER_CONFUSED) !== 0;
+}
+
 // A received 6x58: body = the whole subcommand (header included).
 export function parseEmoteSubcommand(body: Uint8Array): { clientId: number; slot: number; opposite: boolean } | null {
   if (body.length < 8 || body[0] !== EMOTE_OPCODE) return null;
