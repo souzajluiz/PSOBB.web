@@ -489,9 +489,7 @@ export class DfForm1 extends DfEntity {
         // 0x00455E34: a Darvant from the mouth every 32 frames.
         if (this.timer < F1.spitBefore && (this.timer & 0x1f) === 0 && this.spat < this.row.spitMax) {
           const h = this.heads[this.newV];
-          const p = f.randomAlive();
-          const tp = p === 0xffff ? null : f.playerPos(p);
-          if (f.spawnSpit(h[0], h[2], tp ? tp.x : 0, tp ? tp.z : 0)) {
+          if (f.spawnSpit(h[0], h[2])) {
             f.events.push({ kind: 'se', id: 0x36d });
             this.spat++;
           }
