@@ -51,8 +51,8 @@ import type { GameView } from '../render/gameview.ts';
 import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, inUnsafeMap, toBams } from '../render/playermove.ts';
-import { followPoint, headStatusFlags, NO_LEADER, NpcAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, npcCanCastTech, npcWalkFlags, NPC_TP_ASSUMED } from './npcai.ts';
-import { acquireClosestTargets, CHARACTER_FLAG_DEAD, headChainBranch, HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARGET_HIT, HEAD_OWNER_ACQUIRE, HEAD_STATE_ATTACK, HEAD_STATE_CAST, HEAD_STATE_IDLE, HEAD_STOP_DISTANCE, headProbeEnemies, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
+import { followPoint, headStatusFlags, NO_LEADER, NPC_HP_ASSUMED, NpcAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, npcCanCastTech, npcWalkFlags, NPC_TP_ASSUMED } from './npcai.ts';
+import { acquireClosestTargets, CHARACTER_FLAG_DEAD, headChainBranch, HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARGET_HIT, HEAD_FLAG_STRONG, HEAD_FLAG_TOO_CLOSE, HEAD_OWNER_ACQUIRE, HEAD_STATE_ATTACK, HEAD_STATE_CAST, HEAD_STATE_IDLE, HEAD_STOP_DISTANCE, headProbeEnemies, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
 import { TECH, techTpCost } from '../combat/techniques.ts';
 import { QuestUi } from './questui.ts';
 import { challengeCurrentStage, ownChallengeRecords, timerText } from './cmode.ts';
@@ -824,7 +824,7 @@ export class QuestTown {
       const ownerF90 = combat && leader.clientId === this.game.selfId ? headStatusFlags(combat.npcOwnerStatus()).f90 : 0;
       // UpdateState_007af1a8 (the owner's timers), UpdateState_007af7ec (the acquires and the probe), then the field.
       head.ownerStep(ownerF90, acquireClosestTargets(owner, HEAD_OWNER_ACQUIRE, cands).length > 0);
-      head.headStateUpdate({ npc, owner, cands, probe: (at) => headProbeEnemies(at, cands) });
+      head.headStateUpdate({ npc, owner, cands, probe: (at) => headProbeEnemies(at, cands), npcHp: NPC_HP_ASSUMED });
       if (this.isPioneer2()) {
         head.pioneerUpdateState(owner);
       } else {
@@ -834,7 +834,7 @@ export class QuestTown {
           npcWeapon: npc,
           allowed: true, // is_player_allowed_to_attack of the NPC's record (ASSUMED true)
           roll: Math.floor(Math.random() * 32768),
-          npcStatus8: false, // B +0x90 & 8: the server's status, not modelled (ASSUMED false)
+          npcStatus8: (this.npcHeadStatus(head).f90 & 0x8) !== 0, // B +0x90 & 8 (CheckHeadRotation; NPC HP ASSUMED full)
           ray: wall,
           chooser: (mode) => this.headChooses(slot, head, mode, cands),
         });
@@ -916,7 +916,7 @@ export class QuestTown {
       this.npcHeads.set(slot, ch);
     }
     const owner = headStatusFlags(combat.npcOwnerStatus());
-    const npc = headStatusFlags({ hp: 1, hpMax: 1, tp: 1, tpMax: 1, stateFlags30: 0 });
+    const npc = this.npcHeadStatus(head);
     const first = head.targets.length > 0 ? cands.find((e) => e.id === head.targets[0].id) : undefined;
     const pos = head.npcPos;
     const input = {
@@ -931,16 +931,7 @@ export class QuestTown {
       // CheckPlayerTechCastEligibility(B player, tech) (npcai.ts npcCanCastTech). The area is the quest area's map id
       // (unknown with no area script: the map is then taken as unsafe, the port's old behaviour). The NPC's technique
       // level (0) and TP (NPC_TP_ASSUMED) are ASSUMED, not read.
-      canCast: (tech: number) => {
-        const area = this.area?.area ?? null;
-        return npcCanCastTech({
-          unsafeMap: area === null ? true : inUnsafeMap(area),
-          techLevel: 0,
-          tp: NPC_TP_ASSUMED,
-          tpCost: techTpCost(tech, 0),
-          stateClear: true,
-        });
-      },
+      canCast: (tech: number) => this.npcCastEligible(tech),
       lockedInRadius: () => !!first && !!pos && (first.x - pos.x) ** 2 + (first.z - pos.z) ** 2 < head.attackRadius * head.attackRadius,
     };
     const c = ch.choose(mode, input);
@@ -958,11 +949,32 @@ export class QuestTown {
     return c.attack;
   }
 
-  // The head's state-2 cast (SinowberillHead_CastTechnique_007b2e20, quest/npchead.ts headTwoTech): each
-  // tick while the head is in state 2, the Foie family pick at the locked target (B +0x7c). The table word's
-  // 0x40 leaves the cast off (.c:797355). ASSUMED: the strong bit (B +0x90 & 0x1000) is 0, so the roll with
-  // the cast need byte +0x53 decides; the TP gate only sets the input state 3 (not a block), and the
-  // eligibility check (CheckPlayerTechCastEligibility) is ASSUMED true. The busy ticks are the cast's own.
+  // The NPC's status word (B +0x90 / +0x8c from CheckHeadRotation). The NPC's HP and TP are ASSUMED full (NPC_HP_ASSUMED,
+  // the port has no NPC damage or TP), and the target bit is the head's acquire (B +0x8c & 2).
+  private npcHeadStatus(head: NpcHead): { f90: number; f8c: number } {
+    return headStatusFlags({ ...NPC_HP_ASSUMED, tp: 1, tpMax: 1, stateFlags30: 0, targetAcquired: head.acquired });
+  }
+
+  // CheckPlayerTechCastEligibility_0069a088 for the NPC's record: the quest area's map id decides the unsafe-map test
+  // (an area-less quest is taken as unsafe, the old behaviour); the NPC's technique level (0) and TP are ASSUMED.
+  private npcCastEligible(tech: number): boolean {
+    const area = this.area?.area ?? null;
+    return npcCanCastTech({
+      unsafeMap: area === null ? true : inUnsafeMap(area),
+      techLevel: 0,
+      tp: NPC_TP_ASSUMED,
+      tpCost: techTpCost(tech, 0),
+      stateClear: true,
+    });
+  }
+
+  // The head's state-2 cast (SinowberillHead_CastTechnique_007b2e20, .c:797346, quest/npchead.ts headTwoTech). Each
+  // tick while the head is in state 2, the Foie family pick at the locked target (B +0x7c). The table word's 0x40
+  // leaves the cast off, and the NPC's TP need (B +0x90 & 0x10) leaves it off too (the exe's UpdateAnimationCounter
+  // tail is not ported). The strong bit (B +0x90 & 0x1000) comes from CheckHeadRotation with the head's 0x2000 flag,
+  // so the roll with the cast need byte +0x53 decides unless both are set. Order of the exe: the roll, then the TP
+  // gate (input 3 when (TP - cost) / max TP <= 0.2: ASSUMED pass, the NPC's max TP is not in the port), then the
+  // head's 0x2000 is cleared, then CheckPlayerTechCastEligibility (npcCanCastTech), then HandlePlayerTechCastState.
   private stepNpcTwoTech(slot: number, p: LobbyPlayer, head: NpcHead): void {
     if (head.castTicks > 0) {
       head.castTicks--;
@@ -970,8 +982,13 @@ export class QuestTown {
     }
     const combat = this.view.combat;
     if (!combat || head.lockedPrimary === 0 || (head.head34 & 0x40) !== 0) return;
-    const tech = headTwoTech(head.head34, false, (Math.floor(Math.random() * 32768) / 32768) * 10, head.need53);
+    const npcStatus = this.npcHeadStatus(head);
+    if ((npcStatus.f90 & 0x10) !== 0) return;
+    const strong = (head.flags & HEAD_FLAG_TOO_CLOSE) !== 0 && (npcStatus.f90 & HEAD_FLAG_STRONG) !== 0;
+    const tech = headTwoTech(head.head34, strong, (Math.floor(Math.random() * 32768) / 32768) * 10, head.need53);
     if (tech === null) return;
+    head.flags &= ~HEAD_FLAG_TOO_CLOSE; // *(head +0x80) = uVar5 & 0xffffdfff, after the TP gate
+    if (!this.npcCastEligible(tech)) return; // CheckPlayerTechCastEligibility_0069a088 (npcai.ts npcCanCastTech)
     head.castInput(tech); // HandlePlayerTechCastState (.c:797215): the input state is set before the cast
     const ticks = combat.npcCastTechnique({ clientId: slot, charClass: p.charClass }, tech, [head.lockedPrimary]);
     if (ticks !== null) head.castTicks = ticks;

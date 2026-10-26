@@ -41,7 +41,8 @@
 //    source in the port, so UpdateTargetPosition stays dormant.
 //  - the input states (+0x24) and timers: the writers of the paths the port runs are ported (see setInputState);
 //    the TP gate of CastTechnique (input 3), AIProcessState's 0x14 / 0x6c writes, the multi-step attack (input
-//    0xd), and the anim-timing acquire states (0xe..0x11, CheckAnimationState: B +0x334 is ASSUMED 0) are not.
+//    0xd) are not. The anim-timing states (0xe..0x11) are ported 2026-10-26 (`animStep`, npcai.ts headAnimationState):
+//    they fire only on an HP change, so with the NPC's HP ASSUMED full they never fire here.
 //    The +0x5c increment is ASSUMED one per head tick (tickInput). The bit 0x100 of the head flags and +0x100 of
 //    B are the collision record (B +0xd8..0x104), not a timer.
 //  - the 2764 gate (B.player +0x328 & 2) is movement_state standing (= input state 1, SetPlayerInputState_00694390
@@ -49,13 +50,15 @@
 //  - the weapon (B.player +0x300) is the NPC's feet position; the object of CheckWall is the hit point and
 //    its normal is the surface normal (ground_info object x,y,z assumed to be the hit point).
 //  - the threshold of GetDistancePointToLineSegment (g_DistancePointToLineSegmentThresholdSq) is 0.
-//  - the strong bit B +0x90 & 0x1000 and status bits 8 / 0x10 come from the server (0 here).
+//  - the strong bit B +0x90 & 0x1000 is not from the server: CheckHeadRotation (npcai.ts headStatusFlags, 2026-10-26)
+//    sets it when the NPC has a target and its HP is at most 75%; the NPC's HP is ASSUMED full, so it is 0 here.
 //  - B.player +0x44 (the NPC's last position for CheckHeadDistance) is the position at the last tick.
 //  - the input states of the head (+0x24) and the timers +0x5c / +0x5e / +0x6a / +0x6c / +0x70 / +0x100 are
 //    not modelled; the busy time of a cast is the charge ticks (quest/npcai.ts, combat.ts npcCastTechnique).
 //  - the Pioneer 2 test (map_is_pioneer2_) is the floor 0 of the lobby.
 
 import { PLAYER_RADIUS } from '../render/collision.ts';
+import { headAnimationState, HEAD_ANIM_BIG_DROP, HEAD_ANIM_DROP, HEAD_ANIM_HEAL } from './npcai.ts';
 
 // DAT_0097dd84 (.c:796204): the midpoint factor.
 export const HEAD_MIDPOINT = 0.5;
@@ -458,6 +461,8 @@ export class NpcHead {
   castTicks = 0; // the cast's busy ticks (ASSUMED: the technique's charge + cast)
   wallHit = false; // the wall ray's answer for the last movement
   npcPos: HeadPoint | null = null; // the NPC's position for TryAttack and CheckPathAndTarget
+  npcCounter88 = 0; // B +0x88: CheckAnimationState's counter (the HP of its last call)
+  npcAnimBits = 0; // B +0x90 bits 0x40 / 0x80 / 0x100 / 0x200 of this tick (CheckAnimationState)
   // The head's input state (+0x24) and its timers (exe offsets in the comments). The input state is the line
   // the NPC says (DisplayChatBubble_007b2a30 reads the situation table by it). Timers are shorts in the exe.
   inputState = 0; // +0x24: 0..0x19 (see setInputState for the writers)
@@ -506,11 +511,50 @@ export class NpcHead {
     this.flags = (this.flags & ~0x1010) | HEAD_FLAG_MOVE;
   }
 
+  // CheckAnimationState (npcai.ts headAnimationState) and its input writes in UpdateState_007af7ec (.c:795450..795500):
+  // a changed counter sets the input from the bits: 0x40 -> 0xe, 0x80 -> 0xf, no 0x200 -> 0x10, and a heal (0x200)
+  // -> 0x11 unless the state is 8, the head's 0x10000 bit is then cleared instead, and the 0x11 needs P +0x84 clear
+  // (ASSUMED: the port's `lockedSecond` is that word, as the chooser's head84 input). The HP never moves in the port,
+  // so the bits stay 0 and the input is not written from here (the damage path of an NPC is not traced).
+  animStep(hp: { hp: number; hpMax: number }): void {
+    const r = headAnimationState(this.npcCounter88, hp.hp, hp.hpMax);
+    this.npcCounter88 = r.counter;
+    this.npcAnimBits = r.changed ? r.bits : 0;
+    if (!r.changed) return;
+    const b = r.bits;
+    if ((b & HEAD_ANIM_BIG_DROP) !== 0) {
+      this.t5c = 0;
+      this.setInputState(0xe);
+    } else if ((b & HEAD_ANIM_DROP) !== 0) {
+      this.t5c = 0;
+      this.setInputState(0xf);
+    } else if ((b & HEAD_ANIM_HEAL) === 0) {
+      this.t5c = 0;
+      this.setInputState(0x10);
+    } else if (this.state !== HEAD_STATE_ATTACK) {
+      if ((this.flags & 0x10000) === 0) {
+        if (this.lockedSecond === 0) {
+          this.t5c = 0;
+          this.setInputState(0x11);
+        }
+      } else {
+        this.flags &= ~0x10000;
+      }
+    }
+  }
+
   // SinowberillHead_UpdateState_007af7ec (.c:795069), the parts the field reads, in the exe's order: the
   // owner-NPC distance (+0x58), the owner's bit (UpdateState_007af1a8, range 30 around the owner), the B
   // acquire (AcquireTarget, range +0x38, sets B +0x8c bit 2), the collision probe (bits 0x20 / 0x80), then the
   // moved test and the wall counter (CheckHeadDistance). The candidate list is B's triples for CheckPathAndTarget.
-  headStateUpdate(i: { npc: HeadPoint; owner: HeadPoint; cands: readonly HeadCandidate[]; probe?: HeadProbe }): void {
+  headStateUpdate(i: {
+    npc: HeadPoint;
+    owner: HeadPoint;
+    cands: readonly HeadCandidate[];
+    probe?: HeadProbe;
+    // The NPC's player HP (+0x334 / +0x2bc). ASSUMED full when not given: the port has no NPC damage.
+    npcHp?: { hp: number; hpMax: number };
+  }): void {
     if (acquireClosestTargets(i.owner, HEAD_OWNER_ACQUIRE, i.cands).length > 0) this.ownerNeed8c |= HEAD_NEED_ACQUIRED;
     this.dist58 = xzDistSq(i.owner, i.npc);
     this.targets = acquireClosestTargets(i.npc, this.acquireRange, i.cands);
@@ -522,6 +566,7 @@ export class NpcHead {
       this.npcNeed8c |= HEAD_NEED_0X20;
       this.record = hit.rec;
     }
+    this.animStep(i.npcHp ?? { hp: 1, hpMax: 1 });
     const moved = this.prevNpc === null || Math.hypot(i.npc.x - this.prevNpc.x, i.npc.y - this.prevNpc.y, i.npc.z - this.prevNpc.z) > HEAD_MOVED_DIST;
     if (moved) {
       this.npcNeed8c |= HEAD_NEED_MOVED;
