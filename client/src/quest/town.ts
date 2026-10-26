@@ -52,6 +52,8 @@ import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, inUnsafeMap, toBams } from '../render/playermove.ts';
 import { followPoint, headStatusFlags, NO_LEADER, NPC_HP_ASSUMED, NpcAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, npcCanCastTech, npcWalkFlags, NPC_TP_ASSUMED } from './npcai.ts';
+import { NPC_FLAG_FOLLOWER } from './npcai.ts';
+import { NpcTakeover } from './npctakeover.ts';
 import { acquireClosestTargets, CHARACTER_FLAG_DEAD, headChainBranch, HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARGET_HIT, HEAD_FLAG_STRONG, HEAD_FLAG_TOO_CLOSE, HEAD_OWNER_ACQUIRE, HEAD_STATE_ATTACK, HEAD_STATE_CAST, HEAD_STATE_IDLE, HEAD_STOP_DISTANCE, headProbeEnemies, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
 import { TECH, techTpCost } from '../combat/techniques.ts';
 import { QuestUi } from './questui.ts';
@@ -100,6 +102,8 @@ export class QuestTown {
   private shop: string[][] | null = null;
   private templates: NpcPlayerTemplate[] | null = null;
   private readonly npcAi = new NpcAi();
+  // The NPC takeover on an owner's leave (quest/npctakeover.ts, 007b46f8).
+  private readonly npcTakeover = new NpcTakeover();
   // The move sends of those NPCs (quest/npcai.ts NpcMoveSender), by slot.
   private readonly npcMoves = new Map<number, NpcMoveSender>();
   // The head's action chooser of those NPCs (quest/npcai.ts NpcHeadChooser), by slot.
@@ -166,6 +170,8 @@ export class QuestTown {
       this.momokaWaiter = null;
       waiter?.(code);
     });
+    // S->C 0x66: a player left. An NPC whose owner left goes to the next client (quest/npctakeover.ts).
+    this.game.on('playerLeft', () => this.npcOwnerLeft());
     // Another player's 6x69 makes the same NPC player here.
     this.game.on('subcommand', (sub, clientId, body) => {
       if (sub === 0x69 && clientId !== this.game.selfId) {
@@ -734,6 +740,7 @@ export class QuestTown {
 
   private npcKilled(slot: number): void {
     if (this.game.players.get(slot)?.npcTemplate === undefined) return;
+    this.npcTakeover.forget(slot);
     this.npcAi.remove(slot);
     this.npcMoves.delete(slot);
     this.npcFollowHeads.delete(slot);
@@ -746,6 +753,27 @@ export class QuestTown {
     const c = { param1: leader, param2: 0, command: 2, param3: 0 };
     this.game.conn.send(0x60, 0, buildNpcControl(c));
     void this.npcControl(c, true);
+  }
+
+  // The owner left (007b46f8, ASSUMED to run on the leave notice): when this client is the next slot, the NPC
+  // whose owner left is taken over. The exe's default 6x69 (SendPacket0x60_Default_007b4879) is command 2 with
+  // this client as the leader, sent and applied here; then the NPC is flag 3, led by this client, and its head
+  // runs as the owner's (st.owner, stepNpcFollowers -> stepNpcHead). Its melee 6x46 is not ported.
+  private npcOwnerLeft(): void {
+    const self = this.game.selfId;
+    const step = this.npcTakeover.onPlayerLeft((slot) => this.game.players.has(slot), self);
+    if (step.kind !== 'take') return;
+    const c = { param1: self, param2: 0, command: 2, param3: 0 };
+    this.game.conn.send(0x60, 0, buildNpcControl(c));
+    void this.npcControl(c, true);
+    if (!this.npcAi.get(step.npcSlot)) this.npcAi.create(step.npcSlot, true);
+    const st = this.npcAi.get(step.npcSlot);
+    if (st) {
+      st.owner = true;
+      st.flag = NPC_FLAG_FOLLOWER;
+      st.leader = self;
+    }
+    this.log(`6x69: the NPC in slot ${step.npcSlot} is taken over (its owner left); this client leads it`);
   }
 
   // The NPC players follow their leader. The owner's client runs the NPC's head (quest/npchead.ts,
@@ -1018,6 +1046,7 @@ export class QuestTown {
   }
 
   private async npcControl(c: { param1: number; param2: number; command: number; param3: number }, local: boolean, pos?: { x: number; y: number; z: number; angle: number }): Promise<void> {
+    this.npcTakeover.noteCreate(c, this.game.selfId);
     if (c.command === 1 || c.command === 2) {
       const msg = this.npcAi.apply(c, this.game.selfId);
       if (msg) this.log(`6x69: ${msg}`);

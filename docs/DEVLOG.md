@@ -71,6 +71,35 @@
 **Still open.** The material unit terms (the unit specials at item +0x174 / +0x176 are not modelled, so the port compares the bonus alone); the state-4 tool slot action (`UpdateQuickMenuToolTechSlotState`, 0x00741c08); the two-handed and traps tabs.
 
 **Checks.** `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). `tests/quickmenu.test.ts`: ALL PASS. `tests/cmode.test.ts`: OK. `tests/fieldhud.test.ts`, `tests/wordselectmenu.test.ts`, `tests/questflow.test.ts`, `tests/quests.test.ts`, `tests/questmisc.test.ts`: pass. `NEWSERV=.../vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures. Not run in Chrome.
+## 2026-10-25: NPC takeover: the owner's leave hands the NPC to the next client (flag 2 -> 3); the 6x69 flags were wrong in npcai.ts
+
+**Question.** ROADMAP "Combat: NPC takeover": decode `SinowberillChallenge_CheckAndReassignPlayer_007b46f8` (the NPC's +0x32c = 3), what the new owner runs, and port it; then the NPC melee `6x46` (state 3 skips the targeting check).
+
+**Exe evidence (PsoBB.exe; objdump of the binary, the dump only for names; addresses are virtual).**
+- **Takeover body, 007b46f8 (objdump 0x007b46f8..0x007b4874), in order:** (1) the OPM word at 0x00aab1cc is 0 and the owner slot (u16 0x00aad650) is not 0xffff; (2) `GetPlayer(owner) == null`; (3) `GetPlayer(NPC slot)` (u16 0x00a03cc0) exists and `+0x32c == 2` (`movsx` / `cmp 2`), else the three globals reset (owner, NPC slot 0xffff, template dword 0x00aad654 = 0); (4) the loop over slots 0..3 skips the NPC's slot and takes the first present player and breaks; (5) if that is this client (u16 0x00a9c4f4): the owner word becomes this client, the default 6x69 is sent (`SendPacket0x60_Default_007b4879`, objdump 0x007b4879: command 2 at +8, param1 = this client at +4, the stack bytes at +2 and +6 are not written), then `+0x32c = 3`, `+0x750` (leader) = this client, `+0x754` = template, and `SinowberillChallengeBoss_Constructor_007aea10(this client, NPC player_idx (+0x1c), template, queue)` is built.
+- **The NPC's flag (SetChallengeType 0x00686984, objdump 0x686984..0x686a18):** `type < 4 -> 1`, `4 -> 2`, `5 -> 3`, `6 -> 6`, `7 -> 7`; the write is `movw ax, +0x32c`. `player_constructor` (0x00686858) calls it, and the 6x69 creator `SinowberillChallengePlayer_Constructor_00686258` goes through player_constructor. The dispatcher (`SinowberillChallenge_DispatchPacket_007b3f04`) builds an owner NPC (param1 == this client) with type 5 (flag 3) and its AI, and any other with type 4 (flag 2) and no AI. **The `unknown_flags_invincibility = 7` in the older `SinowberillChallengePlayer_Constructor_006859cc` (dump .c:552337) is not on the 6x69 path** (its only caller is 0x006abdb8).
+- **Command 0 globals:** only command 0 sets owner = param1, NPC slot = param2, template = param3, and only when param1 != 0xffff, param2 != 0xffff and param2 != this client (dispatcher, objdump of the same branch). Command 3 sets the flag only.
+- **Trigger (ASSUMED):** `007b46f8` has no E8 / E9 call in the binary (a scan of `.text`). Its address sits in a `.data` table at 0x00b4663c, and no reader of that table was found. The port runs the check on the leave notice (S->C 0x66, `game.ts` `playerLeft`).
+- **Melee 6x46 gate, `send_0x60_0x46_attack_end` (0x00699248), re-read:** `+0x32c == 2` runs the unsafe-map test (0x0068a3fc) and returns when false; `+0x32c != 3` runs the targeting refresh (0x006a3004) and may return; `== 3` skips it. The header's client id is the attacker's `player_idx` (+0x1c), so an NPC's 6x46 names the NPC's slot.
+
+**Port (the takeover is ported; the NPC melee is not).**
+- `client/src/quest/npctakeover.ts` (new, additive): `challengeTypeFlag`, `createdNpcFlag`, `takeoverStep` (the decision of 007b46f8 without its writes), and `NpcTakeover` (the globals from command 0, the flags, `onPlayerLeft`).
+- `client/src/quest/town.ts` (additive only): the `playerLeft` listener calls `npcOwnerLeft`; a 'take' sends the default command 2 (param1 = this client) through `npcControl`, sets the NPC's `owner`, `flag = 3` and `leader = this client` on the `NpcAi` state, so `stepNpcFollowers` runs its head as the owner's; `npcControl` records each 6x69 create; `npcKilled` forgets the flag. `quest/npcai.ts` and `quest/npchead.ts` are not edited.
+- The new owner's AI is the port's owner path (the head chain, `stepNpcHead`), which the exe's `007aea10` object is traced as (the 2026-10-23 entry: `SinowberillChallengePlayer_Update_007aefd4`'s chain).
+
+**Not ported: the NPC melee `6x46`.** The port's NPC head has no melee action: its actions are Resta / Anti / Reverser (`npcAttackCast`) and its moves are walks, so there is no NPC melee strike to send. The NPC melee of the exe (the weapon-attack state machine run on the NPC object) is not traced. The send path exists (`game.sendAttackTargets` builds the 6x46, but its header is this client's id, so an NPC strike would need the id parameter). Nothing added without a caller.
+
+**Found, not changed (for `quest/npcai.ts`):**
+- `NpcAi` gives every created NPC flag 7, and `FOLLOW_CREATED_NPCS` makes command 2 start them as ASSUMED. The exe gives flag 3 to the owner's copy and flag 2 to the others, and command 2 gates on flag 3 only (`.c:798433`). So on a non-owner client the flag-2 copy should not follow; the port makes it follow. The new module keeps the exe flags (`NpcTakeover.flagOf`), so a later change can use them.
+- The `npcai.ts` header says the flag 3 is set "in the vtable init, not traced": that is `SetChallengeType` (above).
+- The port's local creation counts as owner (`local || param1 == self`); the exe's owner test is `param1 == self` only (the creator's own 6x69 is applied back to it, so the exe takes the param1 branch). Left as is.
+
+**ASSUMED.**
+- The trigger (leave notice) and the OPM flag = false (the port has no one-person-mode flag).
+- The default command 2's stack bytes at +2 and +6 are zero in the sent body.
+- The port's leave notice runs after `players.delete` (`game.ts` 0x66), so `present(owner)` is false in the check.
+
+**Tests.** `tests/npctakeover.test.ts` (new): the type-to-flag table, `createdNpcFlag`, the command 0 / 3 bookkeeping (own slot, 0xffff), the decision of 007b46f8 (owner present, OPM, reset cases, the NPC slot skipped, the first-slot taker, another taker), the class sequence (owner leaves, then this client leads; a killed NPC resets), the default command 2 body, a flag-3 NPC following that leader, and a source check of the town.ts wiring. `tests/npcai.test.ts`, `tests/npcs.test.ts`, `tests/attack46.test.ts`, `tests/tech48.test.ts`, `tests/quests.test.ts`, `tests/questflow.test.ts`, `tests/combatdepth.test.ts`: pass. `NEWSERV=.../vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures. `cd client && npx tsc --noEmit -p .`: clean. Not run in Chrome (no Playwright).
 
 ## 2026-10-25: Minimap: the "Sinow Berill sub-entity" icons are the Barba Ray's (body 2.0, parts 1.2)
 
