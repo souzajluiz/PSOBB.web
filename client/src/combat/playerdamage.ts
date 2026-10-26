@@ -333,6 +333,10 @@ export class PlayerDamage {
   state: PlayerHitState = 'alive';
   // Ticks of invulnerability left (a hit while this is positive is ignored).
   invuln = 0;
+  // The player's control state (+0x32c, u16). 0 for a normal local player; 1, 2, 3, 6, 7 are the
+  // Sinowberill challenge-session states and the takeover (3), see combat/enemytechplayer.ts for the writers.
+  // Read by enemyTechOnPlayer (the freeze / shock gate: 1).
+  controlState = 0;
   deathFlags = 0;
   // Death fade alpha, 0..128 (DEATH_FADE_MAX); 0 while alive.
   fade = 0;
