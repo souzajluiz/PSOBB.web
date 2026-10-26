@@ -426,6 +426,24 @@ export function radarSourceOf(type: string): RadarSource | null {
 // the plain icon 0x00805608). The icon's owner is the segment, not the
 // body (the body's own icon is 2.0 above); render/combat.ts minimapEnemies
 // reports the segments under this type.
+// The Barba Ray (enemy type 0xcb, the root frame 0x004b8584, dump name
+// UpdateSinowberillEntity_004b8584: the dump's "Sinowberill" names are the Barba Ray's,
+// and its `player *` parameter types are a mislabel, the callers pass the enemy).
+// The body: the root frame calls EnableSinowberillVisualIndicators_004b9198 at 0x004b891d,
+// on the common tail after the state switch (PROVEN: the call and its icon; the 0x8000
+// path at 0x004b85b9 returns to 0x004b8946 without it). That function adds icon3 at the
+// root's position with scale 0x40000000 (2.0), colour 0xffffa24c, flags 1, only when the
+// box's flag bit 0 is set (`hitboxes->unknown_flags & 1`, dump 239860). The root frame
+// has no plain icon call (no 0x00805608, no slot call) in 0x004b8584..0x004b9198.
+// The parts (BarbaPartAi, the update 0x004ba0ac = UpdateSinowberillPositionAndState_004ba0ac,
+// dump 240335): after the pause gate it copies the row position, then adds icon3 at its
+// own position with scale 0x3f99999a (1.2), colour 0xffffa24c, flags 1, behind the same
+// box-bit test (PROVEN, objdump 0x004ba0ac..0x004ba120; no plain icon in that function).
+// ASSUMED: the box flag bit 0 is on for both (the part's box is copied from the template
+// 0x009abc84, whose +0x18 is 0x8003, PROVEN, and the part init 0x004ba2e4 writes it to
+// this+0x3ac; no writer that clears it was traced, and the root's box init is not traced).
+// The part's icon is the part's own, not the body's: the port's Barba parts are typed
+// 'BARBA_RAY_PART' in render/combat.ts minimapEnemies.
 export const FORCED_ICON_RULES: Readonly<Record<string, EnemyIconRule>> = {
   OLGA_FLOW_1: { scale: 5, color: ENEMY_ICON_COLOR, forced: true },
   OLGA_FLOW_2: { scale: 4, color: ENEMY_ICON_COLOR, forced: true },
@@ -434,6 +452,8 @@ export const FORCED_ICON_RULES: Readonly<Record<string, EnemyIconRule>> = {
   GAL_GRYPHON: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
   PIG_RAY: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
   DRAGON: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
+  BARBA_RAY: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
+  BARBA_RAY_PART: { scale: 1.2, color: ENEMY_ICON_COLOR, forced: true },
 };
 export function enemyIconRule(type: string): EnemyIconRule {
   return FORCED_ICON_RULES[type] ?? ENEMY_ICON_RULE;

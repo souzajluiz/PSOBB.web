@@ -2144,7 +2144,8 @@ export class CombatView {
       }
       const p = e.instance.root.position;
       // A De Rol Le segment keeps the body's slot type, but its icon is its own (classic/minimap.ts FORCED_ICON_RULES).
-      out.push({ x: p.x, z: p.z, type: e.ai instanceof DrlSegmentAi ? 'DE_ROL_LE_BODY' : e.slot.type });
+      // A Barba Ray part keeps the body's slot type; its forced 1.2 icon is its own (UpdateSinowberillPositionAndState_004ba0ac).
+      out.push({ x: p.x, z: p.z, type: e.ai instanceof DrlSegmentAi ? 'DE_ROL_LE_BODY' : e.ai instanceof BarbaPartAi ? 'BARBA_RAY_PART' : e.slot.type });
     }
     return out;
   }
