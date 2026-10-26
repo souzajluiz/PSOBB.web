@@ -5,6 +5,7 @@
 import { detectDevDataSource, onDataSource, setDataSource } from '../data/store.ts';
 import { pickDataFolder } from '../data/source.ts';
 import { areaName, NUM_QUEST_FLOORS } from './areas.ts';
+import { copyEntities, takePaste } from './clipboard.ts';
 import { button, download, h } from './dom.ts';
 import { buildPackage, openQuestFiles, scriptHost, type NamedBytes } from './io.ts';
 import { createEnemy, createObject, QuestDocument, type Change } from './model.ts';
@@ -268,7 +269,7 @@ const viewBar = h(
   h('label', { class: 'qe-check' }, modelsBox, ' Models'),
   h('label', { class: 'qe-check', title: 'Dragging keeps entities on the ground' }, snapBox, ' Snap to ground'),
 );
-const view3d = h('div', { class: 'qe-view' }, viewBar, canvasWrap, viewStatus, h('p', { class: 'qe-hint', text: 'Click selects (Shift or Ctrl adds), drag moves, Alt-drag rotates, drag the green ring around the selection to turn it (Shift snaps to 15 degrees), Delete removes. Drag orbits, wheel zooms, right-drag pans, WASD / Q / E fly. Drag a type from the palette into the view to create it.' }));
+const view3d = h('div', { class: 'qe-view' }, viewBar, canvasWrap, viewStatus, h('p', { class: 'qe-hint', text: 'Click selects (Shift or Ctrl adds), drag moves, Alt-drag rotates, drag the green ring around the selection to turn it (Shift snaps to 15 degrees), Delete removes; Ctrl+C / Ctrl+X copy or cut the selection and Ctrl+V pastes it (onto any floor, or into another quest). Drag orbits, wheel zooms, right-drag pans, WASD / Q / E fly. Drag a type from the palette into the view to create it.' }));
 const viewScript = h('div', { class: 'qe-view', hidden: true });
 const viewEvents = h('div', { class: 'qe-view scroll', hidden: true }, events.el);
 const viewRandom = h('div', { class: 'qe-view scroll', hidden: true }, random.el);
@@ -437,6 +438,23 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     doc.duplicateSelection();
     doc.seal();
+  } else if (mod && (key === 'c' || key === 'x') && doc.selection.length) {
+    e.preventDefault();
+    const n = copyEntities(doc.selection)?.entities.length ?? 0;
+    say(`Copied ${n} ${n === 1 ? 'entity' : 'entities'} (Ctrl+V pastes them on the current floor, or in another quest).`, 'ok');
+    if (key === 'x') {
+      doc.deleteSelection();
+      doc.seal();
+    }
+  } else if (mod && key === 'v') {
+    e.preventDefault();
+    const copies = takePaste(doc.floor);
+    if (!copies) say('Nothing copied yet: select entities and press Ctrl+C.', 'err');
+    else {
+      doc.addEntities(doc.floor, copies, 'Paste');
+      doc.seal();
+      say(`Pasted ${copies.length} ${copies.length === 1 ? 'entity' : 'entities'} on floor ${doc.floor}.`, 'ok');
+    }
   } else if (mod && key === 'a' && tab === '3d') {
     e.preventDefault();
     doc.select(doc.entitiesOf(doc.floor));

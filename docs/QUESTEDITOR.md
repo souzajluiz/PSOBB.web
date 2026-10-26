@@ -34,8 +34,10 @@ Pick a floor in the floor list. The map, the enemy / NPC / object models and one
 - **Rotation gizmo**: a green ring lies flat around the selection (its pivot is the last selected entity on the floor), with a dot at that entity's heading. Press the ring and drag to turn every selected entity in place; the drag is one undo step ("Turn"). Without Shift the angle follows the pointer freely; **hold Shift** while dragging to snap the stored angle to multiples of 15 degrees (of the entity's own angle, as the inspector shows it, so the room's offset does not shift the grid).
 - The angle is stored in the .dat as the entity's Y angle in PSO units: 0x10000 = 360 degrees, wrapped to 0..0xffff. Alt-drag, the `[` / `]` keys and the inspector write the same field.
 - Empty-space drag orbits, wheel zooms, right-drag pans, click the view then WASD / Q / E to fly (the map viewer's controls).
-- **Delete** removes the selection, **Ctrl+D** duplicates, **Ctrl+A** selects the floor, **Esc** clears, **F** frames the selection, **[** / **]** rotate by 15 degrees.
+- **Delete** removes the selection, **Ctrl+D** duplicates, **Ctrl+C** / **Ctrl+X** copy (cut) the selection and **Ctrl+V** pastes it on the current floor, **Ctrl+A** selects the floor, **Esc** clears, **F** frames the selection, **[** / **]** rotate by 15 degrees.
 - **Create**: drag a type from the **Palette** (it lists the types the floor's area holds) into the view, or press `+` next to it to add it at the centre of the view. The new entity gets the nearest room and sits on the map.
+
+**Copy and paste** keep the entities in memory for the page (so they paste into another quest opened in the same page too). A paste keeps the copied local positions and rooms; pasting again onto the floor they came from shifts each paste by 10 units on X and Z, like Duplicate. Each paste is one undo step. The clipboard is `client/src/questeditor/clipboard.ts` (pure, tested in `tests/questeditor-clipboard.test.ts`).
 
 Positions are stored relative to a *room* (the entity's section). Dragging keeps the entity's room and changes its local coordinates; **Nearest room** in the inspector re-assigns the room whose origin is nearest and keeps the world position.
 
@@ -97,6 +99,7 @@ or, from another page: `window.questEditor.registerTestInGame(fn)` / `window.que
 | `client/src/questeditor/model.ts` | The document: bin, per-floor entity / event lists, selection, history, change events. No DOM. |
 | `history.ts`, `datcodec.ts`, `binhead.ts`, `geom.ts`, `areas.ts` | Undo stack; .dat / .evt bytes from the lists; .bin header edits and the minimal new .bin; world <-> room coordinates; area names. |
 | `scene.ts` | The 3D layer over `render/mapviewer.ts` and the enemy / object / NPC layers; picking, dragging, placement. |
+| `clipboard.ts` | The entity clipboard (copy, cut, paste onto a floor), pure. |
 | `overview.ts` | Floor summaries, room summaries and room navigation (pure). |
 | `panel_*.ts`, `dom.ts`, `main.ts`, `style.css` | The panels and the page (`panel_overview.ts` is the overview and room panel). |
 | `publish.ts` | Requests for the admin panel's publish route (base64, names, session check). |
