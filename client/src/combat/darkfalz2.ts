@@ -60,6 +60,7 @@ import {
 } from './darkfalzcommon.ts';
 import { F1, pickWeighted } from './darkfalz1.ts';
 import { TECH, techPower } from './techniques.ts';
+import { chopToInt } from './chop.ts';
 import { enemyFire } from './techfire.ts';
 import { ENEMY_ICON_COLOR, type Icon } from '../classic/minimap.ts';
 
@@ -473,8 +474,10 @@ export class DfForm2 extends DfEntity {
         if (this.timer === F2.recoverDrain) f.events.push({ kind: 'se', id: 0x13e });
         if (--this.timer < 0) {
           // CreateSpecialAttackEntity (0x006EEEB4) on itself, the enemy Resta. ASSUMED
-          // heal: the technique's power (the attacker's MST term is not known).
-          this.hp = Math.min(this.maxHp, this.hp + Math.round(techPower(TECH.resta, this.row.restaLevel)));
+          // heal: the technique's power (the attacker's MST term is not known). The heal
+          // is entity_hit_by_tech's resta case on an enemy target (index >= 0x1000), whose
+          // fistp runs under the truncating control word (0x00773afc, fistp 0x007756ec / 0x00775714): chop.
+          this.hp = Math.min(this.maxHp, this.hp + chopToInt(techPower(TECH.resta, this.row.restaLevel)));
           f.events.push({ kind: 'resta', level: this.row.restaLevel });
           this.enter(this.row.stopState);
         }

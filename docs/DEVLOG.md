@@ -1,5 +1,27 @@
 # Devlog
 
+## 2026-10-26: Damage to HP is chop: the four open Math.round sites and the item heal
+
+**Question.** ROADMAP "Damage to HP is chop" listed four sites still on `Math.round`: the enemy caster's Resta (`render/combat.ts` `enemyResta`), the Dark Falz self-Resta (`combat/darkfalz2.ts`), the shock thunder on the player (`render/combat.ts`, the ETH thunder), and the enemy-on-player HP subtract's routine. Which rounding does each exe conversion use, and does the item heal (ApplyHealthRecoveryEffect) match?
+
+**Method.** objdump of PsoBB.exe by address ranges (`--start-address` / `--stop-address`), the dump for names, `tools/exedata.py read` for the jump table at 0x00977f30 / 0x00977ea0.
+
+**PROVEN: entity_hit_by_tech 0x00773afc truncates.** Its fistp blocks (0x00773e63..0x00773e7d, 0x00773eb0..0x00773ebc, 0x00773ee0..0x00773ee8, and the later ones at 0x00773fb2.., 0x00774009.., 0x00774035..) each `fnstcw`, `or eax, 0xc00`, `fldcw`, `fistp`, restore. RC = 11 is truncation toward zero, not round-half-even. The resta case (tech 15, jump table entry at 0x00977edc = 0x0077556e) joins the common tail at 0x007755a4, and for an enemy target (entity index >= 0x1000, the `cmp [ebp+0x1c], 0x1000` at 0x00775664) the amount is `fistp`ed at 0x007756ec and 0x00775714 under 0xc00. So the Resta heal on an enemy target is chopped. Vtable +0x60 is this function (the technique entity hits each 6x47 target through it).
+
+**Site 1, enemy caster Resta (`enemyResta`): CHOP.** The heal goes through the same tail (above). The MST term and power are the port's ASSUMED terms (unchanged); only the conversion moves to `chopToInt`, the same as the player's `restaHeal` (`combat/techniques.ts`, already chopped).
+
+**Site 2, Dark Falz self-Resta (`darkfalz2.ts` ~477): CHOP.** Same mechanism: CreateSpecialAttackEntity on itself, the target is an enemy (index >= 0x1000, ASSUMED for the boss's id), so the tail's fistp is under 0xc00.
+
+**Site 3, shock thunder on the player (`render/combat.ts` ~6568): CHOP.** PROVEN: the ETH thunder (ETH read at 0x007759c1, `movsx esi, [ebp+0x2f8]`) computes the damage float, then `fistp` at 0x00775a26 and 0x00775a4e, both under `or 0xc00` (0x00775a14..0x00775a2a, 0x00775a3c..0x00775a52). The second one is the HP subtract's amount (`movsx edx, si; push; call 0x00777414`). The port's `Math.round` becomes `chopToInt`. The port computes in doubles, the exe in float32 (`fstp dword`); a value on a float32 boundary can differ by one, not handled (ASSUMED negligible).
+
+**Site 4, enemy-on-player HP subtract's routine: NO CONVERSION INSIDE.** The routine is 0x00777414: `HP (word +0x334) -= amount`, clamped at 0, returns 0 for a negative amount. It takes an integer. Its callers (0x00773ef7 in entity_hit_by_tech, 0x00775a60 in the thunder) pass the `movsx` of a chopped fistp. So the rounding is the caller's (chop). The port already subtracts `chopToInt(damage)` (`combat/playerdamage.ts` line ~418). No code change; the player's try_hit_entity target is still not located, and the function name is not needed for the verdict.
+
+**Item heal (ApplyHealthRecoveryEffect 0x005de854): INTEGER, no rounding.** The amount is `uint8 + (uint8 >> 1) * g_CurrentFloor` (`sar`, `imul`, `movsx` to 16-bit), no FPU op, then `add_player_hp` 0x007773d4 (`HP += amount`, clamped to max at +0x2bc). The item's flag byte 0xf4 == 2 branch (0x005de88b) adds the max HP (+0x2bc) instead, a full restore; the port has no client-side monomate formula (the server applies item use); nothing to change.
+
+**Changes.** `combat/chop.ts` `chopToInt` at the three heal / damage sites above; comment fix in `combat/techniques.ts` (`restaHeal` doc said round, the code and exe say chop). No half-even helper was needed: no site in these four is round-half-even.
+
+**Verified:** `node tests/flinch.test.ts`, `enemytechplayer.test.ts`, `darkfalz.test.ts`, `darkfalzwarp.test.ts`, `derolle.test.ts`, `status.test.ts`, `itemmodels.test.ts`, `items.test.ts` all pass; `NEWSERV=... node tests/combat.test.ts` 5860 checks, 0 failures; `cd client && npx tsc --noEmit -p .` exit 0.
+
 ## 2026-10-25: NPCs drawn: the 0x118 texture load has no reader in the dump; the 0x118 dispatcher plays only row 0
 
 **Question.** ROADMAP "NPCs: drawn now" lists the open parts: the 0x118 texture setup (`plAsmp.rel` by class into obj+0x3ec, its use not traced), the 0x118 walk row (the town walk stands in), the 0x118 weapon (not ported), the 0x33 slot's per-class motion id (ASSUMED), and the talk reach (ASSUMED). This pass re-traces the first two from `PsoBB.exe` (dump `Psobb.exe-05112026.c`, line numbers below; addresses from the dump names).

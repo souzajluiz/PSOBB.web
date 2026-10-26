@@ -5349,7 +5349,10 @@ export class CombatView {
     const ctx = this.difficultyParams;
     const def = ENEMY_TYPE_PARAMS[caster.slot.type];
     const mst = ctx?.params && def?.stats.length ? Math.max(0, ctx.params.stats(ctx.difficulty, def.stats[0]).mst) : 0;
-    const heal = Math.round(mst * 0.5 + techPower(TECH.resta, level));
+    // The heal is entity_hit_by_tech's resta case on an enemy target (index >= 0x1000): its
+    // fistp runs under the truncating control word (0x00775664 / 0x00775674 path, fistp at
+    // 0x007756ec and 0x00775714, 0x00773afc): chopToInt.
+    const heal = chopToInt(mst * 0.5 + techPower(TECH.resta, level));
     target.stats.hp = Math.min(target.stats.maxHp, target.stats.hp + heal);
     this.sendEnemy(target, ENEMY_BASE_FLAGS);
     const what = target === caster ? 'itself' : `E-${target.index.toString(16)} (${target.slot.type})`;
@@ -6565,7 +6568,9 @@ export class CombatView {
     if (special.kind === 'shock') {
       const statusChance = statusChanceFromResist(el.eth);
       // The thunder's damage: (100 - ETH) * 0.002 * (level / (5 - power) + (1 + power) * 20) * 5.
-      const dmg = Math.round(((100 - el.eth) * 0.002 * (special.level / (5 - special.power) + (1 + special.power) * 20)) * 5);
+      // The exe's fistp for this value runs under the truncating control word (fistp 0x00775a26 /
+      // 0x00775a4e, the ETH thunder at 0x007759c1): chopToInt.
+      const dmg = chopToInt(((100 - el.eth) * 0.002 * (special.level / (5 - special.power) + (1 + special.power) * 20)) * 5);
       if (dmg >= 1) this.damage.hit(dmg, angle, 0, killer);
       if (this.rng() < statusChance) this.inflictStatus(STATUS.shock, what);
       return false;

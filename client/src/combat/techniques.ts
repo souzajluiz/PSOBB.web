@@ -310,7 +310,7 @@ export function restaHeal(level: number, mst: number, charClass = 0): number {
 // Another player's Resta on this client (PsoBB.exe, dump names: unknown_cast_tech case resta,
 // dump 642090, makes the Resta entity; TechniqueEntity_Update_006ef3b8 hits each 6x47 target
 // through the target's vtable +0x60 = entity_hit_by_tech (0x00773afc, dump 747782) with the
-// caster as the attacker). Its resta case heals the target by round(caster MST *
+// caster as the attacker). Its resta case heals the target by chop(caster MST *
 // g_DamageMultiplier_NonPlayer + power); the multiplier is ASSUMED to be the 0.5 at 0x00978278
 // (RESTA_MST_SCALE). The MST is the caster's battleparams_stats->mst, kept by the 6x30 handler
 // UpdatePlayerStatsAndLevelMessage_006928e4 (dump 574022). The entity's first hit is the primary
