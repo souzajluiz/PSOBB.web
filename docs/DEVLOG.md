@@ -1,5 +1,21 @@
 # Devlog
 
+## 2026-10-25: NPCs drawn: the 0x118 texture load has no reader in the dump; the 0x118 dispatcher plays only row 0
+
+**Question.** ROADMAP "NPCs: drawn now" lists the open parts: the 0x118 texture setup (`plAsmp.rel` by class into obj+0x3ec, its use not traced), the 0x118 walk row (the town walk stands in), the 0x118 weapon (not ported), the 0x33 slot's per-class motion id (ASSUMED), and the talk reach (ASSUMED). This pass re-traces the first two from `PsoBB.exe` (dump `Psobb.exe-05112026.c`, line numbers below; addresses from the dump names).
+
+**Texture load (PROVEN, loader).** `LoadChallengeEntityData_00605950` (0x00605950, .c:465523) allocates a 0x44000 buffer into obj+0x3e8 (`CustomMalloc_0082e940`), picks the path by `GetChallengeValue_004e6f24(obj+0x3cc)` from `g_pChallengeEntityResourcePath`, loads it with `LoadLooseAssetFile_005ba3f4` into that buffer, and stores the result at obj+0x3ec (.c:465536). It is called from the 0x118 dispatcher's state 1 and state 2 init (.c:463582, .c:463696).
+
+**Reader (PROVEN for the dump, not for the binary's typed fields).** A grep of every `0x3ec` form in the dump (`+ 0x3ec`, `field_0x3ec`, `[0xfb]`, decimal 1004 in the challenge range) finds no read of obj+0x3ec in the challenge code 0x00602c1c..0x00606xxx (.c:463444..466xxx) apart from the write at .c:465536. The other offset-0x3ec accesses in the dump are in other object types (enemies, Olga, Galgryphon, Sinowbeat, Savage Wolf, Sorcerer, Goran, Rappy, Hildebear and so on), and none is the 0x118 path. The challenge renderer `RenderChallengeEntityModel_00604a34` (.c:464750) takes its texture from the item asset (`unknown_try_set_texture(param_2+0x10)`, the weapon's item, obj+0x43c), and its body path `UpdateAndRenderChallengeEntity_00604694` (.c:464633) runs only at obj+0x3c8 == 3 and reads its rows from obj+0x3e0 / 0x3e8 without 0x3ec. Caveat: `ChallengePlayerApplySpawnData_006871f0` (.c:553020) writes `this+0x3ec` from the spawn data (+0x56); the struct type of that call is not checked, so the no-reader claim is for the dump's decompile.
+
+**Verdict:** the loaded file is not read by any traced path, so the port's 0x118 appearance (the player's own body, `formats/npcmodels.ts`) is unchanged. No code change. ASSUMED is kept for the typed-field completeness only.
+
+**Walk row (narrowed, still ASSUMED).** The dispatcher plays exactly one NJM row for the 0x118 entity: state 1 (.c:463563) and state 2 (.c:463677) call `Player__ApplyWeaponAnimationData(obj, &DAT_009c2b80 + idx*0x4c0, g_ChallengeEntityWeaponAnimDataBase+0x430, 0)` with `idx = GetCurrentWeaponAnimationIndex_00603bc8()`, i.e. row 0 (animation id 0) of the class's table, from the npcapcmot file (the base at +0x430). No other `Player__ApplyWeaponAnimationData` call exists in the dispatcher (.c:463444..464104). So the walk is not in the dispatcher. The 0x118 entity is a player object (`player *`), and a walk, if any, comes from the player's movement code (the NPC move sub-commands of `quest/npcai.ts`), which is not traced here. The port keeps the town walk for it (ASSUMED). Its motion file, if the walk plays, would be npcapcmot (the same base for every row of the table), not plymotionnpctown. That is inferred from the one call, not proven for the move path.
+
+**Still open (unchanged):** the 0x33 slot's per-class id (the u16 at njm+8 of each of the 61 `RegisterStageNpcModelData_00608470` call sites, .c:294936 .. .c:334896, each with its own njm struct built on the stack; the decompiled struct is not reliable, DEVLOG 2026-10-24), the 0x118 weapon's per-floor table, and the talk reach.
+
+**Verified:** `node tests/npcs.test.ts` ALL PASS; `NEWSERV=... node tests/combat.test.ts` 5860 checks, 0 failures; `cd client && npx tsc --noEmit -p .` exit 0. No code changed.
+
 ## 2026-10-25: Minimap: the "Sinow Berill sub-entity" icons are the Barba Ray's (body 2.0, parts 1.2)
 
 **Question.** ROADMAP "Minimap left to do" lists the Sinow Berill sub-entity icons as traced but not ported, owners ASSUMED: dump 239865 `EnableSinowberillVisualIndicators_004b9198` (forced 2.0 when box flag bit 0 is set) and dump 240354 `UpdateSinowberillPositionAndState_004ba0ac` (forced 1.2). Which port object is each one?
