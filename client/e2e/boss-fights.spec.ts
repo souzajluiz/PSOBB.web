@@ -77,19 +77,31 @@ async function fight(page: Page, logs: string[], info: TestInfo, cls: string, fl
   console.log(`${tag} spawn: ${JSON.stringify(b)}`);
   await page.screenshot({ path: info.outputPath(`${tag}-0-spawn.png`) });
 
-  // The phases: the brain's sid, sampled every 500 ms.
-  let prev = b.sid;
-  const seen = new Set<string>([String(b.sid)]);
+  // Stand near the boss first: Dark Belra stays hidden until a player is in its search range
+  // (enemyfsmruins.ts, state 'hidden'), and the other brains wake on the same range.
+  await page.evaluate(
+    ([x, y, z]) => {
+      const g = (window as any).classicGame.view;
+      g.placePlayer(g.game.selfId, x, y, z + 35, Math.PI);
+    },
+    [b.x, b.y, b.z],
+  );
+
+  // The phases: the brain's sid and state (VoloptAi and BelraAi have no sid; their state is the phase),
+  // sampled every 500 ms. A change of either counts.
+  const key = (x: BossView) => `${x.sid}|${String(x.state)}`;
+  let prev = key(b);
+  const seen = new Set<string>([prev]);
   for (let t = 0; t < watchMs; t += 500) {
     await page.waitForTimeout(500);
     const s = await readBrain(page, cls);
     if (!s) break;
     b = s;
-    seen.add(String(s.sid));
-    if (s.sid !== prev) out.stateChanges++;
-    prev = s.sid;
+    seen.add(key(s));
+    if (key(s) !== prev) out.stateChanges++;
+    prev = key(s);
   }
-  out.states = [...seen];
+  out.states = [...seen].map((k) => k.split('|').slice(1).join('|'));
   console.log(`${tag} phases: sids ${out.states.join(',')}, changes ${out.stateChanges}, last ${JSON.stringify(b)}`);
 
   // Attack: stand 35 units from the body (facing it, as goldragon-smoke.spec.ts does), then press the
