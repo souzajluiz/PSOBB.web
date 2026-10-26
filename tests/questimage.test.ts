@@ -3,9 +3,14 @@
 // image is printed decompressed, as `.struct IMAGE_DATA` with `.data` hex lines,
 // and the assembler compresses it back with prsCompressOptimal. The printed form
 // is used only when that compressor reproduces the label's bytes; otherwise the
-// label stays `.data` hex. Synthetic data only (no Sega files).
+// label stays `.data` hex. Synthetic data, plus one guard on the four shipped BB
+// copies (read from vendor/newserv when present, skipped otherwise).
 //
 // Run: node tests/questimage.test.ts
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { prsDecompress } from '../client/src/formats/prs.ts';
 import { prsCompressOptimal } from '../client/src/formats/prscompress.ts';
 import { assembleQuest, disassembleQuest, QuestAssemblyError } from '../client/src/formats/questasm.ts';
@@ -118,6 +123,35 @@ const printed = (b: Uint8Array): string => dotData(b).trim().toUpperCase();
   };
   rejects('start:\n  ret\nx:\n  .struct IMAGE_DATA\n  .data 0g\n', 'an IMAGE_DATA with non-hex bytes');
   rejects('start:\n  ret\nx:\n  .struct IMAGE_DATA\n  .field atp 1\n', 'an IMAGE_DATA with a .field line');
+}
+
+// --- the four shipped BB copies stay hex ----------------------------------------
+// q142 / q143 -bb-e / -bb-j (vendor/newserv/system/quests, read in place, never committed). Their streams are not
+// prsCompressOptimal's parse (docs/QUESTFILES.md, "Round-trip results"), so the labels must not print as
+// .struct IMAGE_DATA. Skipped when the quest files are absent.
+{
+  const here = dirname(fileURLToPath(import.meta.url));
+  const mainRoot = (() => {
+    try {
+      return dirname(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: here, encoding: 'utf8' }).trim());
+    } catch {
+      return join(here, '..');
+    }
+  })();
+  const quests = [process.env.NEWSERV, join(here, '../vendor/newserv'), join(mainRoot, 'vendor/newserv')]
+    .filter((d): d is string => !!d)
+    .map((d) => join(d, 'system/quests'))
+    .find((d) => existsSync(d));
+  if (!quests) {
+    console.log('SKIP the shipped IMAGE_DATA copies: no newserv checkout with system/quests (set NEWSERV)');
+  } else {
+    for (const f of ['vr/q142-bb-e.bin', 'vr/q142-bb-j.bin', 'solo-extra/q143-bb-e.bin', 'solo-extra/q143-bb-j.bin']) {
+      const bin = parseQuestBin(prsDecompress(new Uint8Array(readFileSync(join(quests, f)))));
+      const text = disassembleQuest(bin);
+      check(text.includes('call_image_data'), `${f} references an image`);
+      check(!text.includes('.struct IMAGE_DATA'), `${f}: the shipped IMAGE_DATA copy stays hex`);
+    }
+  }
 }
 
 if (failures) {

@@ -272,8 +272,11 @@ prints `// args`, names `labelXXXX:` and does not parse newserv's text (the dire
 label syntax differ in details such as `.allow_create_item`'s format). `.language`, `.include` and `--qedit` mnemonics
 are not supported (`.language` is ignored). Typed data labels use our `.struct` / `.cstr` / `.vector` forms (above), not
 newserv's `// As PlayerStats` comment listings. A compressed image (`IMAGE_DATA`) whose stream `prsCompressOptimal` does not
-reproduce stays hex: the four shipped BB copies (`call_image_data` in q142 / q143, `-bb-e` and `-bb-j`) were made by an
-encoder that differs from the optimal parse at byte 18 of the stream, so they are not typed.
+reproduce stays hex: the four shipped BB copies (`call_image_data` in q142 / q143, `-bb-e` and `-bb-j`) are not
+`prsCompressOptimal`'s parse (it differs at byte 18: the shipped stream takes a long copy where the optimal parse takes a
+short copy and a cheaper tail). No newserv encoder (levels 0..16 of `PRSCompressor`, `prs_compress_indexed`,
+`prs_compress_optimal`) and no greedy or lazy variant tried reproduces them; a lazy rule reproduces the q143 `-bb-j`
+stream alone. So they are not typed (DEVLOG 2026-10-25, "IMAGE_DATA copies"; `tests/questimage.test.ts` guards it).
 
 ## Round-trip results
 
