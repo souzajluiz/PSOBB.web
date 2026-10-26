@@ -115,5 +115,35 @@ check(burstSpinsOnReceipt(0, 0, true) === false, 'the local player is not spun b
 check(burstSpinsOnReceipt(3, 0, false) === false, 'a remote burst in a hub does not spin (is_player_in_unsafe_map)');
 check(burstSpinsOnReceipt(1, 0, true), 'any other remote client id spins too');
 
+// 9. The sincos outputs (2026-10-25, "Guns left"): the helper 0x0082d8bc gives A = cos (the stack
+// pointer's output of the callee 0x008451f8) and B = sin (the first, edx). Its row mix is
+// row1' = cos row1 - sin row3, row3' = sin row1 + cos row3 (a symbolic replay of 0x0082d8d9..0x0082d97a).
+// That 3x3 G (rows 1 and 3, the head's row-vector form) is the transpose of the port's column-form
+// Ry(theta), so the spin's input-side rotation is spinMatrix(spin): m13 = sin, m31 = -sin, m11 = m33 = cos.
+const exeMix = (cos: number, sin: number, row1: number[], row3: number[]): [number[], number[]] => [
+  row1.map((v, j) => cos * v - sin * row3[j]),
+  row1.map((v, j) => sin * v + cos * row3[j]),
+];
+for (const spin of [0, 0x2000, 0x4000, 0x6000, 0xa000, 0xffff]) {
+  const th = spinRadians(spin);
+  const cos = Math.cos(th);
+  const sin = Math.sin(th);
+  const m = spinMatrix(spin).elements; // column-major: m[4 * col + row]
+  // The 3x3 block of the column-major elements (m[4 * col + row]), read row by row.
+  const block = [m[0], m[4], m[8], m[1], m[5], m[9], m[2], m[6], m[10]];
+  const exeG = [cos, 0, sin, 0, 1, 0, -sin, 0, cos]; // G^T, row-major: G = [[c,0,-s],[0,1,0],[s,0,c]]
+  check(block.every((v, i) => near(v, exeG[i])), `spin ${spin.toString(16)}: spinMatrix is the transpose of the exe row mix (G^T)`);
+  // The mix applied to a row pair equals the port's column form on the same basis vectors.
+  const r1 = [1, 0, 0, 0];
+  const r3 = [0, 0, 1, 0];
+  const [n1, n3] = exeMix(cos, sin, r1, r3);
+  check(near(n1[0], cos) && near(n1[2], -sin) && near(n3[0], sin) && near(n3[2], cos), `spin ${spin.toString(16)}: the exe mix of the identity rows is cos / -sin / sin / cos`);
+}
+// A quarter turn (0x4000): the sine is 1, so the spun X axis (input) goes to -Z ... checked through the matrix.
+{
+  const m = spinMatrix(0x4000).elements;
+  check(near(m[0], 0) && near(m[8], 1) && near(m[2], -1) && near(m[10], 0), 'quarter turn 0x4000: the port turns the input X axis to (0, 0, -1) (column form, sin on m13)');
+}
+
 console.log(`${checks - failures} of ${checks} checks passed${failures ? `, ${failures} failed` : ''}`);
 if (failures) process.exitCode = 1;

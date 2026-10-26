@@ -256,6 +256,28 @@ check(ShotEffect.make(O, { x: 0, y: 0, z: 0 }, 0) === null, 'egg: a zero flight 
   check(wall.wall && !wall.bullet && near(wall.dir.z, 60), 'wall: the vector runs to the aim point (the radius-0 centre here), no bullet');
 }
 
+// 2026-10-25 "Guns left": the kinds whose own hook calls +0xc8 (begin) through the vtable, the
+// kinds sharing a traced gun's factory, and the per-kind speeds written by the inner ctors (objdump).
+const HOOK_SHOT_KINDS = [0x12, 0x14, 0x47, 0x4a, 0x4b, 0x4d, 0x67, 0x6c, 0x75, 0x76, 0x77, 0x78, 0x7e, 0x7f, 0x83, 0x84, 0xbf];
+check(HOOK_SHOT_KINDS.every(isGunKind), `kinds whose hook calls begin through +0xc8 are guns (${HOOK_SHOT_KINDS.map((k) => k.toString(16)).join(' ')})`);
+check([0x43, 0x46, 0x66].every(isGunKind), 'the 0x42 factory (0x005ea260) kinds 0x43, 0x46, 0x66 are guns');
+check([0x4c, 0xad, 0xea].every(isGunKind), 'the Mechgun factory (0x005f46a8) kinds 0x4c, 0xad, 0xea are guns');
+check([0xb1, 0xe9].every(isGunKind) && isGunKind(0xeb), 'the Rifle factory kinds 0xb1, 0xe9 and the Shot factory kind 0xeb are guns');
+check(![0x1e, 0x49, 0x6a, 0x6b, 0x8d, 0x91, 0x9e, 0xa6, 0xb0, 0xc0, 0xcd].some(isGunKind), 'the hooks with no +0xc8 call (projectile or other) are not in GUN_KINDS');
+check(bulletSpeed(0x14) === 11 && bulletSpeed(0x47) === 8 && bulletSpeed(0x4a) === 9 && bulletSpeed(0x4d) === 7 && bulletSpeed(0x67) === 7, 'added kinds: 0x14 11, 0x47 8, 0x4a 9, 0x4d 7, 0x67 7');
+check(bulletSpeed(0x6c) === 20 && bulletSpeed(0x78) === 15 && bulletSpeed(0x7e) === 15 && bulletSpeed(0x84) === 10, 'added kinds: 0x6c 20, 0x78 15, 0x7e 15, 0x84 10');
+check(bulletSpeed(0x4c) === 19 && bulletSpeed(0x12) === 19 && bulletSpeed(0xb1) === 19 && bulletSpeed(0xeb) === 15, 'no 0x208 write: default 19 (Mechgun family, 0x12, Rifle family); Shot family 15');
+// The Mechgun family makes two begin calls (the second only when the first made no bullet); the Shot family six.
+check(pelletCount(0x4c) === 2 && pelletCount(0xad) === 2 && pelletCount(0xea) === 2 && pelletCount(0x14) === 1, 'Mechgun family: 2 begin calls; others 1');
+check(pelletCount(0xeb) === 6 && pelletAngleBams(0xeb, 5) === 0 && pelletTargetIndex(0xeb, 5) === 0, 'the Shot family (0xeb): six calls, the regular one at angle 0 target 0');
+check(pelletAllowed(0xea, 1, true) === false && pelletAllowed(0x4c, 1, false) === true, 'Mechgun family second call: allowed only when the first made no bullet');
+check(pelletTargetIndex(0xad, 1) === 0 && pelletAngleBams(0x4c, 0) === 0, 'Mechgun family: both calls at angle 0, target 0');
+// The Rifle family (the same ctor writes): the launcher variant 13 and the muzzle hook at 8..13.
+check(!firesGunBullet(0xb1, 13) && !firesGunBullet(0xe9, 13) && firesGunBullet(0xe9, 12), 'Rifle family: group_idx 13 is the launcher for 0xb1 / 0xe9 too');
+check(rifleHookMuzzle(0xb1, 8) && rifleHookMuzzle(0xe9, 12) && !rifleHookMuzzle(0xb1, 7), 'Rifle family: the hook muzzle is at group_idx 8..13');
+check(shotVisualOf(0xeb) === 'none' && shotVisualOf(0xb1, 9) === 'none' && shotVisualOf(0xb1, 12) === 'default', 'Shot and Rifle families: the callback is 0 (none) for their variants; Rifle 12 keeps the default');
+check(shotVisualOf(0x4c) === 'default' && shotVisualOf(0x43) === 'default', 'Mechgun and 0x42 family ctors write no shot callback: default');
+
 if (failures) {
   console.log(`gunbullet: ${failures} failure(s)`);
   process.exit(1);

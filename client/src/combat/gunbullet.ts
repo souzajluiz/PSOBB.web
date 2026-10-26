@@ -100,6 +100,18 @@ export const GUN_BULLET_SPEED_BY_KIND: ReadonlyMap<number, number> = new Map([
   [9, 15],
   [0x48, 11],
   [0x65, 20],
+  // The 2026-10-25 "Guns left" pass: the inner ctors' own 0x208 writes (objdump, PsoBB.exe; the
+  // value is the float bits in the comment) for the kinds added to GUN_KINDS below.
+  [0x14, 11], // movl $0x41300000 (11.0)
+  [0x47, 8], // 0x41000000 (8.0)
+  [0x4a, 9], // 0x41100000 (9.0)
+  [0x4d, 7], // 0x40e00000 (7.0)
+  [0x67, 7], // 0x40e00000 (7.0)
+  [0x6c, 20], // 0x41a00000 (20.0)
+  [0x78, 15], // 0x41700000 (15.0)
+  [0x7e, 15], // 0x41700000 (15.0)
+  [0x84, 10], // 0x41200000 (10.0)
+  [0xeb, 15], // the Shot factory's inner ctor: 0x41700000 (15.0), as kind 9
 ]);
 // variant = the item's group_idx (data1[2]); only the Handgun's speed depends on it.
 export const bulletSpeed = (kind: number, variant = -1): number => {
@@ -118,14 +130,44 @@ export const SHOT_ANGLES_BAMS: readonly number[] = [0, 2184, -2184, 4551, -4551]
 // 0x48 fires from its own hook (0x005fc348). The Handgun factory's kinds 0x44, 0xaf, 0xe8 share the
 // Handgun vtable and flags 0 (the regular shot). The 0x1c ctor has flags 0 too. Not guns: 0x6d (no
 // begin call on its path) and 0x8b (its own hook, 0x005eae08). The other class-3 kinds are not traced.
-export const GUN_KINDS: ReadonlySet<number> = new Set([6, 7, 8, 9, 0x1c, 0x42, 0x44, 0x45, 0x48, 0x65, 0xaf, 0xe8]);
+// The 2026-10-25 "Guns left" pass (the kinds below are proven by their hook, except 0x75 / 0x76, see
+// the DEVLOG): a kind whose vtable's hook
+// (+0xcc, the slot PerformItemAttack calls first) calls begin_gun_bullet_attack through the vtable
+// slot +0xc8 is a gun, whatever its flags: the hook's own shot runs before the flag test. The
+// hooks were read with objdump (every call in each body, the hook's vtable from the factory's
+// inner ctor, the factory from the table 0x009c2244). Kinds sharing a traced gun's factory get
+// that gun's vtable, hook and inner ctor (the factory is per family, the kind is only a label):
+//  - 0x43, 0x46, 0x66: factory 0x005ea260 (the 0x42 family, vtable 0xb10500, hook 0x005ea204);
+//  - 0x4c, 0xad, 0xea: factory 0x005f46a8 (Mechgun, vtable 0xb16260, hook 0x005f4620);
+//  - 0xb1, 0xe9: factory 0x005fb400 (Rifle, vtable 0xb19f40, hook 0x005fb310, inner 0x005fb494);
+//  - 0xeb: factory 0x005fe0dc (Shot, vtable 0xb1b400, hook 0x005fe004).
+// Own hooks that call +0xc8 (the vtable hook address in brackets): 0x12 [0x005f8338], 0x14
+// [0x005fe8e0], 0x47 [0x005fb6cc], 0x4a [0x005f048c], 0x4b [0x005ec2bc, twice], 0x4d [0x005ebcfc],
+// 0x67 [0x005f2c6c], 0x6c [0x006018ac], 0x75 / 0x76 [0x005f912c; ASSUMED: this hook also calls the
+// melee attack 0x005e90e8, so its gun shot is read from the call to +0xc8 only], 0x77 and 0x83
+// [0x005f8570, twice], 0x78 [0x005f7e08], 0x7e [0x005f912c], 0x7f [0x005f8338], 0x84 [0x005f7194],
+// 0xbf [0x005f369c]. Speeds: the inner ctors' 0x208 writes, GUN_BULLET_SPEED_BY_KIND.
+// Not added (ASSUMED off): the default hook 0x0061cdb0 kinds (0x13, 0x15, 0x1b, 0x26, 0x4e, 0x99,
+// 0xa3: their shot is the regular path, which needs the item flags, not traced); the hooks with no
+// +0xc8 call (0x1e, 0x49, 0x6a, 0x6b, 0x91, 0x9e, 0xb0, 0xcd; the projectile hooks 0x005eb1a8 for
+// 0x8d / 0xc0 / 0xc1 / 0xd2 and 0x005f6110 for 0xa6 fire the projectile 0x005e6df8, not a bullet).
+export const GUN_KINDS: ReadonlySet<number> = new Set([
+  6, 7, 8, 9, 0x1c, 0x42, 0x44, 0x45, 0x48, 0x65, 0xaf, 0xe8,
+  0x12, 0x14, 0x43, 0x46, 0x47, 0x4a, 0x4b, 0x4c, 0x4d, 0x66, 0x67, 0x6c, 0x75, 0x76, 0x77, 0x78, 0x7e, 0x7f, 0x83, 0x84,
+  0xad, 0xb1, 0xbf, 0xe9, 0xea, 0xeb,
+]);
 export const isGunKind = (kind: number): boolean => GUN_KINDS.has(kind);
+// The kinds on one factory (and so one vtable, hook and inner ctor) as the traced guns: the Mechgun's
+// two begin calls, the Shot's six, the Rifle's launcher variant and muzzle hook (the same ctor writes).
+export const MECHGUN_FAMILY: ReadonlySet<number> = new Set([8, 0x4c, 0xad, 0xea]);
+export const SHOT_FAMILY: ReadonlySet<number> = new Set([9, 0xeb]);
+export const RIFLE_FAMILY: ReadonlySet<number> = new Set([7, 0xb1, 0xe9]);
 // Whether this item's attack puts a bullet on the bullet path (variant = data1[2] = group_idx):
 //  - Rifle 7, group_idx 13: ctor flags 0x8000 (launcher projectile), no begin call;
 //  - 0x45, group_idx 1: the hook's projectile branch (0x005f20bf), no begin call.
 export const firesGunBullet = (kind: number, variant = -1): boolean => {
   if (!isGunKind(kind)) return false;
-  if (kind === 7 && variant === 13) return false;
+  if (RIFLE_FAMILY.has(kind) && variant === 13) return false;
   if (kind === 0x45 && variant === 1) return false;
   return true;
 };
@@ -138,30 +180,30 @@ export const SHOT_KIND = 9;
 // is_allowed_to_hit = (the first made no bullet). Both aim at listed target 0 (the 0,0,1 call).
 export const MECHGUN_KIND = 8;
 export const pelletCount = (kind: number): number => {
-  if (kind === SHOT_KIND) return SHOT_ANGLES_BAMS.length + 1;
-  if (kind === MECHGUN_KIND) return 2;
+  if (SHOT_FAMILY.has(kind)) return SHOT_ANGLES_BAMS.length + 1;
+  if (MECHGUN_FAMILY.has(kind)) return 2;
   return 1;
 };
 // The pellet's angle (BAMS) and its listed target index (pellet 5 of the Shot is the regular shot).
 export const pelletAngleBams = (kind: number, i: number): number => {
-  if (kind === MECHGUN_KIND) return 0; // (vec, 0, 0, 1): both calls at angle 0
-  return kind === SHOT_KIND && i === SHOT_ANGLES_BAMS.length ? 0 : (SHOT_ANGLES_BAMS[i] ?? 0);
+  if (MECHGUN_FAMILY.has(kind)) return 0; // (vec, 0, 0, 1): both calls at angle 0
+  return SHOT_FAMILY.has(kind) && i === SHOT_ANGLES_BAMS.length ? 0 : (SHOT_ANGLES_BAMS[i] ?? 0);
 };
 export const pelletTargetIndex = (kind: number, i: number): number => {
-  if (kind === MECHGUN_KIND) return 0;
-  return kind === SHOT_KIND && i === SHOT_ANGLES_BAMS.length ? 0 : i;
+  if (MECHGUN_FAMILY.has(kind)) return 0;
+  return SHOT_FAMILY.has(kind) && i === SHOT_ANGLES_BAMS.length ? 0 : i;
 };
 // Whether pellet i may make a bullet (begin's is_allowed_to_hit): the Mechgun's second call is
 // allowed only when the first made none (do_mechguns_attack: iVar1 == 0). Every other pellet is allowed.
 export const pelletAllowed = (kind: number, i: number, bulletMadeSoFar: boolean): boolean =>
-  !(kind === MECHGUN_KIND && i === 1 && bulletMadeSoFar);
+  !(MECHGUN_FAMILY.has(kind) && i === 1 && bulletMadeSoFar);
 // The Rifle (kind 7, group_idx 8..13) hook ExecutePartisanWeaponAttack (0x005fb310, dump line
 // 457996) puts a muzzle particle 9 at get_weapon_position(item, 1): the weapon walk's entry 1, not
 // the bullet start (the proven decompile). It runs before the regular shot. For group_idx 12 the
 // default callback adds the muzzle at the hand (the other one). Returns true for those variants.
 export const RIFLE_KIND = 7;
 export const RIFLE_HOOK_MUZZLE_ATTACH = 1;
-export const rifleHookMuzzle = (kind: number, variant: number): boolean => kind === RIFLE_KIND && variant >= 8 && variant <= 13;
+export const rifleHookMuzzle = (kind: number, variant: number): boolean => RIFLE_FAMILY.has(kind) && variant >= 8 && variant <= 13;
 
 const TAU = Math.PI * 2;
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
@@ -249,8 +291,8 @@ export type ShotVisual = 'default' | 'egg' | 'none';
 export const shotVisualOf = (kind: number, variant = -1): ShotVisual => {
   if (kind === HANDGUN_KIND) return variant === HANDGUN_EGG_VARIANT ? 'egg' : 'default';
   if (kind === 0x1c || kind === 0x48) return 'egg';
-  if (kind === SHOT_KIND || kind === 0x65) return 'none';
-  if (kind === 7 && ((variant >= 8 && variant <= 11) || variant === 13)) return 'none';
+  if (SHOT_FAMILY.has(kind) || kind === 0x65) return 'none';
+  if (RIFLE_FAMILY.has(kind) && ((variant >= 8 && variant <= 11) || variant === 13)) return 'none';
   return 'default';
 };
 
