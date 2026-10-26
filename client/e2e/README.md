@@ -57,3 +57,4 @@ installed Google Chrome (`channel: 'chrome'`), so no browser download is needed.
   floor on a search ring (6 * r, r 1..6) from the player, on the ground (+6), with no wall between
   the eye and the spot (`collision.segmentHit`, mask -1); it left the bag; a held W (300 ms) moves
   the player again.
+- `challenge-mode.spec.ts`: a fresh account (`wch` prefix, or `PSO_USER`), a Challenge party (EPISODE 1, mode Challenge; Difficulty is not offered) entered as its leader, then the Hunter's Guild clerk (action 1011): the challenge quest dialog opens (A2 list, `counterOpen`). Picking stage 1 and the stage start are not covered yet (see docs/DEVLOG.md 2026-10-26).

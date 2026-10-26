@@ -23187,3 +23187,13 @@ Not checked: the `MapObject` state table for the menu scroll (`144485`) is only 
 **Port:** a dying wolf (`playDeath`) builds `SavageDeathMotion(root yaw, killVelocity)`; `deathPoint` uses `savage.side` for the points marked `killSide` (the gensei and the red 7.5 pool at the motion's end), else the plan's `side`. `deathSteps` applies the turn and the slide after the frame's steps, while the motion runs.
 
 **Tests:** `tests/deathfx.test.ts` (new block): the side for the four cases (cross < 0, cross >= 0, zero, facing +x), the settled target for (1,1) -> -45 deg, (-1,1) -> +45 deg, (0,-1) -> +90 deg, the zero velocity keeps 0.3, the first tick's 0x300 BAMS, the slide 2 / 1.6 / 1.28 then nothing after the motion's end, and the end pool's `killSide` with the +12 fallback. `node tests/deathfx.test.ts`: all checks passed. `tests/enemyfsm.test.ts`: all checks passed. `tests/combat.test.ts` (with `NEWSERV`): 5859 checks, 0 failures. `tests/combatdepth.test.ts`: 836 checks, 0 failures. `npx tsc --noEmit -p .` (client, Node 24): clean. Not run in Chrome.
+
+## 2026-10-26: Challenge mode in a real game (partial): party entry and the clerk's dialog
+
+**What ran.** `client/e2e/challenge-mode.spec.ts` (new): a fresh account (`wch` prefix), the character made if the slot is empty, Create a PARTY -> EPISODE 1 -> Play Mode Challenge (MODES index 1, the Difficulty row skipped) -> Registration; the game is entered (floor 0, Pioneer 2). The leader walks to the Hunter's Guild clerk (action 1011) and talks to it: the challenge quest dialog opens (quest/challengedialog.ts; log `quest menu (A2): 2 entries`, `counterOpen` true). The spec passes (1 passed).
+
+**What did not run.** Picking the first list entry and confirming (Enter on the list, the yes/no) did not produce a stage start in 120 s: no `quest "..." started` or challenge start log. The spec stops after the dialog opens. Open: the list's key path (`ui.list` on `dlg.names()`), the episode-then-quest levels, the yes/no, and the stage-start rules (items/meseta reset, the challenge timer, floor changes, stage end). Not traced in this pass.
+
+**Environment.** The disk filled during the run (ENOSPC on Playwright writes and newserv). newserv crashed around that time and the login stalled at "Connecting..." (a server state, not a client bug). Rerun after the restart; Playwright was run with `--trace off` to save space.
+
+**Bugs fixed.** None in this pass; the failures seen were environmental.
