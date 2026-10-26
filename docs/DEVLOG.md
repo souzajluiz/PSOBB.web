@@ -1,5 +1,25 @@
 # Devlog
 
+## 2026-10-26: Pofuilly hit gate: no hit path reads the box's 0x28, the struck gate is the entity flag
+
+**Question:** the ROADMAP's Pofuilly clause left "the reader of the box's 0x28 bits in the hit path" ASSUMED (`SlimeAi.invulnerable`, `slimeStruckOk`). Which exe code reads them, and does the port's gate match?
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13; dump `Psobb.exe-05112026.c`, objdump of the binary):**
+- The writer, `SetEnemyInvulnerableAndImmune_0053fdf0` (objdump 0x53fdf0..0x53fdff): `mov 0xa4(%ecx),%edx; mov 0x18(%edx),%eax; or $0x28,%eax; mov %eax,0x18(%edx)`. The box is the enemy's `collision_data` row 0 (+0xa4, +0x18). Proven.
+- The entity-level hit gate, `EntityHitEntity_00773350` (objdump 0x7732db..0x773343): `movl 0x30(%esi),%eax`; `test $0x800` (dead) returns with no hit; `test $0x4000000` (maybe_invuln) with no `$0x2000000` sends the number 0 (`push $0x14`, the 0x14 text, at 0x773327) and returns. The box's 0x28 is not read on this path. Proven.
+- Every box-flag reader in the dump: `check_hitbox_flag` (dump 799502) is called with masks 0x2000, 0x80, 0x4, 0x80000, 0x20000 and 0x300000 only, never 0x28. The only reader that tests 0x8 and 0x20 is the pair predicate `CheckTwoHitboxCollision_007b5e40` (dump 799546): a pair is refused when one box has 0x8 and the other 0x2000, or one has 0x20 and the other 0x8000 (the same shape for 0x10/0x4000, 0x40/0x10000, 0x80/0x40000), and it needs bit 0x1 and a bit of 0x6 on both. Its callers are the box-to-box tests (`Entity_CheckHitboxCollision_007b647c`, e.g. the Lobby plant's proximity at dump 540660); none is a hit gate of a Pofuilly. So the 0x28 bits are a pair-test input, and no hit path reads them.
+- Entity flag 0x4000000 (maybe_invuln) writers in the dump: `VoloptActivate` (dump 183461), the Vol Opt monitor set and update (`0x4040000` / `0x2040000`, dump 184847, 184998, 185572..186079), `PoisonLilyActivate_0052039c` (dump 303865), the Hildebear states (dump 295200, 295790, `| 0x6000000`). The masks 0x4000000, 0x4040000, 0x2040000, 0x6000000 and 0x4010000 are grepped over the whole dump: none in the Sinowzoa range (dump 370000..392000). The grep is not a proof of no writer (writes through byte-sized fields are not covered): ASSUMED none on the Pofuilly.
+
+**Port (no code change):**
+- `SlimeAi.invulnerable` (= `!lockable`) gates `splitStruckOk`, and the struck candidate lists (`render/combat.ts` at the melee, gun, technique and NPC lists) filter on it. In the exe the candidates come from the target pick (the reticle test, `check_enemy_is_targetable`, the lock-on set of the DEVLOG 2026-10-25 Pofuilly entry), and the hit itself reads only the dead and maybe_invuln bits. For the Pofuilly the two sets are the same, so the port's proxy gives the exe's hit list. The port's gate is kept; the reason is now the target pick, not the box.
+- `applyEnemyHitRule` shows the number 0 for an invulnerable slime. The exe's 0 needs entity 0x4000000, which no slime code sets (see above), so the port's 0 has no exe basis for the slime. It is only reached through the struck filters above, so nothing is visible today. Not changed; ASSUMED.
+
+**Settled:** the reader of the box's 0x28 in the hit path is none (the hit path reads the entity flags); the pair test reads 0x8 / 0x20 only with its partners.
+
+**Still ASSUMED:** the struck list being the target pick for every Pofuilly hit path (the melee / gun pick's box-level test of `check_enemy_is_targetable` is not traced for the slime's box); the slime's "0" text (above); the `+0x324` defence store (no indirect store to +0x324, unchanged).
+
+**Checks:** read-only pass; no code or test changed in this entry.
+
 ## 2026-10-25: Damage to HP is chop (truncation) on every exe path checked, not round
 
 **Question.** The PvP entry found that EntityHitEntity_00773350 converts the damage total with the x87 control word `| 0xc00` (chop) before `fistp`. Which other damage-to-HP conversions in the port use `Math.round` where the exe chops?
