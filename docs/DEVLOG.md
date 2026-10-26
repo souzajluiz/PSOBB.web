@@ -1,5 +1,33 @@
 # Devlog
 
+## 2026-10-25: IMAGE_DATA copies q142 / q143: no PRS encoder tried reproduces them, so they stay hex (ROADMAP "Quest writers left")
+
+**Question.** The four shipped `call_image_data` copies (q142 and q143, `-bb-e` / `-bb-j`) are not `prsCompressOptimal`'s parse, so they print as hex. Which compressor made them, and can the writer reproduce them byte for byte so they are written from decoded data?
+
+**Data.** The labels were taken from `vendor/newserv/system/quests` (decompressed `.bin`, the label section up to the next label; never copied into the repo). The image is an XVR texture (8256 bytes). Three distinct streams: q142-bb-e and q143-bb-e are the same 2132-byte stream; q142-bb-j is 5496 bytes; q143-bb-j is 1070 bytes plus 2 trailing bytes.
+
+**Candidates (scratch scripts, not committed).**
+- newserv `PRSCompressor` at compression levels 0..16, emulated with its streaming add / advance (257-byte forward ring, 0x2000 reverse window, deque-order candidates, the 0x100 break): first differing stream byte 34 (level 0), 11 (levels 1..8), 8 (level 16) for q142-bb-e.
+- newserv `prs_compress_indexed` (sorted-suffix window index, score-based command choice, emulated): byte 18.
+- newserv `prs_compress_optimal` (the port's `prsCompressOptimal`): byte 18.
+- The port's `prsCompress` (greedy plus one-byte lazy): byte 710 (q142-bb-e), 1130 (q142-bb-j).
+- Pure greedy, nearest match on ties, newserv's emission: byte 91 (q142-bb-e).
+- Lazy greedy (take a literal when the match one byte later is longer than the current one by more than a delta; tie rule, minimum short length, lookahead cap, and the current-length band swept): the best rule is delta 1 with a lookahead cap of 9, which reproduces q143-bb-j exactly (1070 bytes) and stops at byte 710 for q142-bb-e and 1130 for q142-bb-j. No setting reproduces all three streams.
+- Shortest path where each position offers only its longest match (costs 9 / 12 / 18 / 26): byte 18.
+
+**Where the shipped parse leaves the optimal one.**
+- Output offset 25 (stream byte 18): the shipped stream takes `long 7 dist 20` (18 bits). Optimal takes `short 2 dist 20` + `ext 37` (38 bits against 44 for the shipped choice), so the shipped encoder is not cost-optimal under newserv's costs.
+- Output offset 3659 (q142-bb-e): the shipped stream takes `short 4 dist 8` where a lazy rule takes a literal before `ext 70 dist 2816`. Output 1267 (q142-bb-j): it keeps `long 7 dist 8` against `ext 14 dist 24` one byte later.
+- Tabulating the shipped choices against (current match length, next match length): literals before a longer next match occur at current length 2 to 8, and copies over a longer next match occur at current length 4, 5 and 7. No length threshold separates the two.
+
+**Verdict.** Not reproduced. The typed IMAGE_DATA rule is unchanged, so the four labels stay `.data` hex (`questasm.ts` `typedLines`). The 335-quest round trip is unchanged.
+
+**Test.** `tests/questimage.test.ts` gained a guard: the four shipped copies do not print as `.struct IMAGE_DATA` (read from `vendor/newserv/system/quests` when present, skipped otherwise). `docs/QUESTFILES.md` round-trip note updated.
+
+**Not done.** The lazy rule that matched q143-bb-j is one case, not the encoder. Finding the real rule needs the hash-chain depth and the search order of the original tool (a lookahead that misses a far 70-byte copy would explain the q142-bb-e case; that is untested).
+
+**Checks.** `node tests/questimage.test.ts`, `prscompress.test.ts`, `questwrite.test.ts`, `quests.test.ts`, `questmisc.test.ts`: all pass. `cd client && npx tsc --noEmit -p .`: clean (Node 24).
+
 ## 2026-10-25: NPCs drawn: the 0x118 texture load has no reader in the dump; the 0x118 dispatcher plays only row 0
 
 **Question.** ROADMAP "NPCs: drawn now" lists the open parts: the 0x118 texture setup (`plAsmp.rel` by class into obj+0x3ec, its use not traced), the 0x118 walk row (the town walk stands in), the 0x118 weapon (not ported), the 0x33 slot's per-class motion id (ASSUMED), and the talk reach (ASSUMED). This pass re-traces the first two from `PsoBB.exe` (dump `Psobb.exe-05112026.c`, line numbers below; addresses from the dump names).
