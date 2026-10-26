@@ -1,5 +1,31 @@
 # Devlog
 
+## 2026-10-25: Battle mode left: the PvP victim rules re-derived (hit threshold, HP truncation, knockdown)
+
+**Question.** ROADMAP "Battle mode left" lists the PvP victim side as ASSUMED in `combat/pvp.ts`: the victim's hit check reuses the enemy formulas, a miss sends nothing, no team check, knockback only for a heavy strike, no PB gain on a PvP hit. Re-derive each from PsoBB.exe.
+
+**PROVEN (objdump of PsoBB.exe, read per instruction; the Ghidra dump for names).**
+- The hit roll is `vtable +0x70` of the target inside `unknown_melee_attack_2` (dump 579907, 0x006997a0), run in the victim's client on its own player: `rollHit` with the weapon's accuracy (`attack_type_accuracy * combo_step_accuracy`). Matches `combat/formulas.ts`.
+- `EntityHitEntity_00773350` (0x00773350) has no team check. Its gates: attacker present, defender not dead, `maybe_invuln`, the defence roll, then the hitbox sum.
+- Hit threshold: at 0x00773893 `fcomp [0x009782b0]` with the total in `st0`, `jae` to the 0x200 path. 0x009782b0 = 1.0 (`tools/exedata.py read 009782b0 f 2`). A total below 1.0 takes 0x00773893..0x007738b8: total = 0.0 (0x009782b8), flag 0x100, return. No damage, no packet. So a total of 0.5 to 0.99 is a miss; the port had landed at round(total) >= 1.
+- HP lost: the total is converted with the x87 control word set to chop (`or 0xc00`, fldcw, fistp at 0x00773918..0x00773925 and 0x007738e3..0x007738fd), then `deal_damage` (0x00777414) gets `movsx eax, di`. So the HP lost is the total truncated toward zero, not rounded. The PB charge is trunc(total * 20) from the same control-word pattern (0x007738f0).
+- Knockdown: `try_knockdown_player` (0x0077529c): `fild max_hp1` (short at +0x2bc) `* 0.25` (0x0097822c = 0.25) `< total` sets character flag 0x400. No attack type is read. The port's `PlayerDamage.hit` heavy test (`damage > maxHp * 0.25`) is the same rule.
+- Defence roll: `GetEnemyDefense_00773a44` reads the player's `unknown_character_state` row (set to `+0xea0` at init, dump 577115), `short [5]` at `+0xeaa` is zeroed there and the dump has no other store of it. A player never resists here (ASSUMED: no indirect store, the same scan as the enemy side).
+- The damage's defence term reads `movsx word [esi + 0x2d2]` (0x0077362e), the port's `dfp`. The same function reads the attacker's elemental parts (+0x2ec..+0x2f4) and the defender's resists; the port has no elemental parts, so they stay ASSUMED zero.
+
+**Port.**
+- `client/src/combat/pvp.ts`: `pvpStrike` lands on `total >= TOOK_DAMAGE_MIN` (1.0), HP lost = `Math.trunc(total)`, `PvpHit.total` carries the untruncated total. `pvpKnockback(maxHp, total)` replaces the attack-type rule: `maxHp * 0.25 < total` pushes by the total (the knockdown test). The header lists the rules and the remaining ASSUMED items.
+- `client/src/render/combat.ts` `onRemoteStrikeTargets`: knockdown from `this.damage.maxHp` and `r.total`; the PB gain takes `r.total` (trunc(total * 20) in `pbGain`).
+- `tests/pvp.test.ts`: exactly 1.0 lands, 0.99 misses, 1.9 loses 1 HP, the PB total is 1.9, the knockdown threshold (75 vs 76 at max HP 300), no attack-type input.
+
+**Still open.**
+- The elemental terms and `damage_reduction` of the victim's sum (zero in the port).
+- The knockback velocity of a knockdown (the exe's push speed is not traced).
+- The `local_20` case (an attacker with `unknown_flags_invincibility == 2` deals no HP): not ported.
+- The enemy path (`formulas.ts` `rollDamage` callers, `PlayerDamage.hit`) still uses `Math.round` for the HP lost. The exe's chop cast is the same function for enemy hits, so this is likely wrong there too; not changed here (shared code, a separate check).
+
+**Checks.** `node tests/pvp.test.ts` ALL PASS. `node tests/battle.test.ts`, `tests/battletraps.test.ts` ALL PASS. `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures. `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). Not run in Chrome or with two clients.
+
 ## 2026-10-25: Emotes: the motion table of +0xdc (opposite gender has no sender input), the emote's step 3 (confused 6x3F), the lock
 
 **Question.** The ROADMAP Emotes line left open: the opposite-gender motion, the emote's end, the step-3 6x3F (bit 0x10 of +0xb0), the palette route to the sit, the lock rules, and the sitter's state after the stand-up.
