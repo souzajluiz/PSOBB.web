@@ -35,6 +35,21 @@ lobby object is still the old one (a busy screen ignores it).
 **Not checked.** The two-client spec (`client/e2e/two-client-move.spec.ts`) was rewritten for fresh accounts and the slow / guard steps, but has not passed yet. Runs stopped at party creation: the server answered "timed out waiting for join game (64)" in some runs (the create passed in others). The slow and guard steps were never reached, so the speed and step ratios are unverified. The remote guard is only as fresh as the last stop.
 
 **Still open.** Guard changes while a remote player walks are not seen until its next stop (no packet carries it). Whether the exe's remote copy also scales the step by the same rule is an ASSUMED match, not dumped.
+## 2026-10-26: Boss fixes (TODO A): Dragon, De Rol Le, Vol Opt, Dark Belra: spec written, not run
+
+**What ran.** `client/e2e/boss-fights.spec.ts` (new). A fresh account (`wbo...`) is patched offline through `fresh-field.ts` (the new `patch` option, which sees the saved character): level 100, the stat block atp 600 / mst 200 / evp 200 / hp 2000 / dfp 300 / ata 300 / lck 100, and the equipped weapon's data1 replaced by DB'S SABER (code 000105, grind 44). Then Episode 1 warps: Dragon (floor 11), De Rol Le (12), Vol Opt (13), and the first of floors 8, 9, 10, 6, 7 whose brain is `BelraAi`. Per boss: the brain is built, its sid changes over 60 s, and key attacks (ArrowDown held 120 ms, 35 units in front) log `hit ... for N`. The kill and the exit are not checked.
+
+**Runs (newserv back up, Vite 5179, `--trace off`).** Run 4 (the last): Dragon 13 phase changes, 4 hits (2500 to 2250), pass. De Rol Le 19 changes, 3 segment hits (body stays 6000: segments take the damage first, `derolle.ts` hitSegment), pass. Vol Opt built, 1 change (intro to phase 1), 0 hits this run (2 and 4 in earlier runs: the attack lands only some presses), so it fails the hit check. Dark Belra built on floor 8 but stays `hidden` with 0 changes and 0 hits: the watch and the attack both ran with the player near its spawn point, yet it did not emerge (`enemyfsmruins.ts` 'hidden' wakes on a player in BELRA.search range). Not fixed: the cause is unknown (a spawn-range or target-list issue in the spec, or a game bug), and it needs a look at the brain's target list in Chrome.
+
+**Spec fixes made in this session.** The phase count read only `sid`, which VoloptAi and BelraAi do not have, so it reported 0 for both; it now counts a change of `sid` or `state`. The player is placed 35 units from the boss before the 60 s watch (not only before the attacks).
+
+**What broke (first run).** Nothing was run past login. The first run (Vite on 5179) stayed on "Connecting..." until the 90 s poll in `enterFreshField` timed out. newserv was not running (no process, no listener on 12000+); only the bridge (8080) was up. The brief forbids starting or restarting newserv, so the run stopped there. The disk was also full (ENOSPC on the Data volume at times during the session; 161 MiB free at one point), which made the Bash tool and the Vite cache fail intermittently. Both are environment faults, not boss faults.
+
+**Not verified.** Any boss behaviour: the spawn, the phases, the damage and the death. No bug in the four bosses was found or fixed in this session, because no run reached the game. The brief's docs/bosses/ check found no map or fix note for De Rol Le, Vol Opt or Belra (docs/bosses/ holds only Barba Ray, Gal Gryphon, Gol Dragon and Olga Flow); the fixes for these are in DEVLOG 2026-10-21 .. 2026-10-25 (De Rol Le segments and beam; Vol Opt phase 2 and monitors; Dragon flyAcross take-off, 2026-10-24).
+
+**Checks.** `cd client && npx tsc --noEmit -p .`: exit 0. The spec ran under Playwright (the type and the syntax are accepted; the failure is the login above).
+
+**Still open.** Run `e2e/boss-fights.spec.ts` once newserv is up (`PW_BASE_URL=http://127.0.0.1:5179 npx playwright test e2e/boss-fights.spec.ts --workers=1`). Then check the four spawns and phase changes, the hit logs, and the Dark Belra floor (the scan of floors 6..10 is a guess). The kill and the exit are still unchecked for all four.
 
 ## 2026-10-25: Quest editor: copy, cut and paste of entities between floors and quests
 

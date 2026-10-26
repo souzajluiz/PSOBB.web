@@ -66,13 +66,19 @@ export async function ensureCharacter(page: Page, user: string, password: string
 
 // From the login to a party field (Pioneer 2, floor 0). `meseta`: fund the character first.
 // PSO_USER / PSO_PASSWORD override the account (then it is not fresh: `meseta` still applies).
-export async function enterFreshField(page: Page, logs: string[], opts: { prefix: string; meseta?: number; weapon?: boolean; mag?: boolean }): Promise<{ user: string; name: string }> {
+export async function enterFreshField(
+  page: Page,
+  logs: string[],
+  opts: { prefix: string; meseta?: number; weapon?: boolean; mag?: boolean; patch?: (c: ReturnType<typeof parseCharacter>) => Record<string, unknown> },
+): Promise<{ user: string; name: string }> {
   const user = process.env.PSO_USER ?? freshUser(opts.prefix);
   const password = process.env.PSO_PASSWORD ?? user;
   const name = `ps${Date.now() % 100000}`;
 
   await ensureCharacter(page, user, password);
-  if (opts.meseta !== undefined || opts.mag) {
+  if (opts.meseta !== undefined || opts.mag || opts.patch) {
+    // `patch` sees the saved character (its items carry `slot`, `equipped`, `kind`) and returns the admin patch.
+    if (opts.patch) await patchOffline(page, user, opts.patch(parseCharacter(loadCharBuffer(charPath(playersDir(), user, 0)))));
     if (opts.mag) await patchOffline(page, user, { inventory: { add: [MAG_ITEM] } });
     if (opts.meseta !== undefined) await fundOffline(page, user, opts.meseta, opts.weapon);
     await logIn(page, user, password);

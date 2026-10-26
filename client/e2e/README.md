@@ -65,3 +65,8 @@ installed Google Chrome (`channel: 'chrome'`), so no browser download is needed.
   the player again.
 - `ep2-floors-smoke.spec.ts` and `ep2-floors-watch.spec.ts`: a fresh account per run (`wep...`, or `PSO_USER`); the character is made on first login (`logInWithCharacter`). The watch spec reads `EP2_WATCH_FLOORS` (default 1,5,7,10) and `EP2_WATCH_SECONDS`; the smoke spec walks floors 1..17 (floors 16 and 17 have no object set in the data, their two 404s are allowed).
 - `challenge-mode.spec.ts`: a fresh account (`wch` prefix, or `PSO_USER`), a Challenge party (EPISODE 1, mode Challenge; Difficulty is not offered) entered as its leader, then the Hunter's Guild clerk (action 1011): the challenge quest dialog opens (A2 list, `counterOpen`). Picking stage 1 and the stage start are not covered yet (see docs/DEVLOG.md 2026-10-26).
+- `boss-fights.spec.ts`: a fresh account (`wbo...`) with an offline patch through `fresh-field.ts`'s `patch` option
+  (level 100, a high stat block, the equipped weapon swapped for a grind-44 DB'S SABER). It warps to the Dragon
+  (floor 11), De Rol Le (12), Vol Opt (13) and the first Ruins / Mines floor (6..10) with a Dark Belra, and for each
+  one checks the brain is built, its sid changes over 60 s, and key attacks log hits (`hit ... for N`). The kill and
+  the exit are not checked. Needs a running newserv (see the top of this file).
