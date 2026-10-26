@@ -374,21 +374,24 @@ export interface Follower {
 // while the player still walks or runs carries on along the leg direction
 // until the next packet corrects it (dead reckoning). A stopped player's
 // follower is not allowed to pass the stop point: it jumps back to it instead
-// of stepping back. `dir` is the unit direction of the last leg.
+// of stepping back. `dir` is the unit direction of the last leg. `scale` is the
+// remote player's leg speed factor (legSpeed: 0.5 slowed, 0.75 guarding, else 1),
+// the rule the player's own mover applies to its legs.
 export function remoteStep(
   f: Follower,
   target: { x: number; z: number },
   run: boolean,
   moving: boolean,
   dir: { x: number; z: number },
+  scale = 1,
 ): boolean {
-  const speed = run ? RUN_SPEED_PER_TICK : WALK_SPEED_PER_TICK;
+  const speed = (run ? RUN_SPEED_PER_TICK : WALK_SPEED_PER_TICK) * scale;
   const dist = Math.hypot(target.x - f.x, target.z - f.z);
   if (moving) {
     // At (or within a step before) the point, or past it: carry on ahead.
     const along = (f.x - target.x) * dir.x + (f.z - target.z) * dir.z;
-    if (along >= -speed) return followTick(f, f.x + dir.x * LEG_LENGTH, f.z + dir.z * LEG_LENGTH, run);
-    return followTick(f, target.x, target.z, run);
+    if (along >= -speed) return followTick(f, f.x + dir.x * LEG_LENGTH, f.z + dir.z * LEG_LENGTH, run, scale);
+    return followTick(f, target.x, target.z, run, scale);
   }
   if (dist < 0.5) return false;
   if ((f.x - target.x) * dir.x + (f.z - target.z) * dir.z > 0) {
@@ -396,15 +399,15 @@ export function remoteStep(
     f.z = target.z;
     return true;
   }
-  return followTick(f, target.x, target.z, run);
+  return followTick(f, target.x, target.z, run, scale);
 }
 
-export function followTick(f: Follower, targetX: number, targetZ: number, run: boolean): boolean {
+export function followTick(f: Follower, targetX: number, targetZ: number, run: boolean, scale = 1): boolean {
   const dx = targetX - f.x;
   const dz = targetZ - f.z;
   const dist = Math.hypot(dx, dz);
   if (dist < 1e-6) return false;
-  const speed = run ? RUN_SPEED_PER_TICK : WALK_SPEED_PER_TICK;
+  const speed = (run ? RUN_SPEED_PER_TICK : WALK_SPEED_PER_TICK) * scale;
   const toTarget = toBams(Math.atan2(dx, dz));
   f.heading = headingStep(f.heading, toTarget);
   if (dist <= speed) {

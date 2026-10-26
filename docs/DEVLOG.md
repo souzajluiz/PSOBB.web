@@ -24,6 +24,17 @@ team; the spec runs on one account), and Member Expulsion (same reason).
 **Ship select timing:** the first Enter on the ship list after Change BLOCK can land
 before the screen takes input. The spec waits a second and repeats Enter while the
 lobby object is still the old one (a busy screen ignores it).
+## 2026-10-26: Remote players: slow and guard scale their legs too
+
+**Question.** A remote player's copy in this client walked at the fixed leg speed and its animation played at the locomotion factor only. The local mover applies `legSpeed` (slow halves a leg, guard takes 0.75), so a slowed or guarding remote player's feet and position ran ahead of its real speed.
+
+**Change.** `net/lobby.ts`: each remote player keeps `guard`, read from the 6x3E / 6x3F body (+4, u16 != 0). A walk's packets do not carry it, so it changes only at the next stop. `render/combat.ts` gives the lobby view a `remoteLegState` (the remote's status copy: slow, under the same area rule as the local one). `render/lobbyview.ts` steps the remote follower at `legSpeed(1, slowed, guard)` through `remoteStep` / `followTick` (new `scale` argument, default 1), and sets the remote marker's animator rate to `legSpeed(LOCOMOTION_FACTOR[gait], ...)` while it moves and is not attacking or emoting. `net/game.ts` and `quest/town.ts` build `LobbyPlayer` with `guard: false`.
+
+**Tests.** `tests/playermove.test.ts`: a slowed walk follower moves 0.5 a tick, a guarding run follower 1.125, the default run 1.5. `tsc --noEmit` clean.
+
+**Not checked.** The two-client spec (`client/e2e/two-client-move.spec.ts`) was rewritten for fresh accounts and the slow / guard steps, but has not passed yet. Runs stopped at party creation: the server answered "timed out waiting for join game (64)" in some runs (the create passed in others). The slow and guard steps were never reached, so the speed and step ratios are unverified. The remote guard is only as fresh as the last stop.
+
+**Still open.** Guard changes while a remote player walks are not seen until its next stop (no packet carries it). Whether the exe's remote copy also scales the step by the same rule is an ASSUMED match, not dumped.
 
 ## 2026-10-25: Quest editor: copy, cut and paste of entities between floors and quests
 

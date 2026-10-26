@@ -12,7 +12,7 @@ only part of them has matching C (psobb-client-source).
 - [ ] Episode 2 enemy FSMs on Seabed, Mines, Tower (partial 2026-10-26: smoke spec passes on floors 1..17; watch passes on floor 10 but only 2 of 33 groups ran; Seabed Lower and Mines open; real motion lengths for groups a / d in the tests, Gi Gue barrier 5 frames; lobby ping on a closed socket open)
 - [x] Ship / block change and team menus at the counter (e2e: `client/e2e/lobby-counter-menus.spec.ts`; Leave Team as a non-master member is still open, see DEVLOG 2026-10-26)
 - [ ] Boss fixes (De Rol Le, Vol Opt, Dragon, Belra)
-- [ ] Movement: two-client check, slowed / guard animation tie
+- [ ] Movement: two-client check, slowed / guard animation tie (remote copy scales its leg and animation by slow / guard in code, unit test passes; `two-client-move.spec.ts` not passing yet, see DEVLOG)
 - [ ] Quest editor: open a real quest, drag, Script tab, "Test in game", publish to a deployed host
 - [ ] Admin: Quests tab live (open in editor, publish), login on production
 - [ ] Phones: soft keyboard, rotation lock, adaptive resolution (real iOS / Android)

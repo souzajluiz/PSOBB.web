@@ -1,26 +1,33 @@
-// Two classic clients (classic.html, the page production serves) in the same
-// party field. A creates the party at the counter and enters it, B joins it
-// (party-join.spec.ts); then both warp to Forest 1 (floor 1). A (desktop) walks,
-// runs, stops and turns with real key presses. B (a Pixel 7 emulation, CPU
-// throttled 4x while measuring, one-way WebSocket latency 100 ms +- 40 ms)
-// samples A's remote marker on every animation frame, and A samples its own
-// drawn pose on the same clock. Printed: lag (B's remote against A's drawn pose
-// at the same wall time), overshoot, direction flips, zero-move frames,
-// catch-up jumps, speed spread, animation mismatch and frame hitches.
+// Two classic clients (classic.html, the page production serves) on two fresh accounts.
+// Steps, in order:
+//   1. Frame hitches of A in the lobby, alone and then with B in the lobby (both under the
+//      same CPU throttle, the measured client's page throttled 4x while walking).
+//   2. The same two comparisons in the party field (Forest 1): A alone, then with B.
+//   3. A is slowed (combat.inflictStatus, the slow of a technique hit): A's own mover and
+//      animator, and B's copy of A (the remote follower and marker), must both run at half
+//      the leg speed and play the run motion at half the rate.
+//   4. A guards: placed 25 units from the nearest enemy facing it (in the hunter's and the
+//      other classes' enter range); after a stop B has A's guard flag (6x3E). Then A is placed
+//      beyond the leave range and stops again: speed and rate go back to the plain run on both.
+// B samples A's marker on every animation frame, and A samples its own drawn pose on the same
+// clock. Printed: lag, overshoot, direction flips, zero-move frames, catch-up jumps, speed,
+// animation mismatch and frame hitches.
 //
 // Needs newserv (vendor/newserv) and the bridge (bridge/bridge.mjs) running.
 // PW_BASE_URL points at a Vite on its own port. See e2e/README.md.
-import { expect, test, type BrowserContext, type CDPSession, type Page } from '@playwright/test';
-import { consoleLog, cursorTo, expectInGame, key, leaveToLobby, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
+import { expect, test, type BrowserContext, type CDPSession } from '@playwright/test';
+import { consoleLog, cursorTo, expectInGame, key, leaveToLobby, openPartyMenu, peek, reachLobby } from './classic.ts';
+import { ensureCharacter, freshUser } from './fresh-field.ts';
 
-const USER_A = process.env.PSO_USER_A ?? 'webmove1';
-const USER_B = process.env.PSO_USER_B ?? 'webmove2';
-const PASSWORD = process.env.PSO_MOVE_PASSWORD ?? 'webmove';
+const USER_A = process.env.PSO_USER_A ?? freshUser('wmv');
+const USER_B = process.env.PSO_USER_B ?? freshUser('wmw');
+const passwordOf = (user: string): string => process.env.PSO_MOVE_PASSWORD ?? user;
 const LATENCY_MS = Number(process.env.PSO_LATENCY_MS ?? 100);
 const JITTER_MS = Number(process.env.PSO_JITTER_MS ?? 40);
 const CPU_RATE = Number(process.env.PSO_CPU_RATE ?? 4);
 const OBSERVER = process.env.PSO_OBSERVER ?? 'phone';
 const FLOOR = Number(process.env.PSO_FLOOR ?? 1); // Forest 1
+const STATUS_SLOW = 0x11; // combat/status.ts STATUS.slow
 
 // One-way delay with jitter and kept order, on the page's WebSocket (Chrome's
 // network emulation does not shape WebSocket frames).
@@ -47,15 +54,17 @@ const latencyScript = (delay: number, jitter: number) => `
 })();
 `;
 
-// Records one sample per animation frame: the marker of `target` (own id for
-// A, A's id for B) and the logic state of the local mover when there is one.
+// Records one sample per animation frame while on: the marker of `target` (own id when null)
+// with its gait and animation step, and the local mover's state. The lobby's view is
+// classicLobby.view, the field's gameView.view (a LobbyView either way).
 const samplerScript = () => {
   const w = window as any;
+  if (w.__mv) return; // installed once per page (the loop runs for the page's life)
   w.__mv = { on: false, rec: [] as any[], target: null as number | null };
   const loop = (now: number) => {
     const s = w.__mv;
     if (s.on) {
-      const v = w.gameView?.view;
+      const v = w.gameView?.view ?? w.classicLobby?.view;
       const rec: any = { t: now + performance.timeOrigin };
       if (v) {
         const id = s.target ?? v.lobby?.selfId;
@@ -64,6 +73,7 @@ const samplerScript = () => {
           const p = m.group.position;
           rec.p = [p.x, p.y, p.z];
           rec.g = m.gait;
+          rec.s = m.animator?.step;
         }
         if (v.mover) rec.st = v.mover.state;
       }
@@ -74,7 +84,7 @@ const samplerScript = () => {
   requestAnimationFrame(loop);
 };
 
-type Rec = { t: number; p?: [number, number, number]; g?: string; st?: string };
+type Rec = { t: number; p?: [number, number, number]; g?: string; st?: string; s?: number };
 
 const round = (x: number) => Math.round(x * 100) / 100;
 const median = (xs: number[]) => {
@@ -213,10 +223,27 @@ function hitches(rs: Rec[]): Record<string, number> {
   return { frames: d.length, medianMs: round(median(d)), over50: d.filter((x) => x > 50).length, over100: d.filter((x) => x > 100).length };
 }
 
+// Units per second of a marker between the first and the last sample in [from, to] (wall ms).
+function speedIn(rs: Rec[], from: number, to: number): number {
+  const w = rs.filter((r) => r.p && r.t >= from && r.t <= to);
+  if (w.length < 2) return 0;
+  const a = w[0]!;
+  const b = w[w.length - 1]!;
+  const dist = Math.hypot(b.p![0] - a.p![0], b.p![2] - a.p![2]);
+  return dist / ((b.t - a.t) / 1000 || 1);
+}
+
+// The median animation step of the frames in [from, to] where the marker runs (`gait` is the
+// marker's gait field on B's side, the mover's state on A's).
+function runStep(rs: Rec[], from: number, to: number, side: 'st' | 'g'): number {
+  const steps = rs.filter((r) => r.t >= from && r.t <= to && r[side] === 'run' && r.s !== undefined).map((r) => round(r.s!));
+  return median(steps);
+}
+
 test.describe.configure({ mode: 'serial' });
 
-test('two classic clients in Forest 1: the remote follower on a throttled phone', async ({ browser }) => {
-  test.setTimeout(900_000);
+test('two fresh accounts: hitches alone and with the other player, the slow and the guard on both sides', async ({ browser }) => {
+  test.setTimeout(1_800_000);
   const ctxA: BrowserContext = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   // B logs in on a desktop window (the phone's login form is another flow);
   // the phone size is set once B is in the field (the stage takes the tall layout).
@@ -228,12 +255,93 @@ test('two classic clients in Forest 1: the remote follower on a throttled phone'
   const logsB = consoleLog(b!);
   const pageA = a!;
   const pageB = b!;
+  const cdpA: CDPSession = await ctxA.newCDPSession(pageA);
   const cdpB: CDPSession = await ctxB.newCDPSession(pageB);
   const name = `mv${Date.now() % 100000}`;
 
+  // The CPU throttle of the measured windows: both clients, as the field measurement always had.
+  const throttle = async (rate: number) => {
+    await cdpA.send('Emulation.setCPUThrottlingRate', { rate });
+    await cdpB.send('Emulation.setCPUThrottlingRate', { rate });
+  };
+  const samplers = async () => {
+    await pageA.evaluate(samplerScript);
+    await pageB.evaluate(samplerScript);
+  };
+  // Samples on both clients (A's own marker; B's copy of A) while `run` plays.
+  const sampleBoth = async (run: () => Promise<void>): Promise<{ recA: Rec[]; recB: Rec[]; aId: number }> => {
+    const aId = await peek(pageA, (w) => w.classicGame?.game?.selfId ?? w.classicLobbyState?.selfId ?? w.gameView?.game?.selfId ?? null);
+    await pageA.evaluate(() => Object.assign((window as any).__mv, { on: true, rec: [], target: null }));
+    await pageB.evaluate((id) => Object.assign((window as any).__mv, { on: true, rec: [], target: id }), aId);
+    await run();
+    await pageB.waitForTimeout(300);
+    const recA: Rec[] = await pageA.evaluate(() => {
+      const s = (window as any).__mv;
+      s.on = false;
+      return s.rec;
+    });
+    const recB: Rec[] = await pageB.evaluate(() => {
+      const s = (window as any).__mv;
+      s.on = false;
+      return s.rec;
+    });
+    return { recA, recB, aId: aId as number };
+  };
+  const holdKeys = async (keys: string[], ms: number) => {
+    for (const k of keys) await pageA.keyboard.down(k);
+    await pageA.waitForTimeout(ms);
+    for (const k of keys) await pageA.keyboard.up(k);
+  };
+  // A walk, a run, a stop and a turn: the same script for the lobby and the field.
+  const SCRIPT: Array<[string[], number]> = [
+    [['w'], 150], // a short tap: walk
+    [[], 1200],
+    [['w'], 2500], // held: run
+    [[], 1200],
+    [['a'], 800], // turn in place
+    [['w', 'd'], 1500], // run, curving
+    [[], 1500],
+  ];
+  const playScript = async () => {
+    for (const [keys, ms] of SCRIPT) await holdKeys(keys, ms);
+  };
+  // A's frame hitches over the script, A's page throttled (B's too, as in the field measurement).
+  const hitchWindow = async (label: string): Promise<void> => {
+    await throttle(CPU_RATE);
+    await pageA.evaluate(() => Object.assign((window as any).__mv, { on: true, rec: [], target: null }));
+    await playScript();
+    const recA: Rec[] = await pageA.evaluate(() => {
+      const s = (window as any).__mv;
+      s.on = false;
+      return s.rec;
+    });
+    await throttle(1);
+    console.log(`hitches ${label} (A, CPU x${CPU_RATE}): ${JSON.stringify(hitches(recA))}`);
+  };
+  const warmUp = async () => {
+    await pageA.keyboard.down('w');
+    await pageA.waitForTimeout(1500);
+    await pageA.keyboard.up('w');
+  };
+
   try {
-    await test.step('A and B reach the lobby', async () => {
-      await Promise.all([logIn(pageA, USER_A, PASSWORD).then(() => reachLobby(pageA)), logIn(pageB, USER_B, PASSWORD).then(() => reachLobby(pageB))]);
+    await test.step('A and B fresh accounts with a character', async () => {
+      await ensureCharacter(pageA, USER_A, passwordOf(USER_A));
+      await reachLobby(pageA);
+    });
+    await samplers();
+
+    await test.step('lobby: A alone', async () => {
+      await warmUp();
+      await hitchWindow('lobby alone');
+    });
+
+    await test.step('lobby: B logs in and stands in the lobby, then A again', async () => {
+      await ensureCharacter(pageB, USER_B, passwordOf(USER_B));
+      await reachLobby(pageB);
+      await pageB.evaluate(samplerScript);
+      await pageA.waitForTimeout(1000);
+      await hitchWindow('lobby with B');
     });
 
     await test.step('A creates the party and enters it', async () => {
@@ -247,10 +355,31 @@ test('two classic clients in Forest 1: the remote follower on a throttled phone'
       await key(pageA, 'Enter');
       await cursorTo(pageA, (w) => w.classicLobby.party.create.row, 4); // Registration (Normal)
       await key(pageA, 'Enter');
+      const entered = await pageA
+        .waitForFunction(() => !!((window as any).classicGameLoading || (window as any).classicGame), null, { timeout: 15_000 })
+        .then(() => true, () => false);
+      if (!entered) {
+        const state = await peek(pageA, (w) => ({
+          phase: w.classicLobby?.party?.phase,
+          row: w.classicLobby?.party?.create?.row,
+          counter: w.classicLobby?.counter?.open,
+          lobby: w.classicLobby !== undefined,
+          message: w.classicLobby?.party?.message,
+        }));
+        console.log(`party create did not enter: ${JSON.stringify(state)}; A log tail: ${logsA.slice(-12).join(' | ')}`);
+      }
       await expectInGame(pageA, logsA, name);
+      await pageA.evaluate((f) => (window as any).gameView.warpTo(f), FLOOR);
+      await expect.poll(() => peek(pageA, (w) => w.classicGame.view.current?.floor), { timeout: 120_000 }).toBe(FLOOR);
+      await pageA.waitForTimeout(1500);
     });
 
-    await test.step('B joins it from the list', async () => {
+    await test.step('field: A alone in Forest 1', async () => {
+      await warmUp();
+      await hitchWindow('field alone');
+    });
+
+    await test.step('B joins the party and warps to Forest 1', async () => {
       await openPartyMenu(pageB);
       await key(pageB, 'Enter'); // Join a PARTY
       await expect.poll(() => peek(pageB, (w) => w.classicLobby.party?.phase)).toBe('list');
@@ -259,61 +388,138 @@ test('two classic clients in Forest 1: the remote follower on a throttled phone'
       expect(index).toBeGreaterThanOrEqual(0);
       await cursorTo(pageB, (w) => w.classicLobby.party.list.cursor, index, 0x40);
       await key(pageB, 'Enter');
-      await expectInGame(pageB, logsB, name);
-    });
-
-    await test.step('both see two players, then both warp to Forest 1', async () => {
+      // A is already on Forest 1, so B lands on the party's floor, not Pioneer 2: wait for the game only.
+      await expect.poll(() => peek(pageB, (w) => (w.classicGame ? w.classicGame.game.name : '')), { timeout: 90_000 }).toBe(name);
+      expect(logsB.filter((l) => l.startsWith('pageerror'))).toEqual([]);
       await expect.poll(() => peek(pageA, (w) => w.classicGame.game.players.size)).toBe(2);
       await expect.poll(() => peek(pageB, (w) => w.classicGame.game.players.size)).toBe(2);
-      await pageA.evaluate((f) => (window as any).gameView.warpTo(f), FLOOR);
-      await expect.poll(() => peek(pageA, (w) => w.classicGame.view.current?.floor), { timeout: 120_000 }).toBe(FLOOR);
       await pageB.evaluate((f) => (window as any).gameView.warpTo(f), FLOOR);
       await expect.poll(() => peek(pageB, (w) => w.classicGame.view.current?.floor), { timeout: 120_000 }).toBe(FLOOR);
+      await pageB.waitForTimeout(1500);
     });
 
-    const aId = await peek(pageA, (w) => w.classicGame.game.selfId as number);
     if (OBSERVER === 'phone') await pageB.setViewportSize({ width: 412, height: 839 });
-    await pageA.evaluate(samplerScript);
-    await pageB.evaluate(samplerScript);
 
-    await test.step('measure: A walks, runs, stops and turns; B samples A', async () => {
-      // Warm-up: a few seconds of keys so both sides are loaded and moving.
-      await pageA.keyboard.down('w');
-      await pageA.waitForTimeout(1500);
-      await pageA.keyboard.up('w');
-      // The throttle starts with the measurement (loading the field under 4x takes minutes).
-      await cdpB.send('Emulation.setCPUThrottlingRate', { rate: CPU_RATE });
-      await pageB.evaluate((id) => Object.assign((window as any).__mv, { on: true, rec: [], target: id }), aId);
-      await pageA.evaluate(() => Object.assign((window as any).__mv, { on: true, rec: [], target: null }));
-      const script: Array<[string[], number]> = [
-        [['w'], 150], // a short tap: walk
-        [[], 1200],
-        [['w'], 2500], // held: run
-        [[], 1200],
-        [['a'], 800], // turn in place
-        [['w', 'd'], 1500], // run, curving
-        [[], 1500],
-      ];
-      for (const [keys, ms] of script) {
-        for (const k of keys) await pageA.keyboard.down(k);
-        await pageA.waitForTimeout(ms);
-        for (const k of keys) await pageA.keyboard.up(k);
-      }
-      await pageB.waitForTimeout(800);
-      const recA: Rec[] = await pageA.evaluate(() => {
-        const s = (window as any).__mv;
-        s.on = false;
-        return s.rec;
-      });
-      const recB: Rec[] = await pageB.evaluate(() => {
-        const s = (window as any).__mv;
-        s.on = false;
-        return s.rec;
-      });
+    await test.step('field: A with B in the party', async () => {
+      await warmUp();
+      await throttle(CPU_RATE);
+      const { recA, recB } = await sampleBoth(() => playScript());
+      await throttle(1);
       console.log(`latency ${LATENCY_MS}+-${JITTER_MS} ms one way, B ${OBSERVER} CPU x${CPU_RATE}`);
+      console.log(`hitches field with B (A): ${JSON.stringify(hitches(recA))}`);
       console.log(`B remote follower: ${JSON.stringify(analyse(recA, recB))}`);
-      console.log(`A frames: ${JSON.stringify(hitches(recA))}`);
       console.log(`B frames: ${JSON.stringify(hitches(recB))}`);
+    });
+
+    await test.step('slow: A is slowed; A and B walk and run at half the leg speed', async () => {
+      await expect.poll(() => peek(pageA, (w) => !!w.classicGame.view.combat)).toBe(true);
+      await pageA.waitForTimeout(500);
+      const hold = async (label: string) => {
+        const t0 = Date.now();
+        const { recA, recB, aId } = await sampleBoth(() => holdKeys(['w'], 2500));
+        const t1 = Date.now();
+        const from = t0 + 700;
+        const slowed = await peek(pageA, (w) => w.classicGame.view.view.mover.slowed as boolean);
+        const out = {
+          localSpeed: round(speedIn(recA, from, t1)),
+          remoteSpeed: round(speedIn(recB, from, t1)),
+          localStep: runStep(recA, from, t1, 'st'),
+          remoteStep: runStep(recB, from, t1, 'g'),
+          moverSlowed: slowed,
+          aId,
+        };
+        console.log(`${label}: ${JSON.stringify(out)}`);
+        return out;
+      };
+      const base = await hold('slow: base run');
+      expect(base.moverSlowed).toBe(false);
+      await pageA.evaluate((t) => (window as any).classicGame.view.combat.inflictStatus(t, 'two-client test'), STATUS_SLOW);
+      await expect.poll(() => peek(pageA, (w) => w.classicGame.view.combat.status.has(0x11))).toBe(true);
+      const slow = await hold('slow: slowed run');
+      expect(slow.moverSlowed).toBe(true);
+      // The leg factor 0.5 (legSpeed, playermove.ts): the run's 1.5 becomes 0.75 on both sides.
+      expect(slow.localStep).toBeCloseTo(0.75, 2);
+      expect(slow.remoteStep).toBeCloseTo(0.75, 2);
+      expect(slow.localSpeed / base.localSpeed).toBeGreaterThan(0.35);
+      expect(slow.localSpeed / base.localSpeed).toBeLessThan(0.65);
+      expect(slow.remoteSpeed / base.remoteSpeed).toBeGreaterThan(0.35);
+      expect(slow.remoteSpeed / base.remoteSpeed).toBeLessThan(0.65);
+      // The slow lasts SLOW_FRAMES (210 game ticks): wait until it is off.
+      await expect.poll(() => peek(pageA, (w) => w.classicGame.view.combat.status.has(0x11)), { timeout: 20_000 }).toBe(false);
+      await pageA.waitForTimeout(500);
+    });
+
+    await test.step('guard: A guards near an enemy; B sees it at A\'s stop (6x3E) and runs at 0.75', async () => {
+      // As lockon.spec.ts: enemies of room 2 are built, A is placed in front of the nearest one.
+      await pageA.evaluate(() => (window as any).classicGame.view.constructEnemies(1, 2, 1));
+      await expect.poll(() => peek(pageA, (w) => [...w.classicGame.view.combat.enemies.values()].some((e: any) => !e.dead && e.instance?.root?.visible)), { timeout: 60_000 }).toBe(true);
+      // The player is placed `distance` units behind the nearest enemy and faces it (GameView.placePlayer).
+      const placeFacing = (distance: number) =>
+        pageA.evaluate((d) => {
+          const g = (window as any).classicGame;
+          const combat = g.view.combat;
+          const self = g.game.selfId;
+          const from = combat.view.playerPositions().get(self);
+          let best: any = null;
+          let bestD = Infinity;
+          for (const e of combat.enemies.values()) {
+            if (!e || e.dead || !e.instance?.root?.visible) continue;
+            const p = e.instance.root.position;
+            const dd = (p.x - from.x) ** 2 + (p.z - from.z) ** 2;
+            if (dd < bestD) {
+              bestD = dd;
+              best = e;
+            }
+          }
+          const p = best.instance.root.position;
+          const ang = Math.atan2(p.x - from.x, p.z - from.z);
+          const at = { x: p.x - d * Math.sin(ang), y: p.y, z: p.z - d * Math.cos(ang) };
+          g.game.self.angle = ang;
+          g.view.placePlayer(self, at.x, p.y, at.z, ang);
+          g.game.self.angle = ang;
+          return true;
+        }, distance);
+      const guardOf = () => peek(pageA, (w) => w.classicGame.view.view.mover.guard as boolean);
+      const hold = async (label: string) => {
+        const t0 = Date.now();
+        const { recA, recB } = await sampleBoth(() => holdKeys(['a'], 1500));
+        const t1 = Date.now();
+        const from = t0 + 300;
+        const out = {
+          localSpeed: round(speedIn(recA, from, t1)),
+          remoteSpeed: round(speedIn(recB, from, t1)),
+          localStep: runStep(recA, from, t1, 'st'),
+          remoteStep: runStep(recB, from, t1, 'g'),
+          moverGuard: await guardOf(),
+        };
+        console.log(`${label}: ${JSON.stringify(out)}`);
+        return out;
+      };
+      // Guard on: 25 units from the target (inside both enter ranges). The sideways hold keeps it
+      // on (the leave range is 100 for hunters, 150 for the others); its stop sends 6x3E guard 1.
+      await placeFacing(25);
+      await pageA.waitForTimeout(1000);
+      expect(await guardOf()).toBe(true);
+      await holdKeys(['a'], 500);
+      await pageB.waitForTimeout(800);
+      const on = await hold('guard: on');
+      expect(on.moverGuard).toBe(true);
+      expect(on.localStep).toBeCloseTo(1.125, 2);
+      expect(on.remoteStep).toBeCloseTo(1.125, 2);
+      // Guard off: 170 units out, beyond every leave range; the next stop sends guard 0.
+      await placeFacing(170);
+      await pageA.waitForTimeout(1000);
+      expect(await guardOf()).toBe(false);
+      await holdKeys(['a'], 500);
+      await pageB.waitForTimeout(800);
+      const off = await hold('guard: off');
+      expect(off.moverGuard).toBe(false);
+      expect(off.localStep).toBeCloseTo(1.5, 2);
+      expect(off.remoteStep).toBeCloseTo(1.5, 2);
+      expect(on.localSpeed / off.localSpeed).toBeGreaterThan(0.6);
+      expect(on.localSpeed / off.localSpeed).toBeLessThan(0.9);
+      expect(on.remoteSpeed / off.remoteSpeed).toBeGreaterThan(0.6);
+      expect(on.remoteSpeed / off.remoteSpeed).toBeLessThan(0.9);
     });
 
     await test.step('both go back to the lobby', async () => {

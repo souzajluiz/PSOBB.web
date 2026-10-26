@@ -1032,6 +1032,11 @@ export class CombatView {
       // should_do_confused_movement: confused (flag 0x10) in an unsafe map.
       confused: this.status.has(STATUS.confusion) && inUnsafeMap(this.area),
     });
+    // A remote player's slow: the copy of its status this client keeps from the 6x0C / 6x0D
+    // (remoteStatus), under the same area rule as the local one.
+    view.remoteLegState = (clientId) => ({
+      slowed: this.remoteStatus.get(clientId)?.has(STATUS.slow) === true && slowApplies(this.area),
+    });
     if (!this.overlay) {
       this.overlay = new CombatOverlay(this.viewer.scene);
       void this.loadReticleModels();

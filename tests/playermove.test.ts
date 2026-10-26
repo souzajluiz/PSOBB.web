@@ -174,6 +174,19 @@ assert.equal(legSpeed(1.0, true, true), 0.5, 'slowed beats guard');
   assert.ok(Math.abs(g.z - (-5 + 1.0)) < 1e-6);
 }
 {
+  // A slowed or guarding remote player's follower steps at the leg factor (legSpeed 0.5 / 0.75),
+  // on the walk and the run alike; the default factor is the plain speed.
+  const f = { x: 0, z: 0, heading: 0 };
+  assert.equal(remoteStep(f, { x: 0, z: 0 }, false, true, { x: 0, z: 1 }, 0.5), true);
+  assert.ok(Math.abs(f.z - 0.5) < 1e-6, 'slowed walk moves 0.5 a tick: ' + f.z);
+  const g = { x: 0, z: 0, heading: 0 };
+  assert.equal(followTick(g, 0, 30, true, 0.75), true);
+  assert.ok(Math.abs(g.z - 1.5 * 0.75) < 1e-6, 'guarding run moves 1.125 a tick: ' + g.z);
+  const h = { x: 0, z: 0, heading: 0 };
+  assert.equal(remoteStep(h, { x: 0, z: 0 }, true, true, { x: 0, z: 1 }), true);
+  assert.ok(Math.abs(h.z - 1.5) < 1e-6, 'default run is 1.5 a tick: ' + h.z);
+}
+{
   // The mover's legs are counted: one 6x40 / 6x42 per leg, aimed 8 ahead.
   const m = new PlayerMover(0, 0);
   const pushing = { lr: 0, fb: 128, cameraYaw: 0, keyboard: true };
