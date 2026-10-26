@@ -10,6 +10,9 @@ import {
   AIM_HEIGHT,
   WEAPON_HEIGHT,
   castOriginY,
+  techCastNode,
+  techCastPoint,
+  TECH_CAST_NODE_BY_GROUP,
   enemyFire,
   FIRE_SE,
   FireShot,
@@ -458,6 +461,54 @@ check(castOriginY(TECH.barta, 100) === 100, 'Barta starts at the feet, not the c
 check(castOriginY(TECH.barta, 100) + BARTA_START_LIFT === 105, 'an undirected Barta then rides 5 above that (BARTA_START_LIFT)');
 check(castOriginY(TECH.foie, 100) === 100 + WEAPON_HEIGHT, 'Foie starts at the cast point (feet + WEAPON_HEIGHT)');
 check(castOriginY(TECH.gibarta, 100) === 100 + WEAPON_HEIGHT, 'Gibarta starts at the cast point');
+
+// The cast node (unknown_get_tech_cast_location -> GetWeaponModelData +0x10, dump 557464 / 599197).
+// Record = table[k] + g * 0x14, g = the weapon group (0 when >= 0x13), k = g when g < 6 else 0; the
+// table is the pointers at 0x009cc4a4 + 4k. The records and their int at +0x10 were read with
+// tools/exedata.py read (2026-10-25): [address of the record, node].
+const TABLE_PTR = [0x9677e0, 0x967960, 0x967ae0, 0x967c60, 0x967960, 0x967960];
+const RECORD_NODE: Array<[number, number]> = [
+  [0x9677e0, 48], [0x967974, 35], [0x967b08, 35], [0x967c9c, 48], [0x9679b0, 35], [0x9679c4, 35], [0x967858, 35],
+  [0x96786c, 35], [0x967880, 8], [0x967894, 35], [0x9678a8, 35], [0x9678bc, 35], [0x9678d0, 35], [0x9678e4, 48],
+  [0x9678f8, 35], [0x96790c, 48], [0x967920, 35], [0x967934, 35], [0x967948, 35],
+];
+check(TECH_CAST_NODE_BY_GROUP.length === RECORD_NODE.length, 'the cast node table covers the 19 weapon groups');
+for (let g = 0; g < RECORD_NODE.length; g++) {
+  const k = g < 6 ? g : 0;
+  const rec = TABLE_PTR[k] + g * 0x14;
+  check(rec === RECORD_NODE[g][0], `group ${g}: record 0x${rec.toString(16)} (table ${k} + 0x14 * ${g})`);
+  check(techCastNode(g) === RECORD_NODE[g][1], `group ${g}: cast node ${techCastNode(g)} (exe ${RECORD_NODE[g][1]})`);
+}
+check(techCastNode(19) === 48 && techCastNode(-1) === 48, 'an out-of-range group takes the exe clamp (group 0, the hand)');
+
+// The cast point: the caster's body node when the skeleton answers (the provider is asked for
+// body node techCastNode(group)), Barta at the feet with no provider call, the feet plus
+// WEAPON_HEIGHT when the provider refuses (ASSUMED).
+{
+  const feet = { x: 10, y: 5, z: -3 };
+  const asked: Array<{ part: string; node: number }> = [];
+  const provider = (ref: { part: 'weapon' | 'body'; node: number }, out: { x: number; y: number; z: number }) => {
+    asked.push({ part: ref.part, node: ref.node });
+    out.x = 1;
+    out.y = 40;
+    out.z = 2;
+    return true;
+  };
+  const out = { x: 0, y: 0, z: 0 };
+  const p = techCastPoint(TECH.foie, feet, 8, provider, out);
+  check(p.x === 1 && p.y === 40 && p.z === 2, `Foie takes the node point (got ${JSON.stringify(p)})`);
+  check(asked.length === 1 && asked[0].part === 'body' && asked[0].node === 8, `the provider is asked for body node 8 (group 8) (${JSON.stringify(asked)})`);
+  asked.length = 0;
+  techCastPoint(TECH.gibarta, feet, 0, provider, out);
+  check(asked.length === 1 && asked[0].node === 48, 'group 0 (bare hands) asks for body node 48');
+  asked.length = 0;
+  const barta = techCastPoint(TECH.barta, feet, 8, provider, { x: 0, y: 0, z: 0 });
+  check(barta.x === 10 && barta.y === 5 && barta.z === -3 && asked.length === 0, 'Barta starts at the feet and never asks the skeleton');
+  const refused = techCastPoint(TECH.foie, feet, 8, () => false, { x: 0, y: 0, z: 0 });
+  check(refused.x === 10 && refused.y === 5 + WEAPON_HEIGHT && refused.z === -3, `a refused provider falls back to feet + WEAPON_HEIGHT (${JSON.stringify(refused)})`);
+  const none = techCastPoint(TECH.foie, feet, 8, undefined, { x: 0, y: 0, z: 0 });
+  check(none.y === 5 + WEAPON_HEIGHT, 'no provider falls back to feet + WEAPON_HEIGHT');
+}
 
 if (failures) {
   console.log(`${failures} failure(s)`);
