@@ -481,11 +481,13 @@ export class Lobby {
     });
   }
 
-  sendSubcommand(sub: number, payload: Uint8Array, command = 0x60): void {
+  // The header's client id is this client's unless `clientId` names another player (an NPC player's
+  // subcommands carry the NPC's slot, e.g. 6x46 from quest/town.ts stepNpcHead).
+  sendSubcommand(sub: number, payload: Uint8Array, command = 0x60, clientId = this.selfId): void {
     const body = new Uint8Array(4 + payload.length);
     body[0] = sub;
     body[1] = body.length / 4;
-    new DataView(body.buffer).setUint16(2, this.selfId, true);
+    new DataView(body.buffer).setUint16(2, clientId, true);
     body.set(payload, 4);
     this.conn.send(command, 0, body);
   }
