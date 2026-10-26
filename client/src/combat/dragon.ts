@@ -64,6 +64,7 @@ import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { enemyTargetStateSets } from './enemystate.ts';
 import { EnemyShot, PLAYER_RADIUS, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { chopToInt } from './chop.ts';
 
 const BAMS = BAMS_TO_RAD;
 const TWO_PI = Math.PI * 2;
@@ -811,7 +812,7 @@ export class DragonAi extends BrainBase {
   // A hit landed here (entity_hit_by_tech / the weapon hit lowered hp and set
   // the hit flag; the clamp runs on the next tick).
   hit(damage: number): void {
-    this.hp -= Math.max(0, Math.round(damage));
+    this.hp -= Math.max(0, chopToInt(damage));
     this.hitFlag = true;
   }
 

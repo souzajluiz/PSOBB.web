@@ -42,6 +42,7 @@
 
 import { BAMS_TO_RAD } from './enemyai.ts';
 import type { EnemyShot } from './enemyshots.ts';
+import { chopToInt } from './chop.ts';
 
 export const BAMS = BAMS_TO_RAD;
 export type Vec3 = [number, number, number];
@@ -266,7 +267,7 @@ export abstract class DfEntity {
   // A hit can land (the invulnerable flag 0x200 is clear and the part exists).
   abstract get targetable(): boolean;
   damage(amount: number, byLocal: boolean): number {
-    const d = Math.max(0, Math.round(amount));
+    const d = Math.max(0, chopToInt(amount));
     if (d <= 0 || this.dead || !this.targetable) return 0;
     const taken = Math.min(d, Math.max(0, this.hp));
     this.hp -= taken;

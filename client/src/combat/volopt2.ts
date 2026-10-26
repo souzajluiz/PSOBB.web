@@ -43,6 +43,7 @@ import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_AIM_HEIGHT, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { NO_HITS, VO_ID, VoloptAnim, VoloptPart, VoloptWatchdog, type Vec3, type VoloptEvent, type VoloptForm2Link, type VoloptSlot } from './volopt.ts';
+import { chopToInt } from './chop.ts';
 
 const BAMS = BAMS_TO_RAD;
 const PLAYER_RADIUS = 5;
@@ -626,7 +627,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
   // A strike by the local player at (fx, fz). Returns the part it marked
   // (0..3), 4 for the body.
   hit(amount: number, fx: number, fz: number, _byLocal: boolean): number {
-    const d = Math.max(0, Math.round(amount));
+    const d = Math.max(0, chopToInt(amount));
     if (d <= 0 || !this.ready) return -1;
     this.hp = Math.max(0, this.hp - d);
     this.hitFlag = true;

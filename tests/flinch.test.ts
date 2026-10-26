@@ -31,9 +31,9 @@ check(tookDamage(5, false) === false, 'a missed roll never sets 0x200, whatever 
 {
   const d = { hp: 100, maxHp: 100, evp: 0, dfp: 0 };
   check(applyDamage(d, 0) === FLAG_MISSED && d.hp === 100, '0 damage: 0x100, no HP lost');
-  check(applyDamage(d, 0.7) === FLAG_MISSED && d.hp === 100, 'a 0.7 total: 0x100, no HP lost (ROUND would have taken 1)');
+  check(applyDamage(d, 0.7) === FLAG_MISSED && d.hp === 100, 'a 0.7 total: 0x100, no HP lost (the chop is 0; a round would take 1)');
   check(applyDamage(d, 1) === FLAG_HIT && d.hp === 99, 'a 1.0 total: 0x200 and one HP');
-  check(applyDamage(d, 1.4) === FLAG_HIT && d.hp === 98, 'a 1.4 total rounds to 1 HP and keeps 0x200');
+  check(applyDamage(d, 1.4) === FLAG_HIT && d.hp === 98, 'a 1.4 total chops to 1 HP and keeps 0x200');
   check(applyDamage(d, 30) === (FLAG_HIT | FLAG_BIG_HIT) && d.hp === 68, 'a big hit keeps the big-hit flag');
   check((applyDamage(d, 80) & FLAG_DEAD) !== 0 && d.hp === 0, 'HP below 1 sets the dead flag');
 }
@@ -61,13 +61,13 @@ check(tookDamage(5, false) === false, 'a missed roll never sets 0x200, whatever 
   // A 0-damage landed Foie: 0x200, no HP lost (the exe deals 0 and still OR's the flag).
   check(tookDamage(0, true, techTookDamageMin(fire)) === true, 'a 0-damage landed Foie sets 0x200');
   check(applyDamage(d, 0, true, techTookDamageMin(fire)) === FLAG_HIT && d.hp === 100, 'a 0-damage landed Foie: 0x200 and no HP');
-  // A 0.5 total from a damage group still sets 0x200 (no 1.0 threshold), and rounds to 1 HP as the exe's ROUND does.
-  check(applyDamage(d, 0.5, true, techTookDamageMin(fire)) === FLAG_HIT && d.hp === 99, 'a 0.5 Foie total sets 0x200 (the melee threshold does not apply)');
+  // A 0.5 total from a damage group still sets 0x200 (no 1.0 threshold), and chops to 0 HP: entity_hit_by_tech's damage fistps run under the chop control word (first at 0x00773e79), not round-half-even.
+  check(applyDamage(d, 0.5, true, techTookDamageMin(fire)) === FLAG_HIT && d.hp === 100, 'a 0.5 Foie total sets 0x200 and chops to 0 HP (the melee threshold does not apply)');
   // A resisted or missed roll never sets it, whatever the threshold.
   check(tookDamage(30, false, techTookDamageMin(fire)) === false, 'a resisted Foie (no roll) never sets 0x200');
-  check(applyDamage(d, 30, false, TOOK_DAMAGE_ANY) === FLAG_MISSED && d.hp === 99, 'a missed roll is 0x100 with no HP lost');
+  check(applyDamage(d, 30, false, TOOK_DAMAGE_ANY) === FLAG_MISSED && d.hp === 100, 'a missed roll is 0x100 with no HP lost');
   // Support groups: 0x200 never, even for a big total; no HP change.
-  check(applyDamage(d, 30, true, techTookDamageMin(TECH.jellen)) === FLAG_MISSED && d.hp === 99, 'a Jellen total is 0x100 and no HP (the exe deals none)');
+  check(applyDamage(d, 30, true, techTookDamageMin(TECH.jellen)) === FLAG_MISSED && d.hp === 100, 'a Jellen total is 0x100 and no HP (the exe deals none)');
   d.hp = 100;
   // Megid: the kill (landed, HP as total) sets 0x200 with the dead flag; a non-kill is 0x100.
   check(applyDamage(d, 100, true) === (FLAG_HIT | FLAG_BIG_HIT | FLAG_DEAD) && d.hp === 0, 'a Megid kill: 0x200, the big-hit flag and 0x800');

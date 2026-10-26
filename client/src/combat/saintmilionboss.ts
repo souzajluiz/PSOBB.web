@@ -66,6 +66,7 @@ import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_RADIUS } from './enemyshots.ts';
+import { chopToInt } from './chop.ts';
 import { SM_LASER, SM_MISSILE, SM_SAND, SmClock, SmField, SmLaser, laserLength, laserRamp, SmMissile, type SmPoint3, SmRng, SmSandSonic, SmStorm, SmTouch, SmWave, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
 
 const BAMS = BAMS_TO_RAD;
@@ -404,7 +405,7 @@ export class SaintMilionAi extends BrainBase {
   hitPart(i: number, damage: number, ours: boolean): void {
     const p = this.parts[i];
     if (!p || damage < 1) return;
-    p.hp = Math.max(0, p.hp - Math.round(damage));
+    p.hp = Math.max(0, p.hp - chopToInt(damage));
     p.hit = true;
     p.ours = ours;
     if (p.hp <= 0) p.dead = true;

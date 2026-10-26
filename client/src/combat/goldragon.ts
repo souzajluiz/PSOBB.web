@@ -24,6 +24,7 @@ import { BrainBase } from './enemyfsm.ts';
 import { enemyTargetStateSets } from './enemystate.ts';
 import { DragonFireball, DragonTrapezoid, DRAGON_FIRE_IDS, type DragonEmitter } from './dragon.ts';
 import { EnemyShot, PLAYER_RADIUS, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { chopToInt } from './chop.ts';
 
 const BAMS = BAMS_TO_RAD;
 
@@ -559,7 +560,7 @@ export class GoldDragonAi extends BrainBase {
 
   // OlgaUpdate-style hit: lower hp, set the flag the clamp reads on the next tick.
   hit(damage: number): void {
-    this.hp -= Math.max(0, Math.round(damage));
+    this.hp -= Math.max(0, chopToInt(damage));
     this.hitFlag = true;
   }
 

@@ -74,6 +74,7 @@
 
 import type { MotionRecord } from '../formats/plymotion.ts';
 import { TOOK_DAMAGE_ANY, TOOK_DAMAGE_NEVER } from './formulas.ts';
+import { chopToInt } from './chop.ts';
 
 export const TECH = {
   foie: 0, gifoie: 1, rafoie: 2, barta: 3, gibarta: 4, rabarta: 5, zonde: 6, gizonde: 7, razonde: 8, grants: 9,
@@ -303,7 +304,7 @@ export function megidChance(level: number, edk: number): number {
 // Resta's heal on one player.
 export function restaHeal(level: number, mst: number, charClass = 0): number {
   const d = techData(TECH.resta, level, charClass);
-  return Math.round(Math.max(0, mst) * RESTA_MST_SCALE + f32(d.power + d.vPower * level));
+  return chopToInt(Math.max(0, mst) * RESTA_MST_SCALE + f32(d.power + d.vPower * level));
 }
 
 // Another player's Resta on this client (PsoBB.exe, dump names: unknown_cast_tech case resta,

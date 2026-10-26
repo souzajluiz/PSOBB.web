@@ -1,5 +1,38 @@
 # Devlog
 
+## 2026-10-25: Damage to HP is chop (truncation) on every exe path checked, not round
+
+**Question.** The PvP entry found that EntityHitEntity_00773350 converts the damage total with the x87 control word `| 0xc00` (chop) before `fistp`. Which other damage-to-HP conversions in the port use `Math.round` where the exe chops?
+
+**PROVEN (objdump of PsoBB.exe; every `fistp` in the ranges listed below was scanned for a `fldcw` loaded from `orl $0xc00` in the preceding instructions; a fistp with no such restore is "default", round-half-even).**
+- `EntityHitEntity_00773350` (player weapon or gun against an enemy; the same code casts the defender to player for its deal_damage): 4 fistp, all CHOP: 0x00773823, 0x007738fd, 0x00773925, 0x0077398a. The HP lost is `deal_damage(short)` of the chopped total (0x00773937 call), the per-box damage number is chopped too.
+- `entity_hit_by_tech` 0x00773afc (every technique group, the resta case included: dump 748183..748192 `local_30 = ROUND(fVar9)` then `add_player_hp`): the scan finds 28 fistp in 0x00773afc..0x00774f00, all CHOP, none default. The first one, 0x00773e79, sits in a case that tests flags 0x10000000 and `field_0x32c == 2` (dump 747944): `flds`, `fnstcw`, `orl $0xc00`, `fldcw`, `fistpl`, `fldcw`, then a jump to the common tail. The deal_damage call at 0x00773efa follows the fistp at 0x00773ee4 under the same pattern.
+- `unknown_melee_attack_2` 0x006997a0 (the attack driver: called by `modify_attack_type_and_do_melee_attack_2` for the player's weapon, and by `ProcessEnemyAttackState_0063b930` with 1.0, dump 502988): 3 fistp, all CHOP: 0x00699887, 0x0069999a, 0x00699b41.
+- The dump agrees where it shows the control word: `in_FPUControlWord | 0xc00` precedes the ROUND at dump 580019 (unknown_melee_attack_2) and 747652 (EntityHitEntity). The entity_hit_by_tech dump lines carry no control-word line, but the objdump is the ground truth there.
+- The Resta heal of a player (entity_hit_by_tech resta case, above) is CHOP.
+
+**ASSUMED.**
+- The enemy-on-player HP loss: the chop proven in unknown_melee_attack_2 is the conversion of the attack's total, and the player's own try_hit_entity (the vtable slot the driver calls on the target) was not located, so "the HP lost is chop(total) for an enemy's hit on the player" rests on the shared driver, not on a traced deal_damage.
+- Boss-specific damage routines (Dragon, Gol Dragon, Vol Opt, Dark Falz parts, Saint Milion, De Rol Le) were not traced one by one. They take their HP from the same enemy hit path (EntityHitEntity or entity_hit_by_tech, both chop). The port's own `setDamageTaken` (6x0A receive) already used trunc(total) for those bosses while the sender used round(damage): the two sides disagreed on the same number, which is the reason the sender and the receiver both move to chop now.
+
+**Port.**
+- `client/src/combat/chop.ts` (new): `chopToInt(x) = Math.trunc(x)`, the one place the damage path converts a float to an int. Doc comment carries the addresses.
+- `formulas.ts`: `applyDamage` HP loss = `chopToInt(total)` (was round); `rollDamage.shown` = `chopToInt(d)` (was round, the number above the enemy).
+- `playerdamage.ts` `PlayerDamage.hit`: HP loss = `chopToInt(damage)` (was round). The `damage < 1` block test is unchanged (TOOK_DAMAGE_MIN 1.0).
+- Boss `damage` / `hit` methods that subtract float damage, now `chopToInt`: `darkfalzcommon.ts` damage, `volopt.ts` damage, `volopt2.ts` hit, `derolle.ts` hit (the body pool; `hitSegment` takes the int 6x0A total and is unchanged), `dragon.ts` hit, `goldragon.ts` hit, `saintmilionents.ts` hit, `saintmilionboss.ts` hitPart.
+- `render/combat.ts` the four `sendEnemy` totals for the boss strikes (Barba Ray and De Rol Le segment, Dragon, De Rol Le body): `Math.max(0, chopToInt(damage))`, so the 6x0A total is the same number the receiver's HP uses.
+- `techniques.ts` `restaHeal` and `render/combat.ts` the caster's Resta heal (group 6): `chopToInt`.
+- `tests/flinch.test.ts`: the Foie 0.5 total now chops to 0 HP (was 1), so the following HP expectations (missed roll, Jellen) stay at 100. The old comment "rounds to 1 HP as the exe's ROUND does" was the bug.
+
+**Not changed (open).**
+- `render/combat.ts` `enemyResta` (the enemy caster's heal, `Math.round(mst * 0.5 + power)`): the path is CreateSpecialAttackEntity_006eeeb4, not traced.
+- `combat/darkfalz2.ts` 477 (Dark Falz's own resta heal): boss routine, not traced.
+- `render/combat.ts` 6553 (shock thunder damage `Math.round(...)` on the player): enemy technique path, not traced.
+- `playerdamage.ts` `revive` (`round(maxHp * 0.125)`): not a damage conversion; the exe's revive HP was not traced.
+- Log lines still use `Math.round`; they print no state.
+
+**Checks.** `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). `node tests/flinch.test.ts`, `combatdepth`, `pvp`, `enemytechplayer`, `revive`, `techniques`, `battle`, `battletraps` pass. `NEWSERV=.../vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures. Not run in Chrome or with two clients.
+
 ## 2026-10-25: Battle mode left: the PvP victim rules re-derived (hit threshold, HP truncation, knockdown)
 
 **Question.** ROADMAP "Battle mode left" lists the PvP victim side as ASSUMED in `combat/pvp.ts`: the victim's hit check reuses the enemy formulas, a miss sends nothing, no team check, knockback only for a heavy strike, no PB gain on a PvP hit. Re-derive each from PsoBB.exe.
