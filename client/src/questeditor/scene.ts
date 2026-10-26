@@ -646,6 +646,18 @@ export class EditorScene {
     else this.frameEntities();
   }
 
+  // Client coordinates of an entity's marker on screen (null when it is not drawn or is behind the
+  // camera). The e2e tests use it to grab an entity with the mouse.
+  screenPointOf(entity: SetEntity): { x: number; y: number } | null {
+    const item = this.byEntity.get(entity);
+    if (!item) return null;
+    const [x, y, z] = item.placed.world;
+    const p = new THREE.Vector3(x, y + MARKER_LIFT, z).project(this.viewer.camera);
+    if (p.z > 1 || p.z < -1) return null;
+    const r = this.canvas.getBoundingClientRect();
+    return { x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height };
+  }
+
   frameSelection(): void {
     const list = this.doc.selection.length ? this.doc.selection : this.doc.entitiesOf(this.doc.floor);
     this.frameOn(list.map((e) => this.byEntity.get(e)?.placed.world).filter((w): w is Vec3 => !!w), this.doc.selection.length ? 120 : 0);

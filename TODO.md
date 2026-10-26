@@ -13,8 +13,8 @@ only part of them has matching C (psobb-client-source).
 - [ ] Ship / block change and team menus at the counter
 - [ ] Boss fixes (De Rol Le, Vol Opt, Dragon, Belra)
 - [ ] Movement: two-client check, slowed / guard animation tie
-- [ ] Quest editor: open a real quest, drag, Script tab, "Test in game", publish to a deployed host
-- [ ] Admin: Quests tab live (open in editor, publish), login on production
+- [ ] Quest editor: open a real quest, drag, Script tab, "Test in game", publish to a deployed host (partial 2026-10-26: local run in client/e2e/questeditor-real.spec.ts and admin-quests.spec.ts; Test in game reaches the panel and publishes a test quest, but entering a game with it is not seen (port 12000 is the shared newserv, and $quest needs AllowStartFromChatCommand); deployed host not done)
+- [ ] Admin: Quests tab live (open in editor, publish), login on production (partial 2026-10-26: the whole Quests loop passes locally in client/e2e/admin-quests.spec.ts; production login not done, no production access here)
 - [ ] Phones: soft keyboard, rotation lock, adaptive resolution (real iOS / Android)
 
 ## B. Screens and menus

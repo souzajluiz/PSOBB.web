@@ -193,12 +193,30 @@ export function createQuestStore(options) {
     }
   }
 
+  // newserv refuses a quest whose files (the basename, q9001-bb) sit in two categories ("file ...
+  // exists in multiple categories", src/Quest.cc), so a publish may not put one there. The files of
+  // the same quest may all replace each other inside their own category.
+  function checkNoOtherCategory(category, name) {
+    const base = name.replace(/-bb(?:-[a-z])?\.(bin|dat|qst)$/, '-bb');
+    const root = realQuestsDir();
+    for (const other of categories()) {
+      if (other === category) continue;
+      for (const ent of readdirSync(join(root, other), { withFileTypes: true })) {
+        if (!ent.isFile() || ent.isSymbolicLink()) continue;
+        if (ent.name.startsWith(`${base}-`) || ent.name.startsWith(`${base}.`)) {
+          fail(409, `${ent.name} already exists in category ${other}: all files of a quest must be in one category (newserv refuses the quest otherwise)`);
+        }
+      }
+    }
+  }
+
   // Validates a publish request body and returns the plan; writes nothing.
   async function plan(body) {
     if (body === null || typeof body !== 'object' || Array.isArray(body)) fail(400, 'body must be a JSON object');
     const category = checkCategoryName(body.category);
     const name = checkPublishName(body.name);
     const dir = categoryDir(category);
+    checkNoOtherCategory(category, name);
     const writes = [];
     let info;
     if (name.endsWith('.qst')) {

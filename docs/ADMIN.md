@@ -265,7 +265,11 @@ Publishing, in order:
    itself (`q9001-bb.dat`), so the pair always matches. A name for another
    version (`-gc`, `-dc`) is refused: the panel cannot overwrite those.
 3. `confirm` must equal `<category>/<name>` (409 otherwise, like the other
-   destructive actions; the editor asks you to type it).
+   destructive actions; the editor asks you to type it). A quest's files must
+   all sit in one category: a name whose basename (`q9001-bb`) already exists
+   in another category is refused with 409, because newserv refuses the whole
+   quest then ("file ... exists in multiple categories", `src/Quest.cc`). The
+   same basename in its own category is a replacement, as usual.
 4. The bytes are validated before anything is written: base64 check, size
    limit, PRS decompression with a 4 MB output cap (a PRS stream can expand
    about 100x), then the client's own parsers (`parseQuestBin`, `parseQuestDat`,
@@ -281,6 +285,21 @@ Publishing, in order:
    files are put back (new ones removed) and the error is returned.
 7. The audit log gets `quest.publish` with the target, file names and sizes,
    quest number and name. File contents are never logged.
+
+**Test in game** (the editor's button, opened from this tab). The editor posts
+its package to the panel (`questeditor:test`, same origin, to the window that
+opened it, so the Quests tab's editor link must not use `noopener`; the admin
+pages send `Cross-Origin-Opener-Policy: same-origin-allow-popups` for that
+reason). The panel publishes it to the `hidden` category as
+`q<number>-bb-e.bin` + `q<number>-bb.dat` through the route above (the quest
+number is the header's: a number another category holds is refused, so give the
+copy a new number first; an earlier test file of that number is replaced, its
+backup kept), reloads quests and says so. Starting it in a game is the chat
+command `$quest <number>`, which newserv allows only for a quest whose
+`.json` sets `AllowStartFromChatCommand` or for an account with debug on; the
+publish route cannot write that `.json`. So a test quest is found in the game
+only in those two cases, and entering it was not checked end to end (see
+DEVLOG, "quest editor on a real quest").
 
 What it does not do: delete quests, edit the quest's `.json` (category flags,
 enabled expressions) or write other game versions. Quests already loaded by
@@ -315,7 +334,11 @@ authentication, lockout, session expiry, CSRF, the absence of CORS, input
 validation, the mapping to newserv routes / commands, the audit log,
 character / bank / config editing, and the quest routes (listing, reading,
 publishing: bad names and categories, path traversal, symlinks, oversize,
-PRS bomb, invalid quests, CSRF, confirmation, backup, rollback, mirror). `node tests/admin.live.ts` runs everything
+PRS bomb, invalid quests, CSRF, confirmation, backup, rollback, mirror).
+`client/e2e/admin-quests.spec.ts` (Playwright, `-c playwright.admin.config.ts`)
+runs the whole loop in Chrome: Open in editor, Publish to server under a new
+number, the cross-category 409, Test in game answered by the panel, and Open in
+editor again from the Quests tab. `node tests/admin.live.ts` runs everything
 validation, the mapping to newserv routes / commands, the audit log, and
 character / bank / config editing. `node tests/admin.i18n.test.ts` checks the
 translation dictionary (no empty or placeholder-breaking entry, pattern samples,

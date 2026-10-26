@@ -57,3 +57,19 @@ installed Google Chrome (`channel: 'chrome'`), so no browser download is needed.
   floor on a search ring (6 * r, r 1..6) from the player, on the ground (+6), with no wall between
   the eye and the spot (`collision.segmentHit`, mask -1); it left the bag; a held W (300 ms) moves
   the player again.
+
+Quest editor and admin panel (no game server needed):
+
+- `questeditor-real.spec.ts`: the editor on a real newserv quest (vendor `quests/extermination/q101`,
+  skipped without it), opened from the file input with its .bin + .dat. An entity is dragged in the
+  3D view with the mouse (`scene.screenPointOf` gives the marker's position), undone; a comment is
+  applied in the Script tab, and a script that does not assemble is refused with the quest unchanged;
+  Test in game says there is no target, then hands the package to a registered handler (name, bin and
+  dat sizes). Standalone: Vite on `PW_BASE_URL` (default the checkout's). Run:
+  `PW_BASE_URL=http://127.0.0.1:5181 npx playwright test e2e/questeditor-real.spec.ts --trace off`.
+- `admin-quests.spec.ts` (`npx playwright test -c playwright.admin.config.ts admin-quests --trace off`):
+  its own newserv and panel on random loopback ports, a temporary copy of `system/`. The Quests tab's
+  Open in editor on quest 101, Publish to server under a new number in `hidden`, a 409 for the same
+  number in another category, Test in game answered by the panel (a toast), and Open in editor again
+  for the published quest. The editor is built into the temp folder unless `EDITOR_DIST` names a dist
+  built with `vite build --outDir <dir>` (about 40 s; set it to save the build).

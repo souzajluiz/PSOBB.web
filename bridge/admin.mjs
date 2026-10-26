@@ -368,7 +368,9 @@ export function createAdmin(options = {}) {
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
     'Cross-Origin-Resource-Policy': 'same-origin',
-    'Cross-Origin-Opener-Policy': 'same-origin',
+    // same-origin-allow-popups, not same-origin: the editor opened from the Quests tab (a
+    // popup without a COOP header) must keep its opener, which "Test in game" answers.
+    'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   };
 
