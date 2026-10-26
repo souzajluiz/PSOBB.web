@@ -25,14 +25,28 @@
 //   6x46 receive: FUN_00699574 (Ghidra) stores the targets in the attacker's attack
 //     state and plays the motion; it deals no damage itself.
 //
-// ASSUMED (not traced): the victim's hit check reuses the enemy-strike formulas of
-// combat/formulas.ts (rollHit / rollDamage with the attacker's stats) instead of
-// EntityHitEntity's own constants; a remote player's ATP / ATA / LCK are the PlayerStats
-// of its last 6x70 (no 6x70 yet: no hit); a miss sends nothing; the remote strike's
-// attack type is the normal one unless the 6x43..6x45 says heavy; no team check (the
-// exe's EntityHitEntity has none); knockback only for a heavy strike, of its damage.
+// Re-derived from PsoBB.exe (2026-10-25, objdump; DEVLOG 2026-10-25 "PvP victim rules"):
+//   - the hit roll is vtable +0x70 of the target inside unknown_melee_attack_2 (dump 579907,
+//     0x006997a0), the victim's copy of the attacker, so rollHit is that roll;
+//   - EntityHitEntity_00773350 has no team check (its gates: attacker present, defender not
+//     dead, maybe_invuln, the defence roll, then the hitbox sum);
+//   - a total below 1.0 (float compare with 0x009782b0) is a miss: flag 0x100 only, no
+//     damage, no packet (PROVEN 0x00773893..0x007738b8);
+//   - the HP lost is the total truncated toward zero (the x87 control word is set to chop,
+//     0x0077390b..0x00773931 and 0x007738e3..0x007738f9), not rounded;
+//   - the knockdown (try_knockdown_player 0x0077529c) is the flag 0x400 when
+//     max HP (+0x2bc) * 0.25 (0x0097822c) < total: the rule does not read the attack type;
+//   - the defence roll is GetEnemyDefense on the player's +0x324 row, whose short [5] (+0xeaa)
+//     is zeroed at init and has no other store in the dump, so a player never resists here
+//     (ASSUMED: no indirect store, the same scan as the enemy side).
+// ASSUMED (not traced): a remote player's ATP / ATA / LCK are the PlayerStats of its last 6x70
+// (no 6x70 yet: no hit); the elemental and per-hitbox damage terms of the exe's sum
+// (+0x2ec..+0x2f4, the defender's resists, damage_reduction) are zero here; the remote strike's
+// attack type is the normal one unless the 6x43..6x45 says heavy; the knockback velocity of a
+// knockdown is the port's (the exe's push speed is not traced); a miss sends nothing (PROVEN
+// by the 0x100 path).
 
-import { playerAttacker, rollDamage, rollHit, type AttackerStats, type AttackType, type DefenderStats, type Rng, type WeaponForCombat } from './formulas.ts';
+import { playerAttacker, rollDamage, rollHit, TOOK_DAMAGE_MIN, type AttackerStats, type AttackType, type DefenderStats, type Rng, type WeaponForCombat } from './formulas.ts';
 import { inWeaponCone } from './weaponaim.ts';
 
 // PlayerStats of a 6x70 (BB, little endian) at 0x140: atp, mst, evp, hp, dfp, ata, lck.
@@ -78,22 +92,32 @@ export function applyLevelChangeStats(stats: CombatStats | undefined, c: { atp: 
 }
 
 export interface PvpHit {
-  landed: boolean; // the strike hit and did at least 1 damage
-  damage: number; // before rounding (the HP lost is round(damage))
+  landed: boolean; // the summed total reached TOOK_DAMAGE_MIN (1.0): the hit took effect
+  damage: number; // the HP lost: the total truncated toward zero (the exe's chop-mode (int) cast)
+  total: number; // the summed total before truncation (the PB gain and the knockdown test use it)
   critical: boolean;
 }
 
 // The victim's roll for one strike of a remote player: hit chance, then the damage.
 export function pvpStrike(attacker: AttackerStats, defender: DefenderStats, attackType: AttackType, step: number, rng: Rng): PvpHit {
-  if (!rollHit(attacker, defender, attackType, step, rng)) return { landed: false, damage: 0, critical: false };
+  if (!rollHit(attacker, defender, attackType, step, rng)) return { landed: false, damage: 0, total: 0, critical: false };
   const r = rollDamage(attacker, defender, attackType, rng);
-  const landed = Math.round(r.damage) >= 1;
-  return { landed, damage: landed ? Math.round(r.damage) : 0, critical: landed && r.critical };
+  const landed = r.damage >= TOOK_DAMAGE_MIN;
+  return {
+    landed,
+    damage: landed ? Math.trunc(r.damage) : 0,
+    total: landed ? r.damage : 0,
+    critical: landed && r.critical,
+  };
 }
 
-// The knockback strength of a PvP hit (ASSUMED: a heavy strike pushes by its damage).
-export function pvpKnockback(attackType: number, damage: number): number {
-  return attackType === 1 ? damage : 0;
+// The knockdown test of a PvP hit (try_knockdown_player, 0x0077529c): the victim's flag 0x400
+// is set when max HP * 0.25 (0x0097822c) is below the total. No attack type is read.
+// Returns the push strength for the port's hit (the exe's push speed is not traced, ASSUMED to
+// be the total when the knockdown applies, 0 otherwise).
+export const KNOCKDOWN_FRACTION = 0.25;
+export function pvpKnockback(maxHp: number, total: number): number {
+  return maxHp * KNOCKDOWN_FRACTION < total ? total : 0;
 }
 
 // 6x8F as the victim sends it (after the 4-byte header): the attacker id names the

@@ -9701,8 +9701,8 @@ export class CombatView {
     if (!r.landed) return;
     // The direction from the attacker to the local player (the enemyHitsPlayer convention).
     const angle = Math.atan2(me.position.x - from.x, me.position.z - from.z);
-    this.damage.hit(r.damage, angle, pvpKnockback(type, r.damage), clientId, r.critical);
-    this.gainPb(r.damage, true);
+    this.damage.hit(r.damage, angle, pvpKnockback(this.damage.maxHp, r.total), clientId, r.critical);
+    this.gainPb(r.total, true);
     this.onPvpHit?.(clientId, r.damage);
     this.opts.log(`hit by ${remote?.name ?? `player ${clientId + 1}`} for ${r.damage}: ${this.damage.hp}/${this.damage.maxHp}`);
   }

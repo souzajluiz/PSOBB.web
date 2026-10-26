@@ -105,10 +105,28 @@ const never = () => 0.999999; // above any hit chance below 1
   check(ATTACK_DAMAGE_MULT[1] > ATTACK_DAMAGE_MULT[0], 'the heavy multiplier is the larger one');
 }
 
-// --- knockback ----------------------------------------------------------------------
+// --- the hit threshold and the HP lost (EntityHitEntity_00773350, 0x00773893 / 0x007738e3) ---
 {
-  eq(pvpKnockback(0, 40), 0, 'a normal strike does not push');
-  eq(pvpKnockback(1, 40), 40, 'a heavy strike pushes by its damage');
+  // attack type 2 multiplies by 0.5 (ATTACK_DAMAGE_MULT[2]); rng 0.5 keeps the hit roll sure,
+  // the spread at 0 and the critical roll at 250 (LCK 0 never criticals).
+  const one = (atp: number) => ({ atp, atpSpread: 0, equipAtp: 0, ata: 1e6, lck: 0, isPlayer: true });
+  const noDef = { hp: 300, maxHp: 300, evp: 0, dfp: 0 };
+  const at = (atp: number) => pvpStrike(one(atp), noDef, 2, 0, () => 0.5);
+  const exactlyOne = at(10);
+  eq([exactlyOne.landed, exactlyOne.damage, exactlyOne.total], [true, 1, 1], 'a total of exactly 1.0 lands');
+  const short = at(9.9);
+  eq([short.landed, short.damage], [false, 0], 'a total of 0.99 is a miss: no HP lost, no packet');
+  const onePointNine = at(19);
+  check(onePointNine.landed && onePointNine.damage === 1 && Math.abs(onePointNine.total - 1.9) < 1e-9, 'the HP lost truncates 1.9 to 1 (not rounded to 2)');
+  check(Math.abs(onePointNine.total - 1.9) < 1e-9, 'the PB gain takes the untruncated total');
+}
+
+// --- knockdown (try_knockdown_player, 0x0077529c: max HP * 0.25 < total, attack type unread) ---
+{
+  eq(pvpKnockback(300, 75), 0, 'a total of exactly a quarter of max HP does not knock down');
+  eq(pvpKnockback(300, 76), 76, 'a total above a quarter of max HP knocks down');
+  eq(pvpKnockback(300, 40), 0, 'a light total does not push');
+  eq(pvpKnockback(300, 76), pvpKnockback(300, 76), 'the rule is the same for a normal and a heavy strike');
 }
 
 // --- 6x8F payload and parse -----------------------------------------------------------
