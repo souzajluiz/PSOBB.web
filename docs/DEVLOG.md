@@ -23203,3 +23203,12 @@ Not checked: the `MapObject` state table for the menu scroll (`144485`) is only 
 **Checks.** `node tests/enemyfsmep2a.test.ts`, `enemyfsmep2b.test.ts`, `enemyfsmep2d.test.ts`: all checks passed (with `data.gsl`). `client` tsc (Node 24): clean.
 
 **Still open.** Floor 10 (31 of 33 groups not run, the cap is 300 s), Seabed Lower, Mines, the Tower (no enemies, see above), and the lobby-socket ping on a closed connection.
+## 2026-10-26: Challenge mode in a real game (partial): party entry and the clerk's dialog
+
+**What ran.** `client/e2e/challenge-mode.spec.ts` (new): a fresh account (`wch` prefix), the character made if the slot is empty, Create a PARTY -> EPISODE 1 -> Play Mode Challenge (MODES index 1, the Difficulty row skipped) -> Registration; the game is entered (floor 0, Pioneer 2). The leader walks to the Hunter's Guild clerk (action 1011) and talks to it: the challenge quest dialog opens (quest/challengedialog.ts; log `quest menu (A2): 2 entries`, `counterOpen` true). The spec passes (1 passed).
+
+**What did not run.** Picking the first list entry and confirming (Enter on the list, the yes/no) did not produce a stage start in 120 s: no `quest "..." started` or challenge start log. The spec stops after the dialog opens. Open: the list's key path (`ui.list` on `dlg.names()`), the episode-then-quest levels, the yes/no, and the stage-start rules (items/meseta reset, the challenge timer, floor changes, stage end). Not traced in this pass.
+
+**Environment.** The disk filled during the run (ENOSPC on Playwright writes and newserv). newserv crashed around that time and the login stalled at "Connecting..." (a server state, not a client bug). Rerun after the restart; Playwright was run with `--trace off` to save space.
+
+**Bugs fixed.** None in this pass; the failures seen were environmental.

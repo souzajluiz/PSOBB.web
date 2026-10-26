@@ -58,3 +58,4 @@ installed Google Chrome (`channel: 'chrome'`), so no browser download is needed.
   the eye and the spot (`collision.segmentHit`, mask -1); it left the bag; a held W (300 ms) moves
   the player again.
 - `ep2-floors-smoke.spec.ts` and `ep2-floors-watch.spec.ts`: a fresh account per run (`wep...`, or `PSO_USER`); the character is made on first login (`logInWithCharacter`). The watch spec reads `EP2_WATCH_FLOORS` (default 1,5,7,10) and `EP2_WATCH_SECONDS`; the smoke spec walks floors 1..17 (floors 16 and 17 have no object set in the data, their two 404s are allowed).
+- `challenge-mode.spec.ts`: a fresh account (`wch` prefix, or `PSO_USER`), a Challenge party (EPISODE 1, mode Challenge; Difficulty is not offered) entered as its leader, then the Hunter's Guild clerk (action 1011): the challenge quest dialog opens (A2 list, `counterOpen`). Picking stage 1 and the stage start are not covered yet (see docs/DEVLOG.md 2026-10-26).

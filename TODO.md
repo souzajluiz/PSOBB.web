@@ -6,7 +6,7 @@ original client. "100%" is a direction, not a date: the exe has thousands of fun
 only part of them has matching C (psobb-client-source).
 
 ## A. Verification debt (built, never seen running in a browser)
-- [ ] Challenge mode in a real game (all stages)
+- [ ] Challenge mode in a real game (all stages) (partial 2026-10-26: the Challenge party entry and the clerk's challenge dialog run in `e2e/challenge-mode.spec.ts`; picking stage 1 and the stage start are open: no stage-start log after Enter on the list)
 - [ ] Battle mode in a real game
 - [ ] Technique visuals (Foie, Barta, Zonde, Gizonde, Razonde, Grants, Megid, supports, specials)
 - [ ] Episode 2 enemy FSMs on Seabed, Mines, Tower (partial 2026-10-26: smoke spec passes on floors 1..17; watch passes on floor 10 but only 2 of 33 groups ran; Seabed Lower and Mines open; real motion lengths for groups a / d in the tests, Gi Gue barrier 5 frames; lobby ping on a closed socket open)
