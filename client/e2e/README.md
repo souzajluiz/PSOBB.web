@@ -57,3 +57,4 @@ installed Google Chrome (`channel: 'chrome'`), so no browser download is needed.
   floor on a search ring (6 * r, r 1..6) from the player, on the ground (+6), with no wall between
   the eye and the spot (`collision.segmentHit`, mask -1); it left the bag; a held W (300 ms) moves
   the player again.
+- `ep2-floors-smoke.spec.ts` and `ep2-floors-watch.spec.ts`: a fresh account per run (`wep...`, or `PSO_USER`); the character is made on first login (`logInWithCharacter`). The watch spec reads `EP2_WATCH_FLOORS` (default 1,5,7,10) and `EP2_WATCH_SECONDS`; the smoke spec walks floors 1..17 (floors 16 and 17 have no object set in the data, their two 404s are allowed).

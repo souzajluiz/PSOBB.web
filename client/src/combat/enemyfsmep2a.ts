@@ -1033,7 +1033,7 @@ export class GeeAi extends BrainBase {
 // is reported through `events`.
 //
 // Not reproduced: the objects' own look (the stomp's effect and sound), wall
-// rays (flat ground), the barrier's own motions (ASSUMED 20 frames each), the
+// rays (flat ground), the barrier's object speed (ASSUMED one frame a tick), the
 // pack-less hop direction search (the three 120 degree rays: with open ground
 // the first is taken).
 export const GIGUE = {
@@ -1077,7 +1077,10 @@ export const GIGUE = {
   bombFrameA: 5, // 0x00926314
   bombFrame: 20, // 0x00926318
   barrierWander: 45,
-  barrierMotion: 20, // ASSUMED
+  // The barrier's appear (exp_exp_barrier.njm) and vanish (redu_redu_barrier.njm) motions: 5 frames each
+  // in data.gsl (bm_ene_gi_gue.bml). The object's own update (0x0056c704) moves on the motion-end flag,
+  // not a timer; one frame a tick is ASSUMED (the object's animation speed is not read).
+  barrierMotion: 5,
   spitLife: 90, // 0x5a
   spitDelay: 3,
   spitCloseSq: 22500, // 0x0092653c

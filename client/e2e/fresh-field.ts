@@ -92,3 +92,15 @@ export async function enterFreshField(page: Page, logs: string[], opts: { prefix
   await expectInGame(page, logs, name);
   return { user, name };
 }
+
+// Logs in and makes slot 0 when the account has no character (the ep2 floor specs run on a fresh
+// account); stops on the character select, before the lobby.
+export async function logInWithCharacter(page: Page, user: string, password: string): Promise<void> {
+  await logIn(page, user, password);
+  await expect.poll(() => peek(page, (w) => !!w.classicSelect), { timeout: 90_000 }).toBe(true);
+  if (!(await slotFilled(page, 0))) {
+    await key(page, 'Enter'); // the empty slot 0: the creation
+    await makeCharacter(page);
+    await expect.poll(() => slotFilled(page, 0), { timeout: 30_000 }).toBe(true);
+  }
+}
