@@ -129,16 +129,19 @@ export const GRAVE_KILLER_INDEX: Readonly<Record<string, number>> = {
   EPSIGARD: 87,
   ASTARK: 88,
   // Yowie / Satellite Lizard (0x5ae848): [this+0x3ec] != 0 -> 89 (Yowie) at 0x5ae98b, else 90 at 0x5ae994.
-  // ASSUMED: +0x3ec is the variant flag set at spawn (its source is not traced).
+  // +0x3ec = (the spawn record's dword +0x2c, copied to this+0x360, as a float >= 1.0), written by the
+  // helper 0x5aec2c (0x5aec6f / 0x5aec9a). PROVEN chain; the set-file index of the record is not traced.
   YOWIE_CRATER: 89,
   YOWIE_DESERT: 89,
   SATELLITE_LIZARD_CRATER: 90,
   SATELLITE_LIZARD_DESERT: 90,
-  // Merissa (0x5b6ebc): [this+0x380] != 0 -> 92 (AA), else 91 (A). ASSUMED: +0x380 is the variant.
+  // Merissa (0x5b6ebc): [this+0x380] != 0 -> 92 (AA), else 91 (A). +0x380 = P(this.word+0x2c) ? 1 : (record word +0x3c & 1)
+  // (setter 0x5b6ea0, sole caller 0x5b6ca5). PROVEN formula; the table P (0x813038, runtime data) is not read.
   MERISSA_A: 91,
   MERISSA_AA: 92,
   // Zu / Pazuzu (0x5b4884): the ctor's esi != 0 -> 95 (Pazuzu) at 0x5b4ae0, else 94 (Zu) at 0x5b4aeb.
-  // ASSUMED: esi is the Pazuzu flag from the spawn (its source is not traced).
+  // The flag is +0x504 (esi at 0x5b4a9b): (record word +0x3c & 1) OR P(this.word+0x2c) (writers 0x5b4981, 0x5b4cef).
+  // PROVEN formula; P (a 16-word table at *[0xab0248]) is runtime data, not read.
   ZU_CRATER: 94,
   ZU_DESERT: 94,
   PAZUZU_CRATER: 95,
@@ -153,9 +156,11 @@ export const GRAVE_KILLER_INDEX: Readonly<Record<string, number>> = {
   GORAN_DETONATOR: 102,
   PYRO_GORAN: 103,
   // Sinow Zoa / Zele (0x591c48): [this+0x408] > 0 -> 70 (Zele) at 0x591c60, else 69 (Zoa) at 0x591c86.
+  // +0x408 = [this+0x370] (record word +0x3c) via method 0x591658 (writer 0x5916ef) on the 0x5915b4 path PROVEN; the 0x595240 path ASSUMED.
   SINOW_ZOA: 69,
   SINOW_ZELE: 70,
   // Sinow Spigell / Berill (0x59e844): [this+0x3f8] > 0 -> 63 (Spigell) at 0x59e858, else 62 (Berill) at 0x59e882.
+  // +0x3f8 = [this+0x370] (record word +0x3c) via method 0x59e1a4 (writer 0x59e23b) on the 0x59e100 path PROVEN; the 0x5a1bf4 caller ASSUMED.
   SINOW_SPIGELL: 63,
   SINOW_BERILL: 62,
   // The Sorcerer's bees (0x59ae6c): [this+0x3d0] == 1 -> 32 (Bee L) at 0x59af88, else 33 (Bee R) at 0x59aee9.
@@ -168,7 +173,8 @@ export const GRAVE_KILLER_INDEX: Readonly<Record<string, number>> = {
   MERICAROL: 56,
   MERIKLE: 57,
   MERICUS: 58,
-  // Gibbon family (0x564a64): the flag eax (not traced, ASSUMED) != 0 -> 60 (Zol Gibbon, 0x564c15), else 59 (Ul Gibbon).
+  // Gibbon family (0x564a64): the flag is +0x46c = ([this+0x370] > 0) (writer 0x564f00 / 0x564f2d, method 0x564e98); != 0 -> 60
+  // (Zol Gibbon, 0x564c15), else 59 (Ul Gibbon). PROVEN writer; the source of +0x370 (record word +0x3c, via callees not traced) is ASSUMED.
   ZOL_GIBBON: 60,
   UL_GIBBON: 59,
   // Gibbles (0x563200, unconditional).
@@ -184,7 +190,8 @@ export const GRAVE_KILLER_INDEX: Readonly<Record<string, number>> = {
   MORFOS: 66,
   RECOBOX: 67,
   // Boota family (0x5a602c): the variant (eax) == 1 -> 97 (Ze Boota, 0x5a6074), else 96 (Boota, 0x5a6086).
-  // ASSUMED: eax is the Ze flag (its source is not traced).
+  // The variant is this+0x33c (clamped to 0..2 by the ctor), written from this+0x370 = record word +0x3c (creator 0x5a5cd4,
+  // record init 0x786848). PROVEN; eax is not the flag.
   BOOTA: 96,
   ZE_BOOTA: 97,
   // Dolmolm / Dolmdarl (0x553fc8; the dump's name InitializeRappyEntity is wrong): [this+0x370] < 1 -> 64 (push at
@@ -201,8 +208,11 @@ export const GRAVE_KILLER_INDEX: Readonly<Record<string, number>> = {
   // Girtablulu (ctor FUN_005aba28, 0x5aba28): push 0x5d at 0x5abbd7, forwarder call 0x5abc24, unconditional.
   GIRTABLULU: 93,
   // Not in the table, so no killer line: DUBWITCH (ctor 0x618ae4 has no setter call, and the enemy base ctor 0x7865e8
-  // zeroes +0x378 at 0x78663d). Olga's sub-object (0x48a4b0) names 85 (0x55), or 86 (0x56) when [this+0x38c] == 1
-  // (cmp at 0x48a661): no port kind has those ids, so nothing is keyed.
+  // zeroes +0x378 at 0x78663d). Olga's sub-object (ctor 0x48a4b0, vtable 0xaf8c40) names 85 (0x55), or 86 (0x56)
+  // when [this+0x38c] == 1 (cmp at 0x48a661). The value is the loop index of its only creator (0x48a400, called
+  // from 0x49da9b in the form 2 builder): the index is stored at the creator's [ebp-0x7c] (0x49da71 mov, edi = 0 / 1),
+  // which is the struct field +0x54 the ctor reads. So index 0 is 85 and index 1 is 86 (PROVEN, objdump). No port kind
+  // has those ids, and it is not traced that this minion is the last attacker a grave records: nothing is keyed.
 };
 
 // The Rappy family's unitxt ids (the exe's `rappy_unitxt_ids`, 24 int32 at 0x00921a00 in .data,

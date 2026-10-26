@@ -36,8 +36,10 @@
 // Only the leader's dialog is driven (the port opens it from quest/town.ts).
 //
 // The port keeps the exe's states as numbers. Things the port does not drive
-// are marked ASSUMED where they are set (the menu flag, the stage, the start
-// condition).
+// are marked ASSUMED where they are set (the menu flag; the stage byte is
+// GetCurrentChallengeStage_006d040c, cmode.ts challengeCurrentStage, with the selection
+// state and party ASSUMED in town.ts; the start check is the dump's
+// unknown_maybe_num_players_to_start_quest, town.ts challengeStartable).
 
 import { parseQuestMenu, type QuestMenuEntry } from '../net/quests.ts';
 import type { ChallengeQuestDialog } from './cmode.ts';
