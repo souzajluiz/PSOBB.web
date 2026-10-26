@@ -26,7 +26,16 @@ import {
   type StatusValues,
 } from '../classic/hud.ts';
 import { bandsOf, overlayFrame, textureBitmap, VW } from '../classic/stage.ts';
-import { PLAYER_CARD_HEIGHT, TARGET_CARD_ANCHOR } from '../combat/targetcard.ts';
+import {
+  PLAYER_CARD_HEIGHT,
+  PLAYER_CARD_ICON_BAND,
+  TARGET_CARD_ANCHOR,
+  TARGET_CARD_HEIGHT,
+  TARGET_CARD_TOP,
+  playerCardWidth,
+  targetCardValueX,
+  targetCardWidth,
+} from '../combat/targetcard.ts';
 import type { PlayerTargetCardText, TargetCardText } from '../combat/targetcard.ts';
 import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -206,49 +215,50 @@ export class PlayerHud {
     ctx.restore();
   }
 
-  // The bottom-left target card (ui_target_window_attribute): the monster's name and
-  // "Attribute:" with the attribute in its colour. ASSUMED box: the exe's window
-  // size is not traced, so the box is placed from the reference screenshot (top
-  // 369, 97 high, the anchor's x), its padding is ASSUMED too.
+  // The bottom-left target card (ui_target_window_attribute, FUN_00731e4c): the monster's
+  // name and "Attribute:" with the attribute in its colour. PROVEN: the top is 437 - 93 (y 344),
+  // the height 93, the value starts at the label's width + 10 and the width is the wider line
+  // plus 40 (combat/targetcard.ts). ASSUMED: the text origin is 10 in from the box's left and
+  // the line gap is 10 (the exe's text rows are not traced here).
   private drawTargetCard(ctx: CanvasRenderingContext2D, font: CanvasImageSource): void {
     const t = this.targetCard;
     if (!t) return;
     const pad = 10;
     const x = TARGET_CARD_ANCHOR.x;
-    const y = 369;
-    const valueX = glyphTextWidth(t.label) + 4; // ASSUMED gap between the label and the value
-    const width = Math.max(120, Math.max(glyphTextWidth(t.name), valueX + glyphTextWidth(t.value)) + pad * 2);
+    const y = TARGET_CARD_TOP;
+    const labelW = glyphTextWidth(t.label);
+    const width = targetCardWidth(glyphTextWidth(t.name), labelW, glyphTextWidth(t.value));
     ctx.fillStyle = 'rgba(6, 18, 30, 0.78)';
-    ctx.fillRect(x, y, width, 97);
+    ctx.fillRect(x, y, width, TARGET_CARD_HEIGHT);
     ctx.strokeStyle = 'rgba(90, 220, 240, 0.9)';
     ctx.lineWidth = 1;
-    ctx.strokeRect(x + 0.5, y + 0.5, width - 1, 96);
+    ctx.strokeRect(x + 0.5, y + 0.5, width - 1, TARGET_CARD_HEIGHT - 1);
     drawGlyphText(ctx, font, t.name, x + pad, y + pad, 0xffffffff);
     const row = y + pad + GLYPH_HEIGHT + 10;
     drawGlyphText(ctx, font, t.label, x + pad, row, 0xffffffff);
-    drawGlyphText(ctx, font, t.value, x + pad + valueX, row, t.argb);
+    drawGlyphText(ctx, font, t.value, x + pad + targetCardValueX(labelW), row, t.argb);
   }
 
   // The player (ally) card (ChallengeMenuObject_UpdatePlayerTarget, combat/targetcard.ts):
   // the section ID icon and the name in a box 49 high whose bottom edge is gui slot 0x1f's
-  // y (437). The icon is a hexagon in the section's colour (ASSUMED shape and size); the box
-  // width is ASSUMED from the name (the exe's width is the text's width plus a constant).
+  // y (437). PROVEN: the height 49 and the width 34 + name + 40 (playerCardWidth). ASSUMED:
+  // the icon is a hexagon in the section's colour, centred in the 34 band (its size is not
+  // traced).
   private drawAllyCard(ctx: CanvasRenderingContext2D, font: CanvasImageSource): void {
     const c = this.allyCard;
     if (!c) return;
-    const pad = 10;
     const icon = 9; // ASSUMED hexagon radius
     const x = TARGET_CARD_ANCHOR.x;
     const bottom = TARGET_CARD_ANCHOR.y;
     const y = bottom - PLAYER_CARD_HEIGHT;
-    const textX = x + pad + icon * 2 + 6;
-    const width = Math.max(120, textX - x + glyphTextWidth(c.name) + pad);
+    const textX = x + PLAYER_CARD_ICON_BAND;
+    const width = playerCardWidth(glyphTextWidth(c.name));
     ctx.fillStyle = 'rgba(6, 18, 30, 0.78)';
     ctx.fillRect(x, y, width, PLAYER_CARD_HEIGHT);
     ctx.strokeStyle = 'rgba(90, 220, 240, 0.9)';
     ctx.lineWidth = 1;
     ctx.strokeRect(x + 0.5, y + 0.5, width - 1, PLAYER_CARD_HEIGHT - 1);
-    const cx = x + pad + icon;
+    const cx = x + PLAYER_CARD_ICON_BAND / 2;
     const cy = y + PLAYER_CARD_HEIGHT / 2;
     ctx.fillStyle = `#${(c.argb & 0xffffff).toString(16).padStart(6, '0')}`;
     ctx.beginPath();

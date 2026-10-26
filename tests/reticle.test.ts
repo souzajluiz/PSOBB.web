@@ -27,16 +27,24 @@ import {
   reticleRow,
 } from '../client/src/combat/reticle.ts';
 import {
+  PLAYER_CARD_BORDER,
   PLAYER_CARD_HEIGHT,
+  PLAYER_CARD_ICON_BAND,
   SECTION_ARGB,
   TARGET_ATTR_ARGB,
   TARGET_CARD_ANCHOR,
+  TARGET_CARD_BORDER,
   TARGET_CARD_HEIGHT,
+  TARGET_CARD_TOP,
+  TARGET_CARD_VALUE_GAP,
   TARGET_TEXT,
   monsterNameCollection,
+  playerCardWidth,
   playerTargetCardText,
   targetAttributeIndex,
   targetCardText,
+  targetCardValueX,
+  targetCardWidth,
 } from '../client/src/combat/targetcard.ts';
 import { ENEMY_ATTR } from '../client/src/combat/enemystatus.ts';
 
@@ -166,6 +174,19 @@ check('player card: the name', card.name === 'Yukina', card.name);
 check('player card: redria (6) icon colour', card.argb === SECTION_ARGB[6] && card.argb === 0xffff3030, card.argb.toString(16));
 check('player card: unknown section falls back to whitill', playerTargetCardText({ name: 'X', sectionId: 42 }).argb === SECTION_ARGB[9]);
 check('section table has ten sections', SECTION_ARGB.length === 10);
+
+// 11. Card layout from ui_target_window_attribute (FUN_00731e4c) and the player card
+// (FUN_0073220c). Constants: 0x00971058..0x0097109c read with tools/exedata.py: 10.0 (0x009710a0),
+// 40.0 (0x0097109c), 34.0 (0x00971074), 40.0 (0x0097106c), 93.0 (0x42ba0000), 49.0 (0x42440000).
+check('enemy card: top is 437 - 93 = 344', TARGET_CARD_TOP === 344 && TARGET_CARD_TOP === TARGET_CARD_ANCHOR.y - TARGET_CARD_HEIGHT);
+check('enemy card: value gap is 10.0 (0x009710a0)', TARGET_CARD_VALUE_GAP === 10);
+check('enemy card: border spacing is 40.0 (0x0097109c)', TARGET_CARD_BORDER === 40);
+check('enemy card: value x is the label width + 10', targetCardValueX(50) === 60);
+check('enemy card: width is the name when it is wider', targetCardWidth(100, 50, 30) === 140, String(targetCardWidth(100, 50, 30)));
+check('enemy card: width is the label + value when that is wider', targetCardWidth(20, 50, 30) === 130, String(targetCardWidth(20, 50, 30)));
+check('player card: icon band is 34.0 (0x00971074)', PLAYER_CARD_ICON_BAND === 34);
+check('player card: border is 40.0 (0x0097106c)', PLAYER_CARD_BORDER === 40);
+check('player card: width is 34 + name + 40', playerCardWidth(100) === 174, String(playerCardWidth(100)));
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);

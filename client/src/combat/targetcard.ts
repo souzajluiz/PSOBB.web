@@ -22,6 +22,31 @@ export const TARGET_CARD_ANCHOR = { x: 8, y: 437 } as const;
 // window_height_but_overwritten_every_frame = 93.0 (ui_target_window_attribute).
 export const TARGET_CARD_HEIGHT = 93;
 
+// The card's layout (PROVEN from the exe's ui_target_window_attribute, FUN_00731e4c in the
+// Ghidra decompile of 0x00731ed0; the constants read with tools/exedata.py):
+// - the window's top is the slot's y minus its height times the window scale (+0x6c; the
+//   scale is ASSUMED 1): 437 - 93 = 344, so the card runs from y 344 down to 437;
+// - the attribute value starts 10.0 (0x009710a0) right of the label's width (the label is
+//   at the window's origin): value x = label width + 10;
+// - the window's width is the wider of the name and the label + value, plus 40.0
+//   (0x0097109c, `border_spacing_for_ui_target_window`). The two Ghidra sums that add the
+//   g_TargetWindowMargin pair add 0 for a non-negative width (the pair is 0.0 and 2^32,
+//   the int-to-float correction), so they are left out.
+export const TARGET_CARD_TOP = TARGET_CARD_ANCHOR.y - TARGET_CARD_HEIGHT;
+export const TARGET_CARD_VALUE_GAP = 10;
+export const TARGET_CARD_BORDER = 40;
+
+// The x of the attribute value for a label of this width (exe: label width + 10).
+export function targetCardValueX(labelWidth: number): number {
+  return labelWidth + TARGET_CARD_VALUE_GAP;
+}
+
+// The card's width for the name, the label and the value widths (exe: max(name, label + 10 +
+// value) + 40).
+export function targetCardWidth(nameWidth: number, labelWidth: number, valueWidth: number): number {
+  return Math.max(nameWidth, targetCardValueX(labelWidth) + valueWidth) + TARGET_CARD_BORDER;
+}
+
 // monster_attribute_color (0x009f2ed0), ARGB, by the attribute index below.
 export const TARGET_ATTR_ARGB = [0xffa5ffaa, 0xfff5ff99, 0xffff958b, 0xffe1a9ff, 0xffffffff] as const;
 
@@ -92,6 +117,16 @@ export function targetCardText(opts: {
 // scale 1 here), so its bottom edge is the slot's y (437). The section ID icon beside the name
 // is not traced in the exe (its texture); its colours are ASSUMED (SECTION_ARGB).
 export const PLAYER_CARD_HEIGHT = 49;
+
+// PROVEN (ChallengeMenuObject_UpdatePlayerTarget_0073220c, Ghidra FUN_0073220c; constants at
+// 0x00971074 = 34.0 and 0x0097106c = 40.0): the window's width is 34 + the name's width + 40.
+// The 34 is the band the section icon sits in (ASSUMED: the text starts at x + 34).
+export const PLAYER_CARD_ICON_BAND = 34;
+export const PLAYER_CARD_BORDER = 40;
+
+export function playerCardWidth(nameWidth: number): number {
+  return PLAYER_CARD_ICON_BAND + nameWidth + PLAYER_CARD_BORDER;
+}
 
 // ASSUMED: the section ID icon's colour (ARGB) by section_id (the dump's enum section_id:
 // 0 viridia .. 9 whitill). The vanilla reference screenshot shows a green, a blue and a red

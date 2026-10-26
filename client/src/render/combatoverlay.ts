@@ -188,8 +188,9 @@ export class CombatOverlay {
   }
 
   // Lock-on cursor over the current target (null hides it). `pos` is the target's
-  // point, moved toward the camera by `radius` (CalculatePositionTowardsCamera_006ea73c,
-  // ASSUMED 0: the hitbox radius is not passed here); the cursor's colour is the
+  // point, moved toward the camera by `radius` (CalculatePositionTowardsCamera_006ea73c;
+  // the enemy's hit box radius, PROVEN from the reticle's hitbox_radius at +0x2c; the
+  // player's is ASSUMED 0); the cursor's colour is the
   // reticle table row `row` (combat/reticle.ts reticleRow) and it turns to face `camera`.
   // `ally` moves the support target's cursor instead of the enemy's.
   setTarget(
