@@ -1,5 +1,31 @@
 # Devlog
 
+## 2026-10-25: Minimap: the "Sinow Berill sub-entity" icons are the Barba Ray's (body 2.0, parts 1.2)
+
+**Question.** ROADMAP "Minimap left to do" lists the Sinow Berill sub-entity icons as traced but not ported, owners ASSUMED: dump 239865 `EnableSinowberillVisualIndicators_004b9198` (forced 2.0 when box flag bit 0 is set) and dump 240354 `UpdateSinowberillPositionAndState_004ba0ac` (forced 1.2). Which port object is each one?
+
+**PROVEN (objdump of PsoBB.exe, read per instruction; the Ghidra dump for names).**
+- The dump's enclosing function of the 2.0 call is `UpdateSinowberillEntity_004b8584` (dump 239279). That is the Barba Ray's root frame (enemy type 0xcb, `combat/barbaray.ts`, root frame 0x004b8584). The "Sinowberill" names and the `player *` parameter types are a community mislabel: the callers pass the enemy. So these are Barba Ray icons, not Sinow Berill or player icons.
+- 0x004b9198 is called from the root frame at 0x004b891d (dump 239488), after the `DerolleCopyVector3` call (0x00435484) and vtable +0x168. It tests bit 0 of `[[this+0xa4]+0x18]`, then calls `enable_reticle_` (0x006401f0) and icon3 (0x0080575c) at the root's position: colour 0xffffa24c, scale 0x40000000 (2.0), flags 1.
+- The root's 0x8000 path (test on `[ecx+0x630]` at 0x004b85b9, `jne` 0x004b8946) returns without the icon. The rest of the state switch (jump table at 0x004b870d) was not traced target by target.
+- The root frame 0x004b8584..0x004b9198 has no plain icon call (no `0x00805608`) and no direct slot call (`0x00520618`). The body's only radar icon is the forced 2.0.
+- 0x004ba0ac (the part update, dump 240335): after the pause gate (0x004f7c84), the row copy, vtable +0x154 and +0x168, `DerolleCopyVector3`, the same box test and `enable_reticle_`, icon3 at the part's position with scale 0x3f99999a (1.2), colour 0xffffa24c, flags 1 (objdump 0x004ba0ac..0x004ba120). No plain icon call in that function.
+- Box: the part init 0x004ba2e4 copies the template 0x009abc84 into `this+0x394..`. The template's flags word (+0x18, 0x009abc9c) is 0x8003 (`tools/exedata.py read`), so bit 0 is set at init.
+
+**ASSUMED.**
+- Box bit 0 stays set for the body and the parts: no clearing writer was traced, and the writer of the `+0xa4` box pointer was not traced either. The root's box init (0x004afe39) does not copy that template, so the body's box is ASSUMED on for the same reason.
+- The body's common tail covers every alive state (see above).
+- The Sinow Berill (vtable 0x00b0a120, `ENEMY_RADAR_SOURCE` 'slot') is untouched.
+
+**Port.**
+- `client/src/classic/minimap.ts` `FORCED_ICON_RULES`: `BARBA_RAY` (scale 2, forced) and `BARBA_RAY_PART` (scale 1.2, forced), addresses in the comment above the table.
+- `client/src/render/combat.ts` `minimapEnemies`: a `BarbaPartAi` reports the type `BARBA_RAY_PART`; the body keeps `BARBA_RAY`. Before, both drew the plain icon through the default rule; now both are forced and neither draws a plain icon.
+- `tests/minimap.test.ts`: `enemyIconRule('BARBA_RAY')` and `enemyIconRule('BARBA_RAY_PART')`.
+
+**Still open (not this item).** 247150 / 249235 (the player entities' own icons, not enemy rules); the generic attached-object icon of `Enemy_Update_007648dc` (owner not settled); Sinow Beat / Nar Lily update identity (ASSUMED); the Dark Gunner's state 3 writer.
+
+**Checks.** `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). `tests/minimap.test.ts`: all checks passed. `tests/barbaray.test.ts`: ALL PASS. `tests/fieldhud.test.ts` and `tests/enemyfsm.test.ts`: pass. `NEWSERV=.../vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures. Not run in Chrome.
+
 ## 2026-10-25: Damage to HP is chop (truncation) on every exe path checked, not round
 
 **Question.** The PvP entry found that EntityHitEntity_00773350 converts the damage total with the x87 control word `| 0xc00` (chop) before `fistp`. Which other damage-to-HP conversions in the port use `Math.round` where the exe chops?

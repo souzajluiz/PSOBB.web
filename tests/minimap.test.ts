@@ -376,6 +376,11 @@ eq(enemyIconRule('SINOW_GOLD'), { scale: 1, color: 0xffffa24c, forced: false }, 
 eq(enemyIconRule('DRAGON'), { scale: 2, color: 0xffffa24c, forced: true }, 'boss icon: the Dragon is forced at scale 2.0 (OlgaUpdateMainLoop_00423b7c, dump 165532)');
 eq(enemyIconRule('DE_ROL_LE_BODY'), { scale: 1.2, color: 0xffffa24c, forced: true }, 'boss icon: a De Rol Le shell segment is forced at scale 1.2 (exe 0x00435294 = handle_derolle_shell_behavior, dump 176968)');
 eq(enemyIconRule('DE_ROL_LE_MINE'), { scale: 1, color: 0xffffa24c, forced: false }, 'enemy icon: a De Rol Le mine keeps the plain icon (no forced icon traced for it)');
+// Barba Ray (2026-10-25, the roadmap's "Sinow Berill sub-entity" icons): the body's forced 2.0 is
+// EnableSinowberillVisualIndicators_004b9198 (root frame 0x004b891d), the parts' forced 1.2 is
+// UpdateSinowberillPositionAndState_004ba0ac; neither has a plain icon call.
+eq(enemyIconRule('BARBA_RAY'), { scale: 2, color: 0xffffa24c, forced: true }, 'boss icon: the Barba Ray body is forced at scale 2.0 (0x004b9198 via 0x004b891d)');
+eq(enemyIconRule('BARBA_RAY_PART'), { scale: 1.2, color: 0xffffa24c, forced: true }, 'boss icon: a Barba Ray part is forced at scale 1.2 (0x004ba0ac, 0x3f99999a)');
 {
   const m = new MinimapState();
   m.enterFloor(0, 0, [], new MinimapFloors());
