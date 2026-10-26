@@ -28,15 +28,19 @@
 // 0x005e8a14 = do_mechguns_attack). The local player's bursts come from the local attack
 // (gunShot). burstSpinsOnReceipt is that receiver's gate.
 //
-// ASSUMED: which helper output is the cosine. The helper 0x0082d8bc mixes its row 1 with the
-// first sincos output (at (%esp), the value the sincos callee 0x008451f8 stores through its stack
-// pointer) and row 3 with the second (at 0x4(%esp)): row1' = A row1 - B row3 (proven from the
-// disassembly of 0x0082d8bc, columns 1 and 2 read, column 3 by the same pattern); row3 takes the same pair (the port's formula, the
-// second half of the helper not re-traced). The port's c is A and its s is B, so the port is right iff A is the
-// cosine. Not settled: the sincos table at 0x00989560 does not read as a clean float sine table
-// from the file (the values alternate 193.3 / 0 / 52821.3), so the table's identity and the sign of
-// the angle are not checked. The spin angle is BAMS (0x10000 = a full turn) and positive is
-// right-handed about +Y. The visual is not checked in a browser (no Playwright here).
+// The cosine and sine (PROVEN 2026-10-25, "Guns left"; objdump of PsoBB.exe, replay in the DEVLOG):
+// the helper 0x0082d8bc calls the sincos callee 0x008451f8 with the angle in ecx, the address of B in
+// edx (its first output, the sine) and the address of A on the stack (its second, the cosine). Its
+// quadrant-0 path (0x008453b1) stores the sine table [0x0098b560 + 4i] (sin(i * 2pi / 4096), checked
+// at i = 512: 0.70710677) through edx and the cosine table [0x0098c560 - 4i] (cos, 1.0 at i = 0)
+// through the stack pointer; so A = cos and B = sin, the dump's int_angle_sincos(angle, &sin, &cos)
+// order. A symbolic replay of the helper's x87 code (0x0082d8d9..0x0082d97a) gives, for all eight
+// entries: _11' = cos _11 - sin _31, _12' = cos _12 - sin _32, _13' = cos _13 - sin _33,
+// _14' = cos _14 - sin _34, _31' = sin _11 + cos _31, ..., _34' = sin _14 + cos _34, so row1' and
+// row3' are the port's mix with c = cos, s = sin. The angle index is the BAMS value >> 4 (positive
+// is the table's positive index), so the spin is +2pi * spin / 0x10000 about +Y, and the port's
+// spinMatrix (three.js makeRotationY, column form) is the transpose of the helper's 3x3 row mix
+// (checked by tests/weaponspin.test.ts section 9). Not checked: the visual (no Playwright here).
 
 import * as THREE from 'three';
 
