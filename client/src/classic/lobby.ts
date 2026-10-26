@@ -59,6 +59,8 @@ import { validateMenuEntry, type MenuRules } from './fieldmenu.ts';
 import { drawMenuPanel, ItemListWindow, MAIN_MENU, MainMenu, type MainMenuTextures } from './mainmenu.ts';
 import { applyMenuViewShift } from '../render/viewshift.ts';
 import { KEYS } from '../input/keyconfig.ts';
+import { autoKey, AUTO_RUN_FALLBACK, AUTO_WALK_FALLBACK } from '../input/automove.ts';
+import { cameraGateKeyHeld } from '../render/playermove.ts';
 import type { ItemRow } from './itempack.ts';
 import { characterOptionsEnv, cursorSaved, OptionsMenu, readOptionFlags, restoreBrightness, toggleKeyboardControls } from './options.ts';
 import { bandsOf, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
@@ -270,7 +272,18 @@ export class LobbyScreen implements Screen {
       // move keys are seen by the view only as "held" (the exe freezes the keyboard axes).
       const busy = this.busy;
       this.view.cameraInputOn = !busy;
-      this.view.moveKeyHeld = [KEYS.moveForward, KEYS.moveBackward, KEYS.moveLeft, KEYS.moveRight].some((k) => this.keys.has(k));
+      // The six-key table (playermove.ts CAMERA_GATE_ACTIONS): the autorun / autowalk keys count too,
+      // with the same fallback keys the auto move uses (automove.ts autoKey).
+      this.view.moveKeyHeld = cameraGateKeyHeld((action) => {
+        switch (action) {
+          case 'moveForward': return this.keys.has(KEYS.moveForward);
+          case 'moveBackward': return this.keys.has(KEYS.moveBackward);
+          case 'moveLeft': return this.keys.has(KEYS.moveLeft);
+          case 'moveRight': return this.keys.has(KEYS.moveRight);
+          case 'autorun': return this.keys.has(autoKey(KEYS.autorun, AUTO_RUN_FALLBACK));
+          case 'autowalk': return this.keys.has(autoKey(KEYS.autowalk, AUTO_WALK_FALLBACK));
+        }
+      });
       inner?.(dt, busy ? new Set() : this.keys);
       this.applyViewShift();
     };

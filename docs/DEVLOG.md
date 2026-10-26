@@ -1,5 +1,29 @@
 # Devlog
 
+## 2026-10-26: Player movement, part 2: the six-key table, the frozen axes and the keyboard-switch writers
+
+**Question.** ROADMAP "Player movement" open parts: the six-key table (0x0078fee0, ASSUMED to be the four move keys), whether the exe moves the player on a frozen axis (the port gives 0), the other writers of the keyboard switch (0x00791748, 135 callers) and the field's menus. The leg state machine and the 6x40 / 6x42 senders are listed as ported on the roadmap; they were not re-derived in this pass.
+
+**PROVEN (objdump of PsoBB.exe; `tools/exedata.py`; dump names for the enums and the function names).**
+- Setter 0x00791748 (`unknown_keyboard_enable_in_menu`): takes a byte; `< 0` or `>= 8` returns; stores it at 0x009ff3d4 (`camera_input_enabled`). Then, if the object at 0x00a9cccc is set: value 1 calls Reset (0x0078eea8) and then Set (0x0078f5a8) for each of 21 slots (`k = 0, 4, .. 0x50`), with the byte `obj[8 * [0x0097ba60 + k] + 4]`; any other value calls Reset and one Set with the byte at the object's vtable +0x34.
+- Gate (0x0070a6c4..0x0070a74c): `X = camera != 1`. The loop's `ebp` is zeroed at 0x0070a6c2 before the gate, so the not-found path leaves ebp = 0 (the restore `mov ebp, esi` at 0x70a73e copies that zero). The held path (0x70aaa3) sets ebp = 1. The return at 0x70a74c happens only when X != 0 and a key is held. This confirms the 2026-10-26 gate entry.
+- The six-key table is the local array [0, 1, 2, 3, 4, 5] (0x70a6da..0x70a714), pushed into `ValidateMovementKey` (0x0078fee0) at 0x70a71e. The dump's `unknown_input_type` enum: 0 `move_forwards`, 1 `move_backwards`, 2 `move_left`, 3 `move_right`, 4 `autorun`, 5 `autowalk`. So the table is the four move keys plus autorun and autowalk, not the four move keys alone.
+- 0x0078fee0 (one caller, 0x70a723): for the action's entry `obj[8k + 4]` it compares the key code with the four slots `obj + 0x54 / 0x5c / 0x64 / 0x6c`, each slot used only while its flag byte (`+0x50 / 0x58 / 0x60 / 0x68`) is 0; it returns 1 on a match.
+- Frozen axes: the callers zero both axis words before the call. Objdump of the move-start caller (0x69b986..0x69b9c4): `mov word [0x00a9432c], ax; mov word [0x00a94330], ax`, then `push 0x00a9432c; push 0x00a94330; call 0x0070a60c`. The emote state (2), the 0x14 state (2) and the dead update have the same stores (decompile; their calls not re-read in objdump). So a frozen poll leaves the mover at 0 on both axes; the port's `frozen -> 0` matches. The ramp's accumulator is not written on that poll, so the next free poll resumes from the stored value (the port keeps `keyFb` / `keyLr`).
+- Writers of the keyboard switch: 135 call sites of 0x00791748 (objdump scan of every E8 to it, each with the byte pushed just before the call). 46 push 1, 65 push 0, 24 push 3, 4, 5, 6 or 7 or pass no byte in the window read. Open-type callers (for example `ChallengeObjectState1Enter`, `ChatShortcutMenuWindow` destructor) push 0 / 1 in pairs, so the usual reading is 0 = menu holds the keys, 1 = keys back to the field / lobby (ASSUMED for the 24 others). Any value other than 1 freezes the keyboard axes, so the gate needs only "is it 1".
+
+**Port.**
+- `client/src/render/playermove.ts`: `CAMERA_GATE_ACTIONS` (the six roles in the exe's table order) and `cameraGateKeyHeld(held)`. The comment block now lists the proven parts and the writer count.
+- `client/src/classic/lobby.ts`: `moveKeyHeld` is `cameraGateKeyHeld` over the six actions. The autorun / autowalk keys use the same fallbacks as the auto move's toggles (`autoKey(KEYS.autorun, 'q')`, `autoKey(KEYS.autowalk, 'e')`, automove.ts; the fallback keys are ASSUMED, from the port). Before this change only the four move keys counted.
+
+**ASSUMED / still open.**
+- The field: the field path (`gameview` / `playermove` in the field) does not read `rampFrozen`; the camera byte's field menus are not mapped, and the 24 callers with a value other than 0 / 1 are not tied to a menu.
+- The slots `obj + 0x54 .. 0x6c` (what writes them, and whether they are the keys held this poll) are not traced: the port treats "held" as the binding's key being down (ASSUMED).
+- The default bindings of autorun / autowalk in the exe are not read; the port's fallbacks are used when unbound (ASSUMED).
+- Screen-recording drift: not reproduced in Chrome; no exe cause found in this pass.
+
+**Tests.** `node tests/playermove.test.ts` ok (new: the exe table order, a held autorun / autowalk counts, none held passes). `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures. `node tests/shortcuts.test.ts`: all pass. `cd client && npx tsc --noEmit -p .`: exit 0 (Node 24). Not run in Chrome, no Playwright.
+
 ## 2026-10-25: NPCs drawn: the 0x118 texture load has no reader in the dump; the 0x118 dispatcher plays only row 0
 
 **Question.** ROADMAP "NPCs: drawn now" lists the open parts: the 0x118 texture setup (`plAsmp.rel` by class into obj+0x3ec, its use not traced), the 0x118 walk row (the town walk stands in), the 0x118 weapon (not ported), the 0x33 slot's per-class motion id (ASSUMED), and the talk reach (ASSUMED). This pass re-traces the first two from `PsoBB.exe` (dump `Psobb.exe-05112026.c`, line numbers below; addresses from the dump names).

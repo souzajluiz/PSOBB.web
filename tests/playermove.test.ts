@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { toBams, RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, KEY_RAMP_WALK_MAX, autoForwardRamp, lateralDecay, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, remoteStep, slowApplies, inUnsafeMap, guardStance, GUARD_HUNTER_CLASSES, rampFrozen } from '../client/src/render/playermove.ts';
+import { toBams, RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, KEY_RAMP_WALK_MAX, autoForwardRamp, lateralDecay, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, remoteStep, slowApplies, inUnsafeMap, guardStance, GUARD_HUNTER_CLASSES, rampFrozen, CAMERA_GATE_ACTIONS, cameraGateKeyHeld } from '../client/src/render/playermove.ts';
 
 assert.equal(RUN_SPEED, 45);
 assert.equal(WALK_SPEED, 30);
@@ -254,6 +254,11 @@ assert.equal(rampFrozen(true, true), false, 'camera input on: a held key still r
 assert.equal(rampFrozen(true, false), false, 'camera input on, no key: the ramp runs');
 assert.equal(rampFrozen(false, false), false, 'keys off with no key held: the auto move ramp still runs');
 assert.equal(rampFrozen(false, true), true, 'keys off (a menu) and a key held: the axes are frozen');
+// The six-key table (0x70a6da array 0..5 -> the enum move_forwards..autowalk): the held test is any of the six.
+assert.deepEqual([...CAMERA_GATE_ACTIONS], ['moveForward', 'moveBackward', 'moveLeft', 'moveRight', 'autorun', 'autowalk'], 'the exe table order 0..5');
+assert.equal(cameraGateKeyHeld((a) => a === 'autorun'), true, 'a held autorun key counts (table index 4)');
+assert.equal(cameraGateKeyHeld((a) => a === 'autowalk'), true, 'a held autowalk key counts (table index 5)');
+assert.equal(cameraGateKeyHeld(() => false), false, 'no key of the six held: the gate passes');
 {
   // The frozen axis keeps its value across a skipped poll and ramps again from it once free.
   let f = rampAxis(0, false, true, false);
