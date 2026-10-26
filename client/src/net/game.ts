@@ -640,6 +640,9 @@ export class Game extends Lobby {
   // Called with every state subcommand this client sends through recordSent
   // (the battle score reads its own 6x0A damage from it, quest/battlerun.ts).
   onSent: ((body: Uint8Array) => void) | null = null;
+  // Called with a received 6x60 0x0b (the header's entity id and the status at +4, as the exe's box-break
+  // handler reads them); gamefield.ts routes it to the object the entity names.
+  onObjectBreak: ((entityId: number, status: number) => void) | null = null;
 
   recordSent(body: Uint8Array): void {
     this.onSent?.(body);
@@ -726,6 +729,7 @@ export class Game extends Lobby {
       case 0x0b:
       case 0x5f:
         this.recordState(sub, body, true);
+        if (sub === 0x0b && body.length >= 0x0c) this.onObjectBreak?.(dv.getUint16(2, true), dv.getUint16(4, true));
         break;
       case 0x77: {
         // G_SyncQuestRegister_6x77: another client's sync_register.

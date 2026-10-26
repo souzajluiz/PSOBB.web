@@ -838,6 +838,10 @@ export class FieldObjects {
   // is the local player's hit (the caller applies it through the player's damage path).
   difficulty = 0;
   onStalactiteHit: (damage: number, at: { x: number; z: number }) => void = () => {};
+  // The placed stalactite's record branch (0x00679ac4, every placed one has its set record at +0x80): on each
+  // landed tick the saved box status of its set index becomes 1 and the 6x60 0x0b packet goes out. Nothing
+  // changes on this client (no box off, no state, no debris). gamefield.ts wires it to the join sync and the wire.
+  onStalactiteRecord: (index: number) => void = () => {};
   private stalactites = new Map<number, FallingStalactite>(); // object index -> stalactite
   private shattered = new Set<number>(); // object indices whose box is off and model hidden (the shatter, the break)
   private rocks = new Map<number, { flag: number; state: number; at: { x: number; y: number; z: number }; yaw: number }>(); // destructible rocks: switch flag, state (+0xb4), world point, yaw (+0x60)
@@ -1126,7 +1130,6 @@ export class FieldObjects {
   // clients apply theirs).
   tickStalactites(ticks: number, self: { x: number; y: number; z: number } | null, others: ReadonlyArray<{ x: number; y: number; z: number }>): void {
     if (!this.stalactites.size) return;
-    let changed = false;
     for (let i = 0; i < ticks; i++) {
       const players: Array<{ x: number; y: number; z: number }> = [];
       if (self) players.push(self);
@@ -1141,13 +1144,25 @@ export class FieldObjects {
         const model = this.models?.models.get(index);
         if (model) model.root.position.y = s.y;
         if (r.hit && self && stalactiteInRange(self, s)) this.onStalactiteHit(stalactiteDamage(this.difficulty), s);
-        if (r.landed) {
-          this.shatterStalactite(index, s);
-          changed = true;
-        }
+        // The landing flag 0x800000 is set on every tick the stalactite rests on the ground (0x00772b44 lands
+        // again each tick), so the record branch runs each tick. The state, the box and the model stay as they are.
+        if (r.landed) this.onStalactiteRecord(index);
       }
     }
-    if (changed && this.collision) this.collision.obstacles = this.obstacles();
+  }
+
+  // The 6x60 0x0b status packet another client sends (handle_packet0x60_0xb_box_break: the entity found by the
+  // header calls the entity's vtable +0x10, the stalactite's 0x00679ed8, with the status and the debris flag 1).
+  // Status 1 (signed short) runs the break: state 2, the box off, the model hidden and the debris 0x00679b70
+  // (its particles and SE). The exe has no state check here, so each such packet runs it again. Returns whether
+  // `index` is a stalactite of this floor.
+  breakStalactiteFromPacket(index: number, status: number): boolean {
+    const s = this.stalactites.get(index);
+    if (!s || this.delayed.has(index)) return false;
+    if (((status << 16) >> 16) !== 1) return true;
+    s.state = 2;
+    this.shatterStalactite(index, s);
+    return true;
   }
 
   // The destructible rock 0x0303 (its update is the DerollePart update 0x00633734): when its switch flag is
@@ -1226,12 +1241,14 @@ export class FieldObjects {
     this.debris = this.debris.filter((d) => !d.emitter.dead);
   }
 
-  // The shatter (DerolleEnemyHead_Destructor 0x00679ac4, the path without a box record): state 2, the box off, the
-  // model hidden, then the debris 0x00679b70 (five emitters), the particles 100 and 0xf0 and the SE 0xaf.
+  // The break's effects of a stalactite (0x00679ed8 -> 0x00679ef4 -> 0x00679b70): the box off (0x007b52ec), the model
+  // hidden (mark dead), then the debris (five emitters), the particles 100 and 0xf0 and the SE 0xaf. Run by the
+  // remote packet only (breakStalactiteFromPacket); a placed stalactite never shatters on its own client.
   private shatterStalactite(index: number, s: FallingStalactite): void {
     s.state = 2;
     this.shattered.add(index);
     this.models?.setVisible(index, false);
+    if (this.collision) this.collision.obstacles = this.obstacles();
     const at = { x: s.x, y: s.y, z: s.z };
     this.spawnStalactiteDebris(at);
     for (const id of STALACTITE_PARTICLES) this.onParticles(id, at);
