@@ -10,7 +10,7 @@ only part of them has matching C (psobb-client-source).
 - [ ] Battle mode in a real game
 - [ ] Technique visuals (Foie, Barta, Zonde, Gizonde, Razonde, Grants, Megid, supports, specials)
 - [ ] Episode 2 enemy FSMs on Seabed, Mines, Tower (animation lengths for groups a / d are stand-ins)
-- [ ] Ship / block change and team menus at the counter
+- [x] Ship / block change and team menus at the counter (e2e: `client/e2e/lobby-counter-menus.spec.ts`; Leave Team as a non-master member is still open, see DEVLOG 2026-10-26)
 - [ ] Boss fixes (De Rol Le, Vol Opt, Dragon, Belra)
 - [ ] Movement: two-client check, slowed / guard animation tie
 - [ ] Quest editor: open a real quest, drag, Script tab, "Test in game", publish to a deployed host
