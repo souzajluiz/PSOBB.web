@@ -25,6 +25,29 @@
 - The enemy path (`formulas.ts` `rollDamage` callers, `PlayerDamage.hit`) still uses `Math.round` for the HP lost. The exe's chop cast is the same function for enemy hits, so this is likely wrong there too; not changed here (shared code, a separate check).
 
 **Checks.** `node tests/pvp.test.ts` ALL PASS. `node tests/battle.test.ts`, `tests/battletraps.test.ts` ALL PASS. `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures. `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). Not run in Chrome or with two clients.
+## 2026-10-26: Pioneer 2 in a game: the motion-set flag is armed by the game join, not by 0x006a745c
+
+**Question:** the ROADMAP "Pioneer 2 inside a game (floor 0)" line had two open parts: the caller of the flag's enter 0x006a745c (the 2026-10-23 entry's ASSUMED "online game entry") and the caller of the type-4 support-target record on Pioneer 2.
+
+**Exe evidence (PsoBB.exe, objdump, dump `src/Psobb.exe-05112026.c`, `tools/exedata.py`).**
+- The flag is `g_PlayerAnimDataMode`, 0x00a943cc. Its readers: `InitializePlayerEntityBase_00696454` at 0x0069647e (`cmp eax,1; je` the field ctor, 0x24c bytes; `test eax,eax; jne` the rest; the 0 path builds the town set, 0xc bytes). Verified by objdump.
+- Writers of 0x00a943cc (by absolute address, `tools/exedata.py xref` and a scan of the image for the address): 0x006a745c (`mov 1`, then `call 0x006a7448`, the 0x480000-byte buffer), 0x006a7284 (`mov 0`, at 0x006a7289), 0x006a7748 (`mov 0`, CleanupLoginSceneState), 0x006a7948 (`mov 0` at 0x006a7948; `test eax,eax; jne` at 0x006a7957 skips the `mov 1` at 0x006a795b, so the mode is 1 only when the photon chair `operator_new` returns NULL), 0x007bd130 and 0x007bd530 (`mov 1` inside the loading floor's one-shot branch).
+- The 0x006a745c / 0x006a7284 pair is pair 10 of a 13-entry (enter, exit) table at 0x009f9940 (0x68 bytes), run by `FUN_0078b184` (enter, in order) and `FUN_0078b0a0` (exit, in reverse). Its only starter is `FUN_007853f4` (the call at 0x0078554a, the only `call` to it), and that is the enter of the scene at 0x00785540, which first sets `DAT_00a9c1f4 = 1` (`mov [0xa9c1f4],1`, verified). The same table holds 0x00785a8c, the wall-texture choice that reads that flag ("AB_Secret"). The dump names 0x00784f10 `ShowSecretEp1EndingCredits_Destructor` (it clears the flag), and `FUN_007853f4` plays `ending.adx`. So 0x006a745c runs in the Episode 1 ending, not in a game. **The 2026-10-23 premise (the game's enter handler) is wrong.**
+- The arming: the game-join handler `handle_packet0x64` (dump 780053) calls `SetSinowberillChallengeFlags_007bd788` at 0x0079c001 (after `SetFloorAndMapVariant_00815590(0xac9d4c,0,0)`). That setter (verified: `or` bit 0 into the dump's `g_IsOfflineMode`, 0x00aae6d0, and `g_FloorStateFlags`, 0x00ac9d6c) is its only caller. The loading floor's branch at 0x007bd11a reads 0x00aae6d0, `test al,1; je`, clears bit 0, and sets the mode at 0x007bd130 (a second copy in the function at 0x007bd2dc, 0x007bd51b). So the flag becomes 1 on the first floor load after a game join (Pioneer 2 is floor 0 of the game) and stays 1 through warps (the bit is cleared). The lobby cleanup (0x006a7748) and the ending exit (0x006a7284) clear it.
+- Conclusion: the motion set is per game session. Every floor of a game uses the field set, Pioneer 2 included, and the lobby uses the town set. The port's `field: true` on game floors (`render/gameview.ts`) matches. No behaviour change.
+
+**Port.** `client/src/render/gameview.ts`: the comment that cited 0x006a745c / 0x006a7748 now gives the mechanism above. Nothing else.
+
+**Type-4 caller (still ASSUMED).** `find_targets_for_weapons_and_techs` (dump 785117) is called from no named function in the dump, and its VA was not found, so the caller that builds the support record on Pioneer 2 is still not traced. The port shows the support cursor there (2026-10-25 entry).
+
+**Palette delay (still ASSUMED).** The 2026-10-23 palette entry's "about 38 frames" is the state 0x26 of `unknown_update_player_menu_corner` (dump 681845); the progression from the window's state 0 to 0x26 was not decoded, so the port's no-delay show stays.
+
+**ASSUMED:**
+- The player objects are built after the first floor load of a game (the ctor's call site in the load was not traced). The port's field set on every game floor relies on this.
+- No indirect write to 0x00a943cc (the xref is by absolute address only).
+- The photon chair NULL branch (mode 1) is not reached in practice and is not modelled.
+
+**Checks:** `node tests/motions.test.ts` OK; `NEWSERV=... node tests/combat.test.ts` 5860 checks, 0 failures; `NEWSERV=... node tests/npcs.test.ts` ALL PASS; `node tests/fieldhud.test.ts` all checks passed; `cd client && npx tsc --noEmit -p .` exit 0 (Node 24, `client/node_modules` linked for the run and removed after). No new test: the port's behaviour did not change. The Chrome check is not run (no Playwright).
 
 ## 2026-10-25: Emotes: the motion table of +0xdc (opposite gender has no sender input), the emote's step 3 (confused 6x3F), the lock
 

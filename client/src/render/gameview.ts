@@ -708,8 +708,12 @@ export class GameView {
       held: this.heldSource(),
       // Pioneer 2: the talk's target height (render/playercamera.ts). ASSUMED area test.
       town: AREA_NAMES[area] === 'Pioneer 2',
-      // The game's maps, Pioneer 2 included, use the field motion set (DAT_00a943cc = 1 in a
-      // game, 0 in the lobby: FUN_006a745c / FUN_006a7748). ASSUMED for Pioneer 2 (a game area).
+      // The game's maps, Pioneer 2 included, use the field motion set. The exe sets
+      // g_PlayerAnimDataMode (0x00a943cc) to 1 on the first floor load after the game join (0x64):
+      // handle_packet0x64 -> SetSinowberillChallengeFlags_007bd788 sets the g_IsOfflineMode bit,
+      // and the loading floor's one-shot branch (0x007bd11a, 0x007bd130) sets the mode. The lobby
+      // cleanup (0x006a7748) and the ending's exit (0x006a7284) clear it. DEVLOG 2026-10-26.
+      // ASSUMED: the player objects are built after that floor load (their ctor reads the mode).
       field: true,
       // 6x3E / 6x3F room: get_player_room_id on this floor's map (the field's section).
       room: (pos) => this.playerRoom(pos),
