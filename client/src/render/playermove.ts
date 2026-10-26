@@ -131,16 +131,26 @@ export function attackHeading(rad: number, confused: boolean, rand: () => number
 // `negFirst` says which side wins when both keys are held: true for neg (left; the lateral
 // call), false for pos (forward; the forward axis call passes its backward key as neg, forward
 // as pos, and false). `cap` is 128, or KEY_RAMP_WALK_MAX under the auto walk setting.
-// The camera input gate of the same function (0x0070a6c4..0x0070a750, re-read from objdump 2026-10-26):
-// `X = camera_input_enabled != 1` (the getter 0x007917b8 reads the byte at 0x009ff3d4, set by
-// 0x00791748, the dump's unknown_keyboard_enable_in_menu: 1 when the keys are the field's, 0 while a
-// menu holds them; the menu reading is from the dump's names and a sample of the 135 callers, ASSUMED
-// for every caller). When X is set and a key of the six-key table is held
-// (0x0078fee0 per key, ASSUMED to be the held test; the four move keys stand in for the table),
-// the function returns at 0x70a74c before it writes either axis: the amounts stay as they were.
+// The camera input gate of the same function (0x0070a6c4..0x0070a750, re-read from objdump 2026-10-26
+// and again 2026-10-26 (part 2)): `X = camera_input_enabled != 1` (the getter 0x007917b8 reads the byte
+// at 0x009ff3d4, written by 0x00791748, the dump's unknown_keyboard_enable_in_menu, which stores the
+// value 0..7 it is given; value 1 re-arms the 21-entry key table, the others set one byte taken from the
+// object's vtable +0x34). The writer's 135 call sites were listed from objdump (DEVLOG 2026-10-26 part 2). When X is
+// set and a key of the six-key table is held, the function returns at 0x70a74c before it writes either
+// axis: the amounts stay as they were, and the caller had zeroed both before the call (0x69b9b5 for
+// the move start, and the emote, 0x14 and dead callers), so the mover gets 0.
 // With X clear, or with no key held, the ramp runs as before.
+// The six-key table (0x70a6da: the array 0..5 pushed in turn at 0x70a71e) is the keyboard action enum's
+// move_forwards, move_backwards, move_left, move_right, autorun, autowalk (dump enum `unknown_input_type`).
+export const CAMERA_GATE_ACTIONS = ['moveForward', 'moveBackward', 'moveLeft', 'moveRight', 'autorun', 'autowalk'] as const;
+
 export function rampFrozen(cameraInputOn: boolean, moveKeyHeld: boolean): boolean {
   return !cameraInputOn && moveKeyHeld;
+}
+
+// The gate's "a key is held": any of the six actions, `held(action)` says whether that action's key is down.
+export function cameraGateKeyHeld(held: (action: (typeof CAMERA_GATE_ACTIONS)[number]) => boolean): boolean {
+  return CAMERA_GATE_ACTIONS.some((action) => held(action));
 }
 
 export const KEY_RAMP_STEP = 32;
