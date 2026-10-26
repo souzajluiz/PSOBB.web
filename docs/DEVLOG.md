@@ -1,5 +1,33 @@
 # Devlog
 
+## 2026-10-25: Field HUD: the Status window (menu 0x19) re-scanned, no route in the exe; pinned by test
+
+**Question.** The ROADMAP Field HUD left-to-do line starts with the Status window (menu id 0x19, ChatShortcutMenuWindow_Constructor_00756ff4, "no key path traced, ASSUMED none"). The 2026-10-25 entry checked only the Home / field layouts. Does any other list, key or code path open 0x19?
+
+**Verdict: no route in PsoBB.exe. Verified; the port stays closed; now pinned in `tests/fieldhud.test.ts`.** No port code change.
+
+**Evidence (PsoBB.exe, read from the file; dump names for the functions).**
+- Static 8-byte layout rows: a script scanned every 2-byte offset of `.rdata` and `.data` for a run of rows (`u16` id, 6 bytes) of ids <= 0x30 ending in the terminator 0x30, with at least two rows and 0x19 among them. Hits: only the texture pool's Huffman permutation map at 0x0099de64 (`g_TexturePoolHuffmanPermutationMap_0099de60`, an index table, not a menu). The Home layouts 0x009f2f40 (human) / 0x009f3020 (android) and their subs 0x009f2f80 (Item Pack: 9, 0xb, 0x17, 0x1a, 0xc, 0xf), 0x009f2fb8 (Chat: 0x11, 0x12, 0xe, 0x13, 0x16, 0x15), 0x009f2ff0 (Team: 0x25, 0x27, 0x29, 0x2b, 0x2d) hold no 0x19.
+- Code immediates: `push 0x19` / `mov reg, 0x19` / `cmp reg, 0x19` over `.text` (scan, then `objdump -D` of 0x0068d000..0x00760000 for `, 0x19`). Each hit is one of:
+  - gui position 25 (`get_gui_position(0x19)`): `ChatShortcutMenuWindow_CreateSubListWindow_007570f4` at 0x00757102 / 0x0075711b, and `CreateListWindowObject_0073566c` at 0x0073570e. This is the window's own position, not a list value.
+  - `CreateChallengeMenuListWindow_0073e12c` at 0x0073e195 (`push 0x19` as the item value of unitxt(0x10, 0x1c)). This is the title's challenge menu (`ChallengeMenu_Update_0073d840`, `ChallengeMenu_PlayBgm_0073e2e0`): the value goes to `GetTitleStringByIndex_0077bcb0`, a title BGM index, not to `handle_player_menu_select`.
+  - `AddTradeItemToWindow_008252a4` at 0x00825763 (`mov ecx, 0x19`): a trade slot offset compare (+0xc8), not a menu id.
+  - The `mov byte [reg + 0x1c], 0x19` stores (0x0072bc43 ... 0x0075f627) write a state byte, not an id.
+- Keys: `unknown_handle_fkey_inputs` (dump 682260) returns the id of a fixed key, the only shortcuts being function_key_info_menu (20, F1 help), equipment 9, technique 3, mag 0x17, guild 0xe, mail 0x13, symbol chat 0x12, team 0x25 (keyboard controls 21..27). No control maps to 0x19. The keybind slot path (`UpdateKeybindSlot_0071ad88`) passes the same ids.
+- `handle_player_menu_select` case `player_status_menu` (25) allocates 0x2c bytes and calls the constructor. The window is a three-row sub-list (unitxt group 11 0x132 / 0x133 / 0x134, icon 0x36, values 0..2, `ChatShortcutMenuWindow_InitializeSubList_00757574`). Its labels are read here but no port code opens it, so the labels are not ported.
+
+**Port.**
+- `tests/fieldhud.test.ts` (new block "Player Status"): the Home / field menu trees (`MAIN_MENU`, `MAIN_MENU_ANDROID`, walked recursively) hold no 0x19; the three sub tables match the rows above; `FIELD_SHORTCUT_LEAVES`, `LOBBY_SHORTCUT_LEAVES` and `HOME_LEAF_IDS` do not contain 0x19.
+- `classic/fieldmenu.ts` unchanged (the comment at 0x19 already says the window is not opened).
+
+**ASSUMED (still).**
+- Trade invite list (26..28), trade (29), trade verify (30), and the team member / invite / info / point lists (37, 39, 41, 43, 45) are read from their rows only where the port already has them; their sub-lists built at run time are not all decoded. The static scan found no 0x19 in any 8-byte table, and the runtime-built lists found by the immediate scan are listed above. So "no route" rests on that scan, not on a trace of each trade / team list.
+- The window's contents (its three rows and the 0x2c / 0x74 objects) are not drawn or tested because no path opens it.
+
+**Checks.** `node tests/fieldhud.test.ts` ALL PASS (new block). `node tests/shortcuts.test.ts`, `tests/quickmenu.test.ts`, `tests/chatshortcutmenu.test.ts` pass. `cd client && npx tsc --noEmit -p .` exit 0 (Node 24). `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5860 checks, 0 failures. Not run in Chrome (no Playwright).
+
+**Left (Field HUD line, unchanged by this entry):** the Options > Pad Button Config right analog camera, the Keyboard Config overwrite prompt and Escape / text-edit keys, mouse controls and auto disconnect, the MAG window's row spacing and element size, the MAG picture (entry 0xC) size and position, the page slide's drawn axis (`ChatShortcutMenu_UpdatePosition_0073e5f8` scales the float at slide+8; the draw that reads it is not traced), the equipment stat panel's frame and row spacing, the attribute / resist / slot pages of weapons and armour, automatic / manual sort (`6xC4`), saving a switched palette (`07ED`), the item list's scroll bar, the photon row's exe size, and the Status window's other lists row by row.
+
 ## 2026-10-25: Damage to HP is chop (truncation) on every exe path checked, not round
 
 **Question.** The PvP entry found that EntityHitEntity_00773350 converts the damage total with the x87 control word `| 0xc00` (chop) before `fistp`. Which other damage-to-HP conversions in the port use `Math.round` where the exe chops?
