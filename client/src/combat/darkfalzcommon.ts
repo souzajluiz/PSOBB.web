@@ -307,7 +307,7 @@ export interface DfFight {
   // A Darvant spat out by form 1 (ids from the control's counter +0x38c, which
   // runs 1 .. 0x1fd: VoloptForm7Hazard_CalculateOffset 0x0044CFC0); false when
   // the ids are used up.
-  spawnSpit(x: number, z: number, targetX: number, targetZ: number): boolean;
+  spawnSpit(x: number, z: number): boolean;
   // Form 2's beam ended in Ultimate (difficulty 3): three Darvants per living player
   // about (x, y, z), the body's position (0x00458E44). Nothing on the other difficulties.
   spawnBeamDarvants(x: number, y: number, z: number): void;

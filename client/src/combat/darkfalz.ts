@@ -21,9 +21,12 @@
 // when the scene leaves ZAKO) adds one to the control's kill count (+0x394); the
 // scene ends when the count reaches row 53 iparam1 times the party size.
 //
-// ASSUMED (neither the dump nor the JP C has it): the spat Darvants' flight
-// (class 0xAF7EC0; they dive at a player and die with the TYPE1 scene), the exclusion
-// zones of 0x0044C674 (players are not pushed out of the cage props), the camera
+// The spat and beam Darvants (classes 0xAF7EC0 / 0xAF8020; PROVEN in this session: the launch, the fall,
+// the chase with its cage, the beam's constructor and flight, and the bob, see DARVANT). ASSUMED
+// (neither the dump nor the JP C has it): the spat's spawn height (25), the wall test of the nearest
+// search (0x00780D3C, not ported), the hit's callee (the player's +0x60, so a spat or beam is not removed
+// by a hit), the hit test of a dead spat or beam (its box bit stays set; the reader is not traced),
+// the exclusion zones of 0x0044C674 (players are not pushed out of the cage props), the camera
 // and fade work of the cutscene objects (only their durations are kept), and the
 // party size at the moment the control is built (the exe counts the entities of
 // the room in its constructor).
@@ -88,31 +91,53 @@ export const DARVANT = {
   ring: 8, // the circle about the player the chase aims at
   auraReach: 8, // [0xA45A0C]
   auraEvery: 16,
-  // The spat ones. PROVEN (PsoBB.exe 0x00460620, spit state 4 of table 0x009A6794, the factory
-  // 0x00460778 sets it): the flight is a fall under gravity. vy starts at 0 (+0x398), each tick
-  // vy += -0.015 (the constant 0xBC75C290 that 0x00460620 stores once at 0x00A459C8), then
-  // pos += vel. While y >= 6 (the limit: 0x009005A4 at the first tick, then 0x40C00000) it keeps
-  // falling; the first tick y < 6 sets y = 6, vy = 0 and the state to 2
-  // (chase; the spat's chase function 0x004601B0 is not traced). No timer: the flight ends in the
-  // chase. The port still flies straight for spitLife (ASSUMED, not replaced: the chase is open).
+  // The spat ones (class 0xAF7EC0; table 0x009A6794: 2 chase 0x004601B0, 3 sink 0x00460590,
+  // 4 fall 0x00460620; factory 0x00460778). PROVEN, read per instruction in PsoBB.exe:
+  // - Launch (factory): vel = unit(-x, 0, -z) * s, s = rand * 0.41666665 + 1.6666666 (0x00A459D8 =
+  //   0.25 * 0x00A459D4). So the spat leaves its spawn point toward the room's centre.
+  // - Fall (state 4, 0x00460620): vy += -0.015 (0xBC75C290 at 0x00A459C8), then pos += vel. While
+  //   y >= 6 it keeps falling; the first tick with y < 6 sets y = 6, vy = 0 and the state to 2.
   spitGravity: -0.015,
   spitTop: 6,
-  // ASSUMED: the straight flight and its timer below.
-  spitSpeed: 1.2,
-  spitReach: 8,
-  spitLife: 600,
+  spitLaunchBase: 1.6666666,
+  spitLaunchRand: 0.41666665,
+  // Chase (state 2, 0x004601B0 = 0x004601E8 retarget + 0x0046032C horizontal law, then pos += vel).
+  // Retarget at clock & 0x7F == 0 (0x004601E8, the clock read before its increment): with no target,
+  // the nearest player within 287.5 (0x438FC000, 0x007714CC); with one, the target is dropped and the
+  // aim point becomes form 1 + 110 * (sin, cos)(rand * 65536) (0x00A459A8 = 0x00A45A1C + 10).
+  spitSearch: 287.5,
+  wander: 110,
+  // The law (0x0046032C): the aim is the target's (or the wander) xz + 16 * (sin, cos)((w & 7) * 45 deg),
+  // w = the +0x1C word (0x00A459B8 = 2 * [0x00A45A0C]). vx (vz) moves by +-acc toward the aim (acc =
+  // 0.05 * [0x00A45A18]); vy = 0; then the cage (0x004604BC, below); then the speed: while |v| > the cap
+  // (0x3A8, the row 57 clamp) v = unit(v) * (|v| - acc), and the speed is kept in 0x3A0.
+  aimRing: 16,
+  spitAccel: 0.05 * 1.75 * 0.5833333,
+  // The cage (0x004604BC, state 2 only): inside the circle of 100 about form 1 (xz; [0x00A45A1C]) the
+  // spat is put on that circle, toward its own side (1, 0) when it is within 0.01 of the centre
+  // (0x009005BC). Players are not involved.
+  cageRadius: 100,
+  cageMin: 0.01,
   // The beam's Darvants (Ultimate only, 0x00458E44 / 0x00460D34): three per living
   // player about the body, at radius 12.5 (0x00A45788): (0, -1), (-0.86, 0.5) and
-  // (0.86, 0.5) times the radius (constants 0x009001E0..E8). Their state 0 rises
-  // 10/9 a frame (0x00460B84, the constant 0x0A459EC) to the top 6, then they hold.
-  // ASSUMED: the hold's bob and the chase / look of 0x00460C10 are not ported (the
-  // exe's 0x0082EBAC and 0x0083173C are not read), so they hover and keep the aura.
+  // (0.86, 0.5) times the radius (constants 0x009001E0..E8). Their constructor 0x00460DE4
+  // (PROVEN) puts them at y -13 (beamFloor) with timer 150 (beamTimer) and state 0, and gives the
+  // velocity: unit(p + side * offset - pos) * cap, p the nearest player within 100 (beamSearch), or
+  // unit(-pos) when there is none (the offsets are +-4 by w & 3: x by bit 0, z by bit 1).
   beamRadius: 12.5,
   beamOffsets: [
     [0, -1],
     [-0.86, 0.5],
     [0.86, 0.5],
   ] as readonly (readonly [number, number])[],
+  beamFloor: -13,
+  beamTimer: 150,
+  beamSearch: 100,
+  beamSide: 4,
+  // State 0 (0x00460B84) rises 10/9 a frame to the top 6, then state 2 (the flight, 0x00460C10):
+  // pos += vel; the timer counts down and the Darvant dies when it is below 0 or |xz| > 260.
+  beamTop: 6,
+  beamReach: 260,
   beamRise: 10 / 9,
   // The ring's hit box cycle (PsoBB.exe UpdateDarvant 0x0045F25C, states 1 and 2): the
   // timer +0x3B4 counts down a frame; below 0 it is reloaded with 0xA8C and the box goes off,
@@ -122,25 +147,61 @@ export const DARVANT = {
   // The ring's forced radar icon (0x0045F25C tail: colour 0xff7f5126, scale 1.0, flag 1).
   forcedIconColour: 0xff7f5126,
   forcedIconScale: 1,
+  // The bob of state 2 for the spat and the beam (the dispatchers 0x0045FF50 / 0x00460938, PROVEN):
+  // after the state function, y += 0.1 * sin(angle), then angle += step. The phase is
+  // ROUND(rand * 65536) and the step ROUND(rand * 2184 + 1092) (0x0045FBD4, every kind).
+  bobAmp: 0.1,
+  bobPhaseRange: 65536,
+  bobStepBase: 1092,
+  bobStepRand: 2184,
+  // The fparam1 clamp of 0x0045FBD4 (see darvantRowSpeed): valid in (1/3, 10 x the default].
+  // Defaults are 0x00A45A14 (the ring's row 53) and 0x00A45A18 = 1.75 x that (row 57, the spat and beam
+  // cap). Both are written once by 0x00461028 (PROVEN; the constants 0x00900540 = 1.75, 0x00A45A0C = 8).
+  speedFloor: 1 / 3,
+  fallbackSpeed: 0.5833333,
+  fallbackSpeedFalz: 1.75 * 0.5833333,
+  // The spat and beam aura (the dispatchers, PROVEN): in states 1 and 2 only, every n frames where
+  // n = trunc(8 / speed) when speed > 0.5 (the power of two at or above n, minus 1, is the mask) and 16
+  // otherwise; a hit is the nearest player within 8 (0x00A45A0C). The Darvant is not removed by it.
+  auraSpitBeamReach: 8,
 } as const;
+
+// 0x0045FBD4's clamp of a row's fparam1 (0x0077A6CC): the value when it is in (speedFloor, 10 x
+// dflt], else dflt.
+export function darvantRowSpeed(f1: number, dflt: number): number {
+  return f1 <= DARVANT.speedFloor || f1 > 10 * dflt ? dflt : f1;
+}
 
 // One Darvant.
 export class Darvant extends DfEntity {
   st: number = DARVANT.rise;
   kind: 'ring' | 'spit' | 'beam' = 'ring';
+  // The velocity (+0x394, +0x398, +0x39c). The spat and beam fly with it; the ring does not.
   vx = 0;
+  vy = 0;
   vz = 0;
   homeX = 0;
   homeZ = 0;
-  target = -1;
-  timer = 0; // +0x3ac
+  target = -1; // +0x390 (-1: none)
+  timer = 0; // +0x3ac (the ring); the beam's flight timer (+0x384)
   clock = 0; // +0x3c0
+  // The spat / beam speed (+0x3a0: the launch speed, then the speed of the last law step; the aura's
+  // cadence reads it).
+  scale = 0;
+  // The cap of the spat's and beam's speed (+0x3a8, the row 57 clamp).
+  cap = 0;
+  // The spat's aim point (+0x3cc, +0x3d4; y is unused).
+  aimX = 0;
+  aimZ = 0;
+  // The bob phase and step (+0x3c4, +0x3c8).
+  bobAngle = 0;
+  bobStep = 0;
   // The ring's hit box flag (+0x3B0, bit 0 of the box at +0x38C is set to it each tick) and its
   // cycle timer (+0x3B4, see DARVANT.boxCycle). Created by darvantBoxStart; nothing else writes
   // the timer (no reset on a state change or a hit).
   boxOn = false;
   boxTimer = 0;
-  speed = 0.4;
+  speed = 0.4; // +0x3a4: the ring's cap (the row 53 clamp, darvantRowSpeed)
   born = 0;
   constructor(entity: number, hp: number) {
     super(entity, hp);
@@ -357,7 +418,9 @@ export class DarkFalzAi extends BrainBase implements DfFight {
   private newDarvant(kind: 'ring' | 'spit' | 'beam', x: number, y: number, z: number): Darvant | null {
     const id = this.allocId();
     if (id < 0) return null;
-    // The beam's ones share the ring's init (0x0045FBD4), so the ring's row (ASSUMED for their HP).
+    // The shared init of every Darvant (0x0045FBD4): the row 53 clamp (the ring's cap, +0x3A4), the
+    // row 57 clamp (+0x3A8, the spat's and beam's cap), the bob phase and step (two rands, in that order).
+    // The spat and the beam take HP from row 57 and the rest from row 53 (ASSUMED for the beam's HP).
     const row = kind === 'spit' ? this.rows.darvantFalz : this.rows.darvant;
     const d = new Darvant(id, row.hp);
     d.kind = kind;
@@ -366,7 +429,10 @@ export class DarkFalzAi extends BrainBase implements DfFight {
     d.z = z;
     d.homeX = x;
     d.homeZ = z;
-    d.speed = kind === 'spit' ? row.f1 || 0.5 : row.f1 || 0.4;
+    d.speed = darvantRowSpeed(this.rows.darvant.f1, DARVANT.fallbackSpeed);
+    d.cap = darvantRowSpeed(this.rows.darvantFalz.f1, DARVANT.fallbackSpeedFalz);
+    d.bobAngle = Math.round(this.rand() * DARVANT.bobPhaseRange) & 0xffff;
+    d.bobStep = Math.round(this.rand() * DARVANT.bobStepRand + DARVANT.bobStepBase);
     d.timer = 0;
     d.boxTimer = darvantBoxStart(this.entityId + id);
     d.born = this.made;
@@ -377,26 +443,95 @@ export class DarkFalzAi extends BrainBase implements DfFight {
     return d;
   }
 
+  // The nearest live player within reach on the XZ plane (EnemyGetNearestTargetInRange, 0x007714CC,
+  // strict: the distance must be under the reach). ASSUMED: the exe's line-of-sight test is not ported.
+  private nearestAlive(x: number, z: number, reach: number): { clientId: number; x: number; z: number } | null {
+    let best: { clientId: number; x: number; z: number } | null = null;
+    let bd = reach;
+    for (let i = 0; i < this.aliveCount; i++) {
+      const p = this.aliveList[i];
+      const dist = Math.hypot(p.x - x, p.z - z);
+      if (dist < bd) {
+        bd = dist;
+        best = p;
+      }
+    }
+    return best;
+  }
+
   // Form 2's beam ends (Ultimate only, 0x00458E44, the branch on difficulty 3 before
   // the stop state): three Darvants per living player about the body (the form's
   // position at the end of the beam). An id that is used up skips one (0x0044CFC0).
   spawnBeamDarvants(x: number, y: number, z: number): void {
     for (let p = 0; p < this.aliveCount; p++) {
       for (const [ox, oz] of DARVANT.beamOffsets) {
-        this.newDarvant('beam', x + ox * DARVANT.beamRadius, y, z + oz * DARVANT.beamRadius);
+        const d = this.newDarvant('beam', x + ox * DARVANT.beamRadius, y, z + oz * DARVANT.beamRadius);
+        if (d) this.beamConstructor(d);
       }
     }
   }
 
-  // The spat Darvant of form 1's HAKILOOP (ASSUMED flight).
-  spawnSpit(x: number, z: number, tx: number, tz: number): boolean {
+  // The beam's constructor (0x00460DE4, PROVEN): the velocity is unit(p + side * offset - pos) * cap,
+  // where p is the nearest player within beamSearch of the spawn point (the offset: +-beamSide on x by
+  // bit 0 of w, and on z by bit 1, w = the +0x1C word); with no player it is unit(-pos). A zero vector
+  // becomes (1, 0). The beam starts at y = beamFloor, state 0 (rise), timer beamTimer.
+  private beamConstructor(d: Darvant): void {
+    const k = (this.entityId + d.entity) & 3;
+    const near = this.nearestAlive(d.x, d.z, DARVANT.beamSearch);
+    let vx: number;
+    let vz: number;
+    if (near) {
+      const side = DARVANT.beamSide;
+      vx = near.x + ((k & 1) !== 0 ? side : -side) - d.x;
+      vz = near.z + ((k & 2) !== 0 ? side : -side) - d.z;
+    } else {
+      vx = -d.x;
+      vz = -d.z;
+    }
+    const len = Math.hypot(vx, vz);
+    if (len === 0) {
+      vx = 1;
+      vz = 0;
+    } else {
+      vx /= len;
+      vz /= len;
+    }
+    d.vx = vx * d.cap;
+    d.vz = vz * d.cap;
+    d.vy = 0;
+    d.scale = d.cap;
+    d.y = DARVANT.beamFloor;
+    d.timer = DARVANT.beamTimer;
+    d.st = DARVANT.rise;
+  }
+
+  // Form 1's HAKILOOP spits one (the factory 0x00460778, PROVEN): the launch is toward the centre
+  // from the spawn point (unit(-x, 0, -z), or (1, 0) when that is under 0.01 long) at the speed
+  // rand * 0.41666665 + 1.6666666; state 4 (fall). The spawn height is ASSUMED (25; the caller's
+  // position is not traced).
+  spawnSpit(x: number, z: number): boolean {
     const d = this.newDarvant('spit', x, 25, z);
     if (!d) return false;
     d.st = DARVANT.spit;
-    d.timer = DARVANT.spitLife;
-    const a = Math.atan2(tx - x, tz - z);
-    d.vx = Math.sin(a) * d.speed * DARVANT.spitSpeed;
-    d.vz = Math.cos(a) * d.speed * DARVANT.spitSpeed;
+    d.target = -1;
+    d.aimX = 0;
+    d.aimZ = 0;
+    let vx = -x;
+    let vz = -z;
+    if (Math.hypot(vx, vz) < 0.01) {
+      vx = 1;
+      vz = 0;
+    }
+    const n = Math.hypot(vx, vz);
+    if (n > 0) {
+      vx /= n;
+      vz /= n;
+    }
+    const s = this.rand() * DARVANT.spitLaunchRand + DARVANT.spitLaunchBase;
+    d.scale = s;
+    d.vx = vx * s;
+    d.vz = vz * s;
+    d.vy = 0;
     return true;
   }
 
@@ -741,21 +876,57 @@ export class DarkFalzAi extends BrainBase implements DfFight {
       if (d.gone) continue;
       if (d.st !== DARVANT.dead) {
         if (d.hp <= 0) this.killDarvant(d);
-        else if (d.kind === 'ring' ? !keepZako : d.kind === 'spit' ? !keepSpit : !keepBeam) this.killDarvant(d);
+        else if (d.kind === 'ring' ? !keepZako : d.kind === 'spit' ? !keepSpit : !keepBeam) {
+          // The spat and beam dispatchers (0x0045FF50, 0x00460938) kill and return: no step this tick.
+          this.killDarvant(d);
+          if (d.kind !== 'ring') continue;
+        }
       }
       this.stepDarvant(d);
     }
   }
 
   private stepDarvant(d: Darvant): void {
-    const row = d.kind === 'spit' ? this.rows.darvantFalz : this.rows.darvant;
     d.clock++;
-    if (d.kind === 'ring' && (d.st === DARVANT.hover || d.st === DARVANT.chase)) darvantBoxStep(d);
+    if (d.kind === 'ring') {
+      this.stepRing(d);
+      return;
+    }
+    // The spat and beam dispatchers read the clock before its increment.
+    const pre = d.clock - 1;
     switch (d.st) {
       case DARVANT.rise:
-        // State 0 (0x0045F628): up a third of a unit a frame; the beam's ones
-        // (0x00460B84) up 10/9 a frame to the top.
-        d.y += d.kind === 'beam' ? DARVANT.beamRise : DARVANT.riseStep;
+        if (d.kind === 'beam') this.beamRise(d);
+        break;
+      case DARVANT.chase:
+        if (d.kind === 'spit') this.spitChase(d, pre);
+        else this.beamFlight(d);
+        break;
+      case DARVANT.spit:
+        this.spitFall(d);
+        break;
+      case DARVANT.dead:
+        this.sink(d);
+        return;
+      default:
+        // State 1 has no function in either table.
+        return;
+    }
+    // The dispatcher reads the state after the call: a state 2 reached this tick gets the bob and
+    // the aura too (a state 3 reached by the flight's death gets neither).
+    if (d.st === DARVANT.chase) {
+      this.bob(d);
+      this.auraSpitBeam(d, pre);
+    }
+  }
+
+  // The ring's update (0x0045F25C, table 0x009A6780).
+  private stepRing(d: Darvant): void {
+    if (d.st === DARVANT.hover || d.st === DARVANT.chase) darvantBoxStep(d);
+    switch (d.st) {
+      case DARVANT.rise:
+        // State 0 (0x0045F628): up a third of a unit a frame.
+        d.y += DARVANT.riseStep;
         if (d.y >= DARVANT.top) {
           d.y = DARVANT.top;
           d.st = DARVANT.hover;
@@ -764,8 +935,6 @@ export class DarkFalzAi extends BrainBase implements DfFight {
         return;
       case DARVANT.hover: {
         // State 1 (0x0045F6B4): drift home; every 60 frames look for a player.
-        // The beam's ones hold where they stand (ASSUMED, see DARVANT).
-        if (d.kind === 'beam') break;
         this.drift(d, d.homeX, d.homeZ, 0.5);
         if (--d.timer < 0) {
           let best = -1;
@@ -803,24 +972,15 @@ export class DarkFalzAi extends BrainBase implements DfFight {
         }
         break;
       }
-      case DARVANT.spit: {
-        // ASSUMED: straight at the player it was thrown at, and on at the same velocity.
-        d.x += d.vx;
-        d.z += d.vz;
-        if (--d.timer < 0) this.killDarvant(d);
-        return;
-      }
       default:
         // State 3 (0x0045FA94): sink a third a frame; gone below -13.
-        d.y += -DARVANT.riseStep;
-        if (d.y < DARVANT.sinkLimit) d.gone = true;
+        this.sink(d);
         return;
     }
-    // The aura of states 1 and 2 (and the spat ones): every 16th frame the
-    // nearest player within 8 takes the ATP.
+    // The aura of states 1 and 2: every 16th frame the nearest player within 8 is hit.
     if (d.st !== DARVANT.rise && (d.clock & (DARVANT.auraEvery - 1)) === 0) {
       let best = -1;
-      let bd: number = d.kind === 'spit' ? DARVANT.spitReach : DARVANT.auraReach;
+      let bd: number = DARVANT.auraReach;
       for (let i = 0; i < this.aliveCount; i++) {
         const p = this.aliveList[i];
         const dist = Math.hypot(p.x - d.x, p.z - d.z);
@@ -830,10 +990,138 @@ export class DarkFalzAi extends BrainBase implements DfFight {
         }
       }
       if (best >= 0) {
-        this.events.push({ kind: 'hit', clientId: best, power: row.atp, fixed: false, x: d.x, z: d.z, what: 'Darvant' });
-        if (d.kind === 'spit') this.killDarvant(d);
+        this.events.push({ kind: 'hit', clientId: best, power: this.rows.darvant.atp, fixed: false, x: d.x, z: d.z, what: 'Darvant' });
       }
     }
+  }
+
+  // State 3 of every Darvant (0x00460590 / 0x00460CA4 / 0x0045FA94): sink a third a frame, gone below -13.
+  private sink(d: Darvant): void {
+    d.y += -DARVANT.riseStep;
+    if (d.y < DARVANT.sinkLimit) d.gone = true;
+  }
+
+  // The spat's fall (state 4, 0x00460620, PROVEN): vy += gravity, pos += vel; below the top it is
+  // put on 6 and goes to the chase (state 2).
+  private spitFall(d: Darvant): void {
+    d.vy += DARVANT.spitGravity;
+    d.x += d.vx;
+    d.y += d.vy;
+    d.z += d.vz;
+    if (d.y < DARVANT.spitTop) {
+      d.y = DARVANT.spitTop;
+      d.vy = 0;
+      d.st = DARVANT.chase;
+    }
+  }
+
+  // The spat's chase (state 2, 0x004601B0): the retarget (0x004601E8), the horizontal law (0x0046032C,
+  // with the cage 0x004604BC and the speed cap), then pos += vel.
+  private spitChase(d: Darvant, pre: number): void {
+    if ((pre & 0x7f) === 0) {
+      if (d.target < 0) {
+        const p = this.nearestAlive(d.x, d.z, DARVANT.spitSearch);
+        d.target = p ? p.clientId : -1;
+      } else {
+        d.target = -1;
+        if (this.form1) {
+          const a = Math.trunc(this.rand() * 65536);
+          d.aimX = this.form1.x + DARVANT.wander * sinB(a);
+          d.aimZ = this.form1.z + DARVANT.wander * cosB(a);
+        }
+      }
+    }
+    // The target's position (0x0046032C; ASSUMED: the alive list stands in for the player entity).
+    if (d.target >= 0) {
+      const p = this.playerPos(d.target);
+      if (p) {
+        d.aimX = p.x;
+        d.aimZ = p.z;
+      }
+    }
+    // The aim: the aim point plus 16 about the circle of the +0x1C word's low three bits (45 degrees each).
+    const ang = ((this.entityId + d.entity) & 7) << 13;
+    const ax = d.aimX + DARVANT.aimRing * sinB(ang);
+    const az = d.aimZ + DARVANT.aimRing * cosB(ang);
+    const acc = DARVANT.spitAccel;
+    if (ax <= d.x) d.vx -= acc;
+    else d.vx += acc;
+    if (az <= d.z) d.vz -= acc;
+    else d.vz += acc;
+    d.vy = 0;
+    this.cageSpit(d);
+    const s = Math.hypot(d.vx, d.vz);
+    if (s > d.cap) {
+      // The speed above the cap is taken off by acc a frame (the unit vector times |v| - acc).
+      const k = s - acc;
+      d.vx = (d.vx / s) * k;
+      d.vz = (d.vz / s) * k;
+      d.scale = k;
+    } else d.scale = s;
+    d.x += d.vx;
+    d.y += d.vy;
+    d.z += d.vz;
+  }
+
+  // The cage (0x004604BC): the spat is kept on or outside the circle of 100 about form 1 (xz).
+  private cageSpit(d: Darvant): void {
+    const f = this.form1;
+    if (!f) return;
+    const dx = d.x - f.x;
+    const dz = d.z - f.z;
+    const l = Math.hypot(dx, dz);
+    if (!(l < DARVANT.cageRadius)) return;
+    let ux = 1;
+    let uz = 0;
+    if (l > DARVANT.cageMin) {
+      ux = dx / l;
+      uz = dz / l;
+    }
+    d.x = f.x + ux * DARVANT.cageRadius;
+    d.z = f.z + uz * DARVANT.cageRadius;
+  }
+
+  // The beam's rise (state 0, 0x00460B84): 10/9 a frame to the top 6, then the flight (state 2).
+  private beamRise(d: Darvant): void {
+    if (DARVANT.beamTop <= d.y) return;
+    const up = d.y + DARVANT.beamRise;
+    if (up <= DARVANT.beamTop) {
+      d.y = up;
+      return;
+    }
+    d.y = DARVANT.beamTop;
+    d.st = DARVANT.chase;
+  }
+
+  // The beam's flight (state 2, 0x00460C10): pos += vel; the timer counts down, and the beam dies
+  // when it is below 0 or 260 out from the centre (xz).
+  private beamFlight(d: Darvant): void {
+    d.x += d.vx;
+    d.y += d.vy;
+    d.z += d.vz;
+    d.timer--;
+    if (d.timer < 0 || Math.hypot(d.x, d.z) > DARVANT.beamReach) this.killDarvant(d);
+  }
+
+  // The bob of state 2 (the dispatchers): y += 0.1 * sin(phase), then phase += step.
+  private bob(d: Darvant): void {
+    d.y += DARVANT.bobAmp * sinB(d.bobAngle);
+    d.bobAngle = (d.bobAngle + d.bobStep) & 0xffff;
+  }
+
+  // The spat's and beam's aura (the dispatchers, state 2): the cadence is the power of two at or
+  // above trunc(8 / speed) minus 1 (16 when the speed is 0.5 or less); the hit is the nearest player
+  // within 8. The Darvant is not removed by it (ASSUMED for the hit's callee, the player's +0x60).
+  private auraSpitBeam(d: Darvant, pre: number): void {
+    const reach = DARVANT.auraSpitBeamReach;
+    const n = d.scale > reach / 16 ? Math.trunc(reach / d.scale) : 16;
+    let m = 1;
+    while (m < n) m *= 2;
+    if ((pre & (m - 1)) !== 0) return;
+    const p = this.nearestAlive(d.x, d.z, reach);
+    if (!p) return;
+    const row = d.kind === 'spit' ? this.rows.darvantFalz : this.rows.darvant;
+    this.events.push({ kind: 'hit', clientId: p.clientId, power: row.atp, fixed: false, x: d.x, z: d.z, what: 'Darvant' });
   }
 
   // Accelerate toward a point a little each frame and cap the speed.

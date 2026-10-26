@@ -9,7 +9,7 @@
 // each form's own rule (DfAnim), tested against the tables' chains.
 //
 // Run: node tests/darkfalz.test.ts
-import { DARVANT, DarkFalzAi, DarkFalzPartAi, Darvant, DF_ID, SCENE, SCENE_NAMES, darvantBoxStart, darvantBoxStep, darvantRingIcon } from '../client/src/combat/darkfalz.ts';
+import { DARVANT, DarkFalzAi, DarkFalzPartAi, Darvant, DF_ID, SCENE, SCENE_NAMES, darvantBoxStart, darvantBoxStep, darvantRingIcon, darvantRowSpeed } from '../client/src/combat/darkfalz.ts';
 import { DfForm1, F1, F1_ANIM_ROWS, F1_BOX_COUNT, F1_BOX_FLAGS, pickWeighted } from '../client/src/combat/darkfalz1.ts';
 import { DfForm2, F2, F2_ANIM_ROWS } from '../client/src/combat/darkfalz2.ts';
 import { advanceScale, DfForm3, F3, F3_ANIM_ROWS, HomingBolt, f3Spot } from '../client/src/combat/darkfalz3.ts';
@@ -1091,8 +1091,8 @@ function clearZakoBoth(fi: Fight): void {
 
 {
   // Form 2's beam in Ultimate (0x00458E44): when the beam's timer runs out, three
-  // Darvants per living player about the body, at radius 12.5, rising from the body's
-  // height at 10/9 a frame to 6, alive while the scene is TYPE2.
+  // Darvants per living player about the body, at radius 12.5, rising from y -13 (the
+  // constructor 0x00460DE4, PROVEN) at 10/9 a frame to 6, then flying (state 2), alive while the scene is TYPE2.
   const two = () => [player(0, CASKET.x, CASKET.z), player(1, CASKET.x + 4, CASKET.z)];
   const fi = fight({ seed: 7, difficulty: 3, targets: two() });
   toType2(fi);
@@ -1101,11 +1101,9 @@ function clearZakoBoth(fi: Fight): void {
   fi.until(beam, 40000, 'a beam (Ultimate)');
   const before = fi.c.darvants.length;
   let px = 0;
-  let py = 0;
   let pz = 0;
   for (let n = 0; beam() && n < 400; n++) {
     px = f2.x;
-    py = f2.y;
     pz = f2.z;
     fi.step();
   }
@@ -1117,17 +1115,18 @@ function clearZakoBoth(fi: Fight): void {
   let posOk = true;
   made.forEach((d, i) => {
     const [ox, oz] = DARVANT.beamOffsets[i % 3];
-    if (Math.abs(d.x - (px + ox * 12.5)) > 1e-9 || Math.abs(d.z - (pz + oz * 12.5)) > 1e-9 || d.y !== py) posOk = false;
+    if (Math.abs(d.x - (px + ox * 12.5)) > 1e-9 || Math.abs(d.z - (pz + oz * 12.5)) > 1e-9 || d.y !== DARVANT.beamFloor) posOk = false;
   });
-  check(posOk, 'at the body + (0, -12.5), (-10.75, 6.25), (10.75, 6.25), at the body height');
+  check(posOk, 'at the body + (0, -12.5), (-10.75, 6.25), (10.75, 6.25), at y -13 (the constructor sets it; body height unused)');
   const r = made[0];
   const y0 = r.y;
   const t0 = fi.t;
   fi.until(() => r.st !== DARVANT.rise, 200, 'the beam Darvant rises');
   const frames = fi.t - t0;
   check(Math.abs(frames - Math.ceil((DARVANT.top - y0) / DARVANT.beamRise)) <= 1, `it rises at 10/9 a frame (${frames} frames from ${y0.toFixed(1)})`);
-  eq(r.y, DARVANT.top, 'and stops at the top, 6');
-  eq(r.st, DARVANT.hover, 'and it holds (ASSUMED state, see DARVANT)');
+  // The top is reached in state 2; the bob of state 2 (0x00460938 / 0x00460B34) runs on that tick too.
+  check(Math.abs(r.y - DARVANT.top) <= DARVANT.bobAmp + 1e-9, 'and it is at the top, 6, within the bob (0.1)');
+  eq(r.st, DARVANT.chase, 'then the flight: state 2 (0x00460C10, PROVEN)');
   // Their life: they die with TYPE2 (the update's scene check, 0x00460938).
   fi.c.damagePart(DF_ID.form2, 1e9, true);
   fi.until(() => fi.c.scene !== SCENE.type2, 4000, 'the end of TYPE2');
@@ -1285,6 +1284,162 @@ function clearZakoBoth(fi: Fight): void {
   eq(DARVANT.spitGravity, -0.015, 'spit gravity (0xBC75C290 at 0x00A459C8)');
   eq(DARVANT.spitTop, 6, 'spit limit 6.0');
 }
+// --- 10. the spat's launch, fall, chase and cage; the beam's constructor, flight and bob ----------
+// (PsoBB.exe: factories 0x00460778 / 0x00460DE4, the state functions 0x00460620, 0x004601B0,
+// 0x0046032C, 0x004604BC, 0x00460B84, 0x00460C10, and the dispatchers 0x0045FF50 / 0x00460938.)
+type SpawnApi = {
+  newDarvant: (k: 'ring' | 'spit' | 'beam', x: number, y: number, z: number) => Darvant | null;
+  cageSpit: (d: Darvant) => void;
+  beamConstructor: (d: Darvant) => void;
+  bob: (d: Darvant) => void;
+};
+{
+  // The row clamp of 0x0045FBD4: valid in (1/3, 10 x the default], else the default.
+  eq(darvantRowSpeed(0.38, DARVANT.fallbackSpeed), 0.38, 'row speed: 0.38 is valid');
+  eq(darvantRowSpeed(0, DARVANT.fallbackSpeed), DARVANT.fallbackSpeed, 'row speed: 0 takes the default (0x00A45A14)');
+  eq(darvantRowSpeed(1 / 3, DARVANT.fallbackSpeed), DARVANT.fallbackSpeed, 'row speed: 1/3 is not above the floor');
+  eq(darvantRowSpeed(11, DARVANT.fallbackSpeedFalz), DARVANT.fallbackSpeedFalz, 'row speed: over 10 x the default takes it');
+  check(DARVANT.fallbackSpeedFalz > DARVANT.fallbackSpeed, 'row 57 default is 1.75 x row 53 default (0x00900540)');
+}
+{
+  // The launch (0x00460778): toward the centre from the spawn point, at rand * 0.41666665 + 1.6666666.
+  const fi = fight({ seed: 3 });
+  toType1(fi);
+  const c = fi.c as unknown as SpawnApi & { spawnSpit: (x: number, z: number) => boolean };
+  c.spawnSpit(3, 4);
+  const d = fi.c.darvants[fi.c.darvants.length - 1];
+  eq(d.st, DARVANT.spit, 'a spat starts in state 4 (the fall)');
+  check(Math.abs(d.vx + 0.6 * d.scale) < 1e-9 && Math.abs(d.vz + 0.8 * d.scale) < 1e-9, 'the launch points at the centre: unit(-3, -4) times the speed');
+  check(d.scale >= 1.6666666 && d.scale < 1.6666666 + 0.41666665, `the speed is rand * 0.41666665 + 1.6666666 (${d.scale.toFixed(4)})`);
+  c.spawnSpit(0, 0);
+  const e = fi.c.darvants[fi.c.darvants.length - 1];
+  check(e.vx > 0 && e.vz === 0, 'a spat at the centre goes (1, 0) (the zero-vector case of 0x00460778)');
+
+  // The fall (0x00460620): vy += -0.015 a tick, pos += vel; the first tick below 6 is state 2.
+  const f = c.newDarvant('spit', 10, 25, 0)!;
+  f.st = DARVANT.spit;
+  f.vx = 0;
+  f.vz = 0;
+  let y = 25;
+  let vy = 0;
+  let n = 0;
+  while (y >= DARVANT.spitTop) {
+    vy += DARVANT.spitGravity;
+    y += vy;
+    n++;
+  }
+  let steps = 0;
+  while (f.st === DARVANT.spit && steps < 400) {
+    fi.step(1);
+    steps++;
+  }
+  eq(steps, n, 'the fall lasts as many ticks as the gravity sum takes to get under 6');
+  check(Math.abs(f.y - DARVANT.spitTop) <= DARVANT.bobAmp + 1e-9, 'the transition puts it on 6 (the bob of that tick adds at most 0.1)');
+  eq(f.st, DARVANT.chase, 'then state 2 (the chase)');
+}
+{
+  // The cage (0x004604BC): inside 100 about form 1 (xz), it is put on the circle, toward its side.
+  const fi = fight({ seed: 3 });
+  toType1(fi);
+  const c = fi.c as unknown as SpawnApi;
+  const f1 = fi.c.form1!;
+  const d = c.newDarvant('spit', f1.x + 10, 5, f1.z)!;
+  c.cageSpit(d);
+  check(Math.abs(d.x - (f1.x + 100)) < 1e-9 && Math.abs(d.z - f1.z) < 1e-9, 'cage: a spat 10 out is put 100 out on its side');
+  const e = c.newDarvant('spit', f1.x, 5, f1.z)!;
+  c.cageSpit(e);
+  check(Math.abs(e.x - (f1.x + 100)) < 1e-9 && e.z === f1.z, 'cage: at the centre of form 1 it goes to (+100, 0)');
+  const o = c.newDarvant('spit', f1.x, 5, f1.z + 150)!;
+  c.cageSpit(o);
+  eq(o.z, f1.z + 150, 'cage: outside 100 it is not moved');
+}
+{
+  // The beam's constructor (0x00460DE4): toward the nearest player (+-4 by w & 3), else toward the centre.
+  const fi = fight({ seed: 3, targets: [player(0, 50, 0)] });
+  fi.step(1);
+  const c = fi.c as unknown as SpawnApi;
+  const b = c.newDarvant('beam', 0, 0, 0)!;
+  c.beamConstructor(b);
+  eq(b.y, DARVANT.beamFloor, 'a beam is put at y -13 (0x00460DE4)');
+  eq(b.timer, DARVANT.beamTimer, 'with the timer 150');
+  eq(b.st, DARVANT.rise, 'in state 0 (rise)');
+  const k = (0x1000 + b.entity) & 3;
+  const side = k & 1 ? 4 : -4;
+  const sideZ = k & 2 ? 4 : -4;
+  const len = Math.hypot(50 + side, sideZ);
+  check(Math.abs(b.vx - ((50 + side) / len) * b.cap) < 1e-9 && Math.abs(b.vz - (sideZ / len) * b.cap) < 1e-9, 'the velocity is unit(player + offset - beam) times the cap');
+  check(Math.abs(Math.hypot(b.vx, b.vz) - b.cap) < 1e-9 && b.vy === 0, 'speed is the cap and vy is 0');
+  eq(b.cap, darvantRowSpeed(fi.c.rows.darvantFalz.f1, DARVANT.fallbackSpeedFalz), 'the cap is the row 57 clamp');
+
+  const fz = fight({ seed: 3, targets: [] });
+  fz.step(1);
+  const cz = fz.c as unknown as SpawnApi;
+  const bz = cz.newDarvant('beam', 30, 0, 40)!;
+  cz.beamConstructor(bz);
+  const hz = Math.hypot(bz.vx, bz.vz);
+  check(Math.abs(bz.vx / hz + 0.6) < 1e-9 && Math.abs(bz.vz / hz + 0.8) < 1e-9, 'with no player the beam goes toward the centre: unit(-30, -40)');
+}
+{
+  // The beam's flight (0x00460C10): dies below timer 0 or beyond 260 (xz).
+  const fi = fight({ seed: 3 });
+  toType2(fi);
+  const c = fi.c as unknown as SpawnApi;
+  const far = c.newDarvant('beam', 259.5, 6, 0)!;
+  far.st = DARVANT.chase;
+  far.vx = 1;
+  far.timer = 150;
+  fi.step(1);
+  eq(far.st, DARVANT.dead, 'a beam past 260 dies (|xz| 260.5)');
+  const short = c.newDarvant('beam', 0, 6, 0)!;
+  short.st = DARVANT.chase;
+  short.timer = 0;
+  fi.step(1);
+  eq(short.st, DARVANT.dead, 'the timer below 0 kills the beam (timer -1)');
+  const live = c.newDarvant('beam', 0, 6, 0)!;
+  live.st = DARVANT.chase;
+  live.timer = 5;
+  fi.step(1);
+  eq(live.st, DARVANT.chase, 'a beam in reach with time left keeps flying');
+  eq(live.timer, 4, 'the timer counts down a tick');
+}
+{
+  // The bob of state 2 (the dispatchers): y += 0.1 sin(phase), then phase += step.
+  const fi = fight({ seed: 3 });
+  toType2(fi);
+  const c = fi.c as unknown as SpawnApi;
+  const d = c.newDarvant('beam', 0, 0, 0)!;
+  const step0 = d.bobStep;
+  check(step0 >= DARVANT.bobStepBase && step0 < DARVANT.bobStepBase + DARVANT.bobStepRand, 'the step is in 1092 .. 3276 (rand * 2184 + 1092)');
+  d.y = 0;
+  d.bobAngle = 16384;
+  d.bobStep = 1000;
+  c.bob(d);
+  check(Math.abs(d.y - 0.1) < 1e-9, 'bob: a quarter turn adds 0.1');
+  eq(d.bobAngle, 17384, 'and the phase moves by the step');
+}
+{
+  // The aura's cadence (both dispatchers): the mask is the power of two at or above trunc(8 / speed), minus 1.
+  // Speed 1.0208 gives trunc(7.84) = 7, so the mask is 7: a hit on every 8th tick (clock 0, 8, ...).
+  const fi = fight({ seed: 3, targets: [player(0, 0, 3)] });
+  toType2(fi);
+  fi.targets[0].x = 0;
+  fi.targets[0].z = 3;
+  const c = fi.c as unknown as SpawnApi;
+  const d = c.newDarvant('beam', 0, 6, 0)!;
+  d.st = DARVANT.chase;
+  d.timer = DARVANT.beamTimer;
+  d.vx = 0;
+  d.vz = 0;
+  d.scale = 1.0208;
+  d.cap = 1.0208;
+  d.bobStep = 0;
+  const before = fi.log.length;
+  for (let k = 0; k < 16; k++) fi.step(1);
+  let hits = 0;
+  for (const ev of fi.log.slice(before)) if (ev.kind === 'hit' && ev.what === 'Darvant') hits++;
+  eq(hits, 2, 'two aura hits in 16 ticks at speed 1.0208 (every 8)');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

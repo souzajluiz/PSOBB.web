@@ -1,5 +1,35 @@
 # Devlog
 
+## 2026-10-25: Dark Falz boxes: the spat and beam flights (launch, fall, chase, cage, beam flight, bob, aura)
+
+**Question.** ROADMAP "Dark Falz boxes" left open: the spat Darvant's chase (0x004601B0 helpers) and its horizontal speed law (FPU order 0x00460869..0x0046089d), the dead-box hit test of spat and beam Darvants, and the beam's state 2 flight (0x00460C10). The port flew spats straight at the nearest player for a timer, and kept beams hovering after the rise.
+
+**PROVEN (objdump of PsoBB.exe read per instruction; the Ghidra dump for names; `tools/exedata.py` for constants).**
+- Tables. Ring 0x009A6780 (dispatcher 0x0045F25C). Spat 0x009A6794 (dispatcher 0x0045FF50): 2 chase 0x004601B0, 3 sink 0x00460590, 4 fall 0x00460620. Beam 0x009A67A8 (dispatcher 0x00460938): 0 rise 0x00460B84, 1 none, 2 flight 0x00460C10, 3 sink 0x00460CA4.
+- Constants, written once by 0x00461028: 0x00A45A0C = 8, 0x00A45A10 = 1/3, 0x00A45A14 = 0.5833333, 0x00A45A18 = 0x00900540 (1.75) x 0x00A45A14, 0x00A45A1C = 100 (0x42C80000). Also 0x00A459A8 = 0x00A45A1C + 10 (set on the first wander), 0x00A459B8 = 2 x 8 = 16, 0x00A459B4 = 0.05 x 0x00A45A18 (the law's step).
+- Shared init 0x0045FBD4: 0x3A4 = the row 53 fparam1 clamped to (1/3, 10 x 0x00A45A14], else 0x00A45A14; 0x3A8 = the row 57 clamp to 0x00A45A18; then the bob phase 0x3C4 = ROUND(rand x 65536) and step 0x3C8 = ROUND(rand x 2184 + 1092), in that order.
+- Spat factory 0x00460778: vel = unit(-x, 0, -z) x s with s = rand x 0.41666665 + 1.6666666 (0x00A459D8 = 0.25 x 0x00A459D4); 0x3A0 = s; target none; aim 0; state 4. So the spat is thrown toward the centre, not at a player.
+- Fall 0x00460620: vy += -0.015, pos += vel; the first tick with y < 6 sets y = 6, vy = 0, state 2. The dispatcher reads the state after the call, so that tick also gets the bob and the aura.
+- Chase 0x004601B0 = 0x004601E8 (retarget at clock & 0x7F == 0, the clock read before its increment) + 0x0046032C (horizontal law) + pos += vel.
+  - 0x004601E8: no target: the nearest player within 287.5 (0x438FC000, 0x007714CC). With a target: the target is dropped and the aim becomes form 1's xz + 110 x (sin, cos)(rand x 65536).
+  - 0x0046032C: with a target, the aim is that player's xz (not copied when the entity is missing). Aim point = aim + 16 x (sin, cos) of (w & 7) x 45 degrees (w = the +0x1C word). vx (vz) moves by +-acc toward the aim point (the sign from `<=`), vy = 0, then the cage, then while |v| > 0x3A8: v = unit(v) x (|v| - acc) and 0x3A0 = |v| - acc; otherwise 0x3A0 = |v|.
+- Cage 0x004604BC (state 2): when the xz distance to form 1 is under 100, the spat is put on the circle of 100 in its own direction (1, 0) when that distance is under 0.01.
+- Beam constructor 0x00460DE4: y = -13 (0xC1500000), timer 0x384 = 150, state 0, vel = unit(p + (+-4, +-4) - pos) x cap where p is the nearest player within 100 (0x42C80000) and the signs come from w & 3 (x by bit 0, z by bit 1). With no player, vel = unit(-pos). A zero vector becomes (1, 0). The spawn point's y is overwritten by -13.
+- Beam rise 0x00460B84: 10/9 a frame while y < 6; the first step past 6 puts y = 6 and goes to state 2 (no horizontal motion while rising).
+- Beam flight 0x00460C10: pos += vel; the timer counts down; the beam dies (0x00460914: kills + 1, state 3) when the timer is below 0 or |xz| > 260 (0x00A459F4).
+- Bob (both dispatchers, state 2 only, after the state function): y += 0.1 x sin(phase), phase += step (0x0045FF50 to 0x0046015A; 0x00460938 to 0x00460B34).
+- Aura (both dispatchers, states 1 and 2 only): the cadence mask is the power of two at or above n minus 1, where n = trunc(8 / speed) when speed > 0.5 and 16 otherwise (0x00A45A08 = 8 / 16). A hit is the nearest player within 8 (0x007714CC) and the player's vtable +0x60. The dispatcher does not kill the Darvant afterwards.
+- Keep rule (the dispatchers): a spat dies unless the control's +0x384 is 6 (TYPE1); a beam unless it is 8 (TYPE2). It matches the port's SCENE values.
+- Dead boxes. Only the factories set bit 0 of the box (0x004608D5 spat, 0x00461012 beam); the death (0x00460914) and both sinks do not touch it, so it stays set after death. Whether the hit test reads the state is not traced.
+
+**ASSUMED (still open).** The spat's spawn height (25 in the port; the caller's position is not traced). The wall test of the nearest search (0x00780D3C, not ported). The callee of a hit (the player's +0x60): the port no longer removes a spat after a hit, because the dispatcher does not. The chase's player is the AI's target list (the exe reads the player entity by slot, alive or not). Dead spats and beams stay untargetable (the port's rule; the exe's hit test is not traced). The loader that writes the control's set record word 3 (0x1000 | index) stays ASSUMED, as before.
+
+**Changes.**
+- `client/src/combat/darkfalz.ts`: the spat's fall, chase (retarget, law, cage, speed cap), the beam's constructor, rise and flight, the state 2 bob, and the speed-based aura. `newDarvant` takes the two rand phases for every kind and the row 53 / row 57 clamps. The ring's update moved to `stepRing` unchanged. Removed: the spat's straight flight (`spitLife`, `spitSpeed`, `spitReach`) and the beam hover.
+- `spawnSpit(x, z)` (the target arguments are gone; `darkfalzcommon.ts` and `darkfalz1.ts` follow).
+- Tests: `tests/darkfalz.test.ts`. The Ultimate beam test now reads the constructor's y -13 (not the body height), the bob's 0.1 on the top tick, and state 2 after the rise (the old "holds" was the port's ASSUMED state). New section 10 covers the row clamp, the launch direction and speed, the fall length and the transition, the cage, the beam constructor (toward a player, toward the centre), the flight death, the bob, and the aura cadence.
+- Verified: `darkfalz`, `darkfalzwarp`, `darkfalzcamera`, `minimap`, `bossrooms`, `setdata`, `combat` (NEWSERV, 5860 checks), `cd client && tsc --noEmit -p .`.
+
 ## 2026-10-25: Minimap: the "Sinow Berill sub-entity" icons are the Barba Ray's (body 2.0, parts 1.2)
 
 **Question.** ROADMAP "Minimap left to do" lists the Sinow Berill sub-entity icons as traced but not ported, owners ASSUMED: dump 239865 `EnableSinowberillVisualIndicators_004b9198` (forced 2.0 when box flag bit 0 is set) and dump 240354 `UpdateSinowberillPositionAndState_004ba0ac` (forced 1.2). Which port object is each one?
