@@ -35,11 +35,13 @@
 //     critical when rand() * (attacker is a player ? 500 : 200) <= min(LCK, 100)
 //     (DAT_00978298 / DAT_0097829c / DAT_0097828c): d *= 1.5 (DAT_00978294).
 //   total >= 1 (DAT_009782b0): flag 0x200 (hit), 0x400 if total > max HP * 0.25
-//   (FUN_0077529c, DAT_0097822c), HP -= round(total) (FUN_00777414); HP < 1 sets
+//   (FUN_0077529c, DAT_0097822c), HP -= chop(total) (FUN_00777414, chop.ts); HP < 1 sets
 //   0x800 (dead). Otherwise flag 0x100 (miss / no damage).
-// The red/white number shown is round(d) of each hit box (FUN_0078a5e8).
+// The red/white number shown is chop(d) of each hit box (EntityHitEntity's per-box
+// ROUND(damage) runs under the chop control word, see chop.ts).
 
 import { ataSpecials, PLAYER_CLASS_ATTACK, splitAttack, weaponRangeContribution, type AttackRange, type SetContext } from './playerstats.ts';
+import { chopToInt } from './chop.ts';
 
 export { PLAYER_CLASS_ATTACK };
 export type AttackType = 0 | 1 | 2; // normal, heavy, special (player +0x8a4)
@@ -107,8 +109,8 @@ export function defenceResists(defence: number, rng: Rng): boolean {
 }
 
 export interface DamageResult {
-  damage: number; // total before rounding (>= 1 means the hit landed)
-  shown: number; // round(damage), the number above the enemy
+  damage: number; // total before the chop (>= 1 means the hit landed)
+  shown: number; // chopToInt(damage), the number above the enemy
   critical: boolean;
 }
 
@@ -137,7 +139,7 @@ export function rollDamage(
   } else {
     d = 0;
   }
-  return { damage: d, shown: Math.round(d), critical };
+  return { damage: d, shown: chopToInt(d), critical };
 }
 
 // Applies a total hit to the enemy state like FUN_007732b8's tail and returns
@@ -174,7 +176,7 @@ export function applyDamage(defender: DefenderStats, total: number, landed = tot
   if (!tookDamage(total, landed, min)) return FLAG_MISSED;
   let flags = FLAG_HIT;
   if (total > defender.maxHp * 0.25) flags |= FLAG_BIG_HIT;
-  defender.hp = Math.max(0, defender.hp - Math.round(total));
+  defender.hp = Math.max(0, defender.hp - chopToInt(total));
   if (defender.hp < 1) flags |= FLAG_DEAD;
   return flags;
 }

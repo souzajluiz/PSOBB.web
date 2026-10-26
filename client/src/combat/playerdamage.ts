@@ -67,6 +67,7 @@
 // (play once and hold the last frame) and one flag word, listed per table.
 
 import type { MotionRecord } from '../formats/plymotion.ts';
+import { chopToInt } from './chop.ts';
 
 // slot 9 (vtable +0x58), flags 0xa0000040
 // prettier-ignore
@@ -388,8 +389,10 @@ export class PlayerDamage {
     this.events.motion(kind);
   }
 
-  // One attack against the player. `damage` is the rounded total (0 = the hit
-  // did nothing: the client sends 6x4A instead), `angle` the direction the hit
+  // One attack against the player. `damage` is the total before the chop (the
+  // HP lost is chopToInt(damage): unknown_melee_attack_2's chop of the attack's
+  // total, the path an enemy's attack takes; 0 = the hit did nothing: the client
+  // sends 6x4A instead), `angle` the direction the hit
   // came from in radians, `strength` the knockback magnitude.
   hit(damage: number, angle: number, strength: number, killerEntityId = 0xffff, critical = false): void {
     if (this.dead || this.state === 'reviving' || this.lethal) return;
@@ -408,7 +411,7 @@ export class PlayerDamage {
       return;
     }
     this.killer = killerEntityId;
-    this.hp = Math.max(0, this.hp - Math.round(damage));
+    this.hp = Math.max(0, this.hp - chopToInt(damage));
     const heavy = damage > this.maxHp * HEAVY_HIT_FRACTION;
     this.vx = Math.sin(angle) * strength;
     this.vz = Math.cos(angle) * strength;

@@ -124,6 +124,7 @@ import {
   type AttackType,
   type DefenderStats,
 } from '../combat/formulas.ts';
+import { chopToInt } from '../combat/chop.ts';
 import { defaultSetContext, wornEquipment, type SetContext } from '../combat/playerstats.ts';
 import { classBaseElements, playerElements, statusChanceFromResist, type PlayerElements } from '../combat/playerresist.ts';
 import { liveBeatTime } from '../combat/beattime.ts';
@@ -2817,7 +2818,7 @@ export class CombatView {
     const owner = ai.owner;
     const went = owner.hitSegment(ai.index, damage);
     if (e.parent) e.parent.stats.hp = owner.bodyHp;
-    this.sendEnemy(e, flags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+    this.sendEnemy(e, flags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, chopToInt(damage)));
     const p = e.instance.root.position;
     this.num(damage, critical, p.x, p.y + 26, p.z);
     const s = ai.segment;
@@ -2996,7 +2997,7 @@ export class CombatView {
     const went = ai.hit(damage);
     e.stats.hp = BARBA_HP;
     if (parent && damage >= 1) this.barbaLastHit.set(parent.index, byPlayer);
-    this.sendEnemy(e, flags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+    this.sendEnemy(e, flags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, chopToInt(damage)));
     if (parent) this.barbaDrain(parent, owner);
     const p = e.instance.root.position;
     this.num(damage, critical, p.x, p.y + 26, p.z);
@@ -7546,7 +7547,7 @@ export class CombatView {
       }
     } else if (type === 4) {
       // Group 6 (Resta) on the caster: HP + MST * 0.5 + power.
-      const heal = Math.round(Math.max(0, s.mst) * 0.5 + power);
+      const heal = chopToInt(Math.max(0, s.mst) * 0.5 + power);
       this.damage.hp = Math.min(this.damage.maxHp, this.damage.hp + heal);
       this.opts.log(`${name}: +${heal} HP (${this.damage.hp}/${this.damage.maxHp})`);
     } else if (type === 5) {
@@ -7675,7 +7676,7 @@ export class CombatView {
       ai.hitRoot(damage);
       e.stats.hp = e.stats.maxHp;
       if (damage >= 1) this.barbaLastHit.set(e.index, byPlayer);
-      this.sendEnemy(e, baseFlags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+      this.sendEnemy(e, baseFlags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, chopToInt(damage)));
       this.barbaDrain(e, ai);
       const p = e.instance.root.position;
       this.num(damage, critical, p.x, p.y + 26, p.z);
@@ -7692,7 +7693,7 @@ export class CombatView {
       const pool = ai.hit(damage);
       e.stats.hp = ai.bodyHp;
       if (damage >= 1) this.drlLastHitLocal.set(e.index, byPlayer);
-      this.sendEnemy(e, baseFlags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+      this.sendEnemy(e, baseFlags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, chopToInt(damage)));
       const p = e.instance.root.position;
       this.num(damage, critical, p.x, p.y + 26, p.z);
       this.opts.log(`${what}hit De Rol Le's ${pool} for ${Math.round(damage)}: shell ${ai.shellHp}/${ai.shellMax}, body ${ai.bodyHp}/${ai.bodyMax}`);

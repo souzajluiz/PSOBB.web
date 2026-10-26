@@ -31,6 +31,7 @@ import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { DE_ROL_LE_STING_POINTS, deRolLeStingRingTarget } from '../formats/enemymodels.ts';
 import { DrlDebris, DrlFins, type DrlPieceRecord } from './derollefins.ts';
+import { chopToInt } from './chop.ts';
 
 export type Vec3 = [number, number, number];
 const BAMS = BAMS_TO_RAD;
@@ -1588,7 +1589,7 @@ export class DeRolLeAi extends BrainBase {
   // breaks (TriggerPlayerHealEffect_00433fe4: flags | 0x88, SE 0x32d); then
   // the body pool (SE 0x336). Returns the pool the hit went to.
   hit(damage: number): 'shell' | 'body' | 'none' {
-    const d = Math.max(0, Math.round(damage));
+    const d = Math.max(0, chopToInt(damage));
     if (this.dying || d <= 0) return 'none';
     if (!this.shellBroken) {
       this.shellHp -= d;

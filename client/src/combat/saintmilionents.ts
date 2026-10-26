@@ -62,6 +62,7 @@ import type { AiTarget } from './enemyai.ts';
 import { EnemyShot, PLAYER_RADIUS, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { enemyFire } from './techfire.ts';
 import { TECH } from './techniques.ts';
+import { chopToInt } from './chop.ts';
 import {
   SPINNER_ACTIONS,
   SPINNER_ANIMATIONS,
@@ -832,7 +833,7 @@ export class SpinnerEntity {
   // A strike took `damage` hp (the hit sets flag 0x200, hp 0 flag 0x800).
   hit(damage: number): void {
     if (this.gone || damage < 1) return;
-    this.hp = Math.max(0, this.hp - Math.round(damage));
+    this.hp = Math.max(0, this.hp - chopToInt(damage));
     this.hitFlag = true;
     if (this.hp <= 0) this.dead = true;
   }

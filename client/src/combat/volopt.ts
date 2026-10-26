@@ -44,6 +44,7 @@ import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { VOLOPT_MONITOR_OFFSET, VOLOPT_PILLAR_RADIUS } from '../formats/enemymodels.ts';
+import { chopToInt } from './chop.ts';
 
 export type Vec3 = [number, number, number];
 const BAMS = BAMS_TO_RAD;
@@ -147,7 +148,7 @@ export class VoloptPart {
   }
   // Damage that this client dealt (`byLocal`) or learned of through a 6x0A.
   damage(amount: number, byLocal: boolean): void {
-    const d = Math.max(0, Math.round(amount));
+    const d = Math.max(0, chopToInt(amount));
     if (d <= 0 || this.dead) return;
     this.hp = Math.max(0, this.hp - d);
     this.hit = true;
