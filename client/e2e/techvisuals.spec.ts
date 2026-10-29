@@ -17,6 +17,61 @@ import { enterFreshField } from './fresh-field.ts';
 // Screenshots are taken by hand; no traces or failure screenshots (the disk is small).
 test.use({ trace: 'off', screenshot: 'off' });
 
+// The harness shield, before each cast: the Force's HP is topped up and it gets `SHIELD_TICKS` of
+// the exe's invulnerability (PlayerDamage.invuln). That is an exe state, not a client shortcut:
+// enemies do not target or hit a player whose maybe_invuln flag is set (PsoBB.exe dump lines 317577
+// and 314778; the flag follows invuln_frames >= 1, line 555330). Without it a wave hit during the
+// charge ends the cast (a hit ends input state 8: HandlePlayerInputState_0069ed10 runs state 8's
+// end handler, ResetPlayerTechState_006a2a90, dump lines 584743 and 588374), and the wave kills
+// the character over the casts (its HP is not restored between them).
+// The shield does not clear a freeze: that one wears off by its frames, and the idle wait waits
+// for it. A paralysis has no end of its own in this client (combat/status.ts), so the shield cures it.
+const SHIELD_TICKS = 600;
+
+// Runs in the page (Playwright serialises it, so it takes no closure).
+function shieldSelf(ticks: number): void {
+  const combat = (window as any).classicGame.view.combat;
+  const d = combat.damage;
+  if (combat.status.slot0?.type === 0x10) combat.status.cure(0x10);
+  if (!d.dead) {
+    d.hp = d.maxHp;
+    d.invuln = Math.max(d.invuln, ticks);
+  }
+}
+
+// Faces the nearest live enemy from `dist` units. With `tech` it also casts there, in the same
+// evaluate, so the enemy cannot leave the technique's reach between the facing and the cast.
+// Returns true when only facing was asked for, else the cast's result.
+function faceNearestEnemy(arg: { dist: number; tech?: number }): any {
+  const g = (window as any).classicGame;
+  const combat = g.view.combat;
+  const self = g.game.selfId;
+  const from = combat.view.playerPositions().get(self);
+  let best: any = null;
+  let bestD = Infinity;
+  for (const e of combat.enemies.values()) {
+    if (!e || e.dead || !e.instance?.root?.visible) continue;
+    const p = e.instance.root.position;
+    const d = (p.x - from.x) ** 2 + (p.z - from.z) ** 2;
+    if (d < bestD) {
+      bestD = d;
+      best = e;
+    }
+  }
+  if (!best) return false;
+  const p = best.instance.root.position;
+  const a = Math.atan2(p.x - from.x, p.z - from.z);
+  const at = { x: p.x - arg.dist * Math.sin(a), y: p.y, z: p.z - arg.dist * Math.cos(a) };
+  g.game.self.angle = a;
+  g.view.placePlayer(self, at.x, p.y, at.z, a);
+  g.game.self.angle = a;
+  if (arg.tech === undefined) return true;
+  combat.tp = 999; // the HUD's TP is topped up before each cast (the server can lower it)
+  const ok = combat.castTechnique(arg.tech);
+  // The 6x47 list (the targets the cast sends) and the enemies in the cast's list.
+  return { ok, sent: combat.cast?.sent.length ?? -1, targets: combat.cast?.targets.length ?? -1, enemies: [...combat.enemies.values()].filter((e: any) => !e.dead && e.instance?.root?.visible).length };
+}
+
 const OUT_DIR = fileURLToPath(new URL('../test-results/', import.meta.url));
 
 // The Force's class (bridge/admin-chars.mjs CHAR_CLASSES: FOmarl).
@@ -130,32 +185,17 @@ test('Forest 1: every technique of the Technique visuals item cast at the neares
   });
 
   // Faces the nearest live enemy from `dist` units (as lockon.spec.ts), so each cast has a target.
-  const faceNearest = (dist: number) =>
-    page.evaluate((dist: number) => {
-      const g = (window as any).classicGame;
-      const combat = g.view.combat;
-      const self = g.game.selfId;
-      const from = combat.view.playerPositions().get(self);
-      let best: any = null;
-      let bestD = Infinity;
-      for (const e of combat.enemies.values()) {
-        if (!e || e.dead || !e.instance?.root?.visible) continue;
-        const p = e.instance.root.position;
-        const d = (p.x - from.x) ** 2 + (p.z - from.z) ** 2;
-        if (d < bestD) {
-          bestD = d;
-          best = e;
-        }
-      }
-      if (!best) return false;
-      const p = best.instance.root.position;
-      const a = Math.atan2(p.x - from.x, p.z - from.z);
-      const at = { x: p.x - dist * Math.sin(a), y: p.y, z: p.z - dist * Math.cos(a) };
-      g.game.self.angle = a;
-      g.view.placePlayer(self, at.x, p.y, at.z, a);
-      g.game.self.angle = a;
-      return true;
-    }, dist);
+  const faceNearest = (dist: number) => page.evaluate(faceNearestEnemy, { dist });
+
+  // The shield before a cast, and a floor reload when the character is dead (a floor load resets
+  // the damage state, PlayerDamage.reset; a dead character has no busy end to wait for).
+  const shieldOrReload = async () => {
+    await page.evaluate(shieldSelf, SHIELD_TICKS);
+    if (await peek(page, (w) => w.classicGame.view.combat.damage.dead)) {
+      await loadWave();
+      await page.evaluate(shieldSelf, SHIELD_TICKS);
+    }
+  };
 
   const liveEnemies = () =>
     peek(page, (w) => [...w.classicGame.view.combat.enemies.values()].some((e: any) => !e.dead && e.instance?.root?.visible));
@@ -170,12 +210,15 @@ test('Forest 1: every technique of the Technique visuals item cast at the neares
       // An earlier cast may have killed the wave: the floor is loaded again with a new wave.
       // (Fewer than 3 live enemies: the earlier casts thinned the wave, and a cast needs targets in range.)
       const live = await peek(page, (w) => [...w.classicGame.view.combat.enemies.values()].filter((e: any) => !e.dead && e.instance?.root?.visible).length);
-      if (live < 3 || !(await liveEnemies())) await loadWave();
+      const dead = await peek(page, (w) => w.classicGame.view.combat.damage.dead);
+      if (live < 3 || !(await liveEnemies()) || dead) await loadWave();
       // The lock-on picks the enemy (the cast's targets read it), as lockon.spec.ts. When it
       // does not (the wave is left out of the cone after an earlier cast), the wave is loaded again.
       const locked = () => peek(page, (w) => w.classicGame.view.combat.lockOn !== null);
+      let placeDist = cast.dist;
       for (let attempt = 0; ; attempt++) {
-        expect(await faceNearest(attempt === 0 ? cast.dist : 8)).toBe(true);
+        placeDist = attempt === 0 ? cast.dist : 8;
+        expect(await faceNearest(placeDist)).toBe(true);
         try {
           await expect.poll(locked, { timeout: 5_000 }).toBe(true);
           break;
@@ -185,6 +228,8 @@ test('Forest 1: every technique of the Technique visuals item cast at the neares
         }
       }
       await page.waitForTimeout(500);
+      // The shield comes last: a floor load resets the damage state (PlayerDamage.reset clears invuln).
+      await shieldOrReload();
       // The previous cast's effects are gone before the next (the cast and the attack are idle).
       await expect
         .poll(() => peek(page, (w) => { const c = w.classicGame.view.combat; return !c.cast && !c.attack?.active && !c.damage?.busy && !c.status?.immobile; }), { timeout: 30_000 })
@@ -214,13 +259,9 @@ test('Forest 1: every technique of the Technique visuals item cast at the neares
           else for (const key of Object.keys(k)) p[key] = Math.max(p[key], k[key]);
         }, 20);
       });
-      const cast6x47 = await page.evaluate((t: number) => {
-        const combat = (window as any).classicGame.view.combat;
-        combat.tp = 999; // the HUD's TP is topped up before each cast (the server can lower it)
-        const ok = combat.castTechnique(t);
-        // The 6x47 list (the targets the cast sends) and the enemies in the cast's list.
-        return { ok, sent: combat.cast?.sent.length ?? -1, targets: combat.cast?.targets.length ?? -1, enemies: [...combat.enemies.values()].filter((e: any) => !e.dead && e.instance?.root?.visible).length };
-      }, cast.tech);
+      const logAt = logs.length;
+      // Facing the nearest enemy and the cast in one evaluate (faceNearestEnemy).
+      const cast6x47 = await page.evaluate(faceNearestEnemy, { dist: placeDist, tech: cast.tech });
       const started = cast6x47.ok;
       console.log('TECHVIS', cast.name, 'cast', started, JSON.stringify(cast6x47), started ? '' : logs.slice(-3).join(' | '));
       expect(started).toBe(true);
@@ -254,6 +295,7 @@ test('Forest 1: every technique of the Technique visuals item cast at the neares
       report.push(line);
       if (!created || !animated || !disposed) failures.push(line);
       console.log('TECHVIS', cast.name, 'peak', JSON.stringify(peak), 'after', JSON.stringify(after));
+      if (!created || !animated || !disposed) console.log('TECHVIS', cast.name, 'game log', logs.slice(logAt).join(' | ').slice(0, 1500));
     });
   }
   console.log('TECHVIS summary\n' + report.join('\n'));
