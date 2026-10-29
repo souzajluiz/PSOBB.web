@@ -1,3 +1,19 @@
+## 2026-10-29: Boss fixes (TODO A): Dark Belra wave gating, Vol Opt hit positioning; boss-fights spec passes
+
+**What ran.** `client/e2e/boss-fights.spec.ts` (Vite 5184, `--trace off`), 1 run that passed in full (6.6 min, 0 failed requests, 0 page errors). Per boss: Dragon (floor 11) 9 phase changes, 4 hits (2500 to 2250); De Rol Le (12) 8 changes, 1 hit (body stays 6000: segments take the damage first); Vol Opt (13) 1 change, 4 hits; Dark Belra (floor 8) 3 changes, 3 hits.
+
+**Dark Belra: root cause (not a brain bug).** Probed in Chrome. Floor 8 has five or six Dark Belra set entries, each in a wave (sections 20, 22, 30, 31, 55). Their models are hidden until their wave starts (`render/gamefield.ts` sets `enemies.startHidden` on floors with wave events; `render/enemyview.ts` `setVisible` shows an entry when its wave spawns). `render/combat.ts` `tickEnemies` skips an enemy whose model root is not visible (`if (e.dead || !e.instance.root.visible) continue;`), so the brain never ticks: the probe read 0 ticks and a `hidden` state with the root invisible. Moving the player next to a Belra does nothing for a wave-gated one. Stepping into the floor's event triggers (the real collision, 6x67, `render/fieldobjects.ts`) does start the wave: stepping into one of them (event 301) showed Belra 1050 in section 30, which then ticked (75 ticks in 2.5 s) and went to chase. The spec now steps into the triggers in turn (`wakeBelra`) and reads the first shown Belra. The brain's own logic (`client/src/combat/enemyfsmruins.ts`, `BELRA.search` 400, the hidden / appear / chase flow) was not changed. Exe address for the wave gating: not traced in the dump (its Belra names are not resolved); the wave rule is the one already documented in `render/waves.ts`.
+
+**Vol Opt: hits on only some presses (positioning, ASSUMED).** The spec stood 35 units in front of the body centre. Phase-1 hittable parts are the 24 monitors on the walls (`VoloptMonitor.hittable`, DEVLOG 2026-10-25: a monitor is struck while it stands, on any wall) and the pillars while risen, both well away from a point 35 units from the centre (the walls are about 128 to 134 units out, `CORE_WALL`). So a press only hit when a swing reached a part. The spec now stands 10 units from the nearest hittable part (`partSpot`), facing it, and got 4 hits. Whether the exe's melee box test would hit every press from that spot is not traced; ASSUMED.
+
+**Spec fixes.** `readBrain` prefers a shown brain (a wave-gated Belra can be one of several). `wakeBelra` (above). `fight` takes `approach: 'front' | 'part'`; Vol Opt uses 'part'. A comment in the spec about standing near the boss was corrected.
+
+**Checks.** `cd client && npx tsc --noEmit -p .` exit 0. A throwaway probe spec (`zz-probe-belra.spec.ts`, deleted, not committed) was used to find the Belra cause.
+
+**Not verified.** The kill and the exit for all four bosses are not checked. The Vol Opt hit rule from the part spot is not traced against the exe. The Dark Belra wave-trigger mapping per section is not traced against the exe dump, only against the port's `render/waves.ts` rule. The spec was run once.
+
+**Still open.** Kill and exit checks. Whether a player's own teleport paths (`quest/battlerun.ts` respawn, `quest/town.ts`) update the field position the same way `placePlayer` does (not checked here).
+
 # Devlog
 
 ## 2026-10-29: Technique visuals spec passes 3 runs in a row (harness shield, TODO A, partial)
