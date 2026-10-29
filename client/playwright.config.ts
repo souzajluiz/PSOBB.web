@@ -6,6 +6,8 @@ import { defineConfig } from '@playwright/test';
 // PW_BASE_URL points the tests at another dev server (a worktree's Vite on
 // its own port); the default is the checkout's Vite.
 const BASE_URL = process.env.PW_BASE_URL ?? 'http://127.0.0.1:5173';
+// The fallback Vite listens on BASE_URL's port, so a worktree run never starts one on 5173.
+const PORT = new URL(BASE_URL).port || '5173';
 
 export default defineConfig({
   testDir: './e2e',
@@ -23,7 +25,7 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: 'npx vite --host 127.0.0.1 --port 5173',
+    command: `npx vite --host 127.0.0.1 --port ${PORT} --strictPort`,
     url: `${BASE_URL}/classic.html`,
     reuseExistingServer: true,
     timeout: 60_000,
