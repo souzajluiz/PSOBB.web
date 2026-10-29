@@ -194,7 +194,7 @@ import { HAND_NODE } from './heldweapon.ts';
 import { MOTION_TYPE } from '../formats/plymotion.ts';
 import { parseSetFile, type EnemySet } from '../formats/setdata.ts';
 import { fetchStreamFiles } from '../net/bbsession.ts';
-import { applyHpModification, applyLevelChangeStats, nearestTargets, pvpInReach, pvpKnockback, pvpStrike, remoteAttacker } from '../combat/pvp.ts';
+import { applyHpModification, applyLevelChangeStats, nearestTargets, pvpCreditAmount, pvpInReach, pvpKnockback, pvpStrike, remoteAttacker } from '../combat/pvp.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import {
   parseAttack,
@@ -967,7 +967,11 @@ export class CombatView {
       sendRevivable: () => {
         this.game.sendPlayerRevivable();
         this.showSoul(this.game.selfId, true);
-        this.opts.onRevivable?.();
+        // The dead prompt is a field dialog: 0x006920ac opens it on a field, not in battle
+        // (the comment on classic/returnprompt.ts). In battle the death is revived with the revive key.
+        // ASSUMED: no dead prompt in battle is inferred from the field-only opener, not from a dump of
+        // the battle death path; the revive key is the port's choice until the exe is checked.
+        if (!this.battlePvp) this.opts.onRevivable?.();
       },
       sendRevivalItemUsed: () => this.game.sendRevivalItemUsed(),
       // PlayerRestoreHealthAndTP_0068fda4 (Player_DisableMovement): TP = max_tp2.
@@ -9367,6 +9371,13 @@ export class CombatView {
       if (burstSpinsOnReceipt(clientId, this.game.selfId, inUnsafeMap(this.area))) this.view?.addWeaponSpinBurst(clientId);
       this.onRemoteStrikeTargets(clientId, body);
     }
+    // 6x8F: a player was hurt by a remote player's strike (the victim's client sends it,
+    // quest/battlerun.ts reportPlayerHit). The single PB credit path: pvpCreditAmount gates on the
+    // local player being the attacker. quest/battlerun.ts keeps only the score credit for the same packet.
+    if (sub === 0x8f) {
+      const credit = pvpCreditAmount(body, this.game.selfId);
+      if (credit >= 1) this.pvpDealt(credit);
+    }
     if (sub === 0x0a) {
       const s = parseEnemyState(body);
       if (!s) return;
@@ -9741,7 +9752,7 @@ export class CombatView {
     this.opts.log(`hit by ${remote?.name ?? `player ${clientId + 1}`} for ${r.damage}: ${this.damage.hp}/${this.damage.maxHp}`);
   }
 
-  // Battle Mode: the local player's PvP strike was credited by the victim's 6x8F (quest/battlerun.ts).
+  // Battle Mode: the local player's PvP strike is credited by the victim's 6x8F (onSubcommand, pvpCreditAmount).
   // ASSUMED: the attacker's PB gauge takes that damage as dealt.
   pvpDealt(damage: number): void {
     if (damage >= 1) this.gainPb(damage, false);

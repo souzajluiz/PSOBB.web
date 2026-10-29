@@ -12,6 +12,7 @@ import {
   nearestTargets,
   parse6x8F,
   parseCombatStats,
+  pvpCreditAmount,
   pvpInReach,
   pvpKnockback,
   pvpStrike,
@@ -225,6 +226,31 @@ const never = () => 0.999999; // above any hit chance below 1
   const shot = planGunShot(origin, { heading: 0, angleBams: 0, horizontalDistance: 170 }, aimAt, noWall, bulletSpeed(6, 8));
   check(shot.bullet === true && shot.frames === Math.round(60 / bulletSpeed(6, 8)), 'a pellet at a player point makes a bullet (60 units at speed 11)');
   check(planGunShot(origin, { heading: 0, angleBams: 0, horizontalDistance: 170 }, aimAt, () => true, bulletSpeed(6, 8)).bullet === false, 'a wall on the way to a player: no bullet');
+}
+
+// The attacker's 6x8F credit (pvpCreditAmount, FUN_006918fc, not verified in the dump): the local
+// player is credited with the amount when it is the header's attacker and the target is a player;
+// an enemy target, a negative amount, a short body, another attacker or another subcommand credit
+// nothing. The attacker gate is ASSUMED (see pvp.ts).
+{
+  const SELF = 1;
+  const body8f = (attacker: number, victim: number, amount: number) => {
+    const b = new Uint8Array(8);
+    b[0] = 0x8f;
+    b[1] = 2;
+    new DataView(b.buffer).setUint16(2, attacker, true); // the header's attacker
+    new DataView(b.buffer).setUint16(4, victim, true);
+    new DataView(b.buffer).setUint16(6, amount, true);
+    return b;
+  };
+  eq(pvpCreditAmount(body8f(SELF, 2, 37), SELF), 37, '6x8F, a player target, we are the attacker: the amount is credited');
+  eq(pvpCreditAmount(body8f(3, 2, 37), SELF), 0, '6x8F from another attacker: no credit');
+  eq(pvpCreditAmount(body8f(SELF, 0x1000, 37), SELF), 0, '6x8F on an enemy: no PvP credit');
+  eq(pvpCreditAmount(body8f(SELF, 2, 0x8000), SELF), 0, '6x8F with a negative amount (signed short): no credit');
+  eq(pvpCreditAmount(body8f(SELF, 2, 37).subarray(0, 6), SELF), 0, 'a short 6x8F: no credit');
+  const notEight = body8f(SELF, 2, 37);
+  notEight[0] = 0x2f;
+  eq(pvpCreditAmount(notEight, SELF), 0, 'not a 6x8F: no credit');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

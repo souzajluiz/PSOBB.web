@@ -401,8 +401,7 @@ export class BattleRun {
       const h = parse6x8F(body);
       if (h && h.attacker === this.opts.game.selfId && isPlayerEntity(h.target)) {
         this.score.giveDamage(h.amount, true, this.setup.weights);
-        // ASSUMED: the attacker's PB gauge follows the credit (the hit roll ran on the victim).
-        this.opts.view.combat.pvpDealt(h.amount);
+        // The PB gauge credit is pvpDealt, called once from render/combat.ts onSubcommand (not here).
       }
     }
   }

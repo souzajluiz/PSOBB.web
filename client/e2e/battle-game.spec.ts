@@ -11,6 +11,9 @@
 // 5. Traps: A places a trap (Right key); the 6x83 goes out with the count before the decrement,
 //    and B's client places the same trap; the blast (6x80 what 2) hits B when B stands in range.
 // 6. Death and respawn for the player the blast kills (the respawn teleport, `battle respawn`).
+// 6b. Melee (after the respawn): A faces B 12 units away and presses the attack key (ArrowDown, the
+//    Middle palette slot). A's 6x46 names B's client id (pvpTargetsInReach); B's client rolls the hit on its
+//    own copy of A (onRemoteStrikeTargets) and B's HP drops; B's 6x8F reaches A (pvpCreditAmount -> pvpDealt).
 // 7. The end: the timer runs out (`battle: time up`) on both; the leader's rematch prompt is
 //    answered Lobby. The results screen is not drawn yet (battlerun.ts showResults logs only).
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
@@ -247,6 +250,98 @@ test('Battle Mode: a two-player game (traps, death, respawn, time up) on fresh a
     await expect.poll(() => hasLog(logsA, /battle respawn|dead|died/) || hasLog(logsB, /battle respawn|dead|died/), { timeout: 120_000, intervals: [500] }).toBe(true);
     console.log(`respawn logs: ${JSON.stringify([...logsA, ...logsB].filter((l) => /respawn|dead|died/.test(l)))}`);
     await test.info().attach('after-death', { body: await b.screenshot(), contentType: 'image/png' });
+  });
+
+  await test.step('melee: A strikes B from in front; B is hit (6x46 names B, B loses HP, A is credited)', async () => {
+    // B's client rolls the hit on its own copy of A (render/combat.ts onRemoteStrikeTargets), so B's HP
+    // drops when the roll lands. A's client sends the 6x46 with B's client id in its targets (pvpTargetsInReach),
+    // and B's 6x8F reaches A (pvpCreditAmount -> pvpDealt). Both players are placed in each other's view:
+    // B 12 units in front of A, A facing B. The press may miss (the hit roll): up to six presses.
+    const idA = await peek(a, (w) => w.classicGame.game.selfId as number);
+    const idB = await peek(b, (w) => w.classicGame.game.selfId as number);
+    await a.evaluate(() => {
+      const w = window as any;
+      const dealt: number[] = [];
+      (window as any).__dealt = dealt;
+      const c = w.classicGame.view.combat;
+      const orig = c.pvpDealt.bind(c);
+      c.pvpDealt = (d: number) => {
+        dealt.push(d);
+        return orig(d);
+      };
+    });
+    // The respawn teleport is granted at the death (battlerun.ts onDeath); the player gets up with the
+    // revive key (R, render/combat.ts reviveKey) once the state is 'revivable'. Both are revived here.
+    const revive = async (p: Page) => {
+      await expect
+        .poll(
+          async () => {
+            if (!(await peek(p, (w) => w.classicGame.view.combat.damage.dead as boolean))) return true;
+            await p.keyboard.down('r');
+            await p.waitForTimeout(200);
+            await p.keyboard.up('r');
+            return false;
+          },
+          { timeout: 120_000, intervals: [1000] },
+        )
+        .toBe(true);
+    };
+    await revive(b);
+    await revive(a);
+    const hpBefore = await peek(b, (w) => w.classicGame.view.combat.damage.hp as number);
+    const placeFront = async () => {
+      const pos = await peek(a, (w) => {
+        const p = w.classicGame.view.view.playerPositions().get(w.classicGame.game.selfId);
+        return { x: p.x, y: p.y, z: p.z };
+      });
+      await a.evaluate(
+        ([p, target]) => {
+          const w = window as any;
+          const g = w.classicGame.game;
+          const ang = 0; // heading 0 is +z: B stands 12 units in front of A along it
+          w.classicGame.view.placePlayer(g.selfId, p.x, p.y, p.z, ang);
+          g.self.angle = ang;
+          w.classicGame.view.placePlayer(target, p.x, p.y, p.z + 12, Math.PI);
+        },
+        [pos, idB] as const,
+      );
+      await b.evaluate(
+        ([p, other]) => {
+          const w = window as any;
+          w.classicGame.view.placePlayer(other, p.x, p.y, p.z, 0);
+        },
+        [pos, idA] as const,
+      );
+    };
+    let sentTargets = 0;
+    for (let press = 0; press < 6; press++) {
+      await placeFront();
+      await a.waitForTimeout(400);
+      const seen = await peek(a, (w) => (w.__sent as any[]).filter((x) => x.sub === 0x46).length);
+      await a.keyboard.down('ArrowDown');
+      await a.waitForTimeout(120);
+      await a.keyboard.up('ArrowDown');
+      await a.waitForTimeout(2500);
+      // The 6x46 body: u32 target count, then {u16 entity id, u16 hitbox} per target.
+      const sent46 = (await peek(a, (w) => (w.__sent as any[]).filter((x) => x.sub === 0x46))).slice(seen);
+      const names = (x: { payload: number[] }) => {
+        const n = x.payload[0] | (x.payload[1] << 8);
+        return Array.from({ length: n }, (_, i) => x.payload[4 + i * 4] | (x.payload[5 + i * 4] << 8));
+      };
+      const hit = sent46.find((x) => names(x).includes(idB));
+      if (hit) sentTargets++;
+      const hpNow = await peek(b, (w) => w.classicGame.view.combat.damage.hp as number);
+      if (hit && hpNow < hpBefore) break;
+    }
+    const hpAfter = await peek(b, (w) => w.classicGame.view.combat.damage.hp as number);
+    const dealt = await peek(a, () => (window as any).__dealt as number[]);
+    console.log(`melee: 6x46 with B's id ${sentTargets} time(s); B HP ${hpBefore} -> ${hpAfter}; A credited ${JSON.stringify(dealt)}`);
+    console.log(`B hit logs: ${JSON.stringify(logsB.filter((l) => /hit by/.test(l)))}`);
+    expect(sentTargets, "A's 6x46 names B's client id").toBeGreaterThan(0);
+    expect(hpAfter, "B's HP drops on B's client").toBeLessThan(hpBefore);
+    await expect.poll(() => peek(a, () => ((window as any).__dealt as number[]).length), { timeout: 20_000, intervals: [500] }).toBeGreaterThan(0);
+    expect(await peek(a, () => ((window as any).__dealt as number[]).reduce((x, y) => x + y, 0))).toBeGreaterThanOrEqual(hpBefore - hpAfter);
+    await test.info().attach('melee-hit', { body: await b.screenshot(), contentType: 'image/png' });
   });
 
   await test.step('the battle ends with the timer (time up) on both clients', async () => {

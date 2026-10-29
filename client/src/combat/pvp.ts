@@ -142,6 +142,23 @@ export function isPlayerEntity(id: number): boolean {
   return id < PLAYER_ENTITY_LIMIT;
 }
 
+// The attacker's credit for a 6x8F it receives. Dump facts (reverse/refsrc/original-psobb-client-source):
+// the 0x60 subcommand table maps sub 0x8f to 0x006918fc; the sender is ApplyHitEffectText_006917a4,
+// which writes the body as [0x8f, 2, u16 victim player_idx @+2, u16 this+0x1c @+4, u16 amount @+6]
+// and only runs in battle. The validator FUN_006a9800 (named SinowberillChallengeEditor_IsConfigValid
+// in the dump) checks that the entity @+4 exists and the amount @+6 is a non-negative short.
+// NOT VERIFIED: the body of 0x006918fc is not decompiled in the dump, and the Ghidra provider failed
+// to launch, so the receiver's credit rule is ASSUMED. The attacker gate (header @+2 == local id)
+// is the one quest/battlerun.ts already used; the sender layout above puts the victim at +2, so
+// which field is the attacker is ASSUMED too. The port tests "player" as a client id
+// (isPlayerEntity), a proxy for the 0x10000000 flag (ASSUMED).
+// Returns the amount to credit, 0 for none.
+export function pvpCreditAmount(body: Uint8Array, selfId: number): number {
+  const hit = parse6x8F(body);
+  if (!hit || hit.attacker !== selfId || !isPlayerEntity(hit.target) || hit.amount > 0x7fff) return 0;
+  return hit.amount;
+}
+
 // --- our strikes on a remote player (Battle mode) -----------------------------------
 //
 // The attacker's side of a melee strike names the remote players in reach in its 6x46
