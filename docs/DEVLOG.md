@@ -1,5 +1,19 @@
 # Devlog
 
+## 2026-10-29: Challenge mode in a real game: stage 1 starts from the clerk (TODO A, partial)
+
+**What ran.** `client/e2e/challenge-mode.spec.ts`, two browser contexts on local newserv, Vite 5181, `--workers=1 --trace off`. A (the leader, `wch...`) makes a Challenge party (EPISODE 1, mode Challenge). B (a fresh `wcb...` account, made at the character select) joins it from the party list; the spec waits until both are in the game (A sees 2 players). A stands 8 units south of the clerk, B 10 units from A, and A talks to the clerk: the challenge dialog opens (`quest menu (A2)`). A picks Episode 1 (level 0), then Stage1 (level 1), gets the description (A3), opens the yes / no and says Yes. The quest is downloaded and started (`quest "Stage1" started`, `quest loaded`, the barrier and the floor 1 enemies), the counter closes and the leader stands on a stage floor. Passes: 1 passed (about 1 min) on the third run; `cd client && npx tsc --noEmit -p .` exit 0.
+
+**What broke and how it was fixed.**
+- Run 1 failed at the start check, not the start: the spec read `started` from `classicTown.challengeDlg`, but `challengedialog.ts` sets `started` and `town.ts` nulls the dialog in its `finally` once the loop ends, so the read was always null. The spec now keeps a reference to the dialog object at the yes / no and waits on `started` there.
+- The quest-loaded log regex was wrong for the port's text. The stage start logs `quest "Stage1" started` (`quest/session.ts`) and then `quest "Stage1" loaded`; the spec waits on the start line.
+- The earlier stop (no stage-start log after Enter on the list) was the start check: the exe's `unknown_maybe_num_players_to_start_quest` (0x006cba04) gives 2 for a lone player in a challenge game, so the Yes was refused. A second player (B) fixes that. This was not re-run with one player in this session, so the cause is from the code reading, not a before / after test.
+- Yes default: `quest/town.ts` now starts the yes / no on Yes (`yes_no_list_constructor`, 0x00735708, dump `Psobb.exe-05112026.c:702412`, sets `current_selection = 0`; checked in the dump). The run's dialog codes are `[5, 20]` (confirm, then start) after a single Enter, so the default is what the spec relies on. Not isolated: no run with the old No default.
+
+**Not verified.** Stages 2 and up, the stage's play (enemies, the boss, the clear), the S-rank and the rewards, the ghost and records flow, and the B side after the start (B's quest load and floor were not checked). The leader's stage floor check only looks at `counterOpen` false and `floor !== 0`.
+
+**Still open.** TODO.md section A, Challenge mode (all stages). Next: run the stage to its clear with both players, and check B loads the same quest.
+
 ## 2026-10-26: Counter Change SHIP / BLOCK and Team menus: e2e
 
 **What changed:** `client/e2e/lobby-counter-menus.spec.ts` drives the lobby counter's
