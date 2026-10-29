@@ -1,5 +1,24 @@
 # Devlog
 
+## 2026-10-29: Technique visuals spec passes 3 runs in a row (harness shield, TODO A, partial)
+
+**What ran.** `client/e2e/techvisuals.spec.ts` on Forest 1 with `PW_BASE_URL=http://127.0.0.1:5183` (own Vite, `--workers=1`), 17 casts (Foie to Megid). Three passing runs in a row: run 1 3.6 min, run 2 3.5 min, run 3 3.6 min. Each run: every cast created, animated and disposed. `cd client && npx tsc --noEmit -p .` exit 0.
+
+**What broke and how it was fixed.**
+- The WIP shield (`shieldSelf` in the spec, committed as "WIP techvisuals shield") is kept: before each cast the Force's HP is set to max, `PlayerDamage.invuln` is raised to 600 ticks, and a paralysis (status 0x10) is cured. The facing and the cast now run in one evaluate (`faceNearestEnemy` with `tech`), so the enemy cannot leave reach in between. A dead Force gets a floor reload first (`PlayerDamage.reset` clears invuln, so the shield goes on after the reload).
+- Exe citations checked against the dump (`reverse/refsrc/.../Psobb.exe-05112026.c`): the `maybe_invuln` checks on targeting (around line 317577 and 314778) and the `invuln_frames` decrement (around 555330) are in the dump; `HandlePlayerInputState_0069ed10` and `ResetPlayerTechState_006a2a90` are near lines 584743 and 588374. The line numbers are approximate to within a few lines; the functions and their logic were read, not each line.
+- Game code: no change. The 2026-10-26 failure was the test's setup, not a game bug, and the shield addresses it in the harness.
+- Two of the five invocations failed before any test ran: the Vite server on 5183 had died, so Playwright's `webServer` fallback started its own `npx vite --port 5173` (hardcoded in `playwright.config.ts`, the other project's port) and timed out after 60 s. The server was restarted on 5183 and runs 2 and 3 used it. Running the spec without a live server on 5183 is therefore unsafe; the config's `webServer.command` should be fixed to follow `PW_BASE_URL`.
+
+**Not verified.**
+- The screenshots (`test-results/techvisuals-*.jpg`) were not looked at by eye in this session; `animated` is a pixel-difference check only.
+- The shield suppresses the hit, so the wave's damage path during a cast is not exercised by this spec.
+- The effects' look against the exe (Razonde bolts at close range) is still open.
+
+**Still open.**
+- `playwright.config.ts` `webServer.command` hardcodes port 5173 while `PW_BASE_URL` can point elsewhere.
+- Reverser and Ryuker are not cast here (TODO A, same item).
+
 ## 2026-10-29: Challenge mode in a real game: stage 1 starts from the clerk (TODO A, partial)
 
 **What ran.** `client/e2e/challenge-mode.spec.ts`, two browser contexts on local newserv, Vite 5181, `--workers=1 --trace off`. A (the leader, `wch...`) makes a Challenge party (EPISODE 1, mode Challenge). B (a fresh `wcb...` account, made at the character select) joins it from the party list; the spec waits until both are in the game (A sees 2 players). A stands 8 units south of the clerk, B 10 units from A, and A talks to the clerk: the challenge dialog opens (`quest menu (A2)`). A picks Episode 1 (level 0), then Stage1 (level 1), gets the description (A3), opens the yes / no and says Yes. The quest is downloaded and started (`quest "Stage1" started`, `quest loaded`, the barrier and the floor 1 enemies), the counter closes and the leader stands on a stage floor. Passes: 1 passed (about 1 min) on the third run; `cd client && npx tsc --noEmit -p .` exit 0.
