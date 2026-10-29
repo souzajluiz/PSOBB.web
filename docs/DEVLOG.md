@@ -1,5 +1,36 @@
 # Devlog
 
+## 2026-10-29: Battle PvP: one credit path for the 6x8F, melee hit e2e
+
+**What ran:** `node tests/pvp.test.ts` (ALL PASS, includes the new 6x8F credit cases),
+`cd client && npx tsc --noEmit -p .` (exit 0), and `client/e2e/battle-game.spec.ts` (one
+test, passes in 12.3 min, attempt 1 of 3). The new melee step: A faces B 12 units away and
+presses the attack key. A's 6x46 names B's client id (2 tries of the press in the run), B's HP
+drops 8 -> 0 (B's client rolls the hit on its copy of A), and A's `pvpDealt` gets one credit of
+14 (the same amount B logs as "hit by Tallie for 14").
+
+**What broke and how it was fixed:** the 6x8F credit was counted twice. `quest/battlerun.ts`
+already called `pvpDealt(h.amount)` for the same packet when the header attacker was us, and the
+new `render/combat.ts` branch called it again. battlerun.ts keeps the score credit only now;
+`pvpCreditAmount(body, selfId)` is the single PB credit and gates on the header attacker
+being the local id (the gate battlerun already used).
+
+**Dump check (partial):** the 0x60 subcommand table maps sub 0x8f to 0x006918fc, and the sender
+`ApplyHitEffectText_006917a4` writes the 6x8F in the dump. The receiver body at 0x006918fc is not
+decompiled in the English dump, and the JP dirty annotations call that address
+"Subcommand 0x90" (a Tethealla label, conflicts with the table). REA's Ghidra provider failed to
+launch twice (`GhidraLaunchError`), so the receiver's credit rule could not be read.
+
+**Not verified:** the receiver body at 0x006918fc. The sender in the dump writes the victim's
+player_idx at +2 and this+0x1c at +4, while `parse6x8F` reads the attacker at +2 and the target
+at +4. Which field is the attacker is ASSUMED. The e2e passes with the port's reading, so it
+checks the port's own assumption, not the exe. The victim's clients may also not send the 6x8F
+from `ApplyHitEffectText` for player-vs-player hits at all (its caller in the dump is
+`ApplyHitEffects_00773ab0`, the enemy-hits-player path). Not checked.
+
+**Still open:** the 6x2F strike (the PvP path here uses the 6x46), the results screen, sonar,
+and a check of 0x006918fc in Ghidra once the provider launches.
+
 ## 2026-10-26: Counter Change SHIP / BLOCK and Team menus: e2e
 
 **What changed:** `client/e2e/lobby-counter-menus.spec.ts` drives the lobby counter's
