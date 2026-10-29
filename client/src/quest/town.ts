@@ -632,7 +632,9 @@ export class QuestTown {
       if (dlg.closed || dlg.started) return;
       if (dlg.confirming) {
         this.ui.showWindow(dlg.description.replace(/\t[CEJ][0-9A-Za-z]?/g, ''), false);
-        const ok = await this.ui.yesNo(yes, no, 1);
+        // The exe's yes / no list starts on Yes: yes_no_list_constructor (0x00735708, dump
+        // .c:702412) sets current_selection = 0 and Yes is value 0, so an Enter at once is Yes.
+        const ok = await this.ui.yesNo(yes, no, 0);
         this.ui.closeWindow();
         dlg.answer(ok);
         continue;
