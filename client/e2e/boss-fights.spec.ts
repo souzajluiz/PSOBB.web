@@ -33,7 +33,8 @@ const readBrain = (page: Page, cls: string) =>
   page.evaluate((c) => {
     const view = (window as any).classicGame?.view;
     if (!view) return null;
-    const e = [...view.combat.enemies.values()].find((x: any) => x.ai?.constructor?.name === c) as any;
+    const all = [...view.combat.enemies.values()].filter((x: any) => x.ai?.constructor?.name === c) as any[];
+    const e = all.find((x: any) => x.instance.root.visible) ?? all[0];
     if (!e) return null;
     const ai = e.ai;
     const p = e.instance.root.position;
@@ -51,6 +52,26 @@ async function warpTo(page: Page, floor: number): Promise<void> {
   await page.waitForTimeout(4000);
 }
 
+// The Dark Belras of a floor are wave-gated (render/waves.ts): each stays hidden, and its brain does
+// not tick (combat.ts tickEnemies skips a hidden model), until its section's wave event starts. The
+// floor's event triggers start them when the player steps into them (the real collision, 6x67); this
+// steps into them in turn until a Belra's model is shown. Returns false when none is.
+async function wakeBelra(page: Page): Promise<boolean> {
+  const trigs = await page.evaluate(() => ((window as any).classicGame.view.fieldObjects?.all?.triggers ?? []).map((t: any) => [t.x, t.y, t.z]));
+  for (const p of trigs) {
+    await page.evaluate(([x, y, z]) => {
+      const g = (window as any).classicGame.view;
+      g.placePlayer(g.game.selfId, x, y, z, 0);
+    }, p);
+    await page.waitForTimeout(2500);
+    const shown = await page.evaluate(() =>
+      [...(window as any).classicGame.view.combat.enemies.values()].some((e: any) => e.ai?.constructor?.name === 'BelraAi' && e.instance.root.visible),
+    );
+    if (shown) return true;
+  }
+  return false;
+}
+
 interface Fight {
   cls: string;
   floor: number;
@@ -63,8 +84,31 @@ interface Fight {
 }
 
 // The fight on the current floor: sample the brain for `watchMs`, then attack (in front of the body,
-// 35 units away) until 3 hit lines or `maxPresses` presses.
-async function fight(page: Page, logs: string[], info: TestInfo, cls: string, floor: number, tag: string, watchMs: number, maxPresses = 40): Promise<Fight> {
+// 35 units away, or for 'part' the nearest hittable Vol Opt part, 10 units away) until 3 hit lines or
+// `maxPresses` presses.
+// The nearest Vol Opt part the player can strike (a monitor that stands, or a pillar that has risen):
+// the spot 10 units on its far side, facing it (angle PI, as the front spot). Null when none is shown.
+async function partSpot(page: Page): Promise<[number, number, number, number] | null> {
+  return page.evaluate(() => {
+    const view = (window as any).classicGame.view;
+    const me = view.view.playerPositions().get(view.game.selfId);
+    if (!me) return null;
+    let best: any = null;
+    let bestD = Infinity;
+    for (const e of view.combat.enemies.values() as any) {
+      if (e.ai?.constructor?.name !== 'VoloptPartAi' || e.dead || !e.instance.root.visible || e.ai.untargetable) continue;
+      const p = e.instance.root.position;
+      const d = (p.x - me.x) ** 2 + (p.z - me.z) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
+    return best ? [best.x, best.y, best.z + 10, Math.PI] : null;
+  });
+}
+
+async function fight(page: Page, logs: string[], info: TestInfo, cls: string, floor: number, tag: string, watchMs: number, approach: 'front' | 'part' = 'front', maxPresses = 40): Promise<Fight> {
   const out: Fight = { cls, floor, built: false, states: [], stateChanges: 0, hpStart: null, hpEnd: null, hitLines: [] };
   let b = await readBrain(page, cls);
   for (let i = 0; !b && i < 20; i++) {
@@ -77,8 +121,9 @@ async function fight(page: Page, logs: string[], info: TestInfo, cls: string, fl
   console.log(`${tag} spawn: ${JSON.stringify(b)}`);
   await page.screenshot({ path: info.outputPath(`${tag}-0-spawn.png`) });
 
-  // Stand near the boss first: Dark Belra stays hidden until a player is in its search range
-  // (enemyfsmruins.ts, state 'hidden'), and the other brains wake on the same range.
+  // Stand near the boss first: the brains that wait for a player (Dark Belra's 'hidden' state,
+  // enemyfsmruins.ts, searches 400 units) start on one in range. The body must be shown: a
+  // wave-gated Belra is shown by wakeBelra before this.
   await page.evaluate(
     ([x, y, z]) => {
       const g = (window as any).classicGame.view;
@@ -112,12 +157,13 @@ async function fight(page: Page, logs: string[], info: TestInfo, cls: string, fl
   for (let n = 0; n < maxPresses && hits().length < 3; n++) {
     const now = (await readBrain(page, cls)) ?? b;
     if (n % 4 === 0) {
+      const spot = (approach === 'part' ? await partSpot(page) : null) ?? [now.x, now.y, now.z + 35, Math.PI];
       await page.evaluate(
-        ([x, y, z]) => {
+        ([x, y, z, a]) => {
           const g = (window as any).classicGame.view;
-          g.placePlayer(g.game.selfId, x, y, z + 35, Math.PI);
+          g.placePlayer(g.game.selfId, x, y, z, a);
         },
-        [now.x, now.y, now.z],
+        spot,
       );
       await page.waitForTimeout(300);
     }
@@ -168,7 +214,7 @@ test('Episode 1 bosses: Dragon, De Rol Le, Vol Opt and Dark Belra spawn, change 
   });
   await test.step('Vol Opt (floor 13)', async () => {
     await warpTo(page, 13);
-    results.push(await fight(page, logs, info, 'VoloptAi', 13, 'volopt', 60_000));
+    results.push(await fight(page, logs, info, 'VoloptAi', 13, 'volopt', 60_000, 'part'));
   });
   await test.step('Dark Belra (the first Ruins / Mines floor that spawns it)', async () => {
     let found = false;
@@ -176,6 +222,8 @@ test('Episode 1 bosses: Dragon, De Rol Le, Vol Opt and Dark Belra spawn, change 
       await warpTo(page, f);
       if ((await readBrain(page, 'BelraAi')) !== null) {
         found = true;
+        const woke = await wakeBelra(page);
+        expect(woke, `a Dark Belra on floor ${f} shows after its wave trigger`).toBe(true);
         results.push(await fight(page, logs, info, 'BelraAi', f, 'belra', 60_000));
         break;
       }
