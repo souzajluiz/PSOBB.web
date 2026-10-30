@@ -31,8 +31,7 @@ import { BattleHud, RULES_WINDOW } from './battleui.ts';
 import { battleRowAction, isBattleArena, type BattleRowAction } from './battleitems.ts';
 import type { BattleItemsHook } from '../render/fieldhud.ts';
 import {
-  pickRespawn,
-  respawnCandidates,
+  respawnTarget,
   TRAP_EFFECTS,
   TrapCounters,
   TRAP_GATE_VALUE,
@@ -354,19 +353,22 @@ export class BattleRun {
   }
 
   // The death teleport (unknown_dead_player_return_to_p2_related -> SendTeleportRequestToPlayer_00695444):
-  // a random floor spawn that no other player stands near (quest/battletraps.ts respawnCandidates,
-  // pickRespawn). The local player moves there and 6x24 tells the others. When no candidate is
-  // left the player stays where it died (the exe's fallback is its own position).
-  // ASSUMED: the teleport runs only when the battle controller grants a respawn.
+  // a random floor spawn that no other player stands near (quest/battletraps.ts respawnTarget). The
+  // local player moves there and 6x24 tells the others. When no candidate is left (or the roll lands
+  // past the list) the exe still sends the 6x24, carrying the player's own angle and position
+  // (decompile 2026-10-30); the player stays put.
+  // ASSUMED: the teleport runs only when the battle controller grants a respawn; the exe's +0x32c == 2
+  // gate (an NPC challenge player) never holds for the local player and is modelled as open.
   private respawnTeleport(): void {
     const g = this.opts.game;
+    const own = this.opts.view.selfPose();
+    if (!own) return;
     const others = [...g.players.values()].filter((p) => p.clientId !== g.selfId).map((p) => p.position);
-    const spawn = pickRespawn(respawnCandidates(this.opts.view.respawnPoints(), others), Math.floor(Math.random() * 32768));
-    if (!spawn) return;
-    this.opts.view.placePlayer(g.selfId, spawn.x, spawn.y, spawn.z, spawn.angle);
+    const { spawn, fallback } = respawnTarget(this.opts.view.respawnPoints(), others, Math.floor(Math.random() * 32768), own);
+    if (!fallback) this.opts.view.placePlayer(g.selfId, spawn.x, spawn.y, spawn.z, spawn.angle);
     const bams = Math.round((((spawn.angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) * (0x10000 / (Math.PI * 2))) & 0xffff;
     g.conn.send(0x60, 0, buildTeleport(g.selfId, bams, spawn.x, spawn.y, spawn.z));
-    this.log(`battle respawn at ${spawn.x.toFixed(0)}, ${spawn.z.toFixed(0)}`);
+    this.log(`battle respawn${fallback ? ' (own position)' : ''} at ${spawn.x.toFixed(0)}, ${spawn.z.toFixed(0)}`);
   }
 
   // Our own 6x0A: the growth of an enemy's total damage is damage we dealt; 0x800 is its death.

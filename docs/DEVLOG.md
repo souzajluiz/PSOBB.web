@@ -23455,3 +23455,17 @@ The port matched all of this already. The comment in `battletraps.ts` said the b
 **Code.** `client/e2e/battle-game.spec.ts` (step 4b, header line), `tests/battletraps.test.ts` (the respawn distance and candidates block, `respawnCandidates` and `RESPAWN_PLAYER_DISTANCE_SQ` imported). `TODO.md` (the two battle lines). No change under `client/src`.
 
 **Open.** The sonar's effect beyond the ping (what the manager reveals, if anything) is not ported; the sonar row's greyed state at 0 is ASSUMED (unchanged). The PvP lines remain as they were.
+
+## 2026-10-30: Battle respawn fallback (SendTeleportRequestToPlayer 0x00695444)
+
+**Question.** When every spawn has another player within 50, what does the exe send, from where, and what is the +0x32c gate?
+
+**PROVEN (Ghidra decompile of 0x00695444 via tools/ghidra/decomp.sh).**
+- The function zeroes a 13-entry table of {u16 key, ptr}, walks the floor's player spawns (list at DAT_00aca348+0x18, type PTR_DAT_009c8840, +0x84 == 0), skips a spawn when any other player slot's position is within `FUN_007a9180 < 2500.0` (0x0093c68c), keeps up to 5.
+- It builds a stack packet `{0x24, 0x05, u16 [param+0x1c], u32 [src+0x60], f32 [src+0x38], [src+0x3c], [src+0x40]}` = 6x24 (G_TeleportPlayer, 0x14 bytes), `src` = the picked spawn, or the PLAYER ITSELF when the picked entry is null or the candidate count is 0. The pick is `table[ROUND(n * rand/32768 * 0.99)]`; index n reads a zeroed entry, so a roll past the list also takes the own-position fallback (the old port sent nothing there either).
+- It sends through `FUN_008003e0` (the checked 0x60 sender, which also runs the local handler) unless `[param+0x32c] == 2`.
+- +0x32c == 2 is the NPC challenge player of type 4 (SetChallengeType 0x00686984, see the 2026-10-26 entry); the local player is 0 (or 3 after a takeover), so the gate never blocks the local respawn. Modelled open, ASSUMED 0 as elsewhere in the battle code.
+
+**Port.** `quest/battletraps.ts` `respawnTarget(points, others, rnd, own)` returns the spawn or `{own, fallback: true}`. `quest/battlerun.ts` `respawnTeleport` reads `view.selfPose()`, sends the same `buildTeleport` 6x24 in both cases, and moves the player (`placePlayer`) only for a real spawn. Tests: `tests/battletraps.test.ts` (fallback block). tests/battletraps, battle, pvp and `tsc --noEmit` pass.
+
+**Open.** Not e2e-tested; the angle sent in the fallback is the port's own pose angle converted to BAMS.
