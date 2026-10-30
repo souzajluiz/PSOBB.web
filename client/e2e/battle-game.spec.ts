@@ -8,6 +8,9 @@
 // 3. Both stand at the Hunter's Guild counter; A takes the first quest of the Battle category.
 //    The battle starts on both clients (ba_initial_floor, ba_start: `battle: start`).
 // 4. HUD: the timer runs (BattleHud state), the rules window opens on both.
+// 4b. Sonar: A uses the sonar (BattleRun.useSonar, the entry the item list calls); the manager starts
+//    with life 990 frames, pings only while its life is above 90 (the first 900 frames, quest/battle.ts
+//    SonarManager), ends at 0, and the stock is one less.
 // 5. Traps: A places a trap (Right key); the 6x83 goes out with the count before the decrement,
 //    and B's client places the same trap; the blast (6x80 what 2) hits B when B stands in range.
 // 6. Death and respawn for the player the blast kills (the respawn teleport, `battle respawn`).
@@ -211,6 +214,43 @@ test('Battle Mode: a two-player game (traps, death, respawn, time up) on fresh a
     const t2 = await peek(a, (w) => w.classicBattle.hud.state.timer as number);
     console.log(`timer A: ${t1} -> ${t2}`);
     expect(t2).toBeLessThan(t1);
+  });
+
+  await test.step('sonar: A uses the sonar; the manager starts (990 frames), pings, and ends', async () => {
+    // The ping is the combat view's playSonarPing (quest/battlerun.ts tickSonar); each ping records the
+    // manager's life at that frame (the exe's update: the ping runs while the life is above 90).
+    await a.evaluate(() => {
+      const w = window as any;
+      const combat = w.classicGame.view.combat;
+      const orig = combat.playSonarPing.bind(combat);
+      w.__pings = [];
+      combat.playSonarPing = (pitch: number) => {
+        w.__pings.push({ pitch, life: w.classicBattle.sonar.manager?.life ?? null });
+        return orig(pitch);
+      };
+    });
+    const before = await peek(a, (w) => w.classicBattle.sonar.count as number);
+    console.log(`sonar stock before the use: ${before}`);
+    expect(before, 'the battle rules give A a sonar stock (ba_sonar_count)').toBeGreaterThan(0);
+    // Use and read in one evaluate: no frame runs between them, so the life is the constructor's 990.
+    const used = await peek(a, (w) => {
+      const ok = w.classicBattle.useSonar() as boolean;
+      return {
+        ok,
+        life: w.classicBattle.sonar.manager?.life ?? null,
+        active: w.classicBattle.sonar.active as boolean,
+        count: w.classicBattle.sonar.count as number,
+        again: w.classicBattle.useSonar() as boolean,
+      };
+    });
+    console.log(`sonar use: ${JSON.stringify(used)}`);
+    expect(used).toEqual({ ok: true, life: 990, active: true, count: before - 1, again: false });
+    await expect.poll(() => peek(a, (w) => (w.__pings as unknown[]).length), { message: 'a sonar ping', timeout: 15_000, intervals: [500] }).toBeGreaterThan(0);
+    await expect.poll(() => peek(a, (w) => w.classicBattle.sonar.active as boolean), { message: 'the manager ends', timeout: 120_000, intervals: [1000] }).toBe(false);
+    const pings = await peek(a, (w) => (w.__pings as { pitch: number; life: number | null }[]).slice());
+    console.log(`sonar pings: ${JSON.stringify(pings)}`);
+    expect(pings.every((p) => p.life !== null && p.life > 90 && p.life < 990), 'every ping runs in the first 900 frames (life 90 < life < 990)').toBe(true);
+    expect(await peek(a, (w) => w.classicBattle.sonar.count as number), 'the stock is not refilled').toBe(before - 1);
   });
 
   await test.step('traps: A places one from the palette; 6x83 goes out; B is hit by the blast', async () => {
