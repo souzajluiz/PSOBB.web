@@ -40,7 +40,7 @@ only part of them has matching C (psobb-client-source).
 - [ ] Items: pickup particle, SE attenuation, drop line-of-sight, pickup lock, tekker window, bank windows, partial stacks
 
 ## E. Combat
-- [ ] Telepipe ring particle, light, loop sound; remote Resta heal; confusion steering
+- [ ] Remote Resta heal; confusion steering (Telepipe ring 0xB0, loop SE 0xA0 and the no-light finding closed 2026-10-30, e2e/telepipe-fx.spec.ts)
 - [ ] Technique leftovers: cast light, Resta / Anti particles, wall impacts, special effects
 - [ ] Photon blasts (joined / donated), blast objects, weapons with their own specials, per-part hit boxes
 - [ ] Enemy specials: Pan Arms split / merge, Pofuilly split, Grass Assassin emerge, Nano Dragon fly-in, Dubwitch link

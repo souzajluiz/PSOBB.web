@@ -23469,3 +23469,18 @@ The port matched all of this already. The comment in `battletraps.ts` said the b
 **Port.** `quest/battletraps.ts` `respawnTarget(points, others, rnd, own)` returns the spawn or `{own, fallback: true}`. `quest/battlerun.ts` `respawnTeleport` reads `view.selfPose()`, sends the same `buildTeleport` 6x24 in both cases, and moves the player (`placePlayer`) only for a real spawn. Tests: `tests/battletraps.test.ts` (fallback block). tests/battletraps, battle, pvp and `tsc --noEmit` pass.
 
 **Open.** Not e2e-tested; the angle sent in the fallback is the port's own pose angle converted to BAMS.
+
+## 2026-10-30: Telepipe ring, light and loop SE: audit and e2e
+
+**Question.** Is the Telepipe's ring particle, light and loop sound complete, and does it start and stop with the pipe in a real field game?
+
+**State found (earlier entries, re-read, not re-traced).**
+- Ring: `CreateChallengeEnemyEntity_006e8ca4` makes particle index 2 (id 0xB0, third of the row 0xB1 0xB2 0xB0 of `DAT_0096d800`) at ground y + `DAT_0096d960` (1.8), tinted by `DAT_0096d928`. Ported in `render/telepipe.ts` `makeVisual` through the shared `ParticleSystem`.
+- Loop SE: 0xA0 via `PlayDirectionalSFX_00814630` every frame of state 1 of `ChallengeEntity_Update_006e88d0`; positional, never 2D (`FUN_008144b0`). Ported in `TelepipeLayer.loop()` (`seStop` when no field pipe is open, and in `dispose`).
+- Light: none in the exe (the pipe code makes no point light; D3D point lights 1..4 are defaulted and never enabled). Nothing to port. The object made 15 above the pipe (vtable 0x00afea00) is not drawn by anything recovered; ASSUMED not visible.
+
+**Added.** `client/e2e/telepipe-fx.spec.ts`: fresh account (prefix `tpp`), Forest 1, `view.telepipes.open()`, asserts the pipe's particle count > 0, the visual is in the scene, SE 0xA0 is played looping with `at` equal to the pipe's position; then `game.telepipes.close(self)` and asserts the visual is gone, its group has no parent and `SePlayer.stop(0xA0)` ran. The SE calls are recorded on `SePlayer.prototype` because headless Chromium may not start the AudioContext (`play` returns -1).
+
+**Checks.** `PW_BASE_URL=http://127.0.0.1:5191 playwright test e2e/telepipe-fx.spec.ts --trace off`: 1 passed. No new pure logic (timings and ids are covered by `tests/telepipe.test.ts`).
+
+**Open.** The hold timing of the Ryuker cast object (`ChallengeObject_Initialize_006a3df0`) and the 15-above object's drawing are not recovered. TODO now keeps only remote Resta heal and confusion steering.
