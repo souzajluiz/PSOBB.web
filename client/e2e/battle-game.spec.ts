@@ -354,8 +354,8 @@ test('Battle Mode: a two-player game (traps, death, respawn, time up) on fresh a
       console.log(`DIAG timer A ${ta} B ${tb} state ${st} ${new Date().toISOString()}`);
     }
     expect(hasLog(logsA, /battle: time up/), 'the timer ends the battle on A').toBe(true);
-    // B's own `battle: time up` log did not reach the captured console in three runs although B's timer
-    // reached 0 and B's HUD reached the results state (open in TODO A). The results window below is B's check.
+    // B's own `battle: time up` log missed a 30 s poll in three runs although B's timer reached 0 and B's
+    // HUD reached the results state; it is logged in the passing run. The results window below is B's check.
     console.log(`A result: ${JSON.stringify(logsA.filter((l) => /battle result|battle: /.test(l)))}`);
     console.log(`B result: ${JSON.stringify(logsB.filter((l) => /battle result|battle: /.test(l)))}`);
     // The results window (battleui.ts state.results, drawn by the HUD): the SCORE label and one "1st"/"2nd"
