@@ -6,6 +6,10 @@
 //     arrays exactly as long as the node's shaped vertices;
 //  3. Vol Opt's seal door: fe_obj_fuuin_doa.njs layout, and the built door's
 //     vertices following the keys at the node motion's frame.
+//  4. The other six: the file each object / enemy part names, the speed and
+//     wrap the exe's timer 0x0061347c gives it, and the shape advancing frame by
+//     frame (jellyfish, Poison Plant, desert plants bohu and kogomi, the slime
+//     body forms 7 and 8).
 // Run: node tests/njshape.test.ts
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,6 +19,9 @@ import { BmlArchive } from '../client/src/formats/bml.ts';
 import { parseNjsFile, sampleShapeKeys, type NjShapeKey } from '../client/src/formats/njshape.ts';
 import { RelFile } from '../client/src/formats/rel.ts';
 import { buildEnemy, EnemyArchive, shapeNodeInputs } from '../client/src/render/enemymodel.ts';
+import { objectModelFor } from '../client/src/formats/objectmodels.ts';
+import { enemyModelFor, type EnemyModelContext } from '../client/src/formats/enemymodels.ts';
+import type { EnemySet, ObjectSet } from '../client/src/formats/setdata.ts';
 
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
 let failures = 0;
@@ -157,6 +164,83 @@ function collectPointers(rel: RelFile, nodes: number, flags: number[]): number[]
   console.log(`  mesh vertices ${pos.count}: ${at7} match frame 7, ${at18} frame 18.5, ${stale} still frame 7 after moving on`);
   check(at7 > 48 && at18 >= at7, 'the shaped vertices follow the keys at the motion frame');
   check(stale < at18, 'and change with it');
+}
+
+// 4. Which file each object draws, and how its frame runs.
+{
+  const obj = (type: number, params: ObjectSet['params'] = [0, 0, 0, 0, 0, 0]): ObjectSet => ({ kind: 'object', index: 0, type, floor: 0, group: 0, section: 0, unknownA3: 0, position: [0, 0, 0], rotation: [0, 0, 0], params });
+  const specOf = (type: number, params?: ObjectSet['params']) => objectModelFor(obj(type, params), { area: 0x0d, episode: 1 })!;
+  // [type, params, bml, node motion, shape file, speed, the shaped model]
+  const cases: [string, number, ObjectSet['params'], string, number, string, number, number][] = [
+    ['TOKurage 0x00cc', 0xcc, [0, 0, 0, 0, 0, 0], 'bm_fs_obj_kurage.bml', 0, 'fs_obj_kurage.njs', 0.5, 0],
+    ['Poison Plant 0x0380', 0x380, [0, 0, 0, 0, 0, 0], 'bm_obj_ep4_flower.bml', 0, 'bm_obj_ep4_flower.njs', 1, 0],
+    ['bohu 0x0383 (model 0)', 0x383, [0.75, 2, 0, 0, 0, 0], 'bm_obj_ep4_bohu.bml', -1, 'bm_obj_ep4_bohu3.njs', 0.75, 0],
+    ['bohu 0x0383 (param4 1: model 1)', 0x383, [0.5, 1, 0, 1, 0, 0], 'bm_obj_ep4_bohu.bml', -1, 'bm_obj_ep4_bohu3.njs', 0.5, 1],
+    ['kogomi 0x038c', 0x38c, [2, 3, 0, 0, 0, 0], 'bm_obj_ep4_kogomi.bml', -1, 'kogome_bm_obj_ep4_kogomi.njs', 1, 0],
+  ];
+  for (const [what, type, params, bml, motion, njs, speed, model] of cases) {
+    const spec = specOf(type, params);
+    const part = spec.parts[0];
+    const archive = new EnemyArchive(bml, gsl.get(bml), modelCount(new BmlArchive(gsl.get(bml))));
+    check(spec.bml === bml && part.motion === motion && part.speed === speed && part.model === model, `${what}: ${bml}, node motion ${motion}, speed ${speed}, model ${model}`);
+    check(part.shape !== undefined && archive.motionName(part.shape) === njs, `${what}: shape entry ${part.shape} is ${archive.motionName(part.shape ?? 0)}`);
+    if (motion >= 0) check(/\.njm$/.test(archive.motionName(motion) ?? ''), `${what}: node motion ${motion} is an .njm (${archive.motionName(motion)})`);
+    // The timer: frame += speed, past (frames - 1) subtract (frames - 1) ('loop-last').
+    check(part.drive === 'loop-last' || what.startsWith('Poison'), `${what}: drive ${part.drive}`);
+
+    const built = buildEnemy(archive, [{ model: part.model, motion: { index: part.motion ?? 0, speed: part.speed ?? 1, loop: true, shape: part.shape } }]);
+    const a = built.animators[0];
+    check(!!a && !!a.onFrame, `${what}: an animator drives the shape`);
+    let mesh: THREE.SkinnedMesh | null = null;
+    built.root.traverse((o) => {
+      if ((o as THREE.SkinnedMesh).isSkinnedMesh) mesh = o as THREE.SkinnedMesh;
+    });
+    const pos = (mesh as unknown as THREE.SkinnedMesh).geometry.getAttribute('position') as THREE.BufferAttribute;
+    const snap = () => Array.from(pos.array as ArrayLike<number>).join(',');
+    a.restart = 'carry-last';
+    a.setFrame(0);
+    const f0 = snap();
+    // Two seconds of game ticks, the frame must have advanced by speed per tick and the vertices moved.
+    a.update(1 / 30);
+    const f1 = a.frame;
+    for (let i = 0; i < 4; i++) a.update(1 / 30);
+    check(near(f1, speed, 1e-6) && a.frame > f1, `${what}: the frame advances by ${speed} a tick (${f1}, then ${a.frame})`);
+    check(snap() !== f0, `${what}: the shaped vertices changed with the frame`);
+    // Past the last key frame count - 1 the frame wraps (carry-last).
+    const last = a.frameCount - 1;
+    a.setFrame(last - speed / 2);
+    a.update(1 / 30);
+    check(a.frame < last, `${what}: wraps after frame ${last} (${a.frame})`);
+  }
+  // The slime body, forms 7 and 8 (0x00599d0b rows at 0x009bfd60 + 12 * form: {njm, njs, speed}).
+  const ctx: EnemyModelContext = { area: 0x02, episode: 1, difficulty: 0, event: 0 };
+  const slime = enemyModelFor({ kind: 'enemy', type: 0x64, params: [0, 0, 0, 0, 0, 0, 0] } as unknown as EnemySet, ctx)!;
+  const bml = 'bm4_ps_ma_body.bml';
+  const archive = new EnemyArchive(bml, gsl.get(bml), 6);
+  const want: [string, string, string, number][] = [
+    ['Slime puddle', 'wait_bm4_ps_mb_body.njm', 'wait_bm4_ps_mb_body.njs', 0.7],
+    ['Slime crawl', 'move_bm4_ps_mb_body.njm', 'move_bm4_ps_mb_body.njs', 0.8],
+  ];
+  for (const [name, njm, njs, speed] of want) {
+    const part = slime.parts.find((p) => p.name === name);
+    check(!!part && part.motion?.speed === speed && archive.motionName(part.motion.index) === njm && archive.motionName(part.motion.shape ?? -1) === njs, `${name}: ${njm} + ${njs} at ${speed}`);
+    check(part?.model === 4, `${name}: model 4 (bm4_ps_mb_body)`);
+    const built = buildEnemy(archive, [part!]);
+    const a = built.animators[0];
+    a.setFrame(0);
+    let mesh: THREE.SkinnedMesh | null = null;
+    built.root.traverse((o) => {
+      if ((o as THREE.SkinnedMesh).isSkinnedMesh) mesh = o as THREE.SkinnedMesh;
+    });
+    const pos = (mesh as unknown as THREE.SkinnedMesh).geometry.getAttribute('position') as THREE.BufferAttribute;
+    const f0 = Array.from(pos.array as ArrayLike<number>).join(',');
+    a.update(1 / 30);
+    for (let i = 0; i < 6; i++) a.update(1 / 30);
+    check(near(a.frame, speed * 7, 1e-5), `${name}: frame ${a.frame.toFixed(2)} after 7 ticks`);
+    check(Array.from(pos.array as ArrayLike<number>).join(',') !== f0, `${name}: the shaped vertices follow the frame`);
+  }
+  const rare = enemyModelFor({ kind: 'enemy', type: 0x64, params: [0, 0, 0, 0, 0, 1, 0] } as unknown as EnemySet, ctx)!;
+  check(rare.parts.find((p) => p.name === 'Slime crawl')?.model === 5, 'rare slime: model 5 (bm4_ps_mbr_body)');
 }
 
 if (failures) {

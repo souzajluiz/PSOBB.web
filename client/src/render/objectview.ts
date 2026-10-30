@@ -96,6 +96,7 @@ function toEnemyPart(p: ObjectPartSpec): EnemyPartSpec {
   return {
     model: p.model,
     ...(p.offset ? { offset: p.offset } : {}),
+    ...(p.scale ? { scale3: p.scale } : {}),
     texlistOf: p.texlistOf,
     textureArchive: p.textures,
     texRemap: texRemap(p),

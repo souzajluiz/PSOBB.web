@@ -56,12 +56,16 @@ interface ObjectPartBase {
   // object's yaw), applied before the draw: the exe's render calls FUN_00830b74
   // on the current matrix (a local translate, not the object's position).
   offset?: readonly [number, number, number];
+  // Scale of the part's draw (the render's njScale before the model: the Episode 4
+  // plants bohu and kogomi scale by their set record's floats).
+  scale?: readonly [number, number, number];
 }
 
 // A part either plays a motion and says how it is driven, or holds its bind
 // pose: a `drive` or a `speed` without a `motion` does not compile. `shape`
 // is a .njs entry (motion index) drawn at the motion's frame
-// (njDrawShapeMotion), so it needs a motion too.
+// (njDrawShapeMotion), so it needs a motion too; `motion: -1` is the exe's NULL
+// node motion with only the shape running (the plants bohu and kogomi).
 // keys16: the motion's angle keys are the 16-byte form (render/enemymodel.ts motion()).
 type PartMotion = { motion?: never; drive?: never; speed?: never; shape?: never; keys16?: never } | { motion: number; drive: PartDrive; speed?: number; shape?: number; keys16?: true };
 
@@ -970,7 +974,44 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
       return spec('__DESERT_CRYSTALS_BOX__', 'bm_obj_ep4_crystal.bml', [{ model: 3 }], { collision: generatedBox(0x009c9ce8) });
     case 0x0380:
       // Box 0x009c9f18 (sphere r14, flags 0x10003), depth 0 of the type table.
-      return spec('__POISON_PLANT__', 'bm_obj_ep4_flower.bml', [{ model: 0, motion: 0, drive: 'loop', speed: 1 }], { collision: generatedBox(0x009c9f18) });
+      // The shape motion is the BML's .njs (motion entry 1, the ctor 0x006792f8 keeps
+      // get_njm_chunk(bml, 1) at +0x33c); the render 0x00679208 calls njDrawShapeMotion
+      // 0x008304e0 (call 0x0067924c) with the model, the current action's motion (+0xf8), that
+      // shape and the animation frame (+0xc0), so it follows the node motion's frame.
+      return spec('__POISON_PLANT__', 'bm_obj_ep4_flower.bml', [{ model: 0, motion: 0, drive: 'loop', speed: 1, shape: 1 }], { collision: generatedBox(0x009c9f18) });
+    // Desert plant bohu 0x0383 (factory 0x006781ec, ctor 0x00678268, BML bm_obj_ep4_bohu): model
+    // = clamp(param4, 0, 1) (0x006782e8 clamps +0x84), the shape is njm entry 0 (the .njs, the
+    // BML's only motion: 0x00678310 keeps get_njm_chunk(bml, 0) at +0xbc). The render 0x00678138
+    // (call 0x006781b6) draws it with a NULL node motion, scaled by param2 (+0x6c) in x, y and z
+    // (njScale 0x0082fa0c), at frame +0xb0. The update 0x00678030 runs the map object timer
+    // 0x0061347c each tick: frame += +0xb8 (= param1, 0x00678303) and past +0xb4 (frames - 1.0,
+    // 0x0093b108 = -1.0) subtract +0xb4, which is the 'loop-last' drive.
+    case 0x0383:
+      return spec('__DESERT_OOZE_PLANT__', 'bm_obj_ep4_bohu.bml', [
+        { model: clamp(p4(o), 0, 1), motion: -1, drive: 'loop-last', speed: o.params[0], shape: 0, scale: [o.params[1], o.params[1], o.params[1]] },
+      ]);
+    // Desert plant kogomi 0x038c (factory 0x0067a548, ctor 0x0067a5c4, BML bm_obj_ep4_kogomi):
+    // model 0; njm entry 1 (the .njs) is kept at +0xbc (get_njm_chunk(bml, 1)); the render
+    // 0x0067a4c0 (call 0x0067a519) draws it with a NULL node motion, scale (param1, param2,
+    // param1) (pushes +0x68, +0x6c, +0x68 before 0x0082fa0c), at frame +0xb0. The update is the
+    // generic 0x0061345c (the timer 0x0061347c, speed +0xb8 = 1.0 from 0x006132e4). Sphere box
+    // 0x009ca030 with its radius times param1 (0x0067a5c4 scales box + 0xc by +0x68).
+    // ASSUMED: the ctor starts the frame at rand() / 32768 * limit; the port starts at 0.
+    case 0x038c: {
+      const box = generatedBox(0x009ca030);
+      const k = o.params[0];
+      return spec('__DESERT_PLANT_SOLID__', 'bm_obj_ep4_kogomi.bml', [
+        { model: 0, motion: -1, drive: 'loop-last', speed: 1, shape: 1, scale: [k, o.params[1], k] },
+      ], { collision: { ...box, halfX: box.halfX * k, halfZ: box.halfZ * k } });
+    }
+    // Seabed jellyfish TOKurage 0x00cc (factory 0x0062c1b0, ctor 0x0062c22c, loader
+    // load_map_object_jellyfish 0x0062cfa8, BML bm_fs_obj_kurage): model 0, njm 0 at +0xbc
+    // (speed +0xb8 = 0.5 and limit +0xb4 = frames - 1.0 set by the ctor), njm 1 (the .njs) at
+    // +0xc8. The render 0x0062c330 calls njDrawShapeMotion (call 0x0062c422) with the model,
+    // +0x2f motion, +0x32 shape and frame +0xb0; the update 0x0062c448 runs the timer
+    // 0x0061347c. The roaming AI (0x0062c448) and the fade colour are not ported here.
+    case 0x00cc:
+      return spec('TOKurage', 'bm_fs_obj_kurage.bml', [{ model: 0, motion: 0, drive: 'loop-last', speed: 0.5, shape: 1 }]);
     default:
       return null;
   }
