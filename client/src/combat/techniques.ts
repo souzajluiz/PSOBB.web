@@ -307,12 +307,39 @@ export function restaHeal(level: number, mst: number, charClass = 0): number {
   return chopToInt(Math.max(0, mst) * RESTA_MST_SCALE + f32(d.power + d.vPower * level));
 }
 
+// Who a Resta entity hits, in the exe's order (TechniqueEntity_Update_006ef3b8, 0x006ef3b8): the
+// entity at +0xa8 first, which the constructor 0x006ef1d4 sets to the caster's id (+0x1c of the
+// caster object, the `mov [this+0xa8], ...` store), then, only when the entity's 0-based level
+// `(short)+0xa4` is 2 or more, each 6x47 list target in order (ids at +0xe4, count at +0xe0).
+// Every hit goes through the target's vtable +0x60 = entity_hit_by_tech (0x00773afc). PROVEN
+// from the decompile. ASSUMED: a caster that is also in the list is hit once (the port's own list
+// starts with the caster, playerTargets; whether the exe's list builder does is not traced).
+export function restaHits(casterId: number, targets: readonly number[], level: number): number[] {
+  return level < 2 ? [casterId] : [casterId, ...targets.filter((id) => id !== casterId)];
+}
+
+// Whether this client applies a Resta hit's heal to a player copy (entity_hit_by_tech 0x00773afc,
+// the `some_bool` block before LAB_00773d8f; for the support groups only): the effect is skipped
+// (some_bool true) when the
+// caster is a remote copy (the dump's unknown_flags_invincibility == 2, 1 being this client's own player) and the target's +0x32c is
+// neither 1 nor 3, or for a technique group that is not a support. For a real player (+0x32c = 1,
+// SetChallengeType_00686984 gives 1 for type < 4) hit by a Resta, every client applies the heal to
+// its own copy of the target: no packet carries it (add_player_hp = FUN_007773d4 only writes
+// +0x334, clamped by +0x2bc; the 6x4B / 6x70 hit packets bring the real HP later).
+export const PLAYER_CHALLENGE_FLAG = 1;
+export function restaAppliesToCopy(targetFlag: number, casterIsRemote: boolean): boolean {
+  if (targetFlag === 2) return true;
+  if (!casterIsRemote) return true;
+  return targetFlag === 1 || targetFlag === 3;
+}
+
 // Another player's Resta on this client (PsoBB.exe, dump names: unknown_cast_tech case resta,
 // dump 642090, makes the Resta entity; TechniqueEntity_Update_006ef3b8 hits each 6x47 target
 // through the target's vtable +0x60 = entity_hit_by_tech (0x00773afc, dump 747782) with the
 // caster as the attacker). Its resta case heals the target by chop(caster MST *
-// g_DamageMultiplier_NonPlayer + power); the multiplier is ASSUMED to be the 0.5 at 0x00978278
-// (RESTA_MST_SCALE). The MST is the caster's battleparams_stats->mst, kept by the 6x30 handler
+// g_DamageMultiplier_NonPlayer + power); the multiplier is the 0.5 at 0x00978278
+// (RESTA_MST_SCALE; PROVEN: the decompile of 0x00773afc case 6 is `mst * _DAT_00978278 + power` and the
+// word at 0x00978278 reads 0.5). The MST is the caster's battleparams_stats->mst, kept by the 6x30 handler
 // UpdatePlayerStatsAndLevelMessage_006928e4 (dump 574022). The entity's first hit is the primary
 // target only below level 3 (0-based level < 2: `(short)+0xa4 < 2`, the caster itself), so a
 // list target is healed from level 3 on. A dead entity takes nothing (the top check, not a

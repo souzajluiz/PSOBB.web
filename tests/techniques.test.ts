@@ -9,6 +9,9 @@ import {
   megidChance,
   releaseFrame,
   remoteRestaHeal,
+  restaAppliesToCopy,
+  restaHits,
+  PLAYER_CHALLENGE_FLAG,
   restaHeal,
   splitLevel,
   targetListKind,
@@ -174,6 +177,23 @@ eq([releaseFrame(0, 0), releaseFrame(1, 0), releaseFrame(2, 0), releaseFrame(0, 
   // Ryuker never reaches enemies: no 6x47 target list, and the caster's client only opens the pipe
   // (unknown_cast_tech case ryuker; the other clients break out, no entity_hit_by_tech).
   eq([targetListKind(TECH.ryuker), techTookDamageMin(TECH.ryuker)], ['none', TOOK_DAMAGE_NEVER], 'Ryuker: no target list, no 0x200 group');
+}
+
+// Who a remote Resta hits on this client (TechniqueEntity_Update_006ef3b8 0x006ef3b8, hit =
+// entity_hit_by_tech 0x00773afc): the caster always, the 6x47 list from the 0-based level 2 on.
+{
+  eq(restaHits(2, [0, 1], 0), [2], 'Resta Lv1: the caster only');
+  eq(restaHits(2, [0, 1], 1), [2], 'Resta Lv2: the caster only');
+  eq(restaHits(2, [0, 1], 2), [2, 0, 1], 'Resta Lv3: the caster, then the list');
+  eq(restaHits(0, [0, 3], 5), [0, 3], 'a listed caster is hit once (ASSUMED)');
+  eq(restaHits(1, [], 9), [1], 'an empty list: the caster');
+  // The heal lands on a player copy (+0x32c = 1) of a remote caster's hit; an NPC copy (3) too.
+  eq(restaAppliesToCopy(PLAYER_CHALLENGE_FLAG, true), true, 'remote caster, player copy: applied');
+  eq(restaAppliesToCopy(3, true), true, 'remote caster, taken-over NPC: applied');
+  eq(restaAppliesToCopy(0, true), false, 'remote caster, a flag-0 copy: skipped');
+  eq(restaAppliesToCopy(0, false), true, 'local caster: applied to every copy');
+  // The amount is chop(MST * 0.5 + power) with the 0.5 read at 0x00978278 (case 6 of 0x00773afc).
+  eq(restaHeal(2, 400, 0) - restaHeal(2, 0, 0), 200, 'the MST term is MST * 0.5 (PROVEN, 0x00978278)');
 }
 
 if (failures) {
