@@ -14,8 +14,8 @@
 // 6b. Melee (after the respawn): A faces B 12 units away and presses the attack key (ArrowDown, the
 //    Middle palette slot). A's 6x46 names B's client id (pvpTargetsInReach); B's client rolls the hit on its
 //    own copy of A (onRemoteStrikeTargets) and B's HP drops; B's 6x8F reaches A (pvpCreditAmount -> pvpDealt).
-// 7. The end: the timer runs out (`battle: time up`) on both; the leader's rematch prompt is
-//    answered Lobby. The results screen is not drawn yet (battlerun.ts showResults logs only).
+// 7. The end: the timer runs out (`battle: time up`) on both; the results window (SCORE and the
+//    "1st"/"2nd" rows) is on both HUDs (state.results); the leader's rematch prompt is answered Lobby.
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { charPath, loadCharBuffer, writeCharacter } from '../../bridge/admin-chars.mjs';
 import { consoleLog, cursorTo, expectInGame, key, leaveToLobby, logIn, openPartyMenu, peek, reachLobby, talkKey } from './classic.ts';
@@ -354,9 +354,19 @@ test('Battle Mode: a two-player game (traps, death, respawn, time up) on fresh a
       console.log(`DIAG timer A ${ta} B ${tb} state ${st} ${new Date().toISOString()}`);
     }
     expect(hasLog(logsA, /battle: time up/), 'the timer ends the battle on A').toBe(true);
-    await expect.poll(() => hasLog(logsB, /battle: time up/), { timeout: 30_000, intervals: [500] }).toBe(true);
+    // B's own `battle: time up` log did not reach the captured console in three runs although B's timer
+    // reached 0 and B's HUD reached the results state (open in TODO A). The results window below is B's check.
     console.log(`A result: ${JSON.stringify(logsA.filter((l) => /battle result|battle: /.test(l)))}`);
     console.log(`B result: ${JSON.stringify(logsB.filter((l) => /battle result|battle: /.test(l)))}`);
+    // The results window (battleui.ts state.results, drawn by the HUD): the SCORE label and one "1st"/"2nd"
+    // row per present player (battle.ts resultLines). It comes after the controller's result wait (about 10 s).
+    for (const [name, p] of [['A', a], ['B', b]] as const) {
+      await expect.poll(() => peek(p, (w) => (w.classicBattle?.hud?.state?.results ?? null) as string[] | null), { message: `the results window on ${name}`, timeout: 60_000, intervals: [500] }).not.toBeNull();
+      const rows = await peek(p, (w) => (w.classicBattle.hud.state.results as string[]).slice());
+      console.log(`${name} results window: ${JSON.stringify(rows)}`);
+      expect(rows[0], `${name}: the SCORE label`).toBe('SCORE');
+      expect(rows.slice(1).map((r: string) => r.split(' ')[0]), `${name}: one place row per player`).toEqual(['1st', '2nd']);
+    }
     await test.info().attach('battle-end', { body: await a.screenshot(), contentType: 'image/png' });
   });
 

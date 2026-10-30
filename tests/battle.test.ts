@@ -15,7 +15,7 @@ import { Game } from '../client/src/net/game.ts';
 import {
   BattleController, BattleRecords, BattleSetup, PlayerScore, assignTeams, baInitialFloor, build6x8F, build6xCF, build6xD0, build7D,
   decodeBattleRules, effectiveRules, encodeBattleRules, formatBattleTimer, localRestrictions, newBattleRules, parse7D, rankPlayers,
-  roundEven, shuffleStarts, trapNumber, weightFromRegs, winParticleHolders, WIN_PARTICLE, ACK_FRAMES, LOADING_FRAMES, RULES_FRAMES,
+  resultLines, roundEven, shuffleStarts, trapNumber, weightFromRegs, winParticleHolders, WIN_PARTICLE, ACK_FRAMES, LOADING_FRAMES, RULES_FRAMES,
   SonarManager, SonarStock, type BattleRules, type Battle7D, type BattleHost,
 } from '../client/src/quest/battle.ts';
 import {
@@ -219,6 +219,10 @@ eq(assignTeams([true, true, true, true], false), [0, 0, 0, 0], 'no teams');
   const t = rankPlayers([{ id: 0, points: 10, team: 2 }, { id: 1, points: 30, team: 1 }, { id: 2, points: 25, team: 2 }, { id: 3, points: 4, team: 1 }], true);
   eq(t.map((e) => [e.id, e.place, e.points]), [[0, 0, 35], [2, 0, 35], [1, 2, 34], [3, 2, 34]], 'teams share a total');
   check(rankPlayers([], false).length === 4, 'the table always has four entries');
+  // PrintResults_006af27c: the SCORE label, then "%s %s" per present player (title, name), no points.
+  const names = ['Ann', 'Bo', 'Cy', 'Di'];
+  const rows = resultLines(rankPlayers([{ id: 0, points: 10 }, { id: 1, points: 30 }, { id: 3, points: 30 }], false), (id) => names[id]!);
+  eq(rows, ['SCORE', '1st Bo', '1st Di', '3rd Ann'], 'result rows: label, title and name in place order, empty slots skipped');
 }
 {
   const rec = new BattleRecords([1, 0, 0, 0, 0, 0, 0]);

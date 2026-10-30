@@ -20,6 +20,7 @@ import {
   localRestrictions,
   parse7D,
   rankPlayers,
+  resultLines,
   SonarStock,
   type Battle7D,
   type BattleSetup,
@@ -65,8 +66,6 @@ export interface BattleRunOptions {
   meseta?: () => number;
   records?: ArrayLike<number>;
 }
-
-const RESULT_TITLES = ['1st', '2nd', '3rd', '4th'];
 
 export class BattleRun {
   readonly records: BattleRecords;
@@ -528,10 +527,12 @@ export class BattleRun {
     g.conn.send(0x60, 0, body);
   }
 
+  // The results window (SinowberillChallengeEntity_PrintResults_006af27c): the SCORE header and the
+  // place rows (battle.ts resultLines), drawn by the battle HUD until the battle exits.
   private showResults(entries: PlaceEntry[], localPlace: number): void {
-    const lines = entries.filter((e) => e.id >= 0).map((e) => `${RESULT_TITLES[e.place] ?? e.place + 1}  ${this.names(e.id)}  ${e.points}`);
-    this.hud?.showLines(lines, 30000);
-    this.log(`battle result: ${lines.join(' | ')} (you: ${localPlace + 1})`);
+    const lines = resultLines(entries, (id) => this.names(id));
+    this.hud?.showResults(lines);
+    this.log(`battle result: ${lines.slice(1).join(' | ')} (you: ${localPlace + 1})`);
   }
 
   // ba_get_place / ba_get_score: the exe indexes the sorted place table.

@@ -589,6 +589,18 @@ export function rankPlayers(players: Array<{ id: number; points: number; team?: 
   return list;
 }
 
+// The result window's title and place titles (PsoBB.exe: s_ChallengeScoreLabel at 0x009695a8 = "SCORE",
+// g_SinowberillChallengeResultTitles at 0x009ccb64 = the pointers to "1st".."4th" at 0x00969588..0x009695a0).
+export const RESULT_SCORE_LABEL = 'SCORE';
+export const RESULT_TITLES = ['1st', '2nd', '3rd', '4th'] as const;
+
+// The result rows as SinowberillChallengeEntity_PrintResults_006af27c writes them: one line per
+// present player in place order, "%s %s" (s_ChallengeResultFormat at 0x0092c4f8) = the place title
+// and the player's name. The exe prints no points in this list. The header is the SCORE label.
+export function resultLines(entries: readonly PlaceEntry[], name: (id: number) => string): string[] {
+  return [RESULT_SCORE_LABEL, ...entries.filter((e) => e.id >= 0).map((e) => `${RESULT_TITLES[e.place] ?? e.place + 1} ${name(e.id)}`)];
+}
+
 // get_ba_record (.c:609156): the local character's seven u16 battle record fields
 // (place counts, disconnects, two unknown). Counters saturate at 0xFFFF.
 export class BattleRecords {
