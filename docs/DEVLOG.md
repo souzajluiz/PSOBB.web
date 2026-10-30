@@ -23598,3 +23598,8 @@ Follow-up to the boss kill entry: the local-kill hook (`Game.onLocalEntityFlags`
 - Kogomi's ctor starts the frame at `rand() / 32768 * limit`; the port starts at 0.
 - The jellyfish's roaming AI (0x0062c448), its fade colour (+0x104) are not ported. The map `.dat` sets in this data only place type 0x0380 (desert02); 0x00cc, 0x0383 and 0x038c come from other sets or quests.
 - The timer wraps on `frame > limit` in the exe, the port's `carry-last` on `>=`: one tick differs at exact equality.
+
+## 2026-10-30: Chrome checks of today's merges (main thread)
+
+- Shape motions: the `e2e/shape-motions.spec.ts` harness page loaded in Chrome on the main Vite. Over 1.5 s every model's frame advanced (TOKurage 0 -> 24, Poison Plant 0 -> 48, bohu 0 -> 10, kogomi 0 -> 48, slime puddle 0 -> 3.6, slime crawl 0 -> 8.4) and every vertex sum changed. The two slime bodies draw dark in the harness (no field lighting there); not checked in a real field.
+- Quest editor: q101 (`extermination/q101-bb-e.bin` + `q101-bb.dat`) opened through the toolbar file input; the view bar shows "Script positions (7)", `scriptMarkerCount` 7, 3 radius rings, 17 objects under the script root.
