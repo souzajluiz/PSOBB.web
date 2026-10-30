@@ -47,7 +47,7 @@ Audited 2026-10-30 against ROADMAP.md, DEVLOG.md and CodeGraph: each line lists 
 - [ ] 02R technique projectiles (the pillar casts its technique at the target, DEVLOG 2026-10-18; the projectile objects are listed open in ROADMAP, status unclear)
 
 ## F. Bosses
-- [ ] De Rol Le: the segment hit tint and the beam's particles (done: the ten shell segments are hit targets, DEVLOG 2026-10-20)
+- [x] De Rol Le: the segment hit tint and the beam's particles (done: the ten shell segments are hit targets, DEVLOG 2026-10-20; hit tint cyan 0x00ffff fading 0.05 a frame via 0x00435340 and plate materials, DEVLOG 2026-10-21 and 2026-10-24; the beam's 0x176 string every 20 units with the phase +5, wrap 20, from 0x0042fb26, DEVLOG 2026-10-30; still ASSUMED: the beam's end (no 0x0077fffc collision query) and the phase start 0)
 - [ ] Vol Opt: the ceiling fragments of the bars (models 14 / 15), the cage and prison drawn as particles, the red monitor model, Ultimate's Gizonde / Foie / Gibarta objects, camera, ending warp objects (done: hatch lids and broken monitors drawn with the real models, DEVLOG 2026-10-21)
 - [ ] Dragon: intro camera (status unclear), model-node reads (mouth, head, feet places, root height), the ground follower's dust, Ultimate Sinow state 0x10 (done: flame, fireball and entrance particles from the exe tables, DEVLOG 2026-10-21; take-off, DEVLOG 2026-10-24)
 - [ ] Saint-Milion: attack objects (missiles, wave, storm, sand sonic) and cutscenes (done: the 31-state brain, 6xDC, parts, tentacles, death, laser aim and wall cut, DEVLOG 2026-10-21 to 2026-10-25; the "agent running" note was stale)

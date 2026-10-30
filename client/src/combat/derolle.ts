@@ -831,9 +831,35 @@ export const DRL_SEGMENT = {
 // exe's beam state (the function at 0x0042f96c, sub 1 -> 2 at 0x0042ff1d):
 // create_particle_effect_3 (0x0050b7a4) of 0x126 (boss2_senkou) at the beam's
 // start; 0x177 (boss2_beam_b, 0x0050981c, kept as a handle) is the emitter that
-// lasts with the beam; 0x176 (boss2_beam_a, 0x0042fda8) is made at a point on
-// the beam (ASSUMED: the beam's end, not the exe's moving point).
-export const DRL_BEAM = { start: 0x126, emitter: 0x177, tip: 0x176 } as const;
+// lasts with the beam; 0x176 (boss2_beam_a, 0x0042fda8) is made along the beam.
+//
+// PROVEN at 0x0042fb26..0x0042fddd (state 0x1b, sub 2, every frame): the phase
+// +0x708 grows by 5.0 (0x008fcf04) and wraps at 20.0 (0x008fcefc, 0x0042fc74
+// .. 0x0042fca8: 0, 5, 10, 15, 0 ..); the vector from the cast point (+0x4f0)
+// to the beam's end (+0x738, the collision result of 0x0077fffc) is
+// normalised (0x00782868 returns its length) and 0x176 is made at
+// cast point + unit * d for d = phase, phase + 20, ... below the length
+// (0x0042fda8, the loop's step is the same 0x008fcefc). So the beam is a
+// string of 0x176 puffs every 20 units that crawl 5 a frame, not one at the
+// tip. ASSUMED: the phase starts at 0 (the ctor is not read), and the end is
+// the port's own (y -10 floor, no collision query).
+export const DRL_BEAM = { start: 0x126, emitter: 0x177, tip: 0x176, spacing: 20, phaseStep: 5 } as const;
+
+// One frame of the exe's 0x176 loop: the next phase and the points.
+export function beamTipPoints(from: Vec3, to: Vec3, phase: number): { phase: number; points: Vec3[] } {
+  const sum = fround(DRL_BEAM.phaseStep + phase);
+  const next = DRL_BEAM.spacing > sum ? sum : fround(sum - DRL_BEAM.spacing);
+  const dx = to[0] - from[0];
+  const dy = to[1] - from[1];
+  const dz = to[2] - from[2];
+  const len = Math.hypot(dx, dy, dz);
+  const points: Vec3[] = [];
+  if (len <= 0) return { phase: next, points };
+  for (let d = next; d < len; d += DRL_BEAM.spacing) {
+    points.push([from[0] + (dx / len) * d, from[1] + (dy / len) * d, from[2] + (dz / len) * d]);
+  }
+  return { phase: next, points };
+}
 
 const fround = Math.fround;
 // x87 fistp in round-to-nearest mode (ROUND in the dump).
@@ -1023,6 +1049,7 @@ export class DeRolLeAi extends BrainBase {
   beamFiring = false;
   private beamHit = new Set<number>(); // +0x6d0
   private beamDir: Vec3 = [0, 0, 1];
+  private beamPhase = 0; // +0x708
   private beamLen = 0;
   private interval = 180; // +0x6f4 of 0x14 / 0x15
   private delay = 120; // +0x6f8
@@ -2217,7 +2244,9 @@ export class DeRolLeAi extends BrainBase {
       this.beamLen = Math.min(500, this.beamLen + 30);
       const end: Vec3 = [muzzle[0] + this.beamDir[0] * this.beamLen, -10, muzzle[2] + this.beamDir[2] * this.beamLen];
       this.beam = { from: muzzle, to: end };
-      this.emit({ kind: 'particle', id: DRL_BEAM.tip, at: end, up: 0, back: 0 });
+      const tips = beamTipPoints(muzzle, end, this.beamPhase);
+      this.beamPhase = tips.phase;
+      for (const at of tips.points) this.emit({ kind: 'particle', id: DRL_BEAM.tip, at, up: 0, back: 0 });
       this.emit({ kind: 'se', id: 0x331 });
       const power = this.opts.movement ? this.opts.movement.fparam1 : FALLBACK.beam;
       // ASSUMED: field 2 (16) of the hit context is the radius.
