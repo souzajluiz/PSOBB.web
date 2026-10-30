@@ -202,6 +202,10 @@ export class GameField {
       }
     };
     game.on('subcommand', onSub); // Lobby has no off(); the handler goes idle on dispose
+    game.onLocalEntityFlags = (entity, floor, flags) => {
+      // The combat code owns the local corpse (its death motion), so only the set entry is marked.
+      if (!this.disposed && flags & 0x08) this.killEntity(entity, floor, false);
+    };
   }
 
   // The boss's form changed the music (audio/bossbgm.ts): a boss action from
@@ -454,7 +458,7 @@ export class GameField {
     this.killEntity(entityId, floor);
   }
 
-  private killEntity(entityId: number, floor: number): void {
+  private killEntity(entityId: number, floor: number, hide = true): void {
     if (entityId < 0x1000 || entityId >= 0x4000) return;
     const w = this.waves.get(floor);
     if (!w) {
@@ -471,7 +475,7 @@ export class GameField {
     const index = killedSetEntry(entityId - 0x1000 - at.base, at.first, at.types);
     if (index < 0) return;
     w.kill(index);
-    if (floor === this.floor) this.enemies?.setVisible(index, false);
+    if (hide && floor === this.floor) this.enemies?.setVisible(index, false);
   }
 
   // Room of a position: the map section whose circle contains it, nearest first
@@ -939,6 +943,7 @@ export class GameField {
 
   dispose(): void {
     this.disposed = true;
+    this.game.onLocalEntityFlags = null;
     this.game.tradeZone.leaveField();
     this.viewer.renderHooks.delete(this.smoothHook);
     this.menu.dispose();

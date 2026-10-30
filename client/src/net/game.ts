@@ -641,6 +641,8 @@ export class Game extends Lobby {
   // Called with every state subcommand this client sends through recordSent
   // (the battle score reads its own 6x0A damage from it, quest/battlerun.ts).
   onSent: ((body: Uint8Array) => void) | null = null;
+  // Called with every 6x76 this client sends (entity id, floor, flags); gamefield.ts applies a kill (flag 8).
+  onLocalEntityFlags: ((entityId: number, floor: number, flags: number) => void) | null = null;
   // Called with a received 6x60 0x0b (the header's entity id and the status at +4, as the exe's box-break
   // handler reads them); gamefield.ts routes it to the object the entity names.
   onObjectBreak: ((entityId: number, status: number) => void) | null = null;
@@ -910,6 +912,10 @@ export class Game extends Lobby {
   // u16 flags}. The client ORs the flags into the entity's set entry; flag 8
   // means the enemy is dead, which is what advances a wave event.
   sendEntitySetFlags(entityId: number, floor: number, flags: number): void {
+    // set_monster_spawn_initdata_as_dead (0x0051f894's tail) ORs the flags into the local set entry
+    // too, and newserv does not echo a 6x76 to its sender: the local field must apply it itself
+    // (it advances the wave events and, for a boss room, builds the exit warp).
+    this.onLocalEntityFlags?.(entityId, floor, flags);
     const body = new Uint8Array(8);
     const dv = new DataView(body.buffer);
     body[0] = 0x76;
