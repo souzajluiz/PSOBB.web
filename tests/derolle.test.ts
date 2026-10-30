@@ -7,6 +7,7 @@ import {
   DeRolLeAi,
   DrlSegmentAi,
   DRL_BEAM,
+  beamTipPoints,
   DRL_SEGMENT,
   DrlBurst,
   DrlCeilingRock,
@@ -791,11 +792,27 @@ for (const ultimate of [false, true]) {
   const parts = r.events.filter((e): e is Extract<DrlEvent, { kind: 'particle' }> => e.kind === 'particle');
   eq(parts.filter((p) => p.id === DRL_BEAM.start).length, 1, 'beam: 0x126 once, at the start');
   const tips = parts.filter((p) => p.id === DRL_BEAM.tip);
-  check(tips.length >= 10, `beam: 0x176 every firing frame (${tips.length})`);
+  check(tips.length >= 10, `beam: 0x176 along the beam (${tips.length})`);
   check(tips.every((p) => p.up === 0 && p.back === 0), 'beam: the tip is at the point, no lift');
   eq(ai.beamFiring, false, 'beam: not firing after its end');
   const first = r.events.findIndex((e) => e.kind === 'beamStart');
   check(first >= 0 && r.events.findIndex((e) => e.kind === 'particle' && e.id === DRL_BEAM.start) < r.events.findIndex((e) => e.kind === 'particle' && e.id === DRL_BEAM.tip), 'beam: the start particle before the first tip');
+}
+
+// 23a. The 0x176 string (0x0042fb26..0x0042fddd): phase +5 wrapping at 20, a
+//      puff every 20 units from the cast point below the length.
+{
+  let r = beamTipPoints([0, 0, 0], [0, 0, 100], 0);
+  eq(r.phase, 5, 'tip string: phase 0 -> 5');
+  eq(r.points.map((p) => p[2]).join(), '5,25,45,65,85', 'tip string: every 20 from the phase');
+  r = beamTipPoints([0, 0, 0], [0, 0, 100], 15);
+  eq(r.phase, 0, 'tip string: phase 15 wraps to 0 (20 is not below 20)');
+  eq(r.points.map((p) => p[2]).join(), '0,20,40,60,80', 'tip string: phase 0 starts at the cast point');
+  eq(beamTipPoints([0, 0, 0], [0, 0, 0], 0).points.length, 0, 'tip string: a zero beam makes none');
+  eq(beamTipPoints([1, 2, 3], [4, 6, 3], 0).points.length, 0, 'tip string: phase 5 is not below a length-5 beam');
+  const d = beamTipPoints([1, 2, 3], [4, 6, 3], 15).points;
+  eq(d.length, 1, 'tip string: one puff on a short beam');
+  eq(d[0]?.join(), '1,2,3', 'tip string: at the cast point');
 }
 
 // 23b. ownMaterials on a model built from scratch: a node's strips made by the
