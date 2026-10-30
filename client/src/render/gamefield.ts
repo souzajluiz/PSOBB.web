@@ -202,6 +202,9 @@ export class GameField {
       }
     };
     game.on('subcommand', onSub); // Lobby has no off(); the handler goes idle on dispose
+    game.onLocalEntityFlags = (entity, floor, flags) => {
+      if (!this.disposed && flags & 0x08) this.killEntity(entity, floor);
+    };
   }
 
   // The boss's form changed the music (audio/bossbgm.ts): a boss action from
@@ -939,6 +942,7 @@ export class GameField {
 
   dispose(): void {
     this.disposed = true;
+    this.game.onLocalEntityFlags = null;
     this.game.tradeZone.leaveField();
     this.viewer.renderHooks.delete(this.smoothHook);
     this.menu.dispose();
