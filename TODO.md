@@ -18,52 +18,52 @@ only part of them has matching C (psobb-client-source).
 - [ ] Phones: soft keyboard, rotation lock, adaptive resolution (real iOS / Android; checked by the owner on real devices, not emulated)
 
 ## B. Screens and menus
-- [ ] Character creation and Input UserID: SSIM needs captures of the original (title 0.77 and select character 0.92 are measured)
-- [ ] Quest loading: particle wipes and middle particle; lobby / floor loading screens
-- [ ] Classic HUD: balloon overlap and docking, sub-menu transitions, Item List rows, counter leaf actions, ship-select camera
-- [ ] Field HUD: Status window, Keyboard / Pad config, MAG panel and Photon Blast window, equipment detail pages, sort (6xC4), palette save (07ED), item list scroll bar, TP use, window shine
-- [ ] Minimap: switch icons, door / box / boss icons, battle team colours, Challenge "Area n" title
-- [ ] Team: Master Transfer, Buying Privileges, Flag Records, invitations, banned names, team chat line
+Audited 2026-10-30 against ROADMAP.md, DEVLOG.md and CodeGraph: each line lists only what is still open; "(done: ...)" names parts that were ported earlier.
+- [ ] Character creation and Input UserID: SSIM needs captures of the original (title 0.77 and select character 0.92 are measured) (needs captures, cannot be automated)
+- [ ] Quest loading: the quest screen's particle wipes and middle particle; the floor loading screens (floor_prev / floor_next, `GameListObjectConstructor`; the port's leave-a-game screen is the lobby burst, the exe most likely shows the floor warp, UNCLEAR) (done: the quest screen's bars, lines and progress bar `classic/questloading.ts`, DEVLOG 2026-10-19; the lobby burst loading screen when leaving a game, DEVLOG 2026-10-21)
+- [ ] Classic HUD: counter / menu leaf actions that are still logged no-ops (Symbol Chat Home leaf option list and icon editor, the capture picture; Info Board (status unclear); Guild Card add-from-entity; word select state 0x14 name step; quick menu tools tab: material unit terms and the state-4 tool slot action), ship-select camera (the exe's camera is not found, the port's fitted circle is ASSUMED) (done: word balloon overlap and docking, DEVLOG 2026-10-23; sub-menu transitions / slide, DEVLOG 2026-10-23; Item List rows, DEVLOG 2026-10-23; Trade, Shortcut editor, word select picker, Guild Card, Simple Mail, Team Log / Invite / Point Regist, Sent Item, DEVLOG 2026-10-23 and 2026-10-25)
+- [ ] Field HUD: Pad Button Config right analog camera is not driven; Keyboard Config overwrite prompt and the menus' Escape / text-edit keys (ASSUMED); MAG window row spacing, element size, MAG picture (entry 0xC) and page slide; the equipment stat panel's frame and row spacing; saving a Ctrl-switched palette (status unclear; the Customize editor's 07ED save is ported); the item list scroll bar; the photon row's exe size and the Photon Blast window text (state 0xE); the quick-menu text shine (`QuickMenuRenderTextBackground_00742a6c`, owner found, not ported) (done: sort 6xC4 and pickup lock, DEVLOG 2026-10-21; TP use and the status / party window shine, DEVLOG 2026-10-23; MAG pages 0 / 1 / 2 drawn, DEVLOG 2026-10-23; equipment detail pages: the weapon / armour / slot pages have no writer in this exe build, so there is nothing to port, DEVLOG 2026-10-23; Status window 0x19: no route in the exe, kept closed and pinned by test, DEVLOG 2026-10-25; Keyboard Config, Default 1..4 presets, F-keys, Tab, Ctrl+End, PageUp / PageDown, DEVLOG 2026-10-23 and 2026-10-24)
+- [ ] Minimap: boss door (0x0103), Seabed dolphin and Dark Falz hazard / form 3 icons (the +0xd0 bit 0 meaning is UNCLEAR, owners not mapped to port classes); the Challenge "Area n" title (source not found: `cmode_area_title_buffer` is read by a warp-label function, status unclear) (done: switch icons TObjRaderIcon, door 0x80 / 0x0202 / 0x0204 icons, TObjRaderHideCol, DEVLOG 2026-10-23; box icons: the exe draws none; battle team colours, DEVLOG 2026-10-23; forced boss icons Olga Flow, De Rol Le, Dragon, Gal Gryphon, Sinow Berill, Dark Falz form 1, DEVLOG 2026-10-23 and 2026-10-25)
+- [ ] Team: Master Transfer (the 6x handshake), Buying Privileges window, Flag Records window, banned team names (done: invitations, DEVLOG 2026-10-25; team chat line / F9 window / 07EA lines, DEVLOG 2026-10-23; Team Member List, Team Info, Team Log, Point Regist, DEVLOG 2026-10-23 and 2026-10-25)
 
 ## C. World and objects
-- [ ] Lobby: seasonal decoration model, real spawn points and collision (`*c.rel`)
-- [ ] Round hitboxes of field objects other than doors
-- [ ] Shape motions: TOKurage, Episode 4 plants, slime body
-- [ ] Trap vision (cloaked traps)
-- [ ] NPCs: talk-mode camera, TObjNpcEnemy, NPC Rappy / Hildebear / Dark Bringer, Episode 4 quest NPC
-- [ ] Episode 2 enemies: wall / ground rays, Gee states, Gibbles sink, Epsilon visuals
+- [x] Lobby: seasonal decoration model (DEVLOG 2026-10-23), real spawn points and collision `*c.rel` (done 2026-10-16, closed DEVLOG 2026-10-23)
+- [ ] Round hitboxes of field objects: the object loader's use of set flag 8 on a joiner and a two-client check of the stalactite's per-tick packet; the untyped boxes 0x0191 / 0x0193 / 0x0205 (ASSUMED enabled); whether NPCs' walk uses the boxes (ASSUMED); the 0xca state handlers (done: doors, containers, rocks, pillars, crystal box, Wilds solids, stalactite and rock break, all `InitEnemyCollisionBoxes` sites decoded, DEVLOG 2026-10-23 to 2026-10-26)
+- [ ] Shape motions: TOKurage, Episode 4 plants, slime body (`.njs`; only the draw calls of the objects need looking up; the Vol Opt door `.njs` is done)
+- [ ] Trap vision: the Trap Vision tool's effect (the exe has no writer of the vision bit for the tool, UNCLEAR; nothing to port unless one is found), the cloak shader (ASSUMED), per-weapon target records of the state-1 reticle (done: the Seabed capture trap, trigger, spring, hold, reveal, reticle, DEVLOG 2026-10-23; no other cloaked trap exists in the exe)
+- [ ] NPCs: 0x118 walk row (the town walk stands in), 0x33 per-class motion id, 0x118 weapon per-floor table, the talk reach, ids with no port enemy draw nothing (Box, Mothmant, Chao, NiGHTS ...) (done: talk-mode camera and talk cameras, DEVLOG 2026-10-18; TObjNpcEnemy 0x33, Episode 4 quest NPC 0x118, NPC Rappy / Hildebear / Dark Bringer drawn and talking, DEVLOG 2026-10-23 to 2026-10-25)
+- [ ] Episode 2 enemies: wall / ground rays, Gee states, Gibbles sink (status unclear for all three; nothing found in DEVLOG or ROADMAP) (done: Epsilon model swap, colour, particles and orb, DEVLOG 2026-10-21)
 
 ## D. Player and character
-- [ ] Hair / cap texture lists for hat classes; non-default android heads
-- [ ] `proportion_x/y` scaling; per-weapon field motions; emotes, sit
-- [ ] Damage: critical-hit effect, remote knockback, shield block routine, hit point heights (2026-10-30: the dead prompt, the return to Pioneer 2 and the dead camera were ported 2026-10-23 and re-verified by tests/returnprompt.test.ts and e2e/death-return.spec.ts; no longer open)
-- [ ] Items: pickup particle, SE attenuation, drop line-of-sight, pickup lock, tekker window, bank windows, partial stacks
+- [ ] Emotes, sit: the emote's end (state 0x17 has no exit of its own, motion-end rule ASSUMED), the palette-slot route to the sit, the sitter's state after the stand-up (ASSUMED), the +0xdc record consumer (done: hair / cap texture lists and android heads from the exe name lists, DEVLOG 2026-10-23; `proportion_x/y` body and head morph, DEVLOG 2026-10-16 and re-checked 2026-10-23; per-weapon field walk / idle / run motions, DEVLOG 2026-10-23; chat emotes 6x58, Alt+key emotes, sit 6xAB, DEVLOG 2026-10-23 to 2026-10-25)
+- [ ] Damage: shield block routine (status unclear: the block slot 6, SE 0x23 and guard particles are ported, DEVLOG 2026-10-20, but no entry names the exe's shield-block routine itself); ASSUMED items: 6x4E as the 0x60 subcommand from 0x006920ac, the arrival facing, the weapon group, the NPC head's Foie cast height (done: dead prompt, return to Pioneer 2, dead camera, DEVLOG 2026-10-23 and 2026-10-30; critical-hit effect, spark, SE 0x42, flash, DEVLOG 2026-10-23; remote knockback displacement, DEVLOG 2026-10-23; hit point heights, BODY_DY, enemy aim heights, DEVLOG 2026-10-23)
+- [ ] Items: partial stacks (status unclear); the mag and tool details of the bank list and a Check Room screenshot compare; generic SE distance attenuation / pan (status unclear: the floor item SE 0x571 is positional since DEVLOG 2026-10-23, `play_directional_sound_effect` elsewhere is not read) (done: pickup particle 0x9B, DEVLOG 2026-10-21 and 2026-10-23; drop line-of-sight and spot search, DEVLOG 2026-10-21 and 2026-10-23; pickup lock, DEVLOG 2026-10-21; tekker Result window (the exe draws no 3D object), shop and bank windows with the stat panel, DEVLOG 2026-10-23)
 
 ## E. Combat
-- [ ] Remote Resta heal; confusion steering (Telepipe ring 0xB0, loop SE 0xA0 and the no-light finding closed 2026-10-30, e2e/telepipe-fx.spec.ts)
-- [ ] Technique leftovers: cast light, Resta / Anti particles, wall impacts, special effects
-- [ ] Photon blasts (joined / donated), blast objects, weapons with their own specials, per-part hit boxes
-- [ ] Enemy specials: Pan Arms split / merge, Pofuilly split, Grass Assassin emerge, Nano Dragon fly-in, Dubwitch link
-- [ ] 02R technique projectiles
+- [x] Remote Resta heal (DEVLOG 2026-10-23 and 2026-10-24: the ROADMAP item was stale); confusion steering of movement and attack heading (DEVLOG 2026-10-23); Telepipe ring 0xB0 and loop SE 0xA0 (DEVLOG 2026-10-30)
+- [ ] Technique leftovers: wall impacts, special effects, the caster's own Resta / Anti body particles (custom emitter tables not decoded, status unclear after DEVLOG 2026-10-20), Reverser's target visuals (done: cast light on the caster, DEVLOG 2026-10-25)
+- [ ] Photon blasts: remote players' weapon fields (the join list is the caster alone, ASSUMED), the blast object's creation time (30 ticks ASSUMED), blast objects' own visuals, weapons with their own special routines, per-part hit boxes (done: joins, gate and end timing, DEVLOG 2026-10-23; blast icon follows the blast state, DEVLOG 2026-10-23)
+- [ ] Enemy specials: Pofuilly split on a remote player's slime, Nano Dragon fly-in release (the exe's clearer of 0x40000 is not found, the port's release is ASSUMED) (done: Pan Arms split / merge, DEVLOG 2026-10-23; Pofuilly split by combo step 2, DEVLOG 2026-10-24; Grass Assassin emerge, DEVLOG 2026-10-23; Nano Dragon power-up and fly-in, DEVLOG 2026-10-23; Dubwitch link, DEVLOG 2026-10-23)
+- [ ] 02R technique projectiles (the pillar casts its technique at the target, DEVLOG 2026-10-18; the projectile objects are listed open in ROADMAP, status unclear)
 
 ## F. Bosses
-- [ ] De Rol Le: segments as hit targets, particles
-- [ ] Vol Opt: real models and lid drawing, ceiling fragments, Ultimate objects, camera, ending warps
-- [ ] Dragon: intro camera and particles, model node reads, flame / fireball particles, ground dust, Ultimate Sinow state 0x10
-- [ ] Saint-Milion: brain (agent running)
-- [ ] Dark Falz: cutscene objects and camera, Ultimate scenes, technique object flight (agent running)
+- [ ] De Rol Le: the segment hit tint and the beam's particles (done: the ten shell segments are hit targets, DEVLOG 2026-10-20)
+- [ ] Vol Opt: the ceiling fragments of the bars (models 14 / 15), the cage and prison drawn as particles, the red monitor model, Ultimate's Gizonde / Foie / Gibarta objects, camera, ending warp objects (done: hatch lids and broken monitors drawn with the real models, DEVLOG 2026-10-21)
+- [ ] Dragon: intro camera (status unclear), model-node reads (mouth, head, feet places, root height), the ground follower's dust, Ultimate Sinow state 0x10 (done: flame, fireball and entrance particles from the exe tables, DEVLOG 2026-10-21; take-off, DEVLOG 2026-10-24)
+- [ ] Saint-Milion: attack objects (missiles, wave, storm, sand sonic) and cutscenes (done: the 31-state brain, 6xDC, parts, tentacles, death, laser aim and wall cut, DEVLOG 2026-10-21 to 2026-10-25; the "agent running" note was stale)
+- [ ] Dark Falz: Ultimate's Rico / ring scene (quest flag 0x97), technique objects' own flight, the players' push-out of form 1's body, a Chrome check of all the scenes (done: cutscene object at the pivot and the camera driver, DEVLOG 2026-10-21 and 2026-10-22; casket to DEMO_WARP0 seen in Chrome, DEVLOG 2026-10-24; the "agent running" note was stale)
 
 ## G. Quests and modes
-- [ ] NPC players' follow / attack AI (6x69 1-3)
-- [ ] Text colour palette; random-enemy `.dat` sections (types 4 / 5), `evt2`
-- [ ] Battle: PvP hits from our side (partial 2026-10-29: our melee strike on a remote player names it in 6x46 and the 6x8F credit goes to one PB path, `pvpCreditAmount` in `combat/pvp.ts`, e2e passes; ASSUMED: the 6x8F attacker gate, the sender's field layout, and the receiver body at 0x006918fc are not verified in the exe; 6x2F not covered), traps and sonar (partial 2026-10-30: the sonar use, its 990-frame life and pings are in `client/e2e/battle-game.spec.ts` step 4b and pass; the sonar effect beyond the ping is not ported), respawn teleport (2026-10-30: wired, `quest/battlerun.ts` respawnTeleport uses `respawnCandidates` + `pickRespawn`; the distance rule is verified against 0x00695444, see DEVLOG; 2026-10-30 later: the no-candidate fallback is ported, 6x24 at the own angle and position via `respawnTarget`; the +0x32c == 2 gate is modelled open), win particles, `ba_initial_floor` (traps are wired in `quest/battlerun.ts` (placement, 6x80, blast on the local player; no trap model drawn, the palette icon not drawn); the respawn pick is in `quest/battletraps.ts`, wired since 2026-10-30; the sonar use is started by `BattleRun.useSonar`)
-- [ ] Challenge: grave model and text, stage-select counter, records window, S-rank name entry and prize, material x5 / Scape Doll / dead-player rules, in-stage sounds, ghost flow
-- [ ] Download quests (A6 / A7)
+- [ ] NPC players' attack AI (6x69 1-3): the item cast, the head's +0x7c state dispatch, the NPC's dead source and revive, command 3's action state, NPC melee strikes 6x46 (the writer of the attack state for an NPC is not traced) (done: 6x69 follow, DEVLOG 2026-10-23 and 2026-10-25; the head's action chooser, wall branch, target pick and wired Resta / Anti / Reverser casts, DEVLOG 2026-10-23 to 2026-10-26)
+- [x] Text colour palette (DEVLOG 2026-10-23); random-enemy `.dat` sections (types 4 / 5) and `evt2` (`formats/randomenemies.ts`, `materializeQuestDat`, matches newserv, DEVLOG 2026-10-23)
+- [ ] Battle: PvP hits from our side still carry ASSUMED parts (the 6x8F attacker gate, the sender's field layout, the receiver body at 0x006918fc are not verified in the exe; the victim's elemental terms, the knockdown push speed); sonar effect beyond the ping (the exe's reader of `g_BaRulesState` byte 1 / 2 is not found); the trap palette icons and the trap death particle position (ASSUMED); the local overlay's ASSUMED rule mapping; a Chrome check of all of it (done: 6x2F, respawn pick and the no-candidate fallback, DEVLOG 2026-10-23 and 2026-10-30; traps: placement, 6x80, blast, trap model drawn (`bm_o_mine.bml`), DEVLOG 2026-10-21 and 2026-10-24; win particles, DEVLOG 2026-10-23; `ba_initial_floor`, DEVLOG 2026-10-25; results window, DEVLOG 2026-10-30; sonar use and ping, DEVLOG 2026-10-23 and 2026-10-30)
+- [ ] Challenge: the grave's 3D model (`re_b_mark_base.bml` is not in the local data), the records window (trigger not located), in-stage sounds, ghost flow, stages 2-9 and Episode 2 in a real game, the dead-player 0x60 action (done: grave text, killer line, drop fan, ground test, DEVLOG 2026-10-23; stage-selection counter dialog and stage byte, DEVLOG 2026-10-23 and 2026-10-26; S-rank prize choice and name entry, DEVLOG 2026-10-24; material x5, Scape Doll, revive, DEVLOG 2026-10-25)
+- [x] Download quests (A6 / A7): received and stored in IndexedDB, `.qst` read and written; BB servers never send them (newserv rejects them for BB), so there is no menu (DEVLOG 2026-10-23)
 
 ## H. Tools (not in the exe)
-- [ ] Quest editor: multi-floor overview, named parameter forms, random waves, rotation gizmo, copy / paste, script positions in 3D, delete a published quest, edit `.json`
-- [ ] Admin: roles, TOTP, IP bans, drop tables, Ep3 tournaments, quest enable / disable; native-speaker review of the pt-BR and es text
-- [ ] Docker build never run on the new quest-publish volume
+- [ ] Quest editor: script positions and radii in the 3D view, delete a published quest (bridge route with backup and mirror plus admin UI), edit `.json` from the panel (done: multi-floor overview and room navigation, named parameter forms, random waves, rotation gizmo, copy / paste, DEVLOG 2026-10-23 to 2026-10-25)
+- [ ] Admin: roles (several admins), TOTP, IP bans, drop table editing, Ep3 tournaments, quest enable / disable; native-speaker review of the pt-BR and es text
+- [ ] Docker build never run on the new quest-publish volume (the volume mirror `/data/newserv/quests-published` exists, DEVLOG 2026-10-20)
 
 ## Cannot be automated
 Captures of the original client (B), real phones (A), native translation review (H).
