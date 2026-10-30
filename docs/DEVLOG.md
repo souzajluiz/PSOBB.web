@@ -23523,3 +23523,7 @@ The port matched all of this already. The comment in `battletraps.ts` said the b
 **Marked "(status unclear)":** Classic HUD Info Board; Field HUD saving a Ctrl-switched palette; Minimap Challenge "Area n" title; C Episode 2 wall / ground rays, Gee states, Gibbles sink; D shield block routine, partial stacks, generic SE attenuation; E Resta / Anti caster particles, 02R technique projectiles; F Dragon intro camera.
 
 **Not touched:** ROADMAP.md still carries some of the stale claims (for example its Field HUD, Battle and Combat "left" paragraphs); TODO.md is now the shorter, current list, and ROADMAP lines should be trimmed when their item is next worked.
+
+## 2026-10-30: Local 6x76 keeps the corpse
+
+Follow-up to the boss kill entry: the local-kill hook (`Game.onLocalEntityFlags`) now marks the wave set entry dead without `EnemyLayer.setVisible(index, false)`. The combat models live in that layer, so hiding the entry on our own send cut the death motion at the kill frame; a remote 6x76 still hides it as before. `e2e/boss-kill.spec.ts` re-run: 2 passed (2.6 min).
