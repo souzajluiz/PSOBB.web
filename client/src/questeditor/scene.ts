@@ -19,6 +19,7 @@ import { areaName } from './areas.ts';
 import { bamsToDegrees, degreesToBams, nearestSection, wrapBams, worldToSection } from './geom.ts';
 import type { Change, QuestDocument } from './model.ts';
 import { pivotAngle, turnedBams } from './turn.ts';
+import type { ScriptPosition, ScriptPositionKind } from './scriptpos.ts';
 
 const MARKER_COLORS = { enemy: 0xff6b5b, npc: 0x6bff9a, object: 0x5fd4ff } as const;
 const MARKER_LIFT = 6;
@@ -28,6 +29,9 @@ const MODEL_DELAY_MS = 150;
 const TURN_RADIUS = 18; // the rotation gizmo's ring, in world units around the pivot
 const TURN_GRAB = 6; // how far from the ring a press still grabs it
 const TURN_COLOR = 0x7dffd1;
+const SCRIPT_COLORS: Record<ScriptPositionKind, number> = { call: 0xffd24d, talk: 0xffa24d, npc: 0xd98cff, party: 0xff8cc6, start: 0x4dffea, object: 0x9aa9ff, particle: 0xffffff };
+const SCRIPT_POLE = 24; // height of a script position's pole, world units
+const SCRIPT_RING_SEGMENTS = 48;
 
 interface Item {
   entity: SetEntity;
@@ -66,6 +70,8 @@ export class EditorScene {
   private markerOf = new Map<THREE.InstancedMesh, Item[]>();
   private selectionRoot = new THREE.Group();
   private turnRoot = new THREE.Group();
+  private scriptRoot = new THREE.Group();
+  private scriptPositions: ScriptPosition[] = [];
   private loadToken = 0;
   private modelToken = 0;
   private modelTimer: ReturnType<typeof setTimeout> | null = null;
@@ -83,7 +89,7 @@ export class EditorScene {
     this.doc = doc;
     this.host = host;
     this.viewer = new MapViewer(canvas);
-    this.viewer.scene.add(this.markerRoot, this.selectionRoot, this.turnRoot);
+    this.viewer.scene.add(this.markerRoot, this.selectionRoot, this.turnRoot, this.scriptRoot);
     this.tooltip = document.createElement('div');
     this.tooltip.className = 'qe-tooltip';
     this.tooltip.hidden = true;
@@ -359,6 +365,46 @@ export class EditorScene {
     for (const name of ['enemies', 'npcs', 'objects']) {
       const o = this.viewer.scene.getObjectByName(name);
       if (o) o.visible = this.modelsVisible;
+    }
+  }
+
+  // Positions and radii the quest script carries (scriptpos.ts): a diamond and a pole at each
+  // position, a flat ring of the trigger radius where there is one. Rebuilt from the list; the old
+  // geometry and materials are freed.
+  setScriptPositions(list: readonly ScriptPosition[]): void {
+    this.scriptPositions = [...list];
+    this.rebuildScriptMarkers();
+  }
+
+  get scriptMarkerCount(): number {
+    return this.scriptPositions.length;
+  }
+
+  setScriptVisible(v: boolean): void {
+    this.scriptRoot.visible = v;
+  }
+
+  private rebuildScriptMarkers(): void {
+    disposeChildren(this.scriptRoot);
+    for (const p of this.scriptPositions) {
+      const color = SCRIPT_COLORS[p.kind];
+      const mat = () => new THREE.LineBasicMaterial({ color, fog: false, depthTest: false, transparent: true, opacity: 0.95 });
+      const diamond = new THREE.Mesh(new THREE.OctahedronGeometry(4), new THREE.MeshBasicMaterial({ color, fog: false, depthTest: false }));
+      diamond.position.set(p.x, p.y + SCRIPT_POLE, p.z);
+      diamond.renderOrder = 15;
+      const pole = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p.x, p.y, p.z), new THREE.Vector3(p.x, p.y + SCRIPT_POLE, p.z)]), mat());
+      pole.renderOrder = 15;
+      this.scriptRoot.add(diamond, pole);
+      if (p.radius !== null && p.radius > 0) {
+        const pts: THREE.Vector3[] = [];
+        for (let i = 0; i < SCRIPT_RING_SEGMENTS; i++) {
+          const a = (i / SCRIPT_RING_SEGMENTS) * Math.PI * 2;
+          pts.push(new THREE.Vector3(p.x + Math.cos(a) * p.radius, p.y + 1, p.z + Math.sin(a) * p.radius));
+        }
+        const ring = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), mat());
+        ring.renderOrder = 15;
+        this.scriptRoot.add(ring);
+      }
     }
   }
 
@@ -690,7 +736,7 @@ export class EditorScene {
 function disposeChildren(group: THREE.Group): void {
   for (const c of [...group.children]) {
     group.remove(c);
-    if (c instanceof THREE.Mesh) {
+    if (c instanceof THREE.Mesh || c instanceof THREE.Line) {
       c.geometry.dispose();
       (c.material as THREE.Material).dispose();
     }

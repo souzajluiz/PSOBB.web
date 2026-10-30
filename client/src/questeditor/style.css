@@ -181,3 +181,5 @@ textarea { resize: vertical; }
   .qe-palette-list, .qe-entity-list { max-height: 300px; }
   .qe-top { flex-wrap: wrap; }
 }
+.qe-json-dialog { width: min(560px, 92vw); }
+.qe-json-text { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; font-size: 12px; background: var(--bg, #111); color: var(--text); border: 1px solid var(--accent); border-radius: 4px; padding: 6px; }

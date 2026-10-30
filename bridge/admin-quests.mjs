@@ -41,6 +41,10 @@ const FILE_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 const BB_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*-bb(-[a-z])?\.(bin|dat|qst)$/;
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 const EXTS = ['.bin', '.dat', '.qst'];
+// A quest's metadata file (newserv src/Quest.cc looks up <basename>.json, <number>-<version>.json,
+// <number>.json): q058.json, q058-bb.json, q058-bb-e.json, d8825.json. Not config.json and the like.
+const JSON_NAME_RE = /^[A-Za-z]?\d{1,6}(-[A-Za-z0-9]{1,8}){0,2}\.json$/;
+export const MAX_JSON_BYTES = 64 * 1024;
 
 export function checkCategoryName(name) {
   if (typeof name !== 'string' || !CAT_RE.test(name)) fail(400, 'invalid category');
@@ -50,8 +54,18 @@ export function checkCategoryName(name) {
 // A file name that may be listed / read: safe characters, no dot-files, no "..".
 export function checkFileName(name) {
   if (typeof name !== 'string' || !FILE_RE.test(name) || name.startsWith('.') || name.includes('..')) fail(400, 'invalid file name (letters, digits, _ . - only, at most 64)');
-  if (!EXTS.some((e) => name.endsWith(e))) fail(400, 'only .bin, .dat and .qst files');
+  if (name.endsWith('.json')) {
+    if (!JSON_NAME_RE.test(name)) fail(400, 'a quest .json looks like q058-bb.json');
+    return name;
+  }
+  if (!EXTS.some((e) => name.endsWith(e))) fail(400, 'only .bin, .dat, .qst and quest .json files');
   return name;
+}
+
+// The name of a quest metadata file the panel may write (see JSON_NAME_RE).
+export function checkJsonName(name) {
+  if (typeof name !== 'string' || !name.endsWith('.json')) fail(400, 'name must be a quest .json file such as q9001-bb.json');
+  return checkFileName(name);
 }
 
 // A name the panel may WRITE: the above plus the Blue Burst version tag newserv
@@ -249,6 +263,106 @@ export function createQuestStore(options) {
     return { category, dir, name, writes, info, target: `${category}/${name}` };
   }
 
+  // Validates a request to write a quest's metadata .json ({ category, name, json: text }); writes nothing.
+  // The text must be a JSON object (newserv applies its keys as overrides of the quest's metadata).
+  function planJson(body) {
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) fail(400, 'body must be a JSON object');
+    const category = checkCategoryName(body.category);
+    const name = checkJsonName(body.name);
+    const dir = categoryDir(category);
+    if (typeof body.json !== 'string' || body.json.length === 0) fail(400, 'json is missing');
+    const bytes = Buffer.from(body.json, 'utf8');
+    if (bytes.length > MAX_JSON_BYTES) fail(413, `json is larger than ${MAX_JSON_BYTES / 1024} KB`);
+    let parsed;
+    try {
+      parsed = JSON.parse(body.json);
+    } catch (e) {
+      return fail(422, `not valid JSON: ${String(e.message).slice(0, 120)}`);
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) fail(422, 'the quest .json must be an object');
+    const w = { name, bytes, path: resolve(dir, name), replaces: false };
+    if (dirname(w.path) !== dir) fail(400, 'invalid file name');
+    try {
+      const st = lstatSync(w.path);
+      if (!st.isFile() || st.isSymbolicLink()) fail(409, `${name} exists and is not a regular file`);
+      w.replaces = true;
+    } catch (e) {
+      if (e instanceof QuestError) throw e;
+    }
+    return { category, dir, name, writes: [w], info: { keys: Object.keys(parsed).length }, target: `${category}/${name}` };
+  }
+
+  // Validates a delete request ({ category, name }): `name` is any Blue Burst file of the quest
+  // (q9001-bb-e.bin, q9001-bb.dat, q9001-bb.qst, or its .json); every file of that quest in the
+  // category goes: <base>[-lang].bin / .dat / .qst / .json with base = q9001-bb. The version
+  // independent q9001.json is left alone (other versions use it). Deletes nothing.
+  function planDelete(body) {
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) fail(400, 'body must be a JSON object');
+    const category = checkCategoryName(body.category);
+    const name = checkFileName(body.name);
+    const m = /^(.+-bb)(?:-[a-z])?\.(?:bin|dat|qst|json)$/.exec(name);
+    if (!m || (!name.endsWith('.json') && !BB_NAME_RE.test(name))) fail(400, 'name must be a Blue Burst quest file such as q9001-bb-e.bin');
+    const base = m[1];
+    const dir = categoryDir(category);
+    const own = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(-[a-z])?\\.(bin|dat|qst|json)$`);
+    const writes = [];
+    for (const ent of readdirSync(dir, { withFileTypes: true })) {
+      if (!own.test(ent.name)) continue;
+      if (!ent.isFile() || ent.isSymbolicLink()) fail(409, `${ent.name} is not a regular file`);
+      const path = resolve(dir, ent.name);
+      if (dirname(path) !== dir) fail(400, 'invalid file name');
+      writes.push({ name: ent.name, path, size: statSync(path).size });
+    }
+    if (writes.length === 0) fail(404, 'no such quest files');
+    writes.sort((a, b) => a.name.localeCompare(b.name));
+    return { category, dir, name, base, writes, target: `${category}/${name}` };
+  }
+
+  // Deletes a planned quest. EVERY file is copied to the backup folder first (a failing backup
+  // deletes nothing); then the files and their mirror copies go. A failure while deleting puts
+  // back what was already removed.
+  function commitDelete(p) {
+    const backupFiles = [];
+    for (const w of p.writes) backupFiles.push(backup(p.category, w));
+    const removed = [];
+    try {
+      p.writes.forEach((w, i) => {
+        unlinkSync(w.path);
+        removed.push(i);
+      });
+    } catch (e) {
+      restoreDeleted(p, backupFiles, removed, false);
+      throw e;
+    }
+    if (mirrorDir) {
+      for (const w of p.writes) {
+        try {
+          rmSync(join(mirrorDir, p.category, w.name), { force: true });
+        } catch (e) {
+          log(`quest mirror delete failed: ${e.message}`);
+        }
+      }
+    }
+    return { files: p.writes.map((w) => ({ name: w.name, size: w.size })), backupFiles, removed };
+  }
+
+  // Puts deleted files back from their backups (and into the mirror).
+  function restoreDeleted(p, backupFiles, indexes, toMirror = true) {
+    for (const i of indexes) {
+      const w = p.writes[i];
+      try {
+        copyFileSync(backupFiles[i], w.path);
+        if (mirrorDir && toMirror) {
+          const md = join(mirrorDir, p.category);
+          mkdirSync(md, { recursive: true });
+          copyFileSync(backupFiles[i], join(md, w.name));
+        }
+      } catch { /* best effort */ }
+    }
+  }
+
+  const rollbackDelete = (p, result) => restoreDeleted(p, result.backupFiles, result.removed);
+
   function backup(category, w) {
     const dir = join(backupDir, category);
     mkdirSync(dir, { recursive: true });
@@ -312,5 +426,5 @@ export function createQuestStore(options) {
 
   const rollback = (p, result) => restore(p, result.backupFiles, result.renamed);
 
-  return { categories, listFiles, readFile, plan, commit, rollback, validateQuest, questsDir, backupDir };
+  return { categories, listFiles, readFile, plan, planJson, planDelete, commit, commitDelete, rollback, rollbackDelete, validateQuest, questsDir, backupDir };
 }

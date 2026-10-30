@@ -61,7 +61,7 @@ Audited 2026-10-30 against ROADMAP.md, DEVLOG.md and CodeGraph: each line lists 
 - [x] Download quests (A6 / A7): received and stored in IndexedDB, `.qst` read and written; BB servers never send them (newserv rejects them for BB), so there is no menu (DEVLOG 2026-10-23)
 
 ## H. Tools (not in the exe)
-- [ ] Quest editor: script positions and radii in the 3D view, delete a published quest (bridge route with backup and mirror plus admin UI), edit `.json` from the panel (done: multi-floor overview and room navigation, named parameter forms, random waves, rotation gizmo, copy / paste, DEVLOG 2026-10-23 to 2026-10-25)
+- [x] Quest editor: script positions and radii in the 3D view, delete a published quest (bridge route with backup and mirror plus admin UI), edit `.json` from the panel (done 2026-10-30: `scriptpos.ts` + the Script positions markers, `POST /admin/api/quests/delete` and `/json`, admin Delete button, editor Quest .json dialog, DEVLOG 2026-10-30; earlier: multi-floor overview and room navigation, named parameter forms, random waves, rotation gizmo, copy / paste, DEVLOG 2026-10-23 to 2026-10-25; script positions are shown on every floor, the floor a thread runs on is not static, and only constant registers are known)
 - [ ] Admin: roles (several admins), TOTP, IP bans, drop table editing, Ep3 tournaments, quest enable / disable; native-speaker review of the pt-BR and es text
 - [ ] Docker build never run on the new quest-publish volume (the volume mirror `/data/newserv/quests-published` exists, DEVLOG 2026-10-20)
 

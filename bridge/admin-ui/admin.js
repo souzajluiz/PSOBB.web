@@ -727,6 +727,20 @@ window.addEventListener('message', (e) => {
   run(() => testInGame(e.data.package));
 });
 
+// Delete a published quest: every Blue Burst file of it in its category (bin, dat or qst, json). The
+// server copies each file to the backup folder first and removes the mirror copies (docs/ADMIN.md).
+async function deleteQuest(dir, quest, found, select) {
+  const name = found.qst ?? found.bin;
+  const token = `${dir}/${name}`;
+  const ok = await confirmDialog({ title: `Delete quest ${quest.number}`, lines: [`"${quest.name}" (${token}) will be removed from the server with its .dat / .json of the same name. Each file is copied to the server's quest backups first. Players see the change after the quest reload.`], token, action: 'Delete' });
+  if (!ok) return;
+  run(async () => {
+    const r = await api('POST', '/quests/delete', { category: dir, name, confirm: token });
+    toast(`Deleted ${r.files.map((f) => f.name).join(', ')} (backups kept). Quests reloaded.`);
+    select('quests');
+  });
+}
+
 views.quests = async (root, _arg, select) => {
   const [q, f] = await Promise.all([api('GET', '/quests'), api('GET', '/quests/files').catch(() => ({ directories: [] }))]);
   const filesByDir = new Map(f.directories.map((d) => [d.dir, d.files]));
@@ -738,7 +752,7 @@ views.quests = async (root, _arg, select) => {
       table(['#', 'Name', 'Episode', 'Players', 'Enabled when', 'Drops', 'Versions', ''], c.quests.map((x) => {
         const found = c.directory ? questFiles(filesByDir.get(c.directory) ?? [], x.number) : null;
         return [x.number, x.name, x.episode, x.maxPlayers, h('span', { class: 'mono' }, x.enabledExpression ?? 'always'), x.dropMode ?? '-', x.versions.length,
-          found ? h('button', { onclick: () => openInEditor(c.directory, found) }, 'Open in editor') : h('span', { class: 'muted' }, 'no BB file')];
+          found ? h('span', null, h('button', { onclick: () => openInEditor(c.directory, found) }, 'Open in editor'), ' ', h('button', { class: 'danger', onclick: () => deleteQuest(c.directory, x, found, select) }, 'Delete')) : h('span', { class: 'muted' }, 'no BB file')];
       }), 'No quests.'))));
   return true;
 };
