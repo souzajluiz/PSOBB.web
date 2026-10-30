@@ -134,6 +134,9 @@ import {
   megidChance,
   releaseFrame,
   remoteRestaHeal,
+  restaHits,
+  restaAppliesToCopy,
+  PLAYER_CHALLENGE_FLAG,
   restaHeal,
   targetListKind,
   TECH,
@@ -228,7 +231,7 @@ import { CAST_HEIGHT, CAST_LIGHT_AMBIENT, castLightColor, castLightFrames, CHARG
 import { setModelOpacity } from './hitmodels.ts';
 import { DeathRun, deathPlanFor, mothmantDeathPlan, SavageDeathMotion, type DeathActions, type DeathPoint } from '../combat/deathfx.ts';
 import { Dissolve, ICE_DEFAULT_RADIUS, iceRadius } from '../combat/hitmodels.ts';
-import { CRITICAL_SE, restaFloat, FLAME_FRAMES, FLAME_PARTICLE, flamePoint, hitParticles, specialHandlerParticles, specialHitFx, statusApplyFx, statusTickFx, techHitFx, type EnemyStatusKind, type HitFxKind, type ParticleSpawn } from '../combat/hitfx.ts';
+import { CRITICAL_SE, FLAME_FRAMES, FLAME_PARTICLE, flamePoint, hitParticles, specialHandlerParticles, specialHitFx, statusApplyFx, statusTickFx, techHitFx, type EnemyStatusKind, type HitFxKind, type ParticleSpawn } from '../combat/hitfx.ts';
 import { PlayerHud } from './playerhud.ts';
 import { LevelUpEffects } from './levelupfx.ts';
 import { haptic } from '../input/haptics.ts';
@@ -8598,13 +8601,16 @@ export class CombatView {
     if (ownsTechnique(c.tech)) this.castObjects(c.tech, c.level, c.data.rangeH, me.clientId, c.sent, true);
     if (c.tech === TECH.resta) {
       const heal = restaHeal(c.level, mst, me.charClass);
-      // entity_hit_by_tech: the green HP text over every other healed player.
-      for (const id of c.sent) {
-        const q = id !== me.clientId ? view.playerPositions().get(id) : null;
-        if (q) this.overlay?.float(restaFloat(heal), q.x, q.y + 26, q.z);
-      }
+      // entity_hit_by_tech (0x00773afc) on each hit of the entity (restaHits): the caster, then the
+      // 6x47 list from level 3 on. The caster is a local player (flag 1): every player copy takes
+      // add_player_hp on this client, the remote ones in PartyHp. No "HP+n" text: it needs the
+      // target's +0x32c != 1 and a player's is 1 (SetChallengeType_00686984).
       const before = this.damage.hp;
-      if (!this.damage.dead) this.damage.hp = Math.min(this.damage.maxHp, this.damage.hp + heal);
+      for (const id of restaHits(me.clientId, c.sent, c.level)) {
+        if (id === me.clientId) {
+          if (!this.damage.dead) this.damage.hp = Math.min(this.damage.maxHp, this.damage.hp + heal);
+        } else if (id < 0x1000) this.party.addHp(id, heal);
+      }
       this.opts.log(`${name} Lv${c.level + 1}: +${heal} HP (${before} -> ${this.damage.hp}); other players heal on their own clients`);
       return;
     }
@@ -8916,9 +8922,11 @@ export class CombatView {
     // ASSUMED: an unknown caster MST (no 6x70 / 6x30 yet) is 0.
     const casterMst = caster?.mst ?? 0;
     const heal = restaHeal(level, casterMst, charClass);
-    for (const id of cast.targets) {
-      const q = id !== this.game.selfId && id < 0x1000 ? this.view?.playerPositions().get(id) : null;
-      if (q) this.overlay?.float(restaFloat(heal), q.x, q.y + 26, q.z);
+    // A remote caster (flag 2) hits player copies of +0x32c = 1: the heal lands on every copy on
+    // this client (restaAppliesToCopy), the remote ones in PartyHp, the local player below.
+    // No "HP+n" text over a player (+0x32c == 1 hides it, 0x00773afc).
+    for (const id of restaHits(clientId, cast.targets, level)) {
+      if (id !== this.game.selfId && id < 0x1000 && restaAppliesToCopy(PLAYER_CHALLENGE_FLAG, true)) this.party.addHp(id, heal);
     }
     const mine = remoteRestaHeal(cast.targets, this.game.selfId, this.damage.dead, level, casterMst, charClass);
     if (mine > 0) {

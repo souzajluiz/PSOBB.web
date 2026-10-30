@@ -23527,3 +23527,29 @@ The port matched all of this already. The comment in `battletraps.ts` said the b
 ## 2026-10-30: Local 6x76 keeps the corpse
 
 Follow-up to the boss kill entry: the local-kill hook (`Game.onLocalEntityFlags`) now marks the wave set entry dead without `EnemyLayer.setVisible(index, false)`. The combat models live in that layer, so hiding the entry on our own send cut the death motion at the kill frame; a remote 6x76 still hides it as before. `e2e/boss-kill.spec.ts` re-run: 2 passed (2.6 min).
+
+## 2026-10-30: Remote Resta and confusion steering: audit and the missing pieces
+
+**Question.** TODO "Remote Resta heal; confusion steering". Both were partly in the port (2026-10-23/24 entries). What does the exe do exactly, and what was missing?
+
+**Remote Resta (PROVEN from the decompile, `tools/ghidra/decomp.sh 0x00773afc`, dump `entity_hit_by_tech` 747782).**
+- No heal packet and no HP sync packet. Each client computes the heal on its own copies of the hit players. The 6x47 (target list) and 6x48 are all that is sent. The heal is `FUN_007773d4` (= `add_player_hp`, dump 749682): pure `+0x334 += n`, clamped to `+0x2bc`; the amount call `FUN_00775270` (`get_hp`) only clamps. Neither sends anything. Other clients see the real HP later (6x4B / 6x4C, 6x70).
+- Who is hit (`TechniqueEntity_Update_006ef3b8`, constructor `TechniqueEntity_Constructor_006ef1d4`): the entity at `+0xa8` first, which the constructor sets to the caster's id (`*(this+0xa8) = caster+0x1c`), then, only when the 0-based level `(short)+0xa4` is 2 or more, each 6x47 list target (count `+0xe0`, ids from `+0xe4`). The old note called the first hit "the caster itself"; this confirms it. The range is the caster's: the receiver does no range test.
+- Amount (case 6 of `entity_hit_by_tech`): `chop(mst * _DAT_00978278 + power)`; `tools/exedata.py read 00978278 f` = 0.5. The 0.5 was ASSUMED before; it is PROVEN now. The `mst` is the caster's `battleparams_stats->mst`. No resist roll for group 6.
+- `some_bool` (the skip flag of the effect): the target `+0x32c` is 1 for a real player (`SetChallengeType_00686984`: type < 4 gives 1; the dump's own comment says "always 1 for players"). For a remote caster (`unknown_flags_invincibility == 2`) and a target `+0x32c` of 1 or 3, a support technique (Resta, Anti, Reverser, Shifta, Deband) runs the effect (`some_bool = false`); any other target value skips it. A local caster (flag 1) runs it on every copy. So **every client heals every hit player copy, remote copies included**.
+- The green "HP+n" text needs `+0x32c != 1` (and not hidden), so **no text over a real player**. The port drew it over other players; removed (`restaFloat` is no longer used in `render/combat.ts`, the helper stays in `combat/hitfx.ts` for enemy targets).
+
+**What was missing and is now in.**
+- A remote Resta did not raise the other targets' HP in `PartyHp` (party windows, targeted bars), nor the caster's own copy; the local cast did not raise the targets' copies either. `combat/techniques.ts` `restaHits(casterId, targets, level)` gives the exe's hit order; `restaAppliesToCopy` and `PLAYER_CHALLENGE_FLAG` encode the `some_bool` rule. `render/combat.ts` `remoteResta` and the local Resta release call `party.addHp(id, heal)` for each hit player copy (dead copies ignored by `PartyHp.addHp`).
+- ASSUMED: a caster that is also in its own 6x47 list is hit once (the port's list starts with the caster; the exe's list builder is not traced). A remote caster with no known MST heals with MST 0 (as before).
+
+**Confusion steering (PROVEN, already ported 2026-10-24, re-read).**
+- `should_do_confused_movement` (0x0068c098): `is_player_in_unsafe_map && (character_flags & confused 0x10)`.
+- `modify_direction` (0x0068c038): when it is true, the heading argument is replaced by `ROUND(rand() / 32768 * 360 * 65536 / 360)` (`0x0093c750` = 32768, `0x0093c74c` = 360, `0x0093c748` = 65536): a uniform random BAMS angle (0..65534, even) drawn on every call, not inverted or rotated. It is called with the camera-relative input angle in the stick move poll (dump 581529, 581540, 581548, 581746, 581777) and in the attack steps (586320, 586529, 586837) and the palette attack (555922, 555980, 556038, 557161). Duration: `confuse_entity` 300 frames (10 s), ticked by `confusion_effect_tick` (`status_effect_counter -= 1`, the particle every 45 frames).
+- Port: `render/playermove.ts` `modifyDirection` and `PlayerMover` `steer`, `render/lobbyview.ts` (the `steer` for the local player, `legState().confused` from `render/combat.ts`), `attackHeading` for 6x43. Nothing was missing there; a PlayerMover-level test was.
+
+**Tests.**
+- `node tests/techniques.test.ts` (new `restaHits`, `restaAppliesToCopy`, MST * 0.5 block): all checks passed. `node tests/playermove.test.ts` (new confusion block through `PlayerMover`, one draw per poll, none without input): ok. `node tests/hitfx.test.ts`, `node tests/status.test.ts`: passed. `tsc --noEmit -p client`: clean.
+- `client/e2e/resta-confusion.spec.ts` (prefix `rcs`): `PW_BASE_URL=http://127.0.0.1:5191 playwright test e2e/resta-confusion.spec.ts --trace off`: 1 passed (53 s). A fake client "Vicky" (MST 400) casts Resta Lv3 (6x47 + 6x48 pushed through the combat subcommand handler): the local HP (1) goes to full and Vicky's PartyHp rises by at least 200; then, confused through `inflictStatus`, holding W gives many more distinct leg aim angles than before. The real two-client Resta is NOT run (one browser only); the packets are synthetic.
+
+**Open.** A real two-client Resta with the second client's own HP; the Anti / Shifta / Deband hits on remote copies (same `some_bool` rule, only HP is covered); the exe's list builder for the support 6x47 (is the caster in it).

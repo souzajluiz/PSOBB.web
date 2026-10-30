@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { toBams, RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, KEY_RAMP_WALK_MAX, autoForwardRamp, lateralDecay, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, remoteStep, slowApplies, inUnsafeMap, guardStance, GUARD_HUNTER_CLASSES, rampFrozen, CAMERA_GATE_ACTIONS, cameraGateKeyHeld } from '../client/src/render/playermove.ts';
+import { toBams, RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, KEY_RAMP_WALK_MAX, autoForwardRamp, lateralDecay, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, remoteStep, slowApplies, inUnsafeMap, modifyDirection, guardStance, GUARD_HUNTER_CLASSES, rampFrozen, CAMERA_GATE_ACTIONS, cameraGateKeyHeld } from '../client/src/render/playermove.ts';
 
 assert.equal(RUN_SPEED, 45);
 assert.equal(WALK_SPEED, 30);
@@ -284,3 +284,29 @@ assert.equal(cameraGateKeyHeld(() => false), false, 'no key of the six held: the
   assert.equal(f, 96, 'after the menu, a key still held ramps from the frozen 64');
 }
 console.log('playermove exe keyboard mapping: ok');
+
+// Confusion steering (modify_direction 0x0068c038 in PlayerMover): each poll that reads a stick or key
+// direction replaces its target heading with ROUND(rand / 32768 * 65536) BAMS; no rand call when unconfused.
+{
+  const steered: number[] = [];
+  const draws = [8192, 16384, 24576];
+  let i = 0;
+  const steer = (heading: number) => {
+    steered.push(heading);
+    return modifyDirection(heading, true, () => draws[i++ % draws.length]);
+  };
+  const cm = new PlayerMover(0, 0);
+  const input = { lr: 0, fb: 128, cameraYaw: Math.PI, keyboard: false, steer };
+  cm.tick(input, free(cm));
+  assert.equal(cm.state, 'walk');
+  assert.equal(steered.length, 1, 'one steer call per poll');
+  assert.equal(steered[0], 0, 'the stick heading went in (forward = +z = BAMS 0)');
+  const dir = Math.atan2(cm.legEnd().x, cm.legEnd().z);
+  assert.ok(Math.abs(toBams(dir) - 16384) <= 1, 'the leg aims at the random heading (rand 8192 -> BAMS 16384)');
+  const calls0 = steered.length;
+  cm.tick({ lr: 0, fb: 0, cameraYaw: Math.PI, keyboard: false, steer }, free(cm));
+  assert.equal(steered.length, calls0, 'no stick: no rand draw');
+  assert.equal(modifyDirection(0x1234, false, () => { throw new Error('rand drawn'); }), 0x1234, 'unconfused: no rand draw');
+  assert.equal(modifyDirection(0, true, () => 32767), 65534, 'rand max -> BAMS 65534');
+}
+console.log('playermove confusion steering: ok');
