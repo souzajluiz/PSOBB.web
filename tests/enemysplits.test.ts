@@ -3,7 +3,7 @@
 // and Resta, merge); the Pofuilly Slime's puddle / rise / crawl cycle, its
 // spit and arm, its flinch, and the control's four-slot budget.
 // Run: node tests/enemysplits.test.ts
-import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, type PanState, PUDDLE_MOTION, SLIME, SlimeAi, SlimeArm, SlimeControl, slimeSplitsOnHit, SlimeSpit, SLIME_MORPH, SPIT } from '../client/src/combat/enemysplits.ts';
+import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, type PanState, PUDDLE_MOTION, SLIME, SlimeAi, SlimeArm, SlimeControl, slimeSplitsOnHit, slimeSplitsOnReceipt, SlimeSpit, SLIME_MORPH, SPIT } from '../client/src/combat/enemysplits.ts';
 import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 import { splitLockOk, splitRadarOk, splitStruckOk } from '../client/src/render/combat.ts';
@@ -546,6 +546,12 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   check(!slimeSplitsOnHit('emerge', 2, 0, true, false), 'split: a hit that does no damage does not split');
   check(!slimeSplitsOnHit('emerge', 2, 5, false, false), 'split: a hit that is not the local player does not split');
   check(!slimeSplitsOnHit('emerge', 2, 5, true, true), 'split: a killing hit does not split (the is_dead branch)');
+  // The receiver of a 6x0A (action_hit_enemy 0x007877e8 -> restore_enemy_status): the same handler reads the
+  // player at +0x2d8 (this client's last attacker; absent = 0xffff) and that player's combo step now.
+  check(slimeSplitsOnReceipt('puddle', 2), 'receipt: the last attacker is on combo step 2 -> split');
+  check(!slimeSplitsOnReceipt('puddle', undefined), 'receipt: no last attacker (0xffff), a remote hit alone never splits');
+  check(!slimeSplitsOnReceipt('puddle', 0) && !slimeSplitsOnReceipt('puddle', 1), 'receipt: combo step 0 / 1 does not split');
+  check(!slimeSplitsOnReceipt('flinch', 2), 'receipt: no split while flinching (state 12)');
   // The copy is thrown with the exe's heading: vx = sin, vz = cos of it.
   const t = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, thrown: true, throwAngle: Math.PI / 2, rng: () => 0.5 });
   eq(t.state, 'thrown', 'a split copy starts thrown (state 14)');

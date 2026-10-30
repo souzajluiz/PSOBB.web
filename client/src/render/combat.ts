@@ -49,7 +49,7 @@ import {
   armPackHowl,
 } from '../combat/enemyfsm.ts';
 import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
-import { PanArmsAi, PanHalfAi, SlimeAi, SlimeArm, SlimeControl, slimeSplitsOnHit, type PanEvent } from '../combat/enemysplits.ts';
+import { PanArmsAi, PanHalfAi, SlimeAi, SlimeArm, SlimeControl, slimeSplitsOnHit, slimeSplitsOnReceipt, type PanEvent } from '../combat/enemysplits.ts';
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi, SINOW_MIRAGE, type SinowEvent } from '../combat/enemyfsmmines.ts';
 import { DUBWITCH, DubwitchAi } from '../combat/dubwitch.ts';
 import { BELRA, BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SORCERER, SorcererAi, SorcererBitAi, type BulclawEvent, type HealAlly } from '../combat/enemyfsmruins.ts';
@@ -840,6 +840,10 @@ export class CombatView {
   onPvpHit: ((attackerId: number, damage: number) => void) | null = null;
   // The last strike (6x43..6x45: combo step, attack type) of each remote player.
   private remoteStrike = new Map<number, { step: number; attackType: number }>();
+  // The enemy's last attacker (+0x2d8, absent = 0xffff): written by this client's own hits only
+  // (EntityHitEntity 0x00773350 / entity_hit_by_tech via set_last_attacker_idx 0x00773264); a 6x0A
+  // from another client does not write it.
+  private lastAttacker = new Map<number, number>();
   // The Battle Mode traps in the field (render/battletrapview.ts), made on the first sync.
   private battleTraps: BattleTrapView | null = null;
   private disposed = false;
@@ -7809,6 +7813,7 @@ export class CombatView {
     // Pofuilly Slime that is not flinching; the split is made after its flinch (the order is free: the copy
     // takes the body's spot, not the hit).
     const slimeSplit = e.ai instanceof SlimeAi && slimeSplitsOnHit(e.ai.state, this.strike?.step, damage, byPlayer, (flags & FLAG_DEAD) !== 0);
+    if (me && byPlayer) this.lastAttacker.set(e.index, me.clientId);
     if (damage >= 1 && me && byPlayer) e.ai?.onDamage(me.clientId);
     if (slimeSplit) void this.splitSlime(e, 'the combo step 2 hit');
     // The Pofuilly's no-damage hit: EntityHitEntity sets +0x30 0x100 and the generic
@@ -9572,6 +9577,14 @@ export class CombatView {
         if (e.ai instanceof MericarolAi || e.ai instanceof GibbonAi) e.ai.onDamage(clientId);
         if (e.ai instanceof GeeAi || e.ai instanceof GiGueAi || e.ai instanceof GibblesAi) e.ai.onDamage(clientId);
         if (e.ai instanceof ZuAi) e.ai.onDamage(clientId);
+        if (e.ai instanceof SlimeAi) {
+          // 0x00597914 on the receiver: the gate reads +0x2d8's player and its combo step now.
+          const la = this.lastAttacker.get(e.index);
+          const step = la === undefined ? undefined : la === this.game.selfId ? this.strike?.step : this.game.players.has(la) ? this.remoteStrike.get(la)?.step : undefined;
+          const split = slimeSplitsOnReceipt(e.ai.state, step);
+          e.ai.onDamage(clientId);
+          if (split) void this.splitSlime(e, 'the combo step 2 hit (6x0A from another client)');
+        }
         if (e.ai instanceof ExeBrain) e.ai.onDamage(clientId); // the enemy base's hit handler (+0x100) runs here too
         if (e.ai?.flinches?.(0, e.stats.maxHp) ?? true) this.playDamage(e);
       }

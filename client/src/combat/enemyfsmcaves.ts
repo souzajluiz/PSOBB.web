@@ -418,6 +418,8 @@ export const NANO = {
   relocate: 200,
   // The fly-in's wander radius when the set gives less than 1 (0x0057f9d7).
   flyInRadius: 50,
+  // EnemyUpdateTargetPosition_0057f4e0: the release moves the Nano by (0, 0, -150) turned by its heading.
+  releaseBehind: 150,
   breathRange: 500,
   shotLife: 90,
   shotNear: 150,
@@ -585,6 +587,7 @@ export class NanoDragonAi extends BrainBase {
 
   // The fly-in (set param1 == 1): hidden until released (+0x390 0x40000).
   hidden = false;
+  private hiddenTimer = 0;
 
   // flyIn: the set's param1 is 1 (nanodragon_constructor 0x0057f6b0: flags
   // 0x40000 and 0x4000000, and a param2 under g_NanoDragonDefaultParam (1.0,
@@ -613,23 +616,36 @@ export class NanoDragonAi extends BrainBase {
     return this.hidden;
   }
 
-  // The fly-in's release (EnemyProcessTargeting 0x0057f3b8 radius, ASSUMED as
-  // the release): a live player within the search range. The Nano rises from
-  // the ground and flies at the player (the take-off's sub 0 / 1), then lands.
+  // The fly-in's release (PROVEN, DEVLOG 2026-10-30). The state-0 targeting step
+  // EnemyProcessTargeting_0057f3b8 runs every 30 frames (vtable +0x44(0x1e)) while the Nano is in
+  // state 0; a player within the AI record's search radius (record float 0, 150;
+  // EnemyGetNearestTargetInRange_007714cc) selects it, and with 0x40000 set it calls
+  // EnemyUpdateTargetPosition_0057f4e0: the position moves by (0, 0, -150) turned by the Nano's own
+  // heading (the literal -150.0 in the function), the flag 0x1000000 is set and the pending state is
+  // 0xb. The state 0xb entry (0x0057dcb3 .. 0x0057dd34, EnemyAI_ProcessSpellCastState_0057d8d4, mode 0
+  // with 0x1000000 set) then aims at the HOME point (+0x50 / +0x54 / +0x58, the constructor's x1 = x2),
+  // sets the height +0x40c to 50 (0x42480000) at once, clears +0x390 0x40000 (0x0057dd20) and +0x30
+  // 0x4040000 (0x0057dd2b, and: 0xfbfbffff), and plays animation 7 (motion 5 loop, 1.4): the fly
+  // (sub 1) to the home point and the landing (sub 2) are the take-off's own. ASSUMED: the heading
+  // field "rotation" is the entity's yaw, so "behind" is -(sin a, cos a) * 150.
   private release(out: AiFrame, targets: readonly AiTarget[]): void {
+    this.hiddenTimer++;
+    if (this.hiddenTimer % NANO.searchEvery !== 0) return;
     const n = nearest(targets, this.x, this.z, NANO.search);
     if (!n) return;
+    this.targetId = n.clientId;
+    this.x -= Math.sin(this.angle) * NANO.releaseBehind;
+    this.z -= Math.cos(this.angle) * NANO.releaseBehind;
     this.hidden = false;
     out.hidden = false;
     this.state = 'takeoff';
     this.timer = 0;
     this.frames = 0;
-    this.sub = 0;
-    this.height = 0;
-    this.destX = n.x;
-    this.destZ = n.z;
-    this.targetId = n.clientId;
-    this.play(out, once(9, 0.9));
+    this.sub = 1;
+    this.height = NANO.cruise;
+    this.destX = this.spawnX;
+    this.destZ = this.spawnZ;
+    this.play(out, loop(5, 1.4));
   }
 
   private pickWander(): void {

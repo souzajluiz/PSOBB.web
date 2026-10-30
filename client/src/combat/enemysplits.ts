@@ -1167,6 +1167,23 @@ export function slimeSplitsOnHit(state: SlimeState, comboStep: number | undefine
   return byPlayer && damage >= 1 && comboStep === 2 && state !== 'flinch' && !dead;
 }
 
+// The same handler on the client that did NOT cause the hit. A remote player's hit reaches
+// this client as its 6x0A (`action_hit_enemy`, 0x007877e8, header network.h:1752): it ends in the
+// enemy's vtable +0x148 `restore_enemy_status` (dump 762033): hp = max - damage_taken and the
+// packet's flags are OR-ed into +0x30, so the 0x200 (took_damage) bit makes the generic path call
+// the slime's +0x100 (0x00597914) here too. Nothing in that path writes the last attacker
+// (+0x2d8: only EntityHitEntity / entity_hit_by_tech call set_last_attacker_idx, 0x00773264, i.e.
+// hits resolved on this client; restore only clears it to 0xffff when a local-owned enemy dies),
+// so the gate reads whatever +0x2d8 holds: 0xffff (never hit from here: not below
+// g_PlayerEntityCount, no split), or the player of this client's last hit, whose combo step is read
+// NOW. `attackerStep` is that player's combo step, undefined when +0x2d8 names no player. The
+// split is not synced: each client builds its own copy into its own first free slot (the
+// heading is this client's own random). ASSUMED: a remote player's weapon box does not run
+// EntityHitEntity on this client (so it never writes +0x2d8 here).
+export function slimeSplitsOnReceipt(state: SlimeState, attackerStep: number | undefined): boolean {
+  return attackerStep === 2 && state !== 'flinch';
+}
+
 export class SlimeAi extends BrainBase {
   state: SlimeState = 'puddle';
   confused = false;
