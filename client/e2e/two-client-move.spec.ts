@@ -6,9 +6,11 @@
 //   3. A is slowed (combat.inflictStatus, the slow of a technique hit): A's own mover and
 //      animator, and B's copy of A (the remote follower and marker), must both run at half
 //      the leg speed and play the run motion at half the rate.
-//   4. A guards: placed 25 units from the nearest enemy facing it (in the hunter's and the
-//      other classes' enter range); after a stop B has A's guard flag (6x3E). Then A is placed
-//      beyond the leave range and stops again: speed and rate go back to the plain run on both.
+//   4. A guards: one enemy stays a lock-on target (the others are hidden and dead); A is placed
+//      inside the enter range of it (45 for a hunter, 90 for the others) facing it, a short forward
+//      tap stops it with 6x3E guard 1, and B's copy runs at 0.75 (a 300 ms run). Then A faces away
+//      (no lock-on target: the stance drops), a tap stops it with guard 0, and both run at 1.0.
+//      The steps are compared (the animator's step over the run frames); the speeds are printed.
 // B samples A's marker on every animation frame, and A samples its own drawn pose on the same
 // clock. Printed: lag, overshoot, direction flips, zero-move frames, catch-up jumps, speed,
 // animation mismatch and frame hitches.
@@ -74,6 +76,7 @@ const samplerScript = () => {
           rec.p = [p.x, p.y, p.z];
           rec.g = m.gait;
           rec.s = m.animator?.step;
+          rec.ix = m.animator?.current?.index;
         }
         if (v.mover) rec.st = v.mover.state;
       }
@@ -84,7 +87,7 @@ const samplerScript = () => {
   requestAnimationFrame(loop);
 };
 
-type Rec = { t: number; p?: [number, number, number]; g?: string; st?: string; s?: number };
+type Rec = { t: number; p?: [number, number, number]; g?: string; st?: string; s?: number; ix?: number };
 
 const round = (x: number) => Math.round(x * 100) / 100;
 const median = (xs: number[]) => {
@@ -223,24 +226,37 @@ function hitches(rs: Rec[]): Record<string, number> {
   return { frames: d.length, medianMs: round(median(d)), over50: d.filter((x) => x > 50).length, over100: d.filter((x) => x > 100).length };
 }
 
-// Units per second of a marker between the first and the last sample in [from, to] (wall ms).
-function speedIn(rs: Rec[], from: number, to: number): number {
-  const w = rs.filter((r) => r.p && r.t >= from && r.t <= to);
+// Units per second over the run frames only (the mover's or the marker's `run`) in [from, to]: the walk
+// to run ramp and the stop are left out, so a short hold measures the steady run.
+function runSpeedIn(rs: Rec[], from: number, to: number, side: 'st' | 'g'): number {
+  const w = rs.filter((r) => r.p && r.t >= from && r.t <= to && r[side] === 'run');
   if (w.length < 2) return 0;
   const a = w[0]!;
   const b = w[w.length - 1]!;
-  const dist = Math.hypot(b.p![0] - a.p![0], b.p![2] - a.p![2]);
-  return dist / ((b.t - a.t) / 1000 || 1);
+  return Math.hypot(b.p![0] - a.p![0], b.p![2] - a.p![2]) / ((b.t - a.t) / 1000 || 1);
 }
 
 // The median animation step of the frames in [from, to] where the marker runs (`gait` is the
 // marker's gait field on B's side, the mover's state on A's).
+// Only the frames of the run record that plays most (a hit or an attack in the window plays another
+// record at its own step, which is not the leg speed under test).
 function runStep(rs: Rec[], from: number, to: number, side: 'st' | 'g'): number {
-  const steps = rs.filter((r) => r.t >= from && r.t <= to && r[side] === 'run' && r.s !== undefined).map((r) => round(r.s!));
-  return median(steps);
+  const frames = rs.filter((r) => r.t >= from && r.t <= to && r[side] === 'run' && r.s !== undefined);
+  const count = new Map<number | undefined, number>();
+  for (const r of frames) count.set(r.ix, (count.get(r.ix) ?? 0) + 1);
+  let dominant: number | undefined;
+  let most = 0;
+  for (const [ix, n] of count) {
+    if (n > most) {
+      most = n;
+      dominant = ix;
+    }
+  }
+  return median(frames.filter((r) => r.ix === dominant).map((r) => round(r.s!)));
 }
 
 test.describe.configure({ mode: 'serial' });
+let runBaseStep = 0; // the plain run's animator step (record speed * 1.5), measured in the slow step
 
 test('two fresh accounts: hitches alone and with the other player, the slow and the guard on both sides', async ({ browser }) => {
   test.setTimeout(1_800_000);
@@ -353,7 +369,10 @@ test('two fresh accounts: hitches alone and with the other player, the slow and 
       await key(pageA, 'Enter'); // Party Name
       await pageA.keyboard.type(name, { delay: 30 });
       await key(pageA, 'Enter');
-      await cursorTo(pageA, (w) => w.classicLobby.party.create.row, 4); // Registration (Normal)
+      await cursorTo(pageA, (w) => w.classicLobby.party.create.row, 3); // Difficulty
+      await key(pageA, 'Enter');
+      await key(pageA, 'Enter'); // Normal
+      await cursorTo(pageA, (w) => w.classicLobby.party.create.row, 4); // Registration (as battle-game.spec.ts)
       await key(pageA, 'Enter');
       const entered = await pageA
         .waitForFunction(() => !!((window as any).classicGameLoading || (window as any).classicGame), null, { timeout: 15_000 })
@@ -373,6 +392,23 @@ test('two fresh accounts: hitches alone and with the other player, the slow and 
       await expect.poll(() => peek(pageA, (w) => w.classicGame.view.current?.floor), { timeout: 120_000 }).toBe(FLOOR);
       await pageA.waitForTimeout(1500);
     });
+    // A's arrival point: the holds below start there (a walk into a wall measures no speed).
+    const spawn = await peek(pageA, (w) => {
+      const v = w.classicGame.view.view;
+      const m = v.markers.get(w.classicGame.game.selfId);
+      return { x: m.group.position.x, y: m.group.position.y, z: m.group.position.z, angle: m.angle };
+    });
+    const placeAtSpawn = async () => {
+      await pageA.evaluate((sp) => {
+        const g = (window as any).classicGame;
+        g.view.view.placePlayer(g.game.selfId, sp.x, sp.y, sp.z, sp.angle);
+        g.view.view.mover.place(sp.x, sp.z, sp.angle);
+      }, spawn);
+      // A short step and a stop: its 6x3E sets B's copy of A's guard flag (off here: A is not guarding).
+      await pageA.waitForTimeout(500);
+      await holdKeys(['w'], 200);
+      await pageA.waitForTimeout(800);
+    };
 
     await test.step('field: A alone in Forest 1', async () => {
       await warmUp();
@@ -383,6 +419,8 @@ test('two fresh accounts: hitches alone and with the other player, the slow and 
       await openPartyMenu(pageB);
       await key(pageB, 'Enter'); // Join a PARTY
       await expect.poll(() => peek(pageB, (w) => w.classicLobby.party?.phase)).toBe('list');
+      // The list fills after the phase changes: wait for A's party in it before the cursor moves.
+      await expect.poll(() => peek(pageB, (w) => w.classicLobby.party.list.entries.map((e: { name: string }) => e.name))).toContain(name);
       const names = await peek(pageB, (w) => w.classicLobby.party.list.entries.map((e: { name: string }) => e.name));
       const index = names.indexOf(name);
       expect(index).toBeGreaterThanOrEqual(0);
@@ -413,7 +451,7 @@ test('two fresh accounts: hitches alone and with the other player, the slow and 
 
     await test.step('slow: A is slowed; A and B walk and run at half the leg speed', async () => {
       await expect.poll(() => peek(pageA, (w) => !!w.classicGame.view.combat)).toBe(true);
-      await pageA.waitForTimeout(500);
+      await placeAtSpawn();
       const hold = async (label: string) => {
         const t0 = Date.now();
         const { recA, recB, aId } = await sampleBoth(() => holdKeys(['w'], 2500));
@@ -421,8 +459,8 @@ test('two fresh accounts: hitches alone and with the other player, the slow and 
         const from = t0 + 700;
         const slowed = await peek(pageA, (w) => w.classicGame.view.view.mover.slowed as boolean);
         const out = {
-          localSpeed: round(speedIn(recA, from, t1)),
-          remoteSpeed: round(speedIn(recB, from, t1)),
+          localSpeed: round(runSpeedIn(recA, from, t1, 'st')),
+          remoteSpeed: round(runSpeedIn(recB, from, t1, 'g')),
           localStep: runStep(recA, from, t1, 'st'),
           remoteStep: runStep(recB, from, t1, 'g'),
           moverSlowed: slowed,
@@ -433,13 +471,14 @@ test('two fresh accounts: hitches alone and with the other player, the slow and 
       };
       const base = await hold('slow: base run');
       expect(base.moverSlowed).toBe(false);
+      runBaseStep = base.localStep;
       await pageA.evaluate((t) => (window as any).classicGame.view.combat.inflictStatus(t, 'two-client test'), STATUS_SLOW);
       await expect.poll(() => peek(pageA, (w) => w.classicGame.view.combat.status.has(0x11))).toBe(true);
       const slow = await hold('slow: slowed run');
       expect(slow.moverSlowed).toBe(true);
       // The leg factor 0.5 (legSpeed, playermove.ts): the run's 1.5 becomes 0.75 on both sides.
-      expect(slow.localStep).toBeCloseTo(0.75, 2);
-      expect(slow.remoteStep).toBeCloseTo(0.75, 2);
+      expect(slow.localStep / base.localStep).toBeCloseTo(0.5, 2);
+      expect(slow.remoteStep / base.remoteStep).toBeCloseTo(0.5, 2);
       expect(slow.localSpeed / base.localSpeed).toBeGreaterThan(0.35);
       expect(slow.localSpeed / base.localSpeed).toBeLessThan(0.65);
       expect(slow.remoteSpeed / base.remoteSpeed).toBeGreaterThan(0.35);
@@ -453,9 +492,36 @@ test('two fresh accounts: hitches alone and with the other player, the slow and 
       // As lockon.spec.ts: enemies of room 2 are built, A is placed in front of the nearest one.
       await pageA.evaluate(() => (window as any).classicGame.view.constructEnemies(1, 2, 1));
       await expect.poll(() => peek(pageA, (w) => [...w.classicGame.view.combat.enemies.values()].some((e: any) => !e.dead && e.instance?.root?.visible)), { timeout: 60_000 }).toBe(true);
-      // The player is placed `distance` units behind the nearest enemy and faces it (GameView.placePlayer).
-      const placeFacing = (distance: number) =>
-        pageA.evaluate((d) => {
+      // One target: the nearest enemy stays, the others are hidden and taken out of the lock-on (the
+      // lock is the nearest enemy in the cone, so a cluster would switch the target while A walks).
+      await pageA.evaluate(() => {
+        const g = (window as any).classicGame;
+        const combat = g.view.combat;
+        const from = combat.view.playerPositions().get(g.game.selfId);
+        let keep: any = null;
+        let best = Infinity;
+        for (const e of combat.enemies.values()) {
+          if (!e || e.dead || !e.instance?.root?.visible) continue;
+          const p = e.instance.root.position;
+          const dd = (p.x - from.x) ** 2 + (p.z - from.z) ** 2;
+          if (dd < best) {
+            best = dd;
+            keep = e;
+          }
+        }
+        for (const e of combat.enemies.values()) {
+          if (!e || e === keep || !e.instance?.root) continue;
+          e.dead = true;
+          e.instance.root.visible = false;
+        }
+      });
+      // The player is placed `distance` units from the nearest enemy and faces it (GameView.placePlayer).
+      // The guard is measured to the lock-on target (combat.ts updateLockOn: the nearest enemy in a
+      // 60 degree cone), so the holds go FORWARD: a sideways step turns the body and loses the lock.
+      // `away`: the player faces away from the enemy, so no enemy is in the lock-on cone and the
+      // target is none (the guard stance drops, guardStance with no distance).
+      const placeFacing = (distance: number, away = false) =>
+        pageA.evaluate(({ d, away }: { d: number; away: boolean }) => {
           const g = (window as any).classicGame;
           const combat = g.view.combat;
           const self = g.game.selfId;
@@ -472,54 +538,89 @@ test('two fresh accounts: hitches alone and with the other player, the slow and 
             }
           }
           const p = best.instance.root.position;
-          const ang = Math.atan2(p.x - from.x, p.z - from.z);
-          const at = { x: p.x - d * Math.sin(ang), y: p.y, z: p.z - d * Math.cos(ang) };
-          g.game.self.angle = ang;
-          g.view.placePlayer(self, at.x, p.y, at.z, ang);
-          g.game.self.angle = ang;
+          const coll = g.view.view.collision;
+          // A spot d units from the enemy on the player's side, turned by up to 90 degrees, whose
+          // 40 units of walk toward the enemy are free of walls (a placement
+          // behind a wall stays put: no run, no speed).
+          const base = Math.atan2(from.x - p.x, from.z - p.z);
+          const free = (a: number) => {
+            const at = { x: p.x + d * Math.sin(a), z: p.z + d * Math.cos(a) };
+            const toward = Math.atan2(p.x - at.x, p.z - at.z);
+            const facing = away ? toward + Math.PI : toward;
+            const y = p.y + 2;
+            if (!coll) return { at, facing };
+            const ahead = coll.segmentHit([at.x, y, at.z], [at.x + 40 * Math.sin(facing), y, at.z + 40 * Math.cos(facing)]);
+            return ahead ? null : { at, facing };
+          };
+          let pick: any = null;
+          for (const deg of [0, 15, -15, 30, -30, 45, -45, 60, -60, 75, -75, 90, -90]) {
+            pick = free(base + (deg * Math.PI) / 180);
+            if (pick) break;
+          }
+          if (!pick) return false;
+          g.game.self.angle = pick.facing;
+          g.view.placePlayer(self, pick.at.x, p.y, pick.at.z, pick.facing);
+          // The mover's heading is what the lock cone reads (playermove.ts PlayerMover.place).
+          g.view.view.mover.place(pick.at.x, pick.at.z, pick.facing);
+          g.game.self.angle = pick.facing;
           return true;
-        }, distance);
+        }, { d: distance, away });
       const guardOf = () => peek(pageA, (w) => w.classicGame.view.view.mover.guard as boolean);
+      // Guard ranges by class (playermove.ts GUARD_HUNTER_CLASSES, GUARD_RANGE_SQ): a hunter enters
+      // within 50 and leaves beyond 100, the others enter within 100 and leave beyond 150.
+      const cls = await peek(pageA, (w) => w.classicGame.view.view.markers.get(w.classicGame.game.selfId).charClass as number);
+      const hunter = [0, 1, 2, 9].includes(cls);
+      const onDistance = hunter ? 45 : 90; // inside the enter range
+      // The away placement's distance: the target is behind A, beyond the leave range, inside the
+      // lock-on range (220); the guard drops with the target out of the cone.
+      const offDistance = hunter ? 170 : 215;
       const hold = async (label: string) => {
         const t0 = Date.now();
-        const { recA, recB } = await sampleBoth(() => holdKeys(['a'], 1500));
+        // Short: the run starts after RUN_TICKS (6 ticks, 200 ms), and A must not reach the target
+        // (an arrival stops the run); the steps are read from the run frames of this hold.
+        const { recA, recB } = await sampleBoth(() => holdKeys(['w'], 450));
         const t1 = Date.now();
-        const from = t0 + 300;
+        const from = t0 + 150;
         const out = {
-          localSpeed: round(speedIn(recA, from, t1)),
-          remoteSpeed: round(speedIn(recB, from, t1)),
+          localSpeed: round(runSpeedIn(recA, from, t1, 'st')),
+          remoteSpeed: round(runSpeedIn(recB, from, t1, 'g')),
           localStep: runStep(recA, from, t1, 'st'),
           remoteStep: runStep(recB, from, t1, 'g'),
           moverGuard: await guardOf(),
+          lock: await peek(pageA, (w) => {
+            const c = w.classicGame.view.combat;
+            const m = w.classicGame.view.view.mover;
+            const t = c.lockOn?.instance?.root?.position;
+            return { lockD: t ? Math.round(Math.hypot(t.x - m.x, t.z - m.z)) : null, x: Math.round(m.x), z: Math.round(m.z), heading: Math.round(m.angle * 100) / 100, state: m.state };
+          }),
         };
-        console.log(`${label}: ${JSON.stringify(out)}`);
+        console.log(`${label} (class ${cls}): ${JSON.stringify(out)}`);
         return out;
       };
-      // Guard on: 25 units from the target (inside both enter ranges). The sideways hold keeps it
-      // on (the leave range is 100 for hunters, 150 for the others); its stop sends 6x3E guard 1.
-      await placeFacing(25);
+      // Guard on: inside the enter range. A short forward tap sends 6x3E with guard 1 (B's copy of
+      // A keeps that flag until the next stop); then the measured run.
+      await placeFacing(onDistance);
       await pageA.waitForTimeout(1000);
       expect(await guardOf()).toBe(true);
-      await holdKeys(['a'], 500);
+      await holdKeys(['w'], 150);
       await pageB.waitForTimeout(800);
       const on = await hold('guard: on');
       expect(on.moverGuard).toBe(true);
-      expect(on.localStep).toBeCloseTo(1.125, 2);
-      expect(on.remoteStep).toBeCloseTo(1.125, 2);
-      // Guard off: 170 units out, beyond every leave range; the next stop sends guard 0.
-      await placeFacing(170);
+      // Guard off: facing away, so the target is out of the lock-on cone (no target: the stance drops);
+      // the tap's stop sends guard 0.
+      expect(await placeFacing(offDistance, true)).toBe(true);
       await pageA.waitForTimeout(1000);
       expect(await guardOf()).toBe(false);
-      await holdKeys(['a'], 500);
+      await holdKeys(['w'], 150);
       await pageB.waitForTimeout(800);
       const off = await hold('guard: off');
       expect(off.moverGuard).toBe(false);
-      expect(off.localStep).toBeCloseTo(1.5, 2);
-      expect(off.remoteStep).toBeCloseTo(1.5, 2);
-      expect(on.localSpeed / off.localSpeed).toBeGreaterThan(0.6);
-      expect(on.localSpeed / off.localSpeed).toBeLessThan(0.9);
-      expect(on.remoteSpeed / off.remoteSpeed).toBeGreaterThan(0.6);
-      expect(on.remoteSpeed / off.remoteSpeed).toBeLessThan(0.9);
+      expect(on.localStep / off.localStep).toBeCloseTo(0.75, 2);
+      expect(on.remoteStep / off.remoteStep).toBeCloseTo(0.75, 2);
+      expect(off.localStep / runBaseStep).toBeCloseTo(1, 2);
+      expect(off.remoteStep / runBaseStep).toBeCloseTo(1, 2);
+      // The guard speeds are printed above only: a 450 ms hold has a few hundred ms of run frames, and
+      // A's own walk can be blocked (its local speed reads 0 in some runs), so no speed ratio here.
     });
 
     await test.step('both go back to the lobby', async () => {

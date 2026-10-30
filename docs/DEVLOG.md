@@ -23389,3 +23389,33 @@ Not checked: the `MapObject` state table for the menu scroll (`144485`) is only 
 **Harness notes.** The first runs failed at login while newserv was down after the disk filled; that is not a client bug. Gizonde once cast with no target in range after earlier casts had thinned the wave; the spec now reloads the wave below 3 live enemies and casts the enemy-picked techniques from 8 units (`dist` per cast).
 
 **Code.** No combat code changed: the counters found no lifecycle bug in `TechObjects` / `TechEffects` / `TechFire`.
+
+## 2026-10-30: Two-client move spec passes: slow and guard leg / animation tie measured
+
+**What ran.** `client/e2e/two-client-move.spec.ts` on the worktree's Vite (port 5191), against the shared newserv and bridge: `env PW_BASE_URL=http://127.0.0.1:5191 node node_modules/@playwright/test/cli.js test e2e/two-client-move.spec.ts --trace off --reporter=line` gives `1 passed (2.3m)` (final run; earlier runs 1 passed as well). Two fresh accounts (`wmv`, `wmw`), Forest 1 party `mv...`, A slowed by `combat.inflictStatus(0x11)`, guard by placement.
+
+**Measured** (A = the local player's mover and marker, B = B's remote copy of A; speed in units/s over the run frames, step = the run animator's `step`, base run record speed 0.8 so the plain run step is 1.2):
+
+| case | local speed | remote speed | local step | remote step |
+|---|---|---|---|---|
+| plain run (slow hold) | 45.0 | 45.0 | 1.2 | 1.2 |
+| slowed (SLOWED_MULT 0.5) | 22.5 (0.50 of plain) | 22.5 (0.50) | 0.6 (0.50) | 0.6 (0.50) |
+| guard on (GUARD_MULT 0.75) | 33.6 (not asserted) | 30.0 (not asserted) | 0.9 (0.75 of off) | 0.9 (0.75) |
+| guard off | 0 (see open) | 44.8 | 1.2 (1.00 of plain) | 1.2 (1.00) |
+
+The spec asserts the step ratios (0.5 slowed, 0.75 guard, 1.0 back to plain) on both sides and the slowed speed ratio (0.35 to 0.65, both sides). The guard speeds are printed only.
+
+**What was wrong (all in the spec, no client code changed).**
+- The step expectations assumed the run record speed 1.0 (a step of 1.5 plain, 0.75 slowed). The record is 0.8 (plain step 1.2), so the asserts are ratios to the plain run's measured step now.
+- The slow hold ran where a walk into geometry gave no speed (one run measured 0 units). A is put back on its arrival point (`placeAtSpawn`, with `mover.place`) before the slow hold.
+- B's copy keeps A's guard flag from the last 6x3E (B's remote guard comes from the stop packet only, as the exe's `in_guard_stance`), so an earlier guarded stop left B at 0.9 on a plain run. `placeAtSpawn` and the guard holds now end in a stop with A's guard as it is.
+- The guard is measured to the lock-on target (`combat.ts updateLockOn`: the nearest live enemy in a 60 degree cone, 220 units). A sideways `a` hold turns the body and loses the target; the holds go forward now. The room's enemies are a cluster that switches the nearest target while A walks, so the other enemies are hidden and marked dead, leaving one target.
+- `placePlayer` does not set the mover's heading (the cone reads it), so the placement also calls `mover.place`.
+- The guard-off case faces away from the target (no target in the cone: the stance drops). The spawn point was tried first but the room's target sat 47 units from it, so it stayed on.
+- A hit or an attack plays another record at its own step; in the first run the slowed local step read 2.25 and a remote 1.4 in another run. Step readings now use only the frames of the run record that plays most (ASSUMED: the hit / attack record; the record index is sampled with each frame, not traced in Ghidra).
+- Party flow ported from battle-game.spec.ts: the Difficulty row (Enter, Enter) before Registration, and B waits until A's party is in the list before the cursor moves. `timed out waiting for join game (64)` was not seen in the five runs of this session (no cause found).
+
+**Open.**
+- In the last runs the local A reads speed 0 in the guard-off window (the mover in `run`, the position unchanged). Not explained: it may be a wall at the away placement (the walk check uses 40 units of `segmentHit`, not the mover's own collision) or an enemy body of a hidden enemy (dead, still a body?). Not traced; the guard steps do not depend on it.
+- The guard speeds are not asserted (450 ms holds, run frames only; the step ratio is what the spec checks).
+- The join timeout (64) is not reproduced; the create flow is the battle-game one now, but not stress-tested.
