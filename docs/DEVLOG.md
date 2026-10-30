@@ -23493,3 +23493,10 @@ The port matched all of this already. The comment in `battletraps.ts` said the b
 **Checks.** `PW_BASE_URL=http://127.0.0.1:5191 playwright test e2e/telepipe-fx.spec.ts --trace off`: 1 passed. No new pure logic (timings and ids are covered by `tests/telepipe.test.ts`).
 
 **Open.** The hold timing of the Ryuker cast object (`ChallengeObject_Initialize_006a3df0`) and the 15-above object's drawing are not recovered. TODO now keeps only remote Resta heal and confusion steering.
+## 2026-10-30: Dead prompt, return to Pioneer 2, dead camera: already ported, re-verified, TODO trimmed
+
+**Report:** the TODO's Damage line still listed "dead prompt and return to Pioneer 2, dead camera" as open. CodeGraph and the DEVLOG show all three were ported on 2026-10-23 (entries "The dead prompt and the return to Pioneer 2", "The dead-state camera", and the Medical Center arrival spot entry): the death fade (`combat/playerdamage.ts`, helper 0x00788a64, `0x006920ac` at alpha 128), `classic/returnprompt.ts` (unitxt 11/0x56, rows 0x6e / 0x6f, position get_gui_position(0x25) = (17, 306)), `render/gameview.ts` `returnToPioneer2` (6x21 floor 0, Medical Center arrival, full HP/TP), `render/playercamera.ts` (dead camera, no chase, stick orbit). No new exe tracing was needed, so no code changed.
+
+**Checks:** `node tests/returnprompt.test.ts` (Node 24): 62/62 passed. `PW_BASE_URL=http://127.0.0.1:5192 npx playwright test e2e/death-return.spec.ts --trace off`: 1 passed (fresh account, Forest 1, lethal hit, prompt opens, Yes, floor 0, full HP).
+
+**Left (unchanged):** critical-hit effect, remote knockback, shield block routine, hit point heights; the ASSUMED items of the 2026-10-23 entries (6x4E as the 0x60 subcommand from 0x006920ac, the arrival facing).
