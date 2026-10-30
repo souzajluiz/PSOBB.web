@@ -17,6 +17,8 @@ import { formatBattleTimer } from './battle.ts';
 
 export const TIMER_POS = [254, 37] as const; // GUI 0x24
 export const RULES_WINDOW = { x: 151, y: 166, w: 328, h: 166 }; // GUI 0x54, size 0x43a40000 x 0x43260000
+// ASSUMED: the results box's origin (the exe writes the rows into the list windows; their GUI position is not traced).
+export const RESULTS_POS = [200, 110] as const;
 const BORDER = 20;
 
 export interface BattleHudState {
@@ -24,12 +26,15 @@ export interface BattleHudState {
   lives: number | null; // null: unlimited
   points: number | null;
   teamPoints: [number, number] | null;
-  lines: string[]; // the ranking / result lines
+  lines: string[]; // the ranking lines (announcements, timed)
   linesUntil: number; // performance.now() ms
+  // The results window (battle.ts resultLines: the SCORE header, then one row per place). Shown from
+  // the result until the battle exits. ASSUMED: its frame position (the exe's list windows are not placed here).
+  results: string[] | null;
 }
 
 export class BattleHud {
-  readonly state: BattleHudState = { timer: null, lives: null, points: null, teamPoints: null, lines: [], linesUntil: 0 };
+  readonly state: BattleHudState = { timer: null, lives: null, points: null, teamPoints: null, lines: [], linesUntil: 0, results: null };
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private frame: CanvasImageSource | null = null;
@@ -62,8 +67,13 @@ export class BattleHud {
     this.state.linesUntil = performance.now() + ms;
   }
 
+  // The results window (battle.ts resultLines). It stays until clear().
+  showResults(lines: string[]): void {
+    this.state.results = lines;
+  }
+
   clear(): void {
-    Object.assign(this.state, { timer: null, lives: null, points: null, teamPoints: null, lines: [], linesUntil: 0 });
+    Object.assign(this.state, { timer: null, lives: null, points: null, teamPoints: null, lines: [], linesUntil: 0, results: null });
   }
 
   private box(ctx: CanvasRenderingContext2D, x0: number, y: number, lines: string[], extra: number): void {
@@ -99,6 +109,7 @@ export class BattleHud {
     if (st.teamPoints) info.push(`A ${st.teamPoints[0]}  B ${st.teamPoints[1]}`);
     if (info.length) this.box(ctx, 20, 37, info, extra);
     if (st.lines.length && performance.now() < st.linesUntil) this.box(ctx, 200, 110, st.lines, extra);
+    if (st.results) this.box(ctx, RESULTS_POS[0], RESULTS_POS[1], st.results, extra);
   }
 
   dispose(): void {
