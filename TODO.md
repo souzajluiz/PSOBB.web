@@ -36,7 +36,7 @@ only part of them has matching C (psobb-client-source).
 ## D. Player and character
 - [ ] Hair / cap texture lists for hat classes; non-default android heads
 - [ ] `proportion_x/y` scaling; per-weapon field motions; emotes, sit
-- [ ] Damage: dead prompt and return to Pioneer 2, dead camera, critical-hit effect, remote knockback, shield block routine, hit point heights
+- [ ] Damage: critical-hit effect, remote knockback, shield block routine, hit point heights (2026-10-30: the dead prompt, the return to Pioneer 2 and the dead camera were ported 2026-10-23 and re-verified by tests/returnprompt.test.ts and e2e/death-return.spec.ts; no longer open)
 - [ ] Items: pickup particle, SE attenuation, drop line-of-sight, pickup lock, tekker window, bank windows, partial stacks
 
 ## E. Combat
