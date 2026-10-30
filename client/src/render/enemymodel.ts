@@ -192,6 +192,9 @@ export class NodeAnimator {
   frame = 0;
   // Holds the motion (an enemy locked by paralysis, shock or freeze).
   paused = false;
+  // A looping motion the view plays by itself (EnemyPartSpec.ownMotion): it never
+  // ends, so it must not keep `every(a => a.ended)` of the other parts from being true.
+  apart = false;
   // Called with every frame applied (a shape motion drawn at the same frame).
   onFrame: ((frame: number) => void) | null = null;
   // A looping motion that goes back to frame 0 instead of carrying the
@@ -226,6 +229,7 @@ export class NodeAnimator {
 
   // The current motion reached its last frame (non-looping motions hold it).
   get ended(): boolean {
+    if (this.apart) return true;
     return !this.loop && this.frame >= this.motion.frameCount - 1;
   }
 
@@ -337,7 +341,7 @@ export class NodeAnimator {
 }
 
 export interface EnemyMotionSpec {
-  index: number; // motion entry, relative to the first motion of the archive
+  index: number; // motion entry, relative to the first motion of the archive; -1: no node motion, only `shape` runs
   speed: number; // frames per game tick
   loop: boolean;
   // A shape motion entry (.njs, relative to the first motion) drawn at the
@@ -372,6 +376,7 @@ export interface EnemyPartSpec {
   offset?: readonly [number, number, number];
   yaw?: number; // extra Y rotation, radians
   scale?: number; // uniform scale of the part's draw (De Rol Le's body: 2.0)
+  scale3?: readonly [number, number, number]; // per-axis scale of the part's draw (the Episode 4 plants)
   // Nodes (depth-first) that keep a material of their own, tagged userData.node
   // (NjcmPartInput.ownMaterials): De Rol Le's segment plates are tinted per node.
   ownMaterials?: readonly number[] | undefined;
@@ -440,6 +445,7 @@ export function buildEnemy(
     if (part.offset) group.position.set(part.offset[0], part.offset[1], part.offset[2]);
     if (part.yaw) group.rotation.y = part.yaw;
     if (part.scale) group.scale.setScalar(part.scale);
+    if (part.scale3) group.scale.set(part.scale3[0], part.scale3[1], part.scale3[2]);
     if (part.hidden) group.visible = false;
     (part.place === 'world' ? world : root).add(group);
     const drives = part.uvDrive?.length ? new Map(part.uvDrive.map((id): [number, THREE.Vector2] => [id, new THREE.Vector2()])) : undefined;
@@ -468,10 +474,24 @@ export function buildEnemy(
       });
     }
     partNodes.push(nodes);
-    if (part.motion && part.motion.index >= 0 && part.motion.index < own.motionCount) {
+    if (part.motion && part.motion.index < 0 && shaper) {
+      // The exe draws some shapes with a NULL node motion (njDrawShapeMotion
+      // 0x008304e0 called with motion 0: the Episode 4 plants bohu 0x00678138 and
+      // kogomi 0x0067a4c0): only the shape's frame runs. The frame count is the
+      // .njs file's (the ctor reads *(shape + 4)).
+      const motion: NjMotion = { frameCount: shaper.shape.frameCount, type: 0, spline: false, shortAngles: false, nodes: [] };
+      const start = motion.frameCount > 1 ? phase * (motion.frameCount - 1) : 0;
+      const animator = new NodeAnimator([], [], motion, part.motion.speed, part.motion.loop, part.motion.loop ? start : 0);
+      const s = shaper;
+      animator.onFrame = (f) => s.apply(f);
+      s.apply(animator.frame);
+      animators.push(animator);
+      animatedParts.push(part);
+    } else if (part.motion && part.motion.index >= 0 && part.motion.index < own.motionCount) {
       const motion = own.motion(part.motion.index, part.motion.nodes ?? nodes.length, part.motion.keys16 ?? false);
       const start = motion.frameCount > 1 ? phase * (motion.frameCount - 1) : 0;
       const animator = new NodeAnimator(nodes, flagsDepthFirst(data.object), motion, part.motion.speed, part.motion.loop, part.motion.loop ? start : 0);
+      animator.apart = !!part.ownMotion && part.motion.loop;
       if (shaper) {
         const s = shaper;
         animator.onFrame = (f) => s.apply(f);

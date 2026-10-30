@@ -5499,17 +5499,35 @@ export class CombatView {
   // its height and scale and drawn only at alpha > 0 (0x00596264); the tail
   // part is drawn in the forms 9..11 (0x00599ef0, two parts), with the same
   // transform. The yaw is the root's.
+  // The forms 7 (puddle, rise, sink) and 8 (crawl) draw the mb body model with a shape
+  // motion instead (0x00599ef0, formats/enemymodels.ts 'Slime puddle' / 'Slime crawl'): the
+  // body model and the tail are not drawn then, and the shape's frame restarts at 0 when the
+  // form changes (0x00599d6e writes +0x30 = 0).
   private slimeView(e: EnemyRuntime, ai: SlimeAi): void {
     const v = ai.view;
+    const shape = v.morph === 7 ? 'Slime puddle' : v.morph === 8 ? 'Slime crawl' : null;
+    if (this.slimeForm.get(e) !== v.morph) {
+      this.slimeForm.set(e, v.morph);
+      const inst = e.instance;
+      const k = shape ? inst.parts.findIndex((p) => p.name === shape) : -1;
+      const m = k >= 0 ? inst.parts[k].motion : null;
+      const a = k >= 0 ? inst.animators[k] : undefined;
+      if (a && m) {
+        a.play(inst.archive.motion(m.index, a.nodeCount), m.speed, m.loop);
+        a.pose(0);
+      }
+    }
     for (const child of e.instance.root.children) {
       const body = child.name === 'Slime body';
-      if (!body && child.name !== 'Slime tail') continue;
+      const own = child.name === shape;
+      if (!body && !own && child.name !== 'Slime tail' && child.name !== 'Slime puddle' && child.name !== 'Slime crawl') continue;
       child.position.set(0, v.height, 0);
       child.scale.set(v.sx, v.sy, v.sz);
-      child.visible = v.alpha > 0 && (body || v.tail);
+      child.visible = v.alpha > 0 && (own || (shape === null && (body || v.tail)));
       if (child.visible) setModelOpacity(child, v.alpha);
     }
   }
+  private slimeForm = new WeakMap<EnemyRuntime, number>();
 
   private epsilonView(e: EnemyRuntime, ai: EpsilonAi, r: { hidden?: boolean; motion?: EnemyAiMotion | null }): void {
     const parts = e.instance.root.children;

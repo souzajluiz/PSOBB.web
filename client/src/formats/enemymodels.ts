@@ -669,6 +669,19 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
       return spec('TObjEneSlime', 'bm4_ps_ma_body.bml', [
         { model: rare ? 2 : 0, motion: loop(10, 0.5), name: 'Slime body' },
         { model: rare ? 3 : 1, motion: loop(10, 0.5), name: 'Slime tail', hidden: true },
+        // Sub-object forms 7 and 8 draw the BML's model 4 / 5 (DAT_009bfda0[rare], 0x00599cf0)
+        // with a shape motion: njDrawShapeMotion 0x008304e0 (calls 0x00599f46..0x00599f9a, 0x00599ef0)
+        // takes the njm at +0x10, the njs at +0x14 and the frame at +0x30 (0 at the form's start,
+        // 0x00599d6e). The rows are 0x009bfd60 + 12 * form = {njm, njs, speed}: form 7 (puddle,
+        // rise, sink) = 11, 12, 0.7 and form 8 (crawl) = 6, 7, 0.8 (0x009bfdb4, 0x009bfdc0). The
+        // frame steps by the speed and wraps at the njm's frame count (0x00599e74; the limit is
+        // frames + 0.0, 0x009297e0), which is a plain loop. The exe indexes the BML by position and
+        // its rows follow its descriptor order (wait_mb.njm 11, wait_mb.njs 12, wait2 last at 13);
+        // this data.gsl keeps the entries sorted (wait2 at 10, wait_mb.njm 12, wait_mb.njs 13), so
+        // the port takes the entries by the names the rows mean (ASSUMED: the descriptor order
+        // names them; move.njm / move.njs 6, 7 agree in both orders).
+        { model: rare ? 5 : 4, motion: { index: 12, speed: 0.7, loop: true, shape: 13 }, name: 'Slime puddle', hidden: true, ownMotion: true },
+        { model: rare ? 5 : 4, motion: { index: 6, speed: 0.8, loop: true, shape: 7 }, name: 'Slime crawl', hidden: true, ownMotion: true },
       ]);
     }
     // Pan Arms (combined): ctor 0x00582ef4, model 0, table 0x009bf220 slot 0 = wait, 0.7.
