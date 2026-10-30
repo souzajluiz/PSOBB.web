@@ -35,6 +35,20 @@ test('a real quest: drag an entity, undo, edit the script, Test in game', async 
   const info = page.locator('.qe-panel', { hasText: 'entities on this floor' }).getByText(/\d+ of \d+ entities/);
   await expect(info).toHaveText(/^\d+ of \d+ entities$/);
 
+  // Script positions: q101's four player starts and its at_coords_talk circles are drawn (one
+  // diamond and pole per position, a ring per radius), and the Script positions box hides them.
+  const scriptMarks = await docEval<{ count: number; rings: number; objects: number }>(
+    page,
+    `(qe) => { const r = qe.scene.scriptRoot; return { count: qe.scene.scriptMarkerCount, rings: r.children.filter((c) => c.type === 'LineLoop').length, objects: r.children.length }; }`,
+  );
+  expect(scriptMarks.count).toBeGreaterThanOrEqual(7);
+  expect(scriptMarks.rings).toBeGreaterThanOrEqual(3);
+  expect(scriptMarks.objects).toBe(scriptMarks.count * 2 + scriptMarks.rings);
+  await page.getByLabel(/Script positions/).uncheck();
+  expect(await docEval<boolean>(page, `(qe) => qe.scene.scriptRoot.visible`)).toBe(false);
+  await page.getByLabel(/Script positions/).check();
+  expect(await docEval<boolean>(page, `(qe) => qe.scene.scriptRoot.visible`)).toBe(true);
+
   // The first entity of the floor, selected from its list row; wait until the 3D view draws it.
   const row = page.locator('.qe-entity-row').first();
   await row.click();
@@ -73,6 +87,7 @@ test('a real quest: drag an entity, undo, edit the script, Test in game', async 
   await expect(page.locator('.qe-script-status')).toHaveClass(/ok/);
   await expect(page.locator('.qe-script-status')).not.toHaveText('');
   await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeEnabled();
+  expect(await docEval<number>(page, `(qe) => qe.scene.scriptMarkerCount`)).toBe(scriptMarks.count); // the script was rebuilt, same positions
 
   // A script that does not assemble is refused with its message, and the quest keeps its script.
   const bytesHash = `(qe) => { let h = 0; for (const b of qe.document.toQuestBin().data) h = (h * 31 + b) >>> 0; return h; }`;

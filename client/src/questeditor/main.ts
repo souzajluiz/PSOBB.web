@@ -17,6 +17,8 @@ import { createPropertiesPanel, type Panel } from './panel_props.ts';
 import { createScriptPanel } from './panel_script.ts';
 import { EditorScene, type Placement } from './scene.ts';
 import { adminSession, buildPublishBody, defaultPublishName, listQuestDirectories, PUBLISH_NAME_RE, publishQuest, publishTarget, type AdminSession, type PublishFormat } from './publish.ts';
+import { buildJsonBody, checkJsonText, defaultJsonName, JSON_NAME_RE, JSON_TEMPLATE, loadQuestJson, saveQuestJson } from './metajson.ts';
+import { extractScriptPositions } from './scriptpos.ts';
 import { registerTestInGame, testInGame } from './testhook.ts';
 import { degreesToBams, wrapBams } from './geom.ts';
 
@@ -227,9 +229,77 @@ async function openPublish(): Promise<void> {
   publishDialog.showModal();
 }
 
+// --- Quest .json (newserv metadata), admin session only ------------------------------------------
+const jsonDialog = h('dialog', { class: 'qe-dialog qe-json-dialog' });
+const jsonBtn = button('Quest .json', () => void openJson(), '', 'Edit the quest\'s newserv metadata file (enabled expressions, chat start ...) on the server (admin panel session required)');
+jsonBtn.hidden = true;
+
+async function openJson(): Promise<void> {
+  if (!session) return;
+  let dirs;
+  try {
+    dirs = await listQuestDirectories();
+  } catch (err) {
+    say(`Cannot list the server's quest folders: ${(err as Error).message}`, 'err');
+    return;
+  }
+  const category = h('select', { 'aria-label': 'JSON category folder' }, ...dirs.map((d) => h('option', { value: d.dir, text: d.dir, selected: d.dir === publishCategory })));
+  const name = h('input', { type: 'text', value: defaultJsonName(doc.fileName || 'quest'), maxLength: 64, autocomplete: 'off', spellcheck: false, 'aria-label': 'JSON file name' });
+  const text = h('textarea', { class: 'qe-json-text', rows: 12, spellcheck: false, 'aria-label': 'Quest JSON' });
+  const note = h('p', { class: 'qe-hint', role: 'status' });
+  const save = button('Save .json', () => void doSave(), 'primary');
+  const target = (): string => `${category.value}/${name.value}`;
+  const exists = (): boolean => dirs.find((d) => d.dir === category.value)?.files.some((f) => f.name === name.value) ?? false;
+  const refresh = (): void => {
+    const nameOk = JSON_NAME_RE.test(name.value);
+    const err = nameOk ? checkJsonText(text.value) : 'The name must look like q9001-bb.json.';
+    note.textContent = err ?? (exists() ? `Replaces ${target()} (a backup is kept on the server).` : `Creates ${target()}.`);
+    note.className = err ? 'qe-hint qe-error' : 'qe-hint';
+    save.disabled = err !== null;
+  };
+  async function load(): Promise<void> {
+    if (!JSON_NAME_RE.test(name.value)) return refresh();
+    try {
+      const t = await loadQuestJson(category.value, name.value);
+      text.value = t ?? JSON_TEMPLATE;
+    } catch (err) {
+      say(`Cannot read ${target()}: ${(err as Error).message}`, 'err');
+    }
+    refresh();
+  }
+  async function doSave(): Promise<void> {
+    if (!session) return;
+    save.disabled = true;
+    try {
+      const r = await saveQuestJson(session, buildJsonBody(category.value, name.value, text.value));
+      publishCategory = category.value;
+      jsonDialog.close();
+      say(`${r.replaced ? 'Replaced' : 'Created'} ${target()}; the server reloaded its quests.`, 'ok');
+    } catch (err) {
+      say(`Saving the .json failed: ${(err as Error).message}`, 'err');
+      refresh();
+    }
+  }
+  category.addEventListener('change', () => void load());
+  name.addEventListener('change', () => void load());
+  text.addEventListener('input', refresh);
+  jsonDialog.replaceChildren(
+    h('h3', { text: 'Quest metadata (.json)' }),
+    h('p', { class: 'qe-hint', text: 'newserv reads q9001-bb-e.json, q9001-bb.json or q9001.json next to the quest and applies its keys: DescriptionFlag, AvailableIf, EnabledIf, AllowStartFromChatCommand, Joinable, LockStatusRegister, AllowedDropModes ... Saving writes the file (the previous one is backed up) and reloads quests.' }),
+    h('label', { class: 'qe-field' }, h('span', { text: 'Category folder' }), category),
+    h('label', { class: 'qe-field' }, h('span', { text: 'File name' }), name),
+    text,
+    note,
+    h('div', { class: 'qe-actions' }, save, button('Cancel', () => jsonDialog.close())),
+  );
+  await load();
+  jsonDialog.showModal();
+}
+
 void adminSession().then((s) => {
   session = s;
   publishBtn.hidden = !s;
+  jsonBtn.hidden = !s;
 });
 
 const toolbar = h(
@@ -246,6 +316,7 @@ const toolbar = h(
   dataBtn,
   dataLabel,
   h('span', { class: 'grow' }),
+  jsonBtn,
   publishBtn,
   testBtn,
 );
@@ -259,6 +330,18 @@ const markersBox = h('input', { type: 'checkbox', checked: true });
 markersBox.addEventListener('change', () => scene.setMarkersVisible(markersBox.checked));
 const modelsBox = h('input', { type: 'checkbox', checked: true });
 modelsBox.addEventListener('change', () => scene.setModelsVisible(modelsBox.checked));
+const scriptPosBox = h('input', { type: 'checkbox', checked: true });
+scriptPosBox.addEventListener('change', () => scene.setScriptVisible(scriptPosBox.checked));
+const scriptPosLabel = h('span', { class: 'qe-script-count', text: '' });
+// The script's positions and radii (p_setpos, at_coords_call ...) for the 3D view, from the disassembly.
+function refreshScriptPositions(): void {
+  try {
+    scene.setScriptPositions(extractScriptPositions(scriptHost.disassemble(doc.bin)));
+  } catch {
+    scene.setScriptPositions([]);
+  }
+  scriptPosLabel.textContent = ` (${scene.scriptMarkerCount})`;
+}
 const viewBar = h(
   'div',
   { class: 'qe-viewbar' },
@@ -267,6 +350,7 @@ const viewBar = h(
   button('Frame selection', () => scene.frameSelection()),
   h('label', { class: 'qe-check' }, markersBox, ' Markers'),
   h('label', { class: 'qe-check' }, modelsBox, ' Models'),
+  h('label', { class: 'qe-check', title: 'Positions and radii the quest script uses: player starts, at_coords_call / talk circles, moved collisions, particles' }, scriptPosBox, ' Script positions', scriptPosLabel),
   h('label', { class: 'qe-check', title: 'Dragging keeps entities on the ground' }, snapBox, ' Snap to ground'),
 );
 const view3d = h('div', { class: 'qe-view' }, viewBar, canvasWrap, viewStatus, h('p', { class: 'qe-hint', text: 'Click selects (Shift or Ctrl adds), drag moves, Alt-drag rotates, drag the green ring around the selection to turn it (Shift snaps to 15 degrees), Delete removes; Ctrl+C / Ctrl+X copy or cut the selection and Ctrl+V pastes it (onto any floor, or into another quest). Drag orbits, wheel zooms, right-drag pans, WASD / Q / E fly. Drag a type from the palette into the view to create it.' }));
@@ -315,6 +399,7 @@ app.replaceChildren(
   fileInput,
   dialog,
   publishDialog,
+  jsonDialog,
 );
 
 // --- Refresh scheduling -------------------------------------------------------------------------------
@@ -385,10 +470,12 @@ function flush(parts: Part[]): void {
 doc.onChange((c: Change) => {
   switch (c.kind) {
     case 'document':
+      refreshScriptPositions();
       flush(['all']);
       break;
     case 'header':
     case 'bin':
+      if (c.kind === 'bin') refreshScriptPositions();
       flush(['props', 'palette', 'floors', 'script', 'toolbar', 'list']);
       break;
     case 'floor':
@@ -425,7 +512,7 @@ document.addEventListener('keydown', (e) => {
     save('qst');
     return;
   }
-  if (typing(e.target) || dialog.open || publishDialog.open) return;
+  if (typing(e.target) || dialog.open || publishDialog.open || jsonDialog.open) return;
   const key = e.key.toLowerCase();
   if (mod && key === 'z') {
     e.preventDefault();
@@ -544,6 +631,7 @@ if (qstUrl) {
     .catch((err) => say(`Cannot load ${qstUrl}: ${(err as Error).message}`, 'err'));
 }
 
+refreshScriptPositions();
 showTab('3d');
 flush(['all']);
 doc.markSaved();

@@ -855,6 +855,93 @@ function makeCharFile(): Buffer {
   admin2.close();
 }
 
+// ---- quest .json edit and quest delete (temp quests dir, backup, mirror, rollback) -----------------------------------------------------
+
+{
+  const mirrorDir = join(tmp, 'quests-mirror2');
+  const admin3 = makeAdmin({ questsMirror: mirrorDir });
+  const m3 = await mount(admin3);
+  const c3 = new Client(m3.base, m3.port);
+  await c3.login();
+  const root = join(systemDir, 'quests', 'extras');
+  mkdirSync(root, { recursive: true });
+  const q = (n: string) => join(root, n);
+  const bk = (n: string) => readdirSync(join(tmp, 'quest-backups', 'extras')).filter((f) => f.startsWith(`${n}.`));
+  const pkg = buildPackage(QuestDocument.blank({ episode: 0, name: 'Del test' }));
+  const b64 = (u: Uint8Array) => Buffer.from(u).toString('base64');
+  eq((await c3.post('/quests/publish', { category: 'extras', name: 'q9200-bb-e.bin', bin: b64(pkg.bin), dat: b64(pkg.dat), confirm: 'extras/q9200-bb-e.bin' })).status, 200, 'publish a quest to delete');
+  writeFileSync(q('q9200-bb.json'), '{"AllowStartFromChatCommand": true}');
+  writeFileSync(q('q9200.json'), '{}');
+  writeFileSync(q('q92001-bb-e.bin'), 'OTHER QUEST');
+  writeFileSync(q('q9200-gc-e.bin'), 'GC FILE');
+  mkdirSync(join(mirrorDir, 'extras'), { recursive: true });
+  writeFileSync(join(mirrorDir, 'extras', 'q9200-bb.json'), '{"AllowStartFromChatCommand": true}');
+
+  // .json: listed, read, written
+  eq((await c3.get('/quests/files')).json.directories.find((d: any) => d.dir === 'extras').files.map((f: any) => f.name).includes('q9200-bb.json'), true, 'a quest .json is listed');
+  eq((await c3.get('/quests/file/extras/q9200-bb.json')).text, '{"AllowStartFromChatCommand": true}', 'and readable');
+  eq((await c3.get('/quests/file/extras/config.json')).status, 400, 'config.json stays refused');
+  const jb = { category: 'extras', name: 'q9200-bb.json', json: '{\n  "DescriptionFlag": 65\n}', confirm: 'extras/q9200-bb.json' };
+  eq((await new Client(m3.base, m3.port).post('/quests/json', jb)).status, 401, 'json edit needs a session');
+  eq((await c3.post('/quests/json', jb, { csrf: false })).status, 403, 'json edit needs the CSRF token');
+  eq((await c3.post('/quests/json', { ...jb, confirm: 'extras' })).status, 409, 'json edit needs the confirmation');
+  eq((await c3.post('/quests/json', { ...jb, json: '{"a":' })).status, 422, 'invalid JSON is refused');
+  eq((await c3.post('/quests/json', { ...jb, json: '[1]' })).status, 422, 'a non-object is refused');
+  eq((await c3.post('/quests/json', { ...jb, json: 'x'.repeat(70000) })).status, 413, 'a json over 64 KB');
+  eq((await c3.post('/quests/json', { ...jb, name: 'config.json', confirm: 'extras/config.json' })).status, 400, 'json edit refuses config.json');
+  eq((await c3.post('/quests/json', { ...jb, name: '../q1.json', confirm: 'extras/../q1.json' })).status, 400, 'json edit refuses a traversal');
+  eq((await c3.post('/quests/json', { ...jb, category: 'nowhere', confirm: 'nowhere/q9200-bb.json' })).status, 404, 'json edit never creates a category');
+  eq(readFileSync(q('q9200-bb.json'), 'utf8'), '{"AllowStartFromChatCommand": true}', 'refused edits changed nothing');
+  fake.shell.length = 0;
+  const jr = await c3.post('/quests/json', jb);
+  eq(jr.status, 200, 'json edit');
+  eq(readFileSync(q('q9200-bb.json'), 'utf8'), jb.json, 'writes the text');
+  eq(readFileSync(join(mirrorDir, 'extras', 'q9200-bb.json'), 'utf8'), jb.json, 'mirrors it');
+  eq(bk('q9200-bb.json').length, 1, 'backs up the previous one');
+  eq(fake.shell, ['reload quests'], 'and reloads quests');
+  eq((await c3.post('/quests/json', { ...jb, name: 'q9201-bb.json', confirm: 'extras/q9201-bb.json' })).json.files[0].replaced, false, 'a new .json can be created');
+  fake.failNext.add('reload quests');
+  check((await c3.post('/quests/json', { ...jb, json: '{"X": 1}' })).status >= 400, 'a failing reload is reported');
+  eq(readFileSync(q('q9200-bb.json'), 'utf8'), jb.json, 'and the previous json is back');
+
+  // delete
+  const del = { category: 'extras', name: 'q9200-bb-e.bin', confirm: 'extras/q9200-bb-e.bin' };
+  eq((await new Client(m3.base, m3.port).post('/quests/delete', del)).status, 401, 'delete needs a session');
+  eq((await c3.post('/quests/delete', del, { csrf: false })).status, 403, 'delete needs the CSRF token');
+  eq((await c3.post('/quests/delete', del, { headers: { Origin: 'https://evil.example' } })).status, 403, 'delete from another origin');
+  eq((await c3.post('/quests/delete', { ...del, confirm: undefined })).status, 409, 'delete needs the confirmation');
+  eq((await c3.post('/quests/delete', { ...del, confirm: 'q9200-bb-e.bin' })).status, 409, 'a wrong confirmation');
+  eq((await c3.post('/quests/delete', { ...del, name: '../x-bb.qst', confirm: 'extras/../x-bb.qst' })).status, 400, 'delete refuses a traversal');
+  eq((await c3.post('/quests/delete', { ...del, name: 'q9200-gc-e.bin', confirm: 'extras/q9200-gc-e.bin' })).status, 400, 'delete refuses a GameCube name');
+  eq((await c3.post('/quests/delete', { ...del, name: 'config.json', confirm: 'extras/config.json' })).status, 400, 'delete refuses config.json');
+  eq((await c3.post('/quests/delete', { ...del, category: 'evil', confirm: 'evil/q9200-bb-e.bin' })).status, 400, 'delete refuses a symlinked category');
+  eq((await c3.post('/quests/delete', { ...del, name: 'q777-bb.qst', confirm: 'extras/q777-bb.qst' })).status, 404, 'delete of a missing quest');
+  eq(existsSync(q('q9200-bb-e.bin')), true, 'refused deletes removed nothing');
+  fake.shell.length = 0;
+  fake.failNext.add('reload quests');
+  check((await c3.post('/quests/delete', del)).status >= 400, 'a failing reload is reported');
+  eq(readFileSync(q('q9200-bb-e.bin')).equals(Buffer.from(pkg.bin)), true, 'and the .bin is restored byte for byte');
+  eq(existsSync(q('q9200-bb.dat')) && existsSync(q('q9200-bb.json')), true, 'with its .dat and .json');
+  eq(existsSync(join(mirrorDir, 'extras', 'q9200-bb-e.bin')), true, 'and the mirror');
+  fake.shell.length = 0;
+  const dr = await c3.post('/quests/delete', del);
+  eq(dr.status, 200, 'delete');
+  eq(dr.json.files.map((f: any) => f.name), ['q9200-bb-e.bin', 'q9200-bb.dat', 'q9200-bb.json'], 'removes the whole quest (bin, dat, json)');
+  eq(readdirSync(root).sort(), ['q9200-gc-e.bin', 'q9200.json', 'q92001-bb-e.bin', 'q9201-bb.json'], 'other quests, versions and the shared q9200.json stay');
+  eq(readdirSync(join(mirrorDir, 'extras')).includes('q9200-bb-e.bin') || readdirSync(join(mirrorDir, 'extras')).includes('q9200-bb.json'), false, 'the mirror copies are removed too');
+  eq(bk('q9200-bb-e.bin').length >= 1 && bk('q9200-bb.dat').length === 1, true, 'every deleted file has a backup');
+  const bkBin = bk('q9200-bb-e.bin').sort().pop()!;
+  eq(readFileSync(join(tmp, 'quest-backups', 'extras', bkBin)).equals(Buffer.from(pkg.bin)), true, 'with the original bytes');
+  eq(fake.shell, ['reload quests'], 'quests are reloaded');
+  eq((await c3.post('/quests/delete', del)).status, 404, 'a second delete finds nothing');
+  const au = (await c3.get('/audit?limit=1000')).json.entries;
+  check(au.some((e: any) => e.action === 'quest.delete' && e.result === 'ok' && e.detail.includes('q9200-bb.dat')), 'delete is audited');
+  check(au.some((e: any) => e.action === 'quest.delete' && e.result === 'error'), 'a restored delete is audited');
+  check(au.some((e: any) => e.action === 'quest.json' && e.result === 'ok'), 'json edit is audited');
+  m3.server.close();
+  admin3.close();
+}
+
 // ---- audit log ----------------------------------------------------------------------------------------------------------------------------
 
 {

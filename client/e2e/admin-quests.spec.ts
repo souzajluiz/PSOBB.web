@@ -197,8 +197,54 @@ test('Quests tab: open a quest in the editor, publish it under a new number, tes
   await expect(again.locator('.qe-entity-list')).toBeVisible({ timeout: 30_000 });
   expect(await again.evaluate(() => (window as any).questEditor.document.header.questNumber)).toBe(TEST_NUMBER);
 
+  // Edit the quest's .json from the editor: the dialog starts from a template (no file yet),
+  // invalid JSON disables Save, a valid object is written (backup on replace), quests reload.
+  const jsonName = `q${TEST_NUMBER}-bb.json`;
+  await again.getByRole('button', { name: 'Quest .json', exact: true }).click();
+  const jd = again.locator('dialog[open]');
+  await jd.getByLabel('JSON category folder').selectOption('hidden');
+  await expect(jd.getByLabel('JSON file name')).toHaveValue(jsonName);
+  await expect(jd.getByLabel('Quest JSON')).toHaveValue(/AllowStartFromChatCommand/);
+  await jd.getByLabel('Quest JSON').fill('{ "AllowStartFromChatCommand": ');
+  await expect(jd.getByRole('button', { name: 'Save .json', exact: true })).toBeDisabled();
+  await jd.getByLabel('Quest JSON').fill('{\n  "AllowStartFromChatCommand": true,\n  "DescriptionFlag": 65\n}\n');
+  await jd.getByRole('button', { name: 'Save .json', exact: true }).click();
+  await expect(again.locator('.qe-message')).toContainText(`Created hidden/${jsonName}`, { timeout: 30_000 });
+  const jsonPath = join(sys, 'quests/hidden', jsonName);
+  expect(JSON.parse(readFileSync(jsonPath, 'utf8'))).toEqual({ AllowStartFromChatCommand: true, DescriptionFlag: 65 });
+  // A second save replaces it and keeps a backup of the first.
+  await again.getByRole('button', { name: 'Quest .json', exact: true }).click();
+  await expect(jd.getByLabel('Quest JSON')).toHaveValue(/DescriptionFlag/);
+  await jd.getByLabel('Quest JSON').fill('{ "AllowStartFromChatCommand": false }');
+  await jd.getByRole('button', { name: 'Save .json', exact: true }).click();
+  await expect(again.locator('.qe-message')).toContainText(`Replaced hidden/${jsonName}`, { timeout: 30_000 });
+  expect(JSON.parse(readFileSync(jsonPath, 'utf8'))).toEqual({ AllowStartFromChatCommand: false });
+  expect(readdirSync(join(tmp, 'quest-backups/hidden')).filter((n) => n.startsWith(`${jsonName}.`))).toHaveLength(1);
+
   await editor.close();
   await again.close();
+
+  // Delete the published quest from the Quests tab: typed confirmation, every file of it
+  // (.bin, .dat, .json) goes after a backup, the others stay, the total is back.
+  await page.getByRole('button', { name: 'Reload quests', exact: true }).click();
+  const hiddenCard = page.locator('details.card', { has: page.locator('summary span.mono', { hasText: /^hidden$/ }) });
+  const hiddenRow = hiddenCard.locator('tr', { hasText: new RegExp(`^\\s*${TEST_NUMBER}(?!\\d)`) });
+  await expect(async () => {
+    await hiddenCard.evaluate((d: HTMLDetailsElement) => (d.open = true));
+    await expect(hiddenRow).toHaveCount(1);
+  }).toPass({ timeout: 30_000 });
+  await hiddenRow.getByRole('button', { name: 'Delete', exact: true }).click();
+  const confirm = page.locator('.modal');
+  await expect(confirm).toContainText(`hidden/q${TEST_NUMBER}-bb-e.bin`);
+  await expect(confirm.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
+  await confirm.getByLabel('confirmation text').fill(`hidden/q${TEST_NUMBER}-bb-e.bin`);
+  await confirm.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(page.locator('.toast').filter({ hasText: 'Deleted' })).toBeVisible({ timeout: 30_000 });
+  const left = readdirSync(join(sys, 'quests/hidden'));
+  expect(left.filter((n) => n.startsWith(`q${TEST_NUMBER}-bb`))).toEqual([]);
+  const saved = readdirSync(join(tmp, 'quest-backups/hidden'));
+  for (const n of [`q${TEST_NUMBER}-bb-e.bin`, `q${TEST_NUMBER}-bb.dat`, jsonName]) expect(saved.some((f) => f.startsWith(`${n}.`))).toBe(true);
+  await expect(page.getByText(`Quests (${questTotal})`, { exact: true }).first()).toBeVisible({ timeout: 30_000 });
   expect(errors).toEqual([]);
 });
 

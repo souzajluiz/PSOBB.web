@@ -252,6 +252,8 @@ Routes (all behind the session; no CORS):
 | `GET /api/quests/files` | per existing category folder of `system/quests`, the `.bin` / `.dat` / `.qst` files (name, size). Symlinks and odd names are left out |
 | `GET /api/quests/file/<folder>/<name>` | the bytes of one such file (at most 8 MB), `application/octet-stream`, `nosniff`, attachment |
 | `POST /api/quests/publish` | `{ category, name, bin, dat }` or `{ category, name, qst }` (base64), plus `confirm`. See below |
+| `POST /api/quests/json` | `{ category, name, json }` (the text of a quest metadata file) plus `confirm`. See "Quest .json and delete" |
+| `POST /api/quests/delete` | `{ category, name }` (any Blue Burst file of the quest) plus `confirm`. See "Quest .json and delete" |
 
 Publishing, in order:
 
@@ -301,8 +303,16 @@ publish route cannot write that `.json`. So a test quest is found in the game
 only in those two cases, and entering it was not checked end to end (see
 DEVLOG, "quest editor on a real quest").
 
-What it does not do: delete quests, edit the quest's `.json` (category flags,
-enabled expressions) or write other game versions. Quests already loaded by
+### Quest .json and delete
+
+Both routes use the same rules as publish: session, `X-CSRF-Token`, same-origin `Origin`, JSON, an **existing** non-symlink category, safe names, `confirm` equal to `<category>/<name>` (409 otherwise), backup first, `reload quests` afterwards with the files put back if the reload fails, the mirror copy (`ADMIN_QUESTS_MIRROR`) kept in step, and an audit entry (`quest.json`, `quest.delete`; `denied` / `error` as for publish). Files are listed and readable through the existing `GET` routes (`.json` names must look like `q058-bb.json`, `q058-bb-e.json`, `q058.json`, `d8825.json`; `config.json` and the like are refused).
+
+- **`/quests/json`**: `json` is the file's text. It must parse as a JSON **object** (not an array, at most 64 KB); anything else is 422 (413 when too large). It creates or replaces `<category>/<name>` through a temp file and rename. The previous file is backed up, the mirror gets the new text. The server does not judge the keys: newserv ignores the ones it does not know and refuses the quest at reload if an expression does not parse (then the old file is restored and the error returned).
+- **`/quests/delete`**: `name` is any Blue Burst file of the quest (`q9001-bb-e.bin`, `q9001-bb.dat`, `q9001-bb.qst`, `q9001-bb.json`). The files removed are `q9001-bb[-lang].bin / .dat / .qst / .json` of that basename in that category (404 if none). Other quests (`q90010-bb...`), other versions (`-gc`, `-dc`) and the version-independent `q9001.json` stay. **Every file is copied to the backup folder before any is removed** (a failed backup removes nothing), then deleted, then its mirror copy is removed (otherwise the entrypoint would copy it back at the next start). If the reload fails the files are restored from the backups, mirror included. The audit entry lists the files.
+
+The Quests tab shows **Delete** next to **Open in editor** on a quest that has Blue Burst files; it asks for the typed `category/file` and tells that backups are kept. The quest editor's **Quest .json** dialog (docs/QUESTEDITOR.md) uses `/quests/json`. Tests: `node tests/admin.test.ts` (temp quests dir, mirror, backups, rollback) and `client/e2e/admin-quests.spec.ts`.
+
+What it does not do: write other game versions. Quests already loaded by
 players in a game are not changed; the menu shows the new version after the
 reload. The quest number newserv shows is the one in the file name
 (`q9001`), not the header's.

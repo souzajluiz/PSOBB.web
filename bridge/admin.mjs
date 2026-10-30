@@ -28,7 +28,7 @@ import {
   loadBank, loadCharBuffer, parseCharacter, summarizeCharacter, writeBank, writeCharacter,
 } from './admin-chars.mjs';
 import { ItemError, gameDataStatus, itemCatalog, loadGameData, statsForLevel, techLimitsForClass } from './admin-items.mjs';
-import { MAX_BODY_BYTES, QuestError, checkCategoryName, checkPublishName, createQuestStore } from './admin-quests.mjs';
+import { MAX_BODY_BYTES, QuestError, checkCategoryName, checkFileName, checkJsonName, checkPublishName, createQuestStore } from './admin-quests.mjs';
 
 const here = import.meta.dirname;
 
@@ -949,6 +949,70 @@ export function createAdmin(options = {}) {
     const label = String(plan.info.name).replace(/[^\x20-\x7e]/g, '?').slice(0, 40);
     audit(actor, 'quest.publish', `${target} files=${result.files.map((f) => `${f.name}(${f.size}${f.replaced ? ',replaced' : ',new'})`).join(' ')} quest=${plan.info.questNumber} "${label}"`);
     return { ok: true, files: result.files, quest: plan.info };
+  });
+
+  route('POST', '/quests/json', { maxBody: 128 * 1024 }, async ({ body, actor }) => {
+    plainObject(body, 'body');
+    const category = checkCategoryName(body.category);
+    const name = checkJsonName(body.name);
+    const target = `${category}/${name}`;
+    requireConfirm(body, target);
+    let plan;
+    try {
+      plan = questStore.planJson(body);
+    } catch (e) {
+      if (e instanceof QuestError) audit(actor, 'quest.json', `${target} rejected: ${e.message}`, 'denied');
+      throw e;
+    }
+    let result;
+    try {
+      result = questStore.commit(plan);
+    } catch (e) {
+      audit(actor, 'quest.json', `${target} write failed`, 'error');
+      log(`quest json write failed: ${e.message}`);
+      throw new HttpError(500, 'could not write the quest .json');
+    }
+    try {
+      await nsShell('reload quests');
+    } catch (e) {
+      questStore.rollback(plan, result);
+      audit(actor, 'quest.json', `${target}: reload failed, file restored`, 'error');
+      throw e;
+    }
+    audit(actor, 'quest.json', `${target} size=${result.files[0].size}${result.files[0].replaced ? ',replaced' : ',new'} keys=${plan.info.keys}`);
+    return { ok: true, files: result.files };
+  });
+
+  route('POST', '/quests/delete', {}, async ({ body, actor }) => {
+    plainObject(body, 'body');
+    const category = checkCategoryName(body.category);
+    const name = checkFileName(body.name);
+    const target = `${category}/${name}`;
+    requireConfirm(body, target);
+    let plan;
+    try {
+      plan = questStore.planDelete(body);
+    } catch (e) {
+      if (e instanceof QuestError) audit(actor, 'quest.delete', `${target} rejected: ${e.message}`, 'denied');
+      throw e;
+    }
+    let result;
+    try {
+      result = questStore.commitDelete(plan);
+    } catch (e) {
+      audit(actor, 'quest.delete', `${target} failed`, 'error');
+      log(`quest delete failed: ${e.message}`);
+      throw new HttpError(500, 'could not delete the quest files');
+    }
+    try {
+      await nsShell('reload quests');
+    } catch (e) {
+      questStore.rollbackDelete(plan, result);
+      audit(actor, 'quest.delete', `${target}: reload failed, files restored`, 'error');
+      throw e;
+    }
+    audit(actor, 'quest.delete', `${target} files=${result.files.map((f) => `${f.name}(${f.size})`).join(' ')} backed up`);
+    return { ok: true, files: result.files };
   });
 
   route('POST', '/reload', {}, async ({ body, actor }) => {
