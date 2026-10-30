@@ -574,3 +574,21 @@ export function respawnCandidates(points: readonly SpawnPoint[], others: readonl
   }
   return out;
 }
+
+// The whole pick of SendTeleportRequestToPlayer (0x00695444), VERIFIED by decompile 2026-10-30.
+// The walk fills a 13-entry table (zeroed) with up to 5 spawns; the entry read is
+// table[ROUND(n * rnd/32768 * 0.99)] (index up to 5 reads a zero entry). When that entry is null OR
+// n == 0 the packet carries the player's OWN angle and position (+0x60, +0x38..0x40); otherwise the
+// spawn's. Either way the exe then sends 6x24 {24, 05, u16 +0x1c, u32 angle, f32 x, y, z} through
+// FUN_008003e0, unless the player's +0x32c == 2 (the NPC challenge player, type 4: never the local
+// player; the local one is 0 or 3 after a takeover, so the gate is open here: ASSUMED 0).
+// `fallback` marks the own-position case (the player does not move).
+export interface RespawnTarget {
+  spawn: SpawnPoint;
+  fallback: boolean;
+}
+
+export function respawnTarget(points: readonly SpawnPoint[], others: readonly { x: number; z: number }[], rnd: number, own: SpawnPoint): RespawnTarget {
+  const spawn = pickRespawn(respawnCandidates(points, others), rnd);
+  return spawn ? { spawn, fallback: false } : { spawn: own, fallback: true };
+}

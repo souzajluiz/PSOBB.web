@@ -8,7 +8,7 @@ import { build6x80, build6x83, trapNumber as battleTrapNumber } from '../client/
 import { STATUS } from '../client/src/combat/status.ts';
 import {
   BattleTrap, TRAP_BLAST_RADIUS, TRAP_CHAIN_FUSE, TRAP_EFFECTS, TrapCounters, TrapField, hitReport, killCounts, parse6x80,
-  parse6x83, pickRespawn, respawnCandidates, RESPAWN_PLAYER_DISTANCE_SQ, trapAnnouncement, trapDamage, trapNumber, trapVisible, placeRequest, trapPaletteType,
+  parse6x83, pickRespawn, respawnCandidates, respawnTarget, RESPAWN_PLAYER_DISTANCE_SQ, trapAnnouncement, trapDamage, trapNumber, trapVisible, placeRequest, trapPaletteType,
   TRAP_GATE_ADDRESS, TRAP_GATE_VALUE, TRAP_DEATH_PARTICLE, trapDrawn, trapModelParts, trapRevealed, TRAP_REVEAL_RANGE_SQ,
   MAP_ACTION_PERMISSION, TRAP_ACTION_PERMISSION, TRAP_ARM_FRAMES, TRAP_FUSE_FRAMES, TRAP_TRIGGER_RADIUS,
   trapPlacePermitted, triggerSkipsOwner, blastRoomMatch, challengeFlagValue,
@@ -229,6 +229,17 @@ const tgt = (over: Partial<TrapTarget>): TrapTarget => ({ id: 1, x: 0, z: 0, flo
   eq(pickRespawn(pts, 16384)?.x, 2, 'raw half: 5 * 0.5 * 0.99 = 2.475 rounds to 2');
   eq(pickRespawn(pts.slice(0, 2), 32767)?.x ?? null, null, 'two candidates, high roll: 2 * 0.99 rounds to 2, past the list');
   eq(pickRespawn([], 100), null, 'no candidates');
+}
+{
+  // The fallback (decompile 2026-10-30): no candidate, or a roll past the list, sends the own pose.
+  const own = { x: 7, y: 1, z: 9, angle: 1.5 };
+  const sp = [{ x: 0, y: 0, z: 0, angle: 0 }];
+  const t1 = respawnTarget(sp, [{ x: 0, z: 0 }], 100, own);
+  eq([t1.fallback, t1.spawn.x, t1.spawn.z, t1.spawn.angle], [true, 7, 9, 1.5], 'every spawn taken: own position and angle');
+  eq(respawnTarget([], [], 0, own).fallback, true, 'no spawns on the floor: fallback');
+  eq(respawnTarget(sp, [], 32767, own).fallback, true, 'roll past the list (1 * 0.99 rounds to 1): fallback');
+  const t2 = respawnTarget(sp, [], 0, own);
+  eq([t2.fallback, t2.spawn.x], [false, 0], 'a free spawn, low roll: the spawn');
 }
 {
   // SendTeleportRequestToPlayer (0x00695444), VERIFIED 2026-10-30: a spawn is skipped when a player
