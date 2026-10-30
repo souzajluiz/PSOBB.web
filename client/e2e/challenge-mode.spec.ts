@@ -10,7 +10,9 @@ import { consoleLog, cursorTo, expectInGame, key, logIn, openPartyMenu, peek, re
 import { freshUser } from './fresh-field.ts';
 import { makeCharacter, slotFilled } from './phone-helpers.ts';
 
-const PREFIX = 'wch';
+const PREFIX = 'chs';
+// The stage to start (1-based, CM_STAGE env): the Nth entry of the clerk's stage list.
+const STAGE = Math.max(1, Number(process.env.CM_STAGE ?? 1));
 
 // A fresh account: logged in at the character select with slot 0 made.
 async function freshAccount(page: Page, user: string): Promise<void> {
@@ -23,7 +25,7 @@ async function freshAccount(page: Page, user: string): Promise<void> {
   }
 }
 
-test('Challenge Mode: a Challenge party, stage 1 started from the clerk, the stage runs', async ({ browser }) => {
+test(`Challenge Mode: a Challenge party, stage ${STAGE} started from the clerk, the stage runs`, async ({ browser }) => {
   test.setTimeout(900_000);
   const ctxA: BrowserContext = await browser.newContext();
   const ctxB: BrowserContext = await browser.newContext();
@@ -128,6 +130,13 @@ test('Challenge Mode: a Challenge party, stage 1 started from the clerk, the sta
     // Level 1: the stage list.
     await expect.poll(async () => (await state())?.level, { timeout: 30_000 }).toBe(1);
     await expect.poll(async () => (await state())?.names?.[0] ?? '', { timeout: 30_000 }).toMatch(/Stage1/);
+    // The server lists only the stages the account may play: newserv's quests/challenge-ep1/c88102.json has
+    // AvailableIf "CC_Ep1_1" (= Episode 1 stage 1 completed, ExpressionEnvironment.hh), so a fresh
+    // character sees Stage1 only and stages 2+ need a recorded clear of the stage before them.
+    const listed = ((await state())?.names ?? []).length;
+    test.skip(STAGE > listed, `Stage${STAGE} is not listed for this account (only ${listed} stage(s); newserv AvailableIf CC_Ep1_${STAGE - 1})`);
+    for (let i = 1; i < STAGE; i++) await key(a, 'ArrowDown');
+    console.log(`stage list: ${JSON.stringify(await state())}`);
     await key(a, 'Enter');
     // Level 2: the Stage1 entry's description; its Enter opens the yes / no (its cursor starts on Yes).
     await expect.poll(async () => (await state())?.level, { timeout: 30_000 }).toBe(2);
@@ -144,10 +153,21 @@ test('Challenge Mode: a Challenge party, stage 1 started from the clerk, the sta
   });
 
   await test.step('the quest is loaded and started; the leader stands on the stage floor', async () => {
-    await expect.poll(() => logs.some((l) => /quest "Stage1" started/.test(l)), { timeout: 120_000, intervals: [500] }).toBe(true);
+    await expect.poll(() => logs.some((l) => new RegExp(`quest "Stage${STAGE}" started`).test(l)), { timeout: 120_000, intervals: [500] }).toBe(true);
     await expect
       .poll(() => peek(a, (w) => w.classicTown.counterOpen === false && w.classicGame.view.current?.floor !== 0), { timeout: 120_000, intervals: [500] })
       .toBe(true);
+    if (STAGE === 1) {
+      // Stage mechanic: the Area counter window (cmoderun.ts tick: GUI 0x27, "Area NN/NN" of
+      // set_current_area_number / set_area_total, SetupTitleAndCountInternal_00710ae0) is shown, and the
+      // timer window (GUI 0x24, set_timer_text 0x00761588, "h'mm\"ss") runs on.
+      const huds = () => peek(a, (w) => { const h = w.classicTown.ui.huds; return { area: h.get('cmode-area')?.lines?.[0] ?? '', timer: h.get('cmode-timer')?.lines?.[0] ?? '' }; });
+      await expect.poll(async () => (await huds()).area, { timeout: 60_000, intervals: [500] }).toMatch(/^Area 0[1-9]\/\d\d$/); // the quest's own set_area_total (46 in c88101); 01 flips to 02 within seconds
+      await expect.poll(async () => (await huds()).timer, { timeout: 60_000, intervals: [500] }).toMatch(/^\d'\d\d"\d\d$/);
+      const t0 = (await huds()).timer;
+      await expect.poll(async () => (await huds()).timer, { timeout: 30_000, intervals: [500] }).not.toBe(t0);
+      console.log(`HUD: ${JSON.stringify(await huds())}`);
+    }
     console.log(logs.filter((l) => /quest|challenge|cmode|cm:|stage/i.test(l)).slice(-30).join('\n'));
   });
 
