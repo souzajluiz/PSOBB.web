@@ -23469,3 +23469,12 @@ The port matched all of this already. The comment in `battletraps.ts` said the b
 **Port.** `quest/battletraps.ts` `respawnTarget(points, others, rnd, own)` returns the spawn or `{own, fallback: true}`. `quest/battlerun.ts` `respawnTeleport` reads `view.selfPose()`, sends the same `buildTeleport` 6x24 in both cases, and moves the player (`placePlayer`) only for a real spawn. Tests: `tests/battletraps.test.ts` (fallback block). tests/battletraps, battle, pvp and `tsc --noEmit` pass.
 
 **Open.** Not e2e-tested; the angle sent in the fallback is the port's own pose angle converted to BAMS.
+## 2026-10-30 - Challenge mode e2e: stage picker and stage HUD
+
+**Stage picker (TODO line "Challenge mode in a real game (all stages)").** `client/e2e/challenge-mode.spec.ts` now takes `CM_STAGE` (1-based, default 1) and moves the clerk's stage list cursor down to that entry. A fresh character is offered `Stage1` only: the dialog's list (A2 from newserv) had one name. That is the server's rule, not a port bug: `vendor/newserv/system/quests/challenge-ep1/c88102.json` has `AvailableIf`/`EnabledIf` `CC_Ep1_1`, and `ExpressionEnvironment.hh` resolves `CC_Ep1_X` as "Episode 1 stage X completed" from the character's challenge records. So stage 2 needs a recorded Stage1 clear; with `CM_STAGE=2` on a fresh account the spec skips with that reason. No server hack. Stage 2+ in a real game needs an account with a stored clear (or a played-through Stage1), still open.
+
+**Stage mechanic (Stage1).** After the leader stands on the stage floor the spec reads the quest HUD map (`classicTown.ui.huds`, no new hook): the Area counter `cmode-area` (GUI 0x27, `areaCounterText`, SetupTitleAndCountInternal_00710ae0) shows `Area NN/46` (46 = the quest script's own `set_area_total`; area 01 flips to 02 in seconds), and the timer `cmode-timer` (GUI 0x24, `timerText`, set_timer_text 0x00761588) matches `h'mm"ss` and advances. No constants were added to the port.
+
+**Run.** `PW_BASE_URL=http://127.0.0.1:5192 npx playwright test e2e/challenge-mode.spec.ts --trace off`: 1 passed (1.9m); with `CM_STAGE=2`: 1 skipped.
+
+**Open.** Stage clear, rewards, records, ghost flow, stages 2-9 and Episode 2 in a real game.
