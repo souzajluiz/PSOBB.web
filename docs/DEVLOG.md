@@ -23435,3 +23435,23 @@ Strings, read from the PE file (REA's Ghidra provider failed to launch this sess
 **Spec.** `client/e2e/battle-game.spec.ts` after `battle: time up` polls `classicBattle.hud.state.results` on both clients (60 s) and checks `SCORE` then two `1st`/`2nd` rows. Command: `cd client && env PW_BASE_URL=http://127.0.0.1:5191 node node_modules/@playwright/test/cli.js test e2e/battle-game.spec.ts --trace off --reporter=line` gives `1 passed (sample run)`. Both results windows read `["SCORE","1st Tallie","2nd Tallie"]`. The two characters share the name `Tallie` in this room, so the names do not tell the players apart; the spec checks the rows' shape, not who is listed first.
 
 **Open.** Three earlier runs failed at the check `hasLog(logsB, /battle: time up/)`, 30 s and then 120 s after A's log, with no page error on B. In those runs B's timer reached 0 and B's HUD reached the results state (B's `DIAG` timer was null; A's state read `results`), yet the log never reached the captured console. The check was removed; cause not traced. The exe's list-window position and hold rule remain ASSUMED.
+
+## 2026-10-30: Battle respawn pick checked against the exe; sonar covered by the two-client spec
+
+**What ran.** `client/e2e/battle-game.spec.ts` on the worktree's Vite (port 5191), against the shared newserv and bridge: `cd client && env PW_BASE_URL=http://127.0.0.1:5191 node node_modules/@playwright/test/cli.js test e2e/battle-game.spec.ts --trace off` gives `1 passed (12.0m)`, `page errors: 0`, `failed requests: 0`. The unit tests `node --experimental-strip-types tests/battletraps.test.ts`, `tests/battle.test.ts` and `tests/pvp.test.ts` all print ALL PASS.
+
+**Respawn pick (TODO line "Battle: PvP hits from our side").** The TODO said the pick was not wired. It is: `quest/battlerun.ts` `respawnTeleport` takes `respawnCandidates(view.respawnPoints(), others)` and `pickRespawn(..., rnd)`, with `others` the other players' positions. The exe check, against PsoBB.exe (Ghidra, `tools/ghidra/decomp.sh`):
+- `FUN_00695444` (SendTeleportRequestToPlayer) walks the floor object list; a spawn is taken when its type matches and its flag is 0. The loop over the 12 player slots (skipping the respawning player's slot) runs `FUN_007a9180` and `goto`s past the add when the result is `< _DAT_0093c68c`. So a spawn is SKIPPED when a player stands within the distance, strictly below it.
+- `FUN_007a9180` is dx² + dz² (indices 0 and 2, no y). The constant at 0x0093c68c is 2500.0 (read from the PE image), so the distance is 50, squared.
+- The list stops at 5 candidates (`if (4 < iVar4) break`).
+- The index is `ROUND(count * (rand / 32768.0) * 0.99)` with 0x0093c694 = 32768.0 and 0x0093c690 = 0.99 (read from the image); an index past the list gives the own position.
+
+The port matched all of this already. The comment in `battletraps.ts` said the branch sense was UNCLEAR; the decompile shows it: skip when near. The new test block in `tests/battletraps.test.ts` pins the boundary (49.9 skips, exactly 50 does not, 3-4-5 style diagonal, y ignored, list order, 5 at most).
+
+**Open (respawn).** The exe's fallback (no candidate) calls `FUN_008003e0` with the player's own position and angle, so it sends a 6x24-style packet unless `param_1 + 0x32c == 2`; the port returns without sending. The `0x32c` state is not named, so the port keeps the no-send path (ASSUMED no-op for other clients).
+
+**Sonar (TODO line "Battle mode in a real game").** `client/e2e/battle-game.spec.ts` has a new step 4b after the HUD timer: A's stock is read (5 with the battle rules), `BattleRun.useSonar()` is called, and the same evaluate reads the manager: `ok true, life 990, active true, count 4, again false` (a second use refused). The step wraps `combat.playSonarPing` to record the manager's life at each ping: 15 pings at life 960, 900, ..., 120 (every 60 frames, nobody near), all above 90. It waits for the manager to end (`active` false). The stock stays at 4. No port change was needed; the sonar's `window` hooks (`classicBattle`, `classicGame`) were enough.
+
+**Code.** `client/e2e/battle-game.spec.ts` (step 4b, header line), `tests/battletraps.test.ts` (the respawn distance and candidates block, `respawnCandidates` and `RESPAWN_PLAYER_DISTANCE_SQ` imported). `TODO.md` (the two battle lines). No change under `client/src`.
+
+**Open.** The sonar's effect beyond the ping (what the manager reveals, if anything) is not ported; the sonar row's greyed state at 0 is ASSUMED (unchanged). The PvP lines remain as they were.

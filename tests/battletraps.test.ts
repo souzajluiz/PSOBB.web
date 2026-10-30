@@ -8,7 +8,7 @@ import { build6x80, build6x83, trapNumber as battleTrapNumber } from '../client/
 import { STATUS } from '../client/src/combat/status.ts';
 import {
   BattleTrap, TRAP_BLAST_RADIUS, TRAP_CHAIN_FUSE, TRAP_EFFECTS, TrapCounters, TrapField, hitReport, killCounts, parse6x80,
-  parse6x83, pickRespawn, trapAnnouncement, trapDamage, trapNumber, trapVisible, placeRequest, trapPaletteType,
+  parse6x83, pickRespawn, respawnCandidates, RESPAWN_PLAYER_DISTANCE_SQ, trapAnnouncement, trapDamage, trapNumber, trapVisible, placeRequest, trapPaletteType,
   TRAP_GATE_ADDRESS, TRAP_GATE_VALUE, TRAP_DEATH_PARTICLE, trapDrawn, trapModelParts, trapRevealed, TRAP_REVEAL_RANGE_SQ,
   MAP_ACTION_PERMISSION, TRAP_ACTION_PERMISSION, TRAP_ARM_FRAMES, TRAP_FUSE_FRAMES, TRAP_TRIGGER_RADIUS,
   trapPlacePermitted, triggerSkipsOwner, blastRoomMatch, challengeFlagValue,
@@ -229,6 +229,22 @@ const tgt = (over: Partial<TrapTarget>): TrapTarget => ({ id: 1, x: 0, z: 0, flo
   eq(pickRespawn(pts, 16384)?.x, 2, 'raw half: 5 * 0.5 * 0.99 = 2.475 rounds to 2');
   eq(pickRespawn(pts.slice(0, 2), 32767)?.x ?? null, null, 'two candidates, high roll: 2 * 0.99 rounds to 2, past the list');
   eq(pickRespawn([], 100), null, 'no candidates');
+}
+{
+  // SendTeleportRequestToPlayer (0x00695444), VERIFIED 2026-10-30: a spawn is skipped when a player
+  // other than the respawning one is within the distance (0x007a9180 = dx^2 + dz^2, no y; the
+  // compare at 0x006954f2's jump is `fVar6 < _DAT_0093c68c`, 0x0093c68c = 2500.0, so the skip is strict).
+  eq(RESPAWN_PLAYER_DISTANCE_SQ, 2500, 'the respawn distance is 50 (squared 2500, 0x0093c68c)');
+  const spawn = (x: number, y: number, z: number) => ({ x, y, z, angle: 0 });
+  const pts = [spawn(0, 0, 0), spawn(100, 0, 0), spawn(0, 0, 100)];
+  eq(respawnCandidates(pts, [{ x: 0, z: 49.9 }]).map((p) => [p.x, p.z]), [[100, 0], [0, 100]], 'a player 49.9 from spawn 0 skips it (dist^2 < 2500)');
+  eq(respawnCandidates(pts, [{ x: 0, z: 50 }]).length, 3, 'a player exactly 50 away does not skip (strict <)');
+  eq(respawnCandidates(pts, [{ x: 30, z: 39 }]).map((p) => [p.x, p.z]), [[100, 0], [0, 100]], 'the diagonal (30, 39), dist^2 2421, skips spawn 0');
+  eq(respawnCandidates([spawn(0, 0, 0)], [{ x: 0, z: 0 }]).length, 0, 'a player on the spawn skips it');
+  eq(respawnCandidates([spawn(0, 500, 0)], [{ x: 0, z: 0 }]).length, 0, 'only x and z count: a spawn 500 up at the player xz is skipped');
+  const many = Array.from({ length: 9 }, (_, i) => spawn(i * 1000, 0, 0));
+  eq(respawnCandidates(many, []).map((p) => p.x), [0, 1000, 2000, 3000, 4000], 'the first 5 spawns in list order');
+  eq(respawnCandidates(many, [{ x: 0, z: 0 }, { x: 2000, z: 0 }]).map((p) => p.x), [1000, 3000, 4000, 5000, 6000], 'skips in list order, still 5 at most');
 }
 
 {
