@@ -9,6 +9,7 @@ import {
   DragonBurst,
   DRAGON_BODY_BOXES,
   DRAGON_MOUTH,
+  DRAGON_ROOT,
   DRAGON_SE,
   DRAGON_NODE_TABLE,
   DRAGON_TAIL,
@@ -1351,6 +1352,64 @@ for (const n of [1, 2, 5]) {
   const seqs = [DRAGON_SEQ_NORMAL_A, DRAGON_SEQ_NORMAL_B, DRAGON_SEQ_ULTIMATE_A, DRAGON_SEQ_ULTIMATE_B];
   check(seqs.every((s) => !s.includes(0x19) && !s.includes(0x1a)), 'no action sequence holds 0x19 or 0x1a');
   check(!Object.values(DRAGON_STATE).includes(0x19) && !Object.values(DRAGON_STATE).includes(0x1a), 'the port names no state 0x19 or 0x1a');
+}
+
+// 32. The root height (GetPlayerYPosition, DRAGON_ROOT): the take-off (flyUp at frame
+//     40) starts the altitude from the recorded height, the landing floor (state 8)
+//     follows it until the sub-state flips and then holds. Without a record the guess
+//     (0) is used, as before.
+{
+  check(DRAGON_ROOT.node === 0 && DRAGON_ROOT.scale === 2, 'the root is node 0, scaled 2.0 (0x00422768)');
+  const p = (ai: DragonAi) =>
+    ai as unknown as { setSlot(i: number): void; mframe: number; speed: number; c870: number; c86c: number; f888: number };
+  // take-off: one tick at frame 40 sets the altitude to the recorded root height.
+  const takeOff = (height: number | null) => {
+    const ai = brain();
+    ai.recordRootHeight(height);
+    const q = p(ai);
+    q.setSlot(25);
+    q.c870 = 0;
+    q.speed = 0.5;
+    q.mframe = 40 - 0.5;
+    (ai as unknown as { tickFlyUp(): void }).tickFlyUp();
+    return ai.alt;
+  };
+  eq(takeOff(12.5), 12.5, 'flyUp: the altitude starts at the recorded root height');
+  eq(takeOff(null), 0, 'flyUp: without a record the guess (0) is used');
+  // landing: sub 0 follows the root height each tick, the flip freezes it.
+  {
+    const ai = brain();
+    const q = p(ai);
+    q.setSlot(25);
+    q.speed = 0.5;
+    ai.recordRootHeight(7);
+    q.c86c = 0;
+    q.mframe = 0;
+    (ai as unknown as { tickLand(): void }).tickLand();
+    eq(q.f888, 7, 'land: sub 0 reads the root height');
+    ai.recordRootHeight(9);
+    q.mframe = 19;
+    (ai as unknown as { tickLand(): void }).tickLand();
+    // The flip runs sub 1 in the same tick (the floor is 9 above the altitude, so it may land at once).
+    check(q.c86c >= 1, `land: the frame-18 threshold flips the sub-state (${q.c86c})`);
+    eq(q.f888, 9, 'land: the threshold frame still reads the root height');
+    ai.recordRootHeight(-4);
+    q.mframe = 20;
+    (ai as unknown as { tickLand(): void }).tickLand();
+    eq(q.f888, 9, 'land: after the flip the floor holds');
+  }
+  // recordRootHeight ignores a non-finite value (keeps the guess).
+  {
+    const ai = brain();
+    ai.recordRootHeight(Number.NaN);
+    const q = p(ai);
+    q.setSlot(25);
+    q.speed = 0.5;
+    q.c86c = 0;
+    q.mframe = 0;
+    (ai as unknown as { tickLand(): void }).tickLand();
+    eq(q.f888, 0, 'a NaN root height is the guess');
+  }
 }
 
 if (failures) {

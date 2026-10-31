@@ -67,7 +67,7 @@ import { DeRolLeAi, DrlSegmentAi, DRL_BEAM, DRL_SEGMENT, DRL_SLOTS, type DrlEven
 import { BARBA_CAPTURE_COUNT, BARBA_HP, BARBA_PART_COUNT, BARBA_PART_RADIUS, BARBA_PIG_DEST, BARBA_PIG_HEADING, BarbaPartAi, BarbaRayAi, type BarbaEvent, barbaPigMode, barbaRows, decodeBarbaMessage } from '../combat/barbaray.ts';
 import { PigRayAi, type PigEvent } from '../combat/barbaminion.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
-import { DragonAi, DragonFireball, DRAGON_BODY_BOXES, DRAGON_MOUTH, type DragonEvent } from '../combat/dragon.ts';
+import { DragonAi, DragonFireball, DRAGON_BODY_BOXES, DRAGON_MOUTH, DRAGON_ROOT, type DragonEvent } from '../combat/dragon.ts';
 import { GoldDragonAi, GOL_BODY_BOXES, GOL_EXTRA, decodeGolA8, type GolEvent, type GolExtraPlacement } from '../combat/goldragon.ts';
 import { decodeEnemyTargetState } from '../combat/enemystate.ts';
 import { shareMeshResources } from './dispose.ts';
@@ -3142,6 +3142,9 @@ export class CombatView {
         out[2] = v.z;
         return true;
       };
+      // GetPlayerYPosition (DRAGON_ROOT): the root node's animated y, scaled 2.0.
+      const rootNode = tree[DRAGON_ROOT.node];
+      ai.recordRootHeight(rootNode ? DRAGON_ROOT.scale * rootNode.position.y : null);
       ai.recordFeet(read);
       // The mouth is node 60 with the point (0, 0, 5) in its space; the brain
       // keeps y above the ground the body stands on (the altitude's base).

@@ -52,11 +52,12 @@
 // State 0x15's phase 5 is EnemyOnKilledHandler_0051f894 (on_enemy_killed +
 // set_monster_spawn_initdata_as_dead), the exe's kill sends.
 //
-// Not reproduced: the intro's camera, particles and sounds, the model-node
-// reads other than the tail's, the mouth's and the feet's (GetPlayerYPosition
-// 0x00422768), the tail boxes' direction vector (+0xc4 / +0xcc, a knockback
-// the hit callback reads), the ground follower's dust (0x00427984) and the
-// player-controlled dragon. The hit boxes are DRAGON_BODY_BOXES and
+// Not reproduced: the intro's camera, particles and sounds, the tail boxes'
+// direction vector (+0xc4 / +0xcc, a knockback the hit callback reads), the
+// ground follower's dust (0x00427984: its puffs are textured quads, MapObject
+// 0x00429400, not particle ids, so no particle port) and the player-controlled
+// dragon. The model reads are the tail's, the mouth's, the feet's and the root
+// height (DRAGON_ROOT); +0x418 is the mouth's y (the copy of +0x3f0), not a head node. The hit boxes are DRAGON_BODY_BOXES and
 // DRAGON_TAIL. Heights come from the altitude registers.
 
 import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
@@ -226,6 +227,16 @@ export function footNodes(side: number): readonly number[] {
   return side > 0 ? DRAGON_FEET.front : DRAGON_FEET.back;
 }
 
+// The root height (GetPlayerYPosition, 0x00422768, the player-struct helper the
+// Sinow Beat code calls): with a scale of 2.0 it animates the root node (node 0)
+// and transforms the origin, so the result is 2.0 times the root node's animated
+// translation y. The brain reads it for the take-off height (flyUp, 0x00422430,
+// at frame 40: +0x888 = the root height, then the altitude climbs from it) and as
+// the landing floor (state 8, 0x00420ee8: +0x888 = the root height on each frame
+// until the sub-state flips, then it holds). ASSUMED: the port's node 0 translation
+// is the NJM root translation (the same units as the other recorded nodes).
+export const DRAGON_ROOT = { node: 0, scale: 2 } as const;
+
 // The fire's sound effects. 0x00814298 / 0x008144b0 are the SE engine
 // (play_directional_sound_effect, audio/se.ts), not the particle spawn: the
 // breath's loop plays 0x321 every frame (0x00422cb7), its 30 frames after the
@@ -290,7 +301,7 @@ export const DRAGON_GUESS = {
   stompKnockback: 3,
   landRadiusMin: 60,
   impactRadius: 60,
-  animYOffset: 0, // GetPlayerYPosition (the model's own root height)
+  animYOffset: 0, // the root height before the model is drawn (DRAGON_ROOT, recordRootHeight)
   headBelowGround: 25, // the dive's head test (+0x418 <= -50) as an altitude
   followerWait: 900,
   fallbackWait: 150,
@@ -732,6 +743,8 @@ export class DragonAi extends BrainBase {
   // until the model has been drawn.
   private readonly feetNodes = new Map<number, [number, number, number]>();
   private mouthPlace: [number, number, number] | null = null;
+  // The root height the draw recorded (DRAGON_ROOT); the guess until the first draw.
+  private rootY: number = DRAGON_GUESS.animYOffset;
   // The flame's emitter handle (+0x8b4, flyShoot sub-state 2) and the counter of
   // the emerge / dive helper (+0x6ac, 0x0041ebf0: zero at the spawn, 0x004197a1).
   private mouthEmitter: DragonEmitter | null = null;
@@ -1010,6 +1023,13 @@ export class DragonAi extends BrainBase {
       if (read(n, p)) this.feetNodes.set(n, p);
       else this.feetNodes.delete(n);
     }
+  }
+
+  // The root height as the draw sees it this tick (DRAGON_ROOT: 2.0 times node 0's
+  // animated y). null (no model) keeps the ASSUMED guess. The brain reads it on the
+  // next tick, the draw runs after the brain (one frame of lag, ASSUMED harmless).
+  recordRootHeight(y: number | null): void {
+    this.rootY = y !== null && Number.isFinite(y) ? y : DRAGON_GUESS.animYOffset;
   }
 
   // The places of a stomp (side +1 at frame 3, -1 at frame 24): the x / z of
@@ -1906,7 +1926,8 @@ export class DragonAi extends BrainBase {
   private tickFlyUp(): void {
     this.c86c++;
     if (this.c870 === 0 && this.mframe + this.speed >= 40) {
-      this.f888 = DRAGON_GUESS.animYOffset;
+      // 0x00422430: +0x888 = GetPlayerYPosition at the take-off (DRAGON_ROOT).
+      this.f888 = this.rootY;
       this.f884 = f32(Math.sqrt((DRAGON.flightAltitude - this.f888) * -2 * DRAGON.gravityUp));
       this.c870 = 1;
       this.flags |= 0xc00;
@@ -2102,7 +2123,10 @@ export class DragonAi extends BrainBase {
     // 0x00420ee8 sub-state 0 (0x00421235): SE 0x318 at frame 2 (0x41300000 is frame 11, below).
     // ASSUMED: the port's sub 0 (before frame 18) is the exe's sub 0 (the counter at +0x21b).
     if (this.c86c === 0 && this.passed(2)) this.emit({ kind: 'se', id: 0x318 });
-    this.f888 = DRAGON_GUESS.animYOffset;
+    // 0x00420ee8 (state 8, phase 0): while +0x86c is 0, +0x888 = GetPlayerYPosition
+    // each frame; the frame the animation passes the threshold it is read once more
+    // and then holds (DRAGON_ROOT). The port's sub 0 is the exe's +0x86c == 0 (ASSUMED).
+    if (this.c86c === 0) this.f888 = this.rootY;
     if (this.c86c === 0 && this.mframe >= 18) this.c86c = 1;
     const sub = this.c86c;
     if (sub === 1) {
