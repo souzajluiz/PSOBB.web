@@ -134,6 +134,9 @@ export interface QuestClientOptions {
   onQuest?: (q: LoadedQuest) => void;
   // Called when the server's AC says every client is loaded: start the quest.
   onStart?: () => void;
+  // Called with the bytes received and the bytes expected of the files of the
+  // transfer in progress (each open file and each chunk).
+  onProgress?: (loaded: number, total: number) => void;
   autoBarrier?: boolean;
 }
 
@@ -287,10 +290,23 @@ export class QuestClient {
     }
     this.files.set(file.filename, { file, chunks: [], received: 0, complete: false });
     this.log(`quest file ${file.filename}: ${file.size} bytes ("${file.name}")`);
+    this.reportProgress();
     // C_OpenFileConfirmation_44_A6: the filename, with the server's flag.
     const ack = new Uint8Array(0x10);
     writeAscii(ack, 0, 0x10, file.filename);
     this.conn.send(c.command, c.flag, ack);
+  }
+
+  // The bytes of the open files so far (a finished file counts its size).
+  private reportProgress(): void {
+    if (!this.opts.onProgress) return;
+    let loaded = 0;
+    let total = 0;
+    for (const e of this.files.values()) {
+      loaded += Math.min(e.received, e.file.size);
+      total += e.file.size;
+    }
+    this.opts.onProgress(loaded, total);
   }
 
   private onFileChunk(c: Command): void {
@@ -317,6 +333,7 @@ export class QuestClient {
     // 0x400 with one extra byte). The byte count is checked too, so a server
     // that does not pad still works here.
     if (size < QUEST_CHUNK_SIZE || entry.received >= entry.file.size) entry.complete = true;
+    this.reportProgress();
     if (entry.complete) this.finishIfReady();
   }
 

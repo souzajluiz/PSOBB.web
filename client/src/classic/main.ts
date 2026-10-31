@@ -27,6 +27,7 @@ import type { PartyHost } from './gamelist.ts';
 import { LobbyScreen, type LobbyHud, type TransportHost } from './lobby.ts';
 import type { TeamHost, TeamItemRow } from './teammenu.ts';
 import { QuestLoadingScreen } from './questloading.ts';
+import type { QuestLoadingHooks } from './townfield.ts';
 import { parseItemPMT } from '../formats/itempmt.ts';
 import { ItemNames } from '../formats/itemnames.ts';
 import { lobbyEntryArrival, type LobbyEntry } from '../formats/lobbyspawn.ts';
@@ -333,6 +334,8 @@ async function main(): Promise<void> {
   let townField: FieldTown | null = null;
   const enterGame = async (game: Game, shipName: string) => {
     game.log = (m) => console.log(`[game] ${m}`);
+    // The field screen of this game (shown again when a quest transfer's loading screen ends).
+    let fieldScreen: FieldScreen | null = null;
     // A Simple Mail in a game (0x81): the lobby is detached here, so the game takes it. The exe's
     // 0081 handler is the connection's, not the lobby's (007c8dc4): the mail is kept and SE 0x586 plays.
     game.on('simpleMail', (body) => {
@@ -345,6 +348,22 @@ async function main(): Promise<void> {
     // sized from it) stays hidden until the floor is loaded.
     showWorld(false);
     const v = world();
+    // The quest loading screen (classic/questloading.ts) over the field while a quest downloads
+    // and starts. Its particles use the connect warp's assets (particleentry.dat, effect_nt.xvm).
+    let questScreen: QuestLoadingScreen | null = null;
+    const questLoading: QuestLoadingHooks = {
+      begin: () => {
+        questScreen = new QuestLoadingScreen(assets);
+        Object.assign(window, { classicQuestLoading: questScreen });
+        show(questScreen);
+      },
+      progress: (loaded, total) => questScreen?.progress(loaded, total),
+      end: () => {
+        questScreen = null;
+        Object.assign(window, { classicQuestLoading: undefined });
+        if (fieldScreen) show(fieldScreen);
+      },
+    };
     const load = (async () => {
       lobbyView?.dispose();
       lobbyView = null;
@@ -370,7 +389,7 @@ async function main(): Promise<void> {
       // (render/fieldhud.ts names()); the lobby's Item List has them through the same loader.
       view.hud.setNames(() => itemNames);
       view.onLobbyWarp = () => void leaveGame(game, shipName, 'teleporter');
-      townField = new FieldTown({ game, view, files, canvas: worldCanvas, character: () => session?.character ?? null, log: game.log });
+      townField = new FieldTown({ game, view, files, canvas: worldCanvas, character: () => session?.character ?? null, log: game.log, loading: questLoading });
       Object.assign(window, { classicTown: townField.town });
       await view.enter();
       return view;
@@ -384,6 +403,7 @@ async function main(): Promise<void> {
           console.log(`[classic] entered game "${game.name}"`);
           showWorld(true);
           const field = new FieldScreen(view, worldCanvas, canvas, bubble, fit.enabled, view.hud.fieldQuickEnv(titleAssets.skin));
+          fieldScreen = field;
           Object.assign(window, { classicGame: field, classicLobby: undefined });
           show(field);
         }),
@@ -865,7 +885,7 @@ async function main(): Promise<void> {
   else if (jump === 'connecting') show(new ConnectingScreen(await loadConnectingAssets(), new Promise(() => {}), () => {}, () => {}));
   else if (jump === 'questloading') {
     // Layout work: a download of 1 MB at 30 KB a second, started again once done.
-    const loading = new QuestLoadingScreen();
+    const loading = new QuestLoadingScreen(await loadConnectingAssets());
     let loaded = -1;
     setInterval(() => {
       loaded = loaded < 0 || loaded >= 1_000_000 ? 0 : loaded + 3_000;
