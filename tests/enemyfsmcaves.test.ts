@@ -205,15 +205,25 @@ eq(enemyCombatMotions('TObjEneShark', null as never).damage, { index: 3, speed: 
   eq((f as unknown as { wanderRadius: number }).wanderRadius, 50, 'a param2 under 1.0 becomes 50');
   let o = f.tick([player(0, 200)]);
   eq([f.hidden, o.hidden], [true, true], 'no player within 150: still hidden');
+  // EnemyProcessTargeting_0057f3b8: the search runs every 30 frames (vtable +0x44(0x1e)).
+  for (let i = 0; i < 28; i++) f.tick([player(0, 100)]);
+  eq(f.hidden, true, 'a player within 150 does not release it between two searches');
+  const px = f.x;
+  const pz = f.z;
   o = f.tick([player(0, 100)]);
-  eq([f.hidden, f.state, o.hidden, o.motion?.index], [false, 'takeoff', false, 9], 'a player within 150 releases it into the take-off');
-  let maxH = 0;
+  eq([f.hidden, f.state, o.hidden, o.motion?.index], [false, 'takeoff', false, 5], 'the 30th frame with a player within 150 releases it into the fly (animation 7, motion 5)');
+  // EnemyUpdateTargetPosition_0057f4e0: moved by (0, 0, -150) turned by the heading (angle 0: z - 150).
+  // (the same tick already flies one step, fparam1 = 2, back toward the home point)
+  eq([Math.round(f.x - px), Math.round(f.z - pz)], [0, -148], 'the release moves it 150 behind its heading');
+  eq(f.height, NANO.cruise, 'the state 0xb entry sets the height to 50 at once (+0x40c = 0x42480000)');
+  let flew = false;
   for (let i = 0; i < 600 && f.state === 'takeoff'; i++) {
     f.tick([player(0, 100)], i === 25);
-    maxH = Math.max(maxH, f.height);
+    if (Math.abs(f.z) < 0.5 * Math.abs(pz - 150) && f.height >= NANO.cruise) flew = true;
   }
-  eq(maxH, NANO.cruise, 'after the release it rises to 50');
-  eq([f.state, f.height], ['idle', 0], 'and flies at the player, then lands');
+  eq(flew, true, 'it flies toward the HOME point (the spawn, 0x0057dcb3 dest +0x50 / +0x58), not toward the player');
+  eq([f.state, f.height], ['idle', 0], 'and lands there');
+  eq(Math.hypot(f.x, f.z) < NANO.arrive + 2 + 3, true, 'the landing spot is the spawn point');
 }
 
 if (failures) {
