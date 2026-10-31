@@ -830,7 +830,7 @@ for (const n of [1, 2, 5]) {
   check(hoverN.length === 1 && hoverN[0].kind === 'particle' && hoverN[0].id === N.f04, 'the hover roar makes the take-off id 76 at frame 14');
   check(oneFrame(S.roarAir, 13, true).every((e) => e.kind === 'particle' && e.id === U.f04), 'the Ultimate hover roar makes id 513');
 
-  // The volley (0x00421494 phase 2 at frame 47): one launch flash (+0x1c) at the mouth per fireball.
+  // The volley (0x00421494 phase 2 at frame 47): one launch flash (+0x1c) at the mouth after the three fireballs.
   const vb = brain();
   const vp = vb as unknown as { setState(n: number): void; volley(): void };
   vp.setState(S.flyShoot);
@@ -838,11 +838,12 @@ for (const n of [1, 2, 5]) {
   vb.events.splice(0);
   vp.volley();
   const launches = vb.events.filter((e) => e.kind === 'particle');
-  eq(launches.length, 3, 'a volley makes three launch flashes');
+  eq(launches.length, 1, 'a volley makes ONE launch flash (0x004218eb follows the three fireballs)');
+  eq((vb as unknown as { pendingShots: unknown[] }).pendingShots.filter((s) => s instanceof DragonFireball).length, 3, 'a volley makes three fireballs');
   const m = vb.mouth();
   check(
     launches.every((e) => e.kind === 'particle' && e.id === N.launch && e.x === m[0] && e.y === m[1] && e.z === m[2]),
-    'every launch flash is id 549 at the mouth',
+    'the launch flash is id 549 at the mouth',
   );
   const vu = brain({ ultimate: true });
   const vup = vu as unknown as { setState(n: number): void; volley(): void };
@@ -1316,8 +1317,9 @@ for (const n of [1, 2, 5]) {
     const ai = brain();
     (ai as unknown as { c86c: number }).c86c = 0;
     eq(ids(tickSounds(ai, 'tickLand', 2.25)), ids([0x318]), 'land: sub 0 frame 2 sounds 318');
-    (ai as unknown as { c86c: number }).c86c = 1;
-    eq(ids(tickSounds(ai, 'tickLand', 2.25)), '', 'land: sub 1 is silent at frame 2');
+    (ai as unknown as { c86c: number; alt: number }).c86c = 1;
+    (ai as unknown as { alt: number }).alt = 50;
+    eq(ids(tickSounds(ai, 'tickLand', 2.25)), '', 'land: sub 1 is silent at frame 2 (in the air)');
   }
   // 0x320: the fireball's impact (0x004268db, the update 0x00426790 at arrived counter 1), once.
   {
@@ -1376,7 +1378,8 @@ for (const n of [1, 2, 5]) {
   };
   eq(takeOff(12.5), 12.5, 'flyUp: the altitude starts at the recorded root height');
   eq(takeOff(null), 0, 'flyUp: without a record the guess (0) is used');
-  // landing: sub 0 follows the root height each tick, the flip freezes it.
+  // landing: sub 0 follows the root height each tick; the fall starts after frame 18
+  // (0x008fbc68) and sub 1 (the touch-down test) starts at frame 44 (0x008fbc6c).
   {
     const ai = brain();
     const q = p(ai);
@@ -1390,11 +1393,14 @@ for (const n of [1, 2, 5]) {
     ai.recordRootHeight(9);
     q.mframe = 19;
     (ai as unknown as { tickLand(): void }).tickLand();
-    // The flip runs sub 1 in the same tick (the floor is 9 above the altitude, so it may land at once).
-    check(q.c86c >= 1, `land: the frame-18 threshold flips the sub-state (${q.c86c})`);
-    eq(q.f888, 9, 'land: the threshold frame still reads the root height');
+    eq(q.c86c, 0, 'land: frame 19 is still sub 0 (no flip at 18)');
+    check(q.alt < 0, `land: the body falls from frame 19 (alt ${q.alt})`);
+    eq(q.f888, 9, 'land: the sub 0 frames read the root height');
+    q.mframe = 44;
+    (ai as unknown as { tickLand(): void }).tickLand();
+    eq(q.c86c, 1, 'land: frame 44 flips to sub 1');
     ai.recordRootHeight(-4);
-    q.mframe = 20;
+    q.mframe = 45;
     (ai as unknown as { tickLand(): void }).tickLand();
     eq(q.f888, 9, 'land: after the flip the floor holds');
   }
@@ -1409,6 +1415,91 @@ for (const n of [1, 2, 5]) {
     q.mframe = 0;
     (ai as unknown as { tickLand(): void }).tickLand();
     eq(q.f888, 0, 'a NaN root height is the guess');
+  }
+}
+
+// 33. The attacks re-read against the exe (2026-10-31, DEVLOG): the breath's
+//     direction is the mouth node's fixed 30-degree-down vector along the body (not the
+//     target), 5 a frame; the fireball arrives on the first frame its counter is above the
+//     length (strict); one launch flash per volley; the landing touches down from frame 44
+//     and plays 0x322 there.
+{
+  // Flame: 0x00425334 (angle 0xffffeaab) and 0x0042496e (P1 - P0). The velocity does
+  // not depend on the target: a player straight ahead does not change it.
+  for (const withTarget of [false, true]) {
+    const ai = brain({ x: 0, z: 0, angle: 0 });
+    const q = ai as unknown as { yaw: number; flame(): void; pendingShots: EnemyShot[] };
+    q.yaw = 0;
+    if (withTarget) {
+      (ai as unknown as { last: AiTarget[] }).last = [player(0, 0, 200)];
+      (ai as unknown as { targetId: number | null }).targetId = 1;
+    }
+    q.pendingShots = [];
+    q.flame();
+    const f = q.pendingShots[0] as DragonFlame;
+    eq(q.pendingShots.length, 1, `flame: one flame (target ${withTarget})`);
+    const x0 = f.x;
+    const y0 = f.y;
+    const z0 = f.z;
+    f.tick([]);
+    const dx = f.x - x0;
+    const dy = f.y - y0;
+    const dz = f.z - z0;
+    check(Math.abs(dx) < 1e-9, `flame: no sideways drift with yaw 0 (${dx}, target ${withTarget})`);
+    check(Math.abs(dy - -2.5) < 1e-3, `flame: 2.5 down a frame (${dy})`);
+    check(Math.abs(dz - 5 * 0.8660254) < 1e-3, `flame: 4.33 forward a frame (${dz})`);
+    check(Math.abs(Math.hypot(dx, dy, dz) - 5) < 1e-3, `flame: 5 a frame (${Math.hypot(dx, dy, dz)})`);
+  }
+  // The flame follows the body's yaw: a quarter turn sends it along +x.
+  {
+    const ai = brain({ x: 0, z: 0, angle: 0 });
+    const q = ai as unknown as { yaw: number; flame(): void; pendingShots: EnemyShot[] };
+    q.yaw = 0x4000;
+    q.pendingShots = [];
+    q.flame();
+    const f = q.pendingShots[0] as DragonFlame;
+    const x0 = f.x;
+    f.tick([]);
+    check(Math.abs((f.x - x0) - 5 * 0.8660254) < 1e-3, `flame: a quarter turn sends it along +x (${f.x - x0})`);
+  }
+  // Fireball: the length 100 at 25 a frame: the 4th frame's counter is 100, not above it,
+  // so it is still flying; the 5th frame arrives on the aim point.
+  {
+    const b = new DragonFireball([0, 0, 0], [0, 0, 100], 130);
+    for (let i = 0; i < 4; i++) b.tick([]);
+    check(b.flying, 'fireball: still flying on the 4th frame (counter 100 is not above 100)');
+    b.tick([]);
+    check(!b.flying && Math.abs(b.z - 100) < 1e-9, `fireball: arrives on the 5th frame at the aim (z ${b.z})`);
+  }
+  // A length of 90 arrives on the 4th frame (counter 100 is above 90) and lands on the aim.
+  {
+    const b = new DragonFireball([0, 0, 0], [0, 0, 90], 130);
+    for (let i = 0; i < 4; i++) b.tick([]);
+    check(!b.flying && Math.abs(b.z - 90) < 1e-9, `fireball: length 90 arrives on the 4th frame at the aim (z ${b.z})`);
+  }
+  // Landing: 0x00420ee8 sub 1 -> 2 plays 0x322 at the touch-down, and the body can not
+  // touch down in sub 0 (before frame 44), even under the floor.
+  {
+    const ai = brain();
+    const q = ai as unknown as { setSlot(i: number): void; speed: number; c86c: number; alt: number; f884: number; mframe: number };
+    q.setSlot(25);
+    q.speed = 0.5;
+    ai.recordRootHeight(0);
+    q.c86c = 0;
+    q.alt = -50;
+    q.f884 = 0;
+    q.mframe = 30;
+    ai.events.splice(0);
+    (ai as unknown as { tickLand(): void }).tickLand();
+    eq(q.c86c, 0, 'landing: under the floor at frame 30 is still sub 0');
+    eq(ai.events.filter((e) => e.kind === 'se').length, 0, 'landing: no 0x322 before the touch-down');
+    q.mframe = 44;
+    (ai as unknown as { tickLand(): void }).tickLand();
+    eq(q.c86c, 1, 'landing: frame 44 starts sub 1');
+    q.mframe = 45;
+    (ai as unknown as { tickLand(): void }).tickLand();
+    eq(q.c86c, 2, 'landing: sub 1 touches down under the floor');
+    eq(ai.events.filter((e) => e.kind === 'se' && e.id === 0x322).length, 1, 'landing: 0x322 at the touch-down');
   }
 }
 
