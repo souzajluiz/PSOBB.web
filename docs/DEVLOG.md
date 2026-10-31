@@ -23598,3 +23598,11 @@ Follow-up to the boss kill entry: the local-kill hook (`Game.onLocalEntityFlags`
 - Kogomi's ctor starts the frame at `rand() / 32768 * limit`; the port starts at 0.
 - The jellyfish's roaming AI (0x0062c448), its fade colour (+0x104) are not ported. The map `.dat` sets in this data only place type 0x0380 (desert02); 0x00cc, 0x0383 and 0x038c come from other sets or quests.
 - The timer wraps on `frame > limit` in the exe, the port's `carry-last` on `>=`: one tick differs at exact equality.
+
+## 2026-10-30: Boss kill spec extended: Vol Opt kill and exit, Dark Belra kill
+
+**Vol Opt (floor 13).** `e2e/boss-kill.spec.ts` kills it through `combat.applyEnemyHit` as the exe requires: phase 1 ends when the core dies (`VoloptAi.tickFight`, "the core dead or every pillar a wreck"), the change carries the players to the second arena, then the form 2 body (`VoloptForm2Ai`, 9500 HP) is hit until its hp reaches 0 and the death motion runs (state 5; kill at frame 47). The control reaches state 5 and `voloptOver` logs "Vol Opt defeated: quest flag 0x2a set, room 0 groups 1 and 3 appear" (`unhide_objects_for_volopt_death`, DEVLOG 2026-10-19). Before the kill the floor has no area warp; after it the area warp (set index 27, floor 0, at (-6, 0, 71)) is built by groups 1 / 3, and taking it (menu, Enter) changes the floor 13 -> 0. No port code change was needed.
+
+**Dark Belra.** Not an Episode 2 boss: it is an ordinary Ruins / Mines monster (several per floor, floor 8 here had 7, all wave-gated and hidden until a wave trigger). The spec wakes one through the floor's event triggers (as boss-fights.spec.ts), kills it with one `applyEnemyHit` and asserts the EXP award; the boss "defeated" log and an exit warp of its own do not exist for it (the floor keeps its ordinary warps). A Belra has no exit path of its own; the exe address of its death handler was not traced (ASSUMED the generic EnemyOnKilledHandler 0x0051f894). The corpse keeps its death motion (no model hiding added).
+
+**Tests.** `PW_BASE_URL=http://127.0.0.1:5193 NEWSERV_SYSTEM=.../vendor/newserv/system playwright test e2e/boss-kill.spec.ts --trace off --workers=1` 3 boss-kill tests (Dragon, De Rol Le, Vol Opt) passed in one run (6.8 min); the Dark Belra test passed on its own re-run (1.1 min) after its assertions were corrected (the first version expected a boss log and no area warp)..
