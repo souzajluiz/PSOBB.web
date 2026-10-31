@@ -23662,3 +23662,19 @@ All four read from the exe (dump `Psobb.exe-05112026.c` lines 776xxx..778xxx, Gh
 ## 2026-10-30: Ep2 watch merge note
 
 The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with its own hook (`onLocalEntityDefeated`). The merge keeps main's `Game.onLocalEntityFlags` (flag 8 marks the wave set entry, the corpse is not hidden, see "Local 6x76 keeps the corpse") and drops the duplicate; the branch's spec, `wstransport.ts` send guard and docs are kept.
+
+## 2026-10-31: ROADMAP.md status sync
+
+**Question.** Which `- [ ]` lines in `docs/ROADMAP.md` still claim as open work that the 2026-10-30 merges or the TODO.md audit (2026-10-30) show as done?
+
+**Method.** All 27 `- [ ]` lines were compared with `TODO.md` and the 2026-10-30 DEVLOG entries (battle respawn and sonar e2e, Telepipe e2e, challenge stage picker, boss kill and exit, shape motions, quest editor, team, Nano Dragon, Pofuilly split, De Rol Le beam). Only status claims were edited; history notes are kept.
+
+**Lines changed (4 of 27 `- [ ]` lines, none marked `[x]`):**
+- Trap vision (line 180): the shape motions of TOKurage, the Episode 4 plants and the slime body are marked done; the jellyfish roaming AI and fade colour and the slime idle index stay open (TODO C).
+- Combat left to do (line 240): the remote player's Pofuilly slime split and the Nano Dragon fly-in release are marked done; the Nano Dragon ATP bonus stays open (TODO E).
+- Battle mode left (line 294): the sonar use, life, pings and end are covered by `client/e2e/battle-game.spec.ts` step 4b; the Chrome check and the sonar effect beyond the ping stay open (TODO A, G).
+- Quest editor left to do (line 300): deleting a published quest, script positions in the 3D view and editing the quest `.json` are marked done; the browser check of open / publish on a deployed host stays open (TODO A, H).
+
+**Not changed, unresolved.** Challenge mode (line 302): the 2026-10-30 `CM_STAGE` e2e runs the stage picker for Stage1, but the line's "not run in Chrome" note about the stage-selection dialog was left as is; stages 2-9 and Episode 2 stay open per TODO A. The `ROADMAP.md` prose paragraphs (the "Next up" list, item 2 and item 1) still describe the Dragon, De Rol Le, Vol Opt and TOKurage / plant / slime shape motions as open; they are not `- [ ]` lines and were not edited.
+
+**Docs only.** No code, no tests, no Vite or Playwright run.
