@@ -358,18 +358,24 @@ export class SmMissile extends EnemyShot {
 // --- the wave (state 21: 0x00769808, the beam 0x0076cb9c, update 0x0076ccdc) -------------
 //
 // One beam per phase-0 pass, made on the clock's frame 28 (SM.waveFrame; the effect 0x6f9 of
-// frame 27 is not drawn). Its origin O is a boss node read at frame 29 of a one-frame track,
-// whose data is not read: ASSUMED the boss's position at the spawn, and its local frame is the
-// boss's heading then.
-// Each frame P = O + R(amp * sin θ, 0, rate * θ), θ in BAMS (65536 = 360 degrees; x sideways,
-// z forward; R turns the local frame by the heading), then θ += step and ramp = min(1, ramp + 0.025).
-// The hit is a ground probe under P: with ground, an explosion of type 5 at P every frame, iparam5
-// to every living player within 100 on the XZ plane (no height test, no once-per-player gate);
-// without ground the beam dies. The probe is the boss's ground callback when it has one, else the
-// boss's arena circle (ASSUMED, see SaintMilionAi.waveFrame). ASSUMED: the life cap.
+// frame 27 is not drawn). Read in the exe (PROVEN unless marked):
+// - The origin O (0x00769808): the boss's matrix (identity, translated to the boss's position
+//   +0x38, turned by its heading +0x60, 0x0082d838 / 0x0082d8bc) applied to the translation of a key
+//   at frame 29 (0x00579de0, 0x00830aa0). The track is chosen by the runtime global [0xa9b078]. ASSUMED:
+//   the key is 0, so O is the boss's position; the exe's O is off by the key's offset.
+// - The beam's frame is the heading at the spawn (ctor +0x50, read by the update at 0x0076cd60).
+// - Each update (0x0076ccdc): the ramp +0x58 = min(1, +0x58 + 0.025) first; the local point
+//   (amp * sin θ, 0, rate * θ) with θ = +0x54 in BAMS (0x0076cd1d..0x0076cd53), turned by the
+//   heading and added to O (0x0076cd6a..0x0076cd81); y = O.y + 10 (0x00977a00); θ += step; then the
+//   probe 0x00780630(P, 0x16ef), a vertical trace through the collision objects. ASSUMED: the boss's
+//   ground callback stands for it. No hit: the dead bit, no explosion. A hit: type 5 at P with the
+//   radius ramp * 64 (0x009779f4) and the knockback 10.0 (dispatcher 0x00768990 case 5, no factor on
+//   iparam5); the area hit takes max(radius, 100) (0x0051fc9c, threshold 0x009216d4 = 100), once per
+//   frame, no once-per-player gate. Also SE 0x6fa at P each hit and a camera quake (not ported).
+// - There is no life counter in the exe: the beam ends only when the probe misses.
 // The 10.0 the exe passes with type 5 is the knockback, meaning not known (as the missile's 3.0).
 export const SM_WAVE = {
-  // The types 0 .. 3 (0x009779b8): the step of θ a frame (BAMS), the rate and the amp.
+  // The types 0 .. 3 (0x009779b8, 12 bytes each): the step of θ a frame (BAMS), the rate and the amp.
   types: [
     { step: 728, rate: 0.00213623046875, amp: -140 },
     { step: 728, rate: 0.00213623046875, amp: 140 },
@@ -377,17 +383,17 @@ export const SM_WAVE = {
     { step: 280, rate: 0.007171630859375, amp: 300 },
   ],
   rampStep: 0.025,
-  radius: 100,
+  // The explosion's radius is ramp * 64 (0x009779f4); the area hit then takes max(radius, 100).
+  radiusPerRamp: 64,
   knockback: 10,
-  // ASSUMED: the height the beam is drawn at, and its life (the exe's beam ends on the ground probe).
+  // The height above the boss's position: O.y + 10 (0x00977a00). The port's boss stands on the ground.
   height: 10,
-  life: 600,
 } as const;
 
 export class SmWave extends EnemyShot {
   readonly effect: ShotEffect;
   readonly look: ShotLook = { color: 0x60c0ff, size: 1 };
-  // The exe's +0x58. No hit uses it (the blast radius is 100, not ramp * 64).
+  // The exe's +0x58 (the ramp, 0 .. 1). It sets the explosion's radius (ramp * 64), see tick.
   ramp = 0;
   private theta = 0;
   private readonly ox: number;
@@ -397,7 +403,8 @@ export class SmWave extends EnemyShot {
   private readonly spec: (typeof SM_WAVE.types)[number];
   private readonly floor: (x: number, z: number) => boolean;
 
-  // heading: BAMS. type: 0 .. 3. damage: the MovementData iparam5. floor: the ground under (x, z).
+  // heading: BAMS (the boss's heading at the spawn). type: 0 .. 3. damage: the MovementData iparam5.
+  // floor: the ground under (x, z) (the exe's probe 0x00780630, ASSUMED to be this callback).
   constructor(x: number, z: number, heading: number, type: number, damage: number, floor: (x: number, z: number) => boolean) {
     super(x, SM_WAVE.height, z);
     this.ox = x;
@@ -410,25 +417,22 @@ export class SmWave extends EnemyShot {
     this.effect = { kind: 'blast', damage, knockback: SM_WAVE.knockback };
   }
 
+  // One update (0x0076ccdc): the ramp, the point P, θ += step, the probe; a hit is the explosion at P.
   tick(targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return [];
-    this.frames++;
-    if (this.frames > SM_WAVE.life) {
-      this.done = true;
-      return [];
-    }
+    this.ramp = Math.min(1, this.ramp + SM_WAVE.rampStep);
     const t = this.theta;
     const lx = this.spec.amp * Math.sin(t * BAMS);
     const lz = this.spec.rate * t;
     this.x = this.ox + lx * this.cos + lz * this.sin;
     this.z = this.oz - lx * this.sin + lz * this.cos;
+    this.theta += this.spec.step;
     if (!this.floor(this.x, this.z)) {
       this.done = true;
       return [];
     }
-    this.theta += this.spec.step;
-    this.ramp = Math.min(1, this.ramp + SM_WAVE.rampStep);
-    return targets.filter((p) => !p.dead && Math.hypot(p.x - this.x, p.z - this.z) <= SM_WAVE.radius);
+    const radius = Math.max(this.ramp * SM_WAVE.radiusPerRamp, SM_BLAST.minRadius);
+    return targets.filter((p) => !p.dead && Math.hypot(p.x - this.x, p.z - this.z) <= radius);
   }
 }
 
@@ -628,21 +632,30 @@ export class SmBlast extends EnemyShot {
 
 // --- the storm (state 23: 0x0076b7a8 makes it, its update 0x00766c5c) ---------------------
 //
-// One object, made on phase 4 of state 23 and kept by the boss (it is not a shot). Its counter n
-// starts at 1 on its first frame and grows by 1 a frame; T = 75 * n (0x00976234). The explosion
-// of radius r (0x00976224: 100, 200, 400, 1000) goes off on the frame T first passes r
-// (r < T <= r + 75), so on frames 2, 3, 6 and 14. Its damage is iparam4 times the factor of
-// its type 6 .. 9 (0x00768990's jump table: 1.0, 0.8, 0.64 and 0.32, the products of 0x00977484
-// and 0x0097748c; trunc as the missile's), its knockback 3.0 (0x40400000 on every type).
-// ASSUMED: the storm is active from its creation (the exe gates the update on a motion flag the
-// port cannot read), and its centre is the arena's origin (the exe passes the runtime global
-// [0x00a9b020]; not decoded). It ends after the fourth explosion.
+// One object, made on phase 4 of state 23 and kept by the boss (it is not a shot). Read in the
+// exe's update 0x00766c5c (PROVEN unless marked):
+// - Its counter +0x68 (c) starts at 0. A frame whose child slot 2 is flagged (0x00765a90(2)) adds 1
+//   before the explosions and plays SE 0x6f7 when c was below 1 (not ported). Then, when the count n
+//   is above 0: T = 75 * n (0x00976234), c = n + 1. So a flagged frame moves c by 2 and an unflagged
+//   one by 1 (once c is above 0).
+// - For the radii r = 100, 200, 400, 1000 (0x00976224..0x00976230), in order, k = 0..3, of type 6 + k:
+//   if T <= r an explosion of radius T and the scan stops; else if T <= r + 75 an explosion of radius
+//   r. So a frame can give two explosions, and a ring is a radius-T blast while it grows.
+// - Damage: iparam4 times 1.0, 0.8, 0.64, 0.32 for types 6 .. 9 (0x00768990's jump table; the products
+//   of 0x00977484 and 0x0097748c, trunc as the missile's). Knockback 3.0 on every type.
+// - The area of each explosion: max(radius, 100) (see SmBlast).
+// - Once T is above 1075 (r + 75 of the last ring) no explosion can come again: the object is done.
+// The exe's object has no dead bit; it is removed with the boss's state, which is not read.
+// ASSUMED: the child slot 2 flag (the storm's motion window) is set on every frame (`flagged`), and
+// the centre is the arena's origin (the exe passes the runtime global [0x00a9b020]; not decoded).
 export const SM_STORM = { step: 75, radii: [100, 200, 400, 1000], factors: [1, 0.8, 0.64, 0.32], knockback: 3 } as const;
 
 export class SmStorm {
   done = false;
-  private n = 0;
-  private fired = 0;
+  // The counter +0x68.
+  private c = 0;
+  // ASSUMED: whether child slot 2 is flagged this frame (0x00765a90(2)); the exe reads the motion.
+  flagged: () => boolean = () => true;
   private readonly x: number;
   private readonly z: number;
   private readonly iparam: number;
@@ -654,20 +667,31 @@ export class SmStorm {
     this.iparam = iparam;
   }
 
-  // One frame: the explosions that go off on it.
+  private blast(k: number, radius: number): SmBlast {
+    const damage = Math.trunc(f32(this.iparam * f32(SM_STORM.factors[k])));
+    return new SmBlast(this.x, this.z, radius, damage, SM_STORM.knockback);
+  }
+
+  // One update (0x00766c5c): the explosions that go off on it.
   tick(): SmBlast[] {
     if (this.done) return [];
-    this.n++;
-    const t = SM_STORM.step * this.n;
+    let n = this.c;
+    if (this.flagged()) n += 1;
+    this.c = n;
     const out: SmBlast[] = [];
-    while (this.fired < SM_STORM.radii.length) {
-      const r = SM_STORM.radii[this.fired];
-      if (!(r < t && t <= r + SM_STORM.step)) break;
-      const damage = Math.trunc(f32(this.iparam * f32(SM_STORM.factors[this.fired])));
-      out.push(new SmBlast(this.x, this.z, r, damage, SM_STORM.knockback));
-      this.fired++;
+    if (n > 0) {
+      const t = SM_STORM.step * n;
+      this.c = n + 1;
+      for (let k = 0; k < SM_STORM.radii.length; k++) {
+        const r = SM_STORM.radii[k];
+        if (t <= r) {
+          out.push(this.blast(k, t));
+          break;
+        }
+        if (t <= r + SM_STORM.step) out.push(this.blast(k, r));
+      }
     }
-    if (this.fired >= SM_STORM.radii.length) this.done = true;
+    if (SM_STORM.step * this.c > SM_STORM.radii[SM_STORM.radii.length - 1] + SM_STORM.step) this.done = true;
     return out;
   }
 }
@@ -675,10 +699,15 @@ export class SmStorm {
 // --- the sand sonic (state 10 at clock 45: 0x0076c644 makes it, 0x0076c974 launches it, its update
 // 0x0076c2e0) -------------------------------------------------------------------------------------
 //
-// It waits trunc(6 * rng) frames (0x009774ac = 6.0), then launches from the arm's tip: the start is
-// node 0x17 (the exe adds 100 to its height and snaps it to the ground: ASSUMED, the port's ground
-// is the boss's) and the heading is atan2 of node 4 -> node 0x17 in XZ (BAMS, the swing's
-// direction). It moves 20 times (+0xb4 = 20) 10.0 a frame (+0xb0) along the heading. After each
+// The wait is trunc(6 * rng) (0x009774ac = 6.0), set on the clock's 45 by 0x0076c790 (+0xb8). A wait of
+// 0 or less launches on that frame (0x0076c790 calls the launch). Otherwise the update counts it down
+// (0x0076c2e0), and the launch runs on the frame the count reaches 0, the same update. So a wait of w
+// launches on the w-th update after the crossing. Then it launches from the arm's tip (0x0076c974): the
+// start is node 0x17 (the exe adds 100 to its height and snaps it to the ground: ASSUMED, the port's
+// ground is the boss's, and the port's node positions stand for the exe's +0x444 table). The heading
+// is atan2(x, z) of node 0x17 alone (fpatan at 0x0076c9e8, PROVEN), not node 4 -> node 0x17; node 4 is
+// read only for the radius (+0xbc, fixed at the launch). The move is then 20 times (+0xb4 = 20) 10.0 a
+// frame (+0xb0) along the heading (0x0076c490, the vector (0, 0, 10) turned by the heading). After each
 // move it explodes once at its position (0x0076c4ec -> 0x0076a788, type 2 with the boss's base
 // ATP: the int16 at [boss+0x2c4], the damage of type 2 in 0x00768990). Its knockback is the 10.0
 // of +0xb0 times 1.01 (0x00977940) passed as the third argument: its meaning is not known, as the
@@ -707,11 +736,17 @@ export class SmSandSonic extends EnemyShot {
     this.effect = { kind: 'blast', damage, knockback: SM_SAND.knockback };
   }
 
-  // One frame of the wait: true while it still waits.
+  // The wait is over before any update (0 or less): the launch runs at once (0x0076c790).
+  ready(): boolean {
+    return this.wait <= 0;
+  }
+
+  // One update of the countdown (0x0076c2e0): true while it still waits. The count that reaches 0 is the
+  // launch's frame, so this returns false on that update.
   waiting(): boolean {
     if (this.wait <= 0) return false;
     this.wait--;
-    return true;
+    return this.wait > 0;
   }
 
   // The launch at (x, z), heading `angle` (radians), with the arm's base (node 4) at (pivotX, pivotZ).

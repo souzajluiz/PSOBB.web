@@ -562,13 +562,19 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     check(w.done, 'the beam dies with no ground');
     eq(w.tick([player(1, 0, 0)]).length, 0, 'and it stays dead');
   }
-  // The life cap (ASSUMED): with ground everywhere the beam ends after SM_WAVE.life frames.
+  // No life counter in the exe (0x0076ccdc): with ground everywhere the beam is still flying after 3000 frames.
   {
     const w = new SmWave(0, 0, 0, 0, 500, () => true);
-    for (let i = 1; i <= SM_WAVE.life; i++) w.tick([]);
-    check(!w.done, 'still flying at the cap');
+    for (let i = 1; i <= 3000; i++) w.tick([]);
+    check(!w.done, 'still flying after 3000 frames (no cap)');
+  }
+  // The ramp is min(1, 0.025 n) before the point of frame n, so the radius is max(ramp * 64, 100) = 100 always.
+  {
+    const w = new SmWave(0, 0, 0, 0, 500, () => true);
     w.tick([]);
-    check(w.done, 'ended after the cap');
+    eq(Math.round(w.ramp * 1000), 25, 'frame 1: the ramp is 0.025 (updated before the point)');
+    // Frame 2's point is about 9.5 from the origin: a player at the origin is hit by the 100 area (not by 3.2).
+    eq(w.tick([player(1, 0, 0)]).length, 1, 'frame 2: a player at the origin is hit (the area is 100, not the ramp)');
   }
   // The boss's own beam with no ground callback: the arena circle (arena 3: origin (0, 0), range 620) ends it.
   {
@@ -577,45 +583,65 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     if (!wave) check(false, 'arena 3 beam for the circle test');
     else {
       let n = 0;
-      while (!wave.done && n < SM_WAVE.life) {
+      while (!wave.done && n < 3000) {
         wave.tick([]);
         n++;
       }
-      check(wave.done && n < SM_WAVE.life, `the arena circle ends the beam (${n} frames)`);
+      check(wave.done && n < 3000, `the arena circle ends the beam (${n} frames)`);
     }
   }
 }
 
-// 10. The storm (state 23): one object on phase 4; its explosions on frames 2, 3, 6 and 14 (T = 75 n passes
-//     100, 200, 400 and 1000), the radius and the damage factor of each (iparam4 times 1.0, 0.8, 0.64, 0.32),
-//     knockback 3.0; it ends after the fourth.
+// 10. The storm (state 23, 0x00766c5c): one object on phase 4. Its counter moves 2 a flagged frame and 1 an
+//     unflagged one (once above 0); T = 75 n against the rings 100, 200, 400, 1000: an explosion of radius T
+//     (and the scan stops) when T <= r, else one of radius r when T <= r + 75. Type 6 + k, damage iparam4 times
+//     1.0, 0.8, 0.64, 0.32, knockback 3.0. Done once T is past 1075. The flag (the child slot 2 motion window)
+//     is ASSUMED on every frame in the boss; the mixed case below covers the counter with a window.
 {
   const drive = (ai: SaintMilionAi) => ai as unknown as { setState(s: number, first?: boolean): void; storm: SmStorm | null; arena: number };
   const blasts = (shots: readonly EnemyShot[]) => shots.filter((x): x is SmBlast => x instanceof SmBlast);
   const row = { ...MV2, iparam: [1013, 1100, 750, 1000, 500, 0] };
-  // The four explosions of a storm of iparam4 1000: frame, radius (the blast's stored area) and damage.
+  // A blast as "type:radius" at iparam4 1000 (the type from the damage; the stored radius is max(radius, 100)).
+  const kind = (b: SmBlast): string => {
+    const dmg = b.effect.kind === 'blast' ? b.effect.damage : -1;
+    const type = ({ 1000: 6, 800: 7, 640: 8, 320: 9 } as Record<number, number>)[dmg] ?? -1;
+    return `${type}:${(b as unknown as { radius: number }).radius}`;
+  };
+  // Runs `frames` ticks with the flag of each frame from `flag(i)` (0-based); the explosions of each frame.
+  const run = (flag: (i: number) => boolean, frames: number, iparam = 1000) => {
+    const st = new SmStorm(0, 0, iparam);
+    let i = 0;
+    st.flagged = () => flag(i++);
+    const out: string[] = [];
+    for (let f = 1; f <= frames; f++) out.push(st.tick().map(kind).join(','));
+    return { out, st };
+  };
+  // Every frame flagged: T = 75, 225, 375, ... (n = 1, 3, 5, ...). Frame 1 T 75: type 6 (radius 75, area 100).
+  // Frame 2 T 225: type 7 (200) and type 8 (225). Frame 3 T 375: type 8. Frames 4 .. 7: type 9 at 525 .. 975.
   {
-    const st = new SmStorm(0, 0, 1000);
-    const at: Array<{ frame: number; damage: number; knock: number; radius: number }> = [];
-    for (let n = 1; n <= 20; n++) {
-      for (const b of st.tick()) {
-        const e = b.effect.kind === 'blast' ? b.effect : null;
-        at.push({ frame: n, damage: e?.damage ?? -1, knock: e?.knockback ?? -1, radius: (b as unknown as { radius: number }).radius });
-      }
-    }
-    eq(at.map((x) => x.frame).join(','), '2,3,6,14', 'the explosions on frames 2, 3, 6 and 14');
-    eq(at.map((x) => x.radius).join(','), SM_STORM.radii.join(','), 'the radii are 100, 200, 400 and 1000');
-    eq(at.map((x) => x.damage).join(','), '1000,800,640,320', 'the damage is iparam4 times 1.0, 0.8, 0.64, 0.32');
-    eq(at.every((x) => x.knock === SM_STORM.knockback), true, 'knockback 3.0');
-    eq(st.tick().length, 0, 'the storm is spent after the fourth explosion');
-    check(st.done, 'it ends after the fourth');
+    const { out, st } = run(() => true, 8);
+    eq(out.join(' | '), '6:100 | 7:200,8:225 | 8:375 | 9:525 | 9:675 | 9:825 | 9:975 | ', 'every frame flagged: the rings by frame');
+    check(st.done, 'done after frame 8 (T 1125 is past 1075)');
+    check(!run(() => true, 7).st.done, 'not done after frame 7');
+  }
+  // Frames 1 and 2 flagged, then not: the counter then moves 1 a frame (T = 300, 375, 450, ...).
+  {
+    const { out, st } = run((i) => i < 2, 14);
+    eq(out.join(' | '), '6:100 | 7:200,8:225 | 8:300 | 8:375 | 8:400,9:450 | 9:525 | 9:600 | 9:675 | 9:750 | 9:825 | 9:900 | 9:975 | 9:1000 | ', 'a window of two flagged frames, then one step a frame');
+    check(st.done, 'done after the T 1050 ring (the counter is 15)');
+  }
+  // Nothing flagged: the counter stays at 0 and there is no explosion.
+  {
+    const { out, st } = run(() => false, 5);
+    eq(out.join(' | '), ' |  |  |  | ', 'no flag, no explosion');
+    check(!st.done, 'not done while unflagged');
   }
   // The damage is trunc of the float product (iparam4 1360: 1088 and 870 and 435 for types 7 .. 9).
   {
     const st = new SmStorm(0, 0, 1360);
     const got: number[] = [];
-    for (let n = 1; n <= 14; n++) for (const b of st.tick()) if (b.effect.kind === 'blast') got.push(b.effect.damage);
-    eq(got.join(','), '1360,1088,870,435', 'iparam4 1360 gives 1360, 1088, 870 and 435');
+    for (let n = 1; n <= 8; n++) for (const b of st.tick()) if (b.effect.kind === 'blast') got.push(b.effect.damage);
+    eq(got.join(','), '1360,1088,870,870,435,435,435,435', 'iparam4 1360: 1360, 1088, 870 and 435');
   }
   // The explosion's area: max(radius, 100) on the XZ plane, the living only, once.
   {
@@ -635,12 +661,12 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     drive(b).setState(23);
     check(drive(b).storm instanceof SmStorm, 'state 23 entry makes the storm');
     const got: number[] = [];
-    for (let n = 1; n <= 20; n++) {
+    for (let n = 1; n <= 12; n++) {
       const k = blasts(b.tick([player(1, 5000, 5000)]).shots ?? []).length;
       for (let i = 0; i < k; i++) got.push(n);
     }
-    eq(got.join(','), '2,3,6,14', 'the boss makes its four explosions on frames 2, 3, 6 and 14');
-    eq(drive(b).storm?.done, true, 'the storm ends after the fourth');
+    eq(got.join(','), '1,2,2,3,4,5,6,7', 'the boss makes the storm explosions of the flagged-every-frame case (ASSUMED flag)');
+    eq(drive(b).storm?.done, true, 'the storm is done once T is past 1075');
   }
 }
 
@@ -653,7 +679,9 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
   // The object alone: three frames of wait, the launch, 20 moves of 10.0 along the heading, one explosion each.
   {
     const s = new SmSandSonic(3, ATP);
-    eq([s.waiting(), s.waiting(), s.waiting(), s.waiting()].join(','), 'true,true,true,false', 'three frames of wait');
+    eq(s.ready(), false, 'a wait of 3 is not ready at once');
+    eq([s.waiting(), s.waiting(), s.waiting(), s.waiting()].join(','), 'true,true,false,false', 'the countdown: the update that reaches 0 launches');
+    eq(new SmSandSonic(0, ATP).ready(), true, 'a wait of 0 launches on the spot (0x0076c790)');
     s.launch(0, 0, 0, 0, 0);
     eq(s.launched, true, 'launched');
     const near = player(1, 0, 0);
@@ -691,8 +719,8 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     }
     eq(explosions, SM_SAND.moves, 'one explosion per move');
   }
-  // The boss: made at the clock's crossing of 45 and launched trunc(6 * rng) frames later, from node 0x17 with
-  // the heading from node 4, its damage the base ATP.
+  // The boss: made at the clock's crossing of 45 and launched trunc(6 * rng) frames later, from node 0x17, its
+  // damage the base ATP.
   for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
     const b = make(true, { seed, atp: ATP, movement: [MV2, MV2] });
     b.tick([player(1, 5000, 5000)]);
@@ -743,6 +771,23 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     const radius = (250 * Math.PI) / 6;
     eq(sonic.tick([player(1, 0, 250 + 130), player(2, 0, 250 + 132)]).map((t) => t.clientId).join(','), '1', `move 20 (radius ${radius.toFixed(2)}): 130 in, 132 out`);
     check(sonic.done, 'removed after the 20th');
+  }
+  // The heading is atan2(x, z) of node 0x17 alone (0x0076c9e8 fpatan of the tip), not node 4 -> node 0x17: with node 4
+  // at (30, 0) and the tip at (30, 50), the heading is atan2(30, 50), not 0. Its first move is 10 along it.
+  {
+    const b = make(true, { seed: 4, atp: ATP, movement: [MV2, MV2] });
+    b.tick([player(1, 5000, 5000)]);
+    b.nodesKnown = true;
+    b.nodes.fill(0);
+    b.nodes[4 * 3] = 30;
+    b.nodes[0x17 * 3] = 30;
+    b.nodes[0x17 * 3 + 2] = 50;
+    const sonic = new SmSandSonic(0, ATP);
+    (b as unknown as { sonic: SmSandSonic | null }).sonic = sonic;
+    b.tick([]);
+    const h = Math.atan2(30, 50);
+    sonic.tick([]);
+    eq(Math.abs(sonic.x - (30 + 10 * Math.sin(h))) < 1e-6 && Math.abs(sonic.z - (50 + 10 * Math.cos(h))) < 1e-6, true, 'the first move is 10 along atan2(x17, z17)');
   }
 }
 

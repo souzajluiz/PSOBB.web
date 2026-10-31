@@ -23988,3 +23988,52 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 - The missile model (the `SaintEmilionPart`'s njcm from `g_SaintEmilionBmlData`, its file name not identified here), the trail effect 0xf, and the SEs 0x6f6 / 0x6f7: not drawn or played. The missile is still the coloured shot ball.
 - The flag `0x2000000` (skipped as dead) and `0x800` (the 240-frame jump) are unknown.
 - The wave, storm and sand sonic: not re-read in this pass (their entries of 2026-10-21 stand as written).
+
+## 2026-10-31: Saint-Milion wave, storm and sand sonic re-read against the exe (corrects 2026-10-21)
+
+**Outcome.** The 2026-10-21 entries for the three objects had five wrong rules. Fixed in code: the storm's rings fire every frame (not once each, and not four in all), the sand sonic's heading is node 0x17 alone and its launch comes on the countdown's zero, and the wave has no life cap. The remaining guesses are marked ASSUMED below. Everything else of the three matched the exe and is kept.
+
+**Wave (state 21, spawn 0x00769808 phase 0, ctor 0x0076cb9c, update 0x0076ccdc).**
+- Count and type: one beam on the clock's frame 28 (0x41e00000); frame 27 is effect 0x6f9 (not drawn). Type: arenas 3 / 4 -> 2, the others 0, plus 1 when the roll is >= 0.5 (0x009773c8 = 0.5). Kept.
+- Table 0x009779b8 (12 bytes: step, rate, amp): 728 / 0.00213623046875 / -140 and 140, 280 / 0.007171630859375 / -300 and 300. Kept, read from the exe.
+- Frame: the heading at the spawn is stored at +0x50 (the ctor's 4th argument, `+0x60` of the boss) and turns the beam (0x0076cd60). The origin O is the boss matrix (identity, translated to the boss's position +0x38, turned by its heading, 0x00769808 at 0x007698c7..0x007698d4) applied to the translation of a key at frame 29 (0x00579de0, 0x00830aa0). The track is picked by the runtime global [0xa9b078]. **ASSUMED:** the key is 0, so O is the boss's position; the exe's O is off by the key.
+- Each update (0x0076ccdc): the ramp +0x58 = min(1, ramp + 0.025) first; the point is turned (amp * sin θ, 0, rate * θ) (θ = +0x54 in BAMS, sin table 0x0082dcbc) and added to O; y = O.y + 10 (0x00977a00); θ += step; then the probe 0x00780630(P, 0x16ef) (vertical trace through the collision objects, **ASSUMED** to be the boss's ground callback). A miss sets the dead bit (0x0076ce32, no explosion). A hit calls 0x0076a724(5, P, ramp * 64, 0): damage iparam5 raw (0x00768990 case 5, +0x28, no factor), knockback 10.0 (0x41200000), and the area hit 0x0051fc9c: radius above 100 (0x009216d4) takes one path, else the default path, taken as the 100 scan (**ASSUMED**, as the 2026-10-21 entry had it). SE 0x6fa at P and a camera quake (radius / 8) per hit: not ported.
+- **Corrected:** no life counter exists in the exe; the update has no cap, the beam ends only at the probe's miss. The port's 600-frame cap (`SM_WAVE.life`) is removed. The ramp is applied before the point (the radius is ramp * 64 <= 64, so the area is 100 on every frame either way).
+
+**Storm (state 23, phase 4 0x0076b7a8, ctor 0x00766b20, update 0x00766c5c, phase 5 0x0076a708 flips flags only).**
+- The counter +0x68 (c). Each update: if child slot 2 is flagged (0x00765a90(2), the motion's flag 0x2 at +0x9c, not read), c += 1 and SE 0x6f7 when c was below 1. Then, when n = c > 0: T = 75 n (0x00976234), c = n + 1. **Corrected:** so a flagged frame moves c by 2 and an unflagged one by 1 (once c > 0). The 2026-10-21 "frames 2, 3, 6, 14" came from one count per frame, which the exe does not do.
+- The rings (0x00976224..0x00976230 = 100, 200, 400, 1000), in order k = 0..3, type 6 + k: if T <= r_k an explosion of radius T and the scan stops; else if T <= r_k + 75 an explosion of radius r_k. **Corrected:** a ring is a blast of radius T while it grows, and a frame can give two blasts. The 2026-10-21 "one each, then done after four" is wrong.
+- Damage: iparam4 times 1.0, 0.8, 0.64, 0.32 for types 6 .. 9 (dispatcher 0x00768990, the products of 0x00977484 and 0x0097748c; trunc). Knockback 3.0 (0x40400000 on every type). Kept.
+- Done: once 75 c > 1075 (the next T is past the last ring), no further explosion is possible. **Corrected:** not "after the fourth".
+- Timers +0x48 / +0x4c: SE 0x6fc and 0x6fd in windows (0x00976240..0x00976248), not ported.
+- **ASSUMED:** the flag (the storm's motion window) is set on every frame; the storm's centre is the arena's origin (the exe passes the runtime global [0x00a9b020], not decoded).
+- With every frame flagged the rings are: frame 1 type 6 (T 75, area 100); frame 2 type 7 (200) and type 8 (225); frame 3 type 8 (375); frames 4 .. 7 type 9 (525, 675, 825, 975); frame 8 nothing, done. Eight blasts in seven frames.
+
+**Sand sonic (state 10, phase 0 0x0076865c at the clock's 45 = 0x42340000; ctor 0x0076c644; launch 0x0076c974; update 0x0076c2e0; move 0x0076c490; explosion 0x0076c4ec).**
+- Wait: w = the chopped 6 * rng (0x009774ac = 6.0; the ROUND in the decompile runs with the chop control word, so it is a truncation), set by 0x0076c790 (+0xb8 = w). **Corrected:** w <= 0 launches on that same phase-0 frame (0x0076c790 calls the launch). Otherwise the update counts down (0x0076c2e0: w -= 1, and at 0 the launch runs in the same update). So a wait of w launches on the w-th update after the crossing. The port launched one update later.
+- Launch (0x0076c974): start = node 0x17 with y + 100 and a ground snap (the port's ground is the boss's, **ASSUMED**). The heading is `fpatan(x, z)` of node 0x17 alone (0x0076c9e8 .. 0x0076c9f6, BAMS): **corrected**, it is not the direction from node 4 to node 0x17. Node 4 is stored at +0xbc and used only for the radius.
+- Move (0x0076c490): the vector (0, 0, 10) turned by the heading, added to the position (+0x38). 20 moves (+0xb4 = 20); the 21st update removes it (dead bit, no explosion).
+- Explosion after each move (0x0076c4ec): d = XZ distance from +0xbc to the sand sonic, then 0x0076a788(2, pos, 10.0 * 1.01 = 10.1, g * d * 120, 0): damage = the boss's base ATP (int16 at [boss+0x2c4], the type 2 case of 0x00768990), knockback 10.1, area max(radius, 100). Kept.
+- **ASSUMED:** g = [0xa9b0a4] (runtime, not decoded) = π / 720, so the radius is d * π / 6.
+
+**Port.**
+- `client/src/combat/saintmilionents.ts`: `SM_WAVE` (no `life`, `radiusPerRamp` 64, the exe's notes) and `SmWave.tick` (ramp, point, θ, probe; area max(ramp * 64, 100)); `SM_STORM` and `SmStorm` (the counter, `flagged` callback defaulting to always, the rings as above, done past 1075); `SmSandSonic.ready()` and `waiting()` (the countdown's zero is the launch update).
+- `client/src/combat/saintmilionboss.ts`: `sonicFresh` (the sonic made on this tick: launch now if the wait is 0, else the countdown starts on the next tick); `sandSonicFrame` heading `atan2(x17, z17)`.
+- `tests/saintmilionboss.test.ts`: section 9 (no cap at 3000 frames; the ramp is 0.025 on frame 1 and the area is 100 on frame 2); section 10 (every frame flagged: 6:100 | 7:200,8:225 | 8:375 | 9:525 | 9:675 | 9:825 | 9:975; a window of two flagged frames then one a frame, 14 frames; no flag; damage 1360 gives 1360, 1088, 870, 435; the boss's storm gives 1,2,2,3,4,5,6,7 and is done); section 11 (ready() and the countdown's zero on the update that reaches 0; the heading is atan2 of node 0x17 with node 4 off the origin).
+
+**Checks.**
+- `node tests/saintmilionboss.test.ts`: ALL PASS.
+- `node tests/saintmilion.test.ts`: all checks passed.
+- `node tests/enemyfsmep4.test.ts`: all checks passed.
+- `node tests/bossrooms.test.ts`: ALL PASS.
+- `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures.
+- `node tests/enemies.test.ts` (imports the module): ALL PASS.
+- client `tsc --noEmit` (Node 24): clean.
+- Not run in Chrome; the Ep4 boss e2e was not run (it needs a prepared character).
+
+**Open / ASSUMED.**
+- The wave's origin key (the runtime track [0xa9b078]) and the probe's exact semantics (the collision list 0xaab3f0, mask 0x16ef, the hit height).
+- The storm's flag window (child slot 2, its motion), so the storm's blast count is the every-frame case only; its centre [0xa9b020].
+- The sand's g [0xa9b0a4] and the snap to the ground at the launch.
+- The area's default path (0x0051fc9c +0x34) taken as the 100 scan.
+- Not ported: the models and draw of the three objects, SEs 0x6f7 / 0x6f9 / 0x6fa / 0x6fc / 0x6fd / 0x6f0, the camera quakes, and the effect 0x6f9.
