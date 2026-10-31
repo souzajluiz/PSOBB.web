@@ -23662,3 +23662,25 @@ All four read from the exe (dump `Psobb.exe-05112026.c` lines 776xxx..778xxx, Gh
 ## 2026-10-30: Ep2 watch merge note
 
 The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with its own hook (`onLocalEntityDefeated`). The merge keeps main's `Game.onLocalEntityFlags` (flag 8 marks the wave set entry, the corpse is not hidden, see "Local 6x76 keeps the corpse") and drops the duplicate; the branch's spec, `wstransport.ts` send guard and docs are kept.
+
+
+## 2026-10-31: Field HUD item list scroll bar and quick-menu shine (research only, partial)
+
+**What changed:** no client code. The two items of the Field HUD line in TODO.md (the item list scroll bar, the quick-menu text shine) were pinned as far as the exe reaches today. Neither is ported.
+
+**Shine (`QuickMenuRenderTextBackground_00742a6c`): not drawn, no live caller.** This confirms the 2026-10-23 entry. Its only caller is `QuickMenuRenderTextElement_00742a48`, slot 2 of vtable 0x00b41680 (the base `ChallengeMenuListWindow`). The base constructor `ChallengeMenuListWindow_Constructor_00742174` is only called by the two derived constructors (QuestListEntry at 0x00b41250, `ChallengeMenuListWindow_Constructor_00743978` at 0x00b417a0), which set their own vtables, so the base slot is never reached. The live quick-menu render is `ChallengeMenuListWindow_Render_00743b1c`, whose status-window shine is already ported (`classic/hud.ts`). Porting the 0x00742a6c shine would draw something the exe never draws.
+
+**Scroll bar (`ListWindowObject_RenderScrollbar` family): thumb constants pinned, list inputs open.**
+- The Item Pack list is `ChallengePlayer_CreateGuildCardSearchWindow_0075198c` (dump line 724214), whose constructor is `ChatShortcutMenuListWindow_Constructor_00736988(this, x, 0x24, ...)`, title unitxt 11 [0x37]. It calls `ListWindowObject_InitializeScrollbar_00737b8c` (dump 724263), which calls `ListWindowObject_CreateScrollbar_007362a4` (dump 702892): a 0xc-byte `list_scrollbar_settings` at window +0x64, flag +0x2c |= 0x80. Its position is `_DAT_009713f4 (-20) + window+0x38`.
+- `ListWindowObject_UpdateScrollbarMetrics_00736358` (dump 702932): settings[0] = `_DAT_009713ec (-19) + window+0x48`; settings[1] = `short(window+0x86) * 0x14 - 6`. The short at +0x86 is reset to 0 in `ListWindowObject_ResetListItems_00736578`; it is read as the first visible row (ASSUMED, not traced to its writer).
+- `ListWindowObject_UpdateScrollbarPosition_00736530` (dump 703039) clamps the render position through `ClampRenderPosition_0073f8a4` (window+0x70); the constants `_DAT_009713bc (-20)` and `_DAT_009713b8 (-6)` are its offsets.
+- Draw: `ListWindowObject_Render_007352f4` (dump 702114) calls `RenderScrollbarPrimitives_0073f6b2` (dump 710670, `(settings, window_pos, window+0x70)`) after the rows, when the settings pointer is non-null.
+- Thumb draw (`RenderScrollbarPrimitives_0073f6b2`, disassembled with `lldb -b -o "target create ..."`, `disassemble -s 0x0073f6b2`): the track and thumb use texture 0 (`set_image_in_texture(0, 0xff646464)`), colour `InterpolateColorByProgress_007a919c(0x86, 0xff, 0x41, flag, 0x1c2, 300, 0x13b, 0x14a)`. Measured constants (`tools/exedata.py read`, floats): 0x00972d3c = 17.0 (track y offset from window y), 0x00972d6c = 7.0 (thumb x base), 0x00972d38 = 3.0, 0x00972d34 = 3.0, 0x00972d30 = 35.0, 0x00972d60 = 34.0, 0x00972d48 = 35.0, 0x00972d4c = 0.1495, 0x00972d64 = 0.1196, 0x00972d68 = -1.0. The track width / thickness / thumb width globals (`g_ScrollbarTrackWidth`, `g_ScrollbarThickness`, `g_ScrollbarThumbWidth`, `g_ScrollbarThumbResizeThreshold`, `g_ScrollbarBaseHeight`) have no address in the named dump; their addresses are in the code after 0x0073f8a4 and were not read.
+- Thumb size and position (from the dump, ASSUMED field names): with `e = window[0xe]`, `H = g_ScrollbarBaseHeight`, track height = `H / (g_ScrollbarTrackHeightBase + e)`; the thumb height is `H / (H + e)`; when `window[3] >= g_ScrollbarThumbResizeThreshold`, the thumb is `[local_c + (renderpos * (window[3] - thickness)) / unk_flag, + window[7] * (window[3] - thickness) / unk_flag]` when that span is below `unk_flag`, else the full track. `unk_flag` is settings+4 (set to 0.0 in the constructor, not traced where it is written).
+
+**Open (why this is not a port yet):**
+- The inputs `window[2]`, `window[3]`, `window[7]`, `window[0xe]` and `unk_flag` are not traced to their writers. `get_position_of_list_menu` (the list's rect) was not read.
+- The track / thumb globals above need their addresses (the lldb disassembly of 0x0073f7fa..0x0073f8a4 has them).
+- REA Ghidra provider failed to launch twice (`GhidraLaunchError`), so the decompile was taken from the named dump and lldb.
+
+**Left for the next pass:** trace the list window's rect and the `window[2/3/7/0xe]` writers, read the track / thumb globals, then port the thumb in `classic/fieldwindows.ts` `drawListWindow` (the Item Pack list is `ITEM_LIST`, 8 visible rows, `VISIBLE_ROWS`) with the node test and a Playwright check of a 9+ item pack.
