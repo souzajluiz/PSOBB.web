@@ -23751,3 +23751,23 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 - The intro camera (not traced).
 
 **Checks.** `node tests/dragon.test.ts`: dragon: ok (section 32 is new: the root is node 0 scaled 2.0; the take-off starts the altitude from the record (12.5) and from the guess (0); the landing sub 0 reads the root height, the frame-18 flip reads it once more and then holds; NaN keeps the guess). `node tests/enemies.test.ts`: ALL PASS. `node tests/derolle.test.ts`: ALL PASS. `node tests/goldragon.test.ts`: goldragon: ok. `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures. `node client/node_modules/typescript/bin/tsc --noEmit -p client`: clean (Node 24).
+
+## 2026-10-31: Ep2 watch on Episode 1 Mines (floors 6, 7); the fresh-load gap closed by fresh games
+
+**Run (Episode 1, Mines 1 = floor 6, Mines 2 = floor 7; Vite 5193, `--trace off`, fresh account `mnwq7e3k3`):**
+`PW_BASE_URL=http://127.0.0.1:5193 NEWSERV_SYSTEM=/Users/junior/Downloads/psobb-master/web/vendor/newserv/system PSO_USER=mnwq7e3k3 EP2_WATCH_EPISODE=1 EP2_WATCH_FLOORS=6,7 EP2_WATCH_SECONDS=15 EP2_FLOOR_CAP_S=1500 npx playwright test e2e/ep2-floors-watch.spec.ts --trace off` -> `1 passed (34.3m)`, page errors 0, no failed requests.
+- Floor 6 (area 0x6): 35 groups in the discovery load, 31 ran, 4 absent (53/6, 53/8, 53/13, 53/14: in no game's load). 18 of the 19 games were fresh.
+- Floor 7 (area 0x7): 30 groups, 27 ran, 3 absent (61/5, 61/7, 61/8). 16 fresh games.
+- Own events at 0 when the group started: 28 of 31 (floor 6) and 27 of 27 (floor 7). Floor 6's 53/1, 53/4, 53/7 started at flag 6, not 24: an earlier group in the same game (the 531 trigger's action) started their events. Not a finished (0x18) wave.
+- Earlier runs on the same spec (no fresh games) are the gap: floor 6 ran 25 of 43 groups and floor 7 22 of 37 (a game keeps the variants of its floors, and a group after a chain kill saw events finished, 0x18: its wave enemies were hidden and idle, and the chained waves never started).
+
+**Spec changes (`client/e2e/ep2-floors-watch.spec.ts`).** `startGame()` (login, party, `expectInGame`) runs again for a fresh game. The game's chain kills are kept in `killed`; a group after a kill starts a fresh game. A group is picked from each game's own load, non-chained first, so a game's variants are the ones the group is watched in (the discovery load's list is only the pending names). Four games in a row without a pending group gives up on the rest (`absent`). Each result has `session` (its game) and the floor summary `fresh` (games started for a group).
+
+**Mines FSM watch (clean groups, own events at 0; the states after 15 s).** Gillchic / Dubchic walk, melee, laser and go home as the player moves in and out of aggro; Canadine ring children hover, laser and zap; Canane `idle -> notice -> rise`; Sinow Beat and Gold `wait -> drop -> chase / warp / combo / away / lost`, and Sinow Gold casts `tech` (floor 7, 52/1). No enemy was stuck in a spawn state, and no enemy was hidden in a clean group except the 61/4 root below. Dubwitch (30/1, 50/1, 80/1) stays `hidden` as it should until its linked Dubchic is dead.
+
+**Open (not fixed; no exe comparison done this session):**
+- The Canane (`CananeAi`, `combat/enemyfsmmines.ts`) stays in `rise` for the whole 90 s of a group 51/1 watch (`EP2_WATCH_GROUPS=51/1 EP2_WATCH_SECONDS=90`, 2.3 min), and in 60/1 and 53/1 the same way. Its stage 3 waits for a ring child in `return` or for at most `8 - outCount` children alive (`CananeAi.tick`, the exe's `CananeEnemyUpdate_00541da4` at 0x00541da4, stage 3); both out-fighters sit in `lost` (no target within `CANADINE.search`, 200) while the player is about 125 from the nearest enemy. The stage-3 gate or the `lost` search is the likely cause (ASSUMED, not yet read against the exe).
+- Floor 7 group 61/4: its chain root (event 611, a Gillchic) stayed hidden and idle for 30 s after the player was placed on its trigger, so the chain stopped and the group's Garanz stayed unstarted. Not isolated: the trigger may not have fired, or the Gillchic was never shown. The spec logs no flags for the root, so the next run should print the root's flags and its trigger's `fired`.
+- Floors 8..10 (Ruins) are not watched.
+
+**Checks.** `npx tsc --noEmit -p .` was not run (the spec runs under Playwright's own TypeScript; the run above compiled it). No FSM code changed, so no unit test changed.
