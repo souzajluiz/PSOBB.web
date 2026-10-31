@@ -829,6 +829,11 @@ export class TeamMenus {
     this.notice(left, 'master');
   }
 
+  // The success displays (the answer 0 of 11EA / 05EA's 06EA) send their 07EA with the notice's text:
+  // team_member_promotion_success_display 0x0079e8a8 (15 0x6f) and demotion 0x0079e7f8 (15 0x74) take the
+  // row's label only (one %s); dismissal 0x0079e720 (15 0x79) takes the row's label and the team name
+  // (g_pKeyTeamConfig + 0x2cc, ASSUMED: the team name the membership carries). Each sends 07EA after the
+  // notice's team log line, and no answer is waited for.
   private sendMemberAction(action: MemberAction, member: TeamMember): void {
     const t = ACTION_TEXT[action];
     const label = memberRowLabel(member);
@@ -838,7 +843,11 @@ export class TeamMenus {
     void this.guard(
       call,
       (code) => {
-        if (code === 0) this.notice(format(this.text.t15(t.done), label, this.host.membership().name), 'master');
+        if (code === 0) {
+          const done = action === 'dismiss' ? format(this.text.t15(t.done), label, this.host.membership().name) : format(this.text.t15(t.done), label);
+          this.host.operationNotice?.(done);
+          this.notice(done, 'master');
+        }
         // 11EA answers 5 for "already promoted / demoted"; 06EA has no such code.
         else if (code === 5 && action !== 'dismiss') this.notice(this.text.t15(t.already), 'master');
         else this.notice(this.text.t15(t.failed), 'master');
@@ -853,7 +862,14 @@ export class TeamMenus {
     void this.guard(
       this.host.disband(),
       (code) => {
-        if (code === 0) this.notice(format(this.text.t15(T15_TEAM.dissolved), name), 'master');
+        // team_dissolution_success_display 0x0079e564 (15 0x82, the team name): 07EA with the same text. The
+        // disband (10EA) comes first; newserv relays a 07EA only to a sender that still has a team, so the line
+        // is ASSUMED to be dropped there (as the leave's, see team.ts operationNotice).
+        if (code === 0) {
+          const done = format(this.text.t15(T15_TEAM.dissolved), name);
+          this.host.operationNotice?.(done);
+          this.notice(done, 'master');
+        }
         else this.notice(this.text.t15(T15_TEAM.dissolveFailed), 'master');
       },
       () => this.notice(this.text.t15(T15_TEAM.dissolveFailed), 'master'),

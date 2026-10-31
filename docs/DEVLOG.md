@@ -23885,3 +23885,32 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 - The bank mag row in a screenshot / e2e, and the tool subtype 2 path (`0x00726608`).
 - The take spinner's max (decompile ambiguous; ASSUMED).
 - The SE audit per call site (above).
+## 2026-10-31: 07EA after promote, demote, dismiss and dissolve (purchase sends none on the Buying path)
+
+**Question.** Which of the five success displays that did not send the 07EA operation notice send it, when, and with which text.
+
+**Dispatch (PROVEN).** `0x0079e528` switches on the team state `DAT_00aab218` and calls the display: `0x30` promote -> `0x0079e8a8`, `0x37` demote -> `0x0079e7f8`, `0x3e` dismiss -> `0x0079e720`, `0x45` transfer -> `0x0079e5e8` (ported), `0x4a` dissolve -> `0x0079e564`. Callers (objdump `calll`): `0x007c1a24` (EA table entries 0x06 and 0x10, flag 0 -> `0x7c1a2f` -> `0x79e528`), `0x007c4d8c` (entry 0x11, flag 0 -> `0x7c4dbb`). So the display runs on the answer 0 of 06EA / 10EA / 11EA. The state is set before the request: promote `0x00799601` (11EA 0x30), demote `0x0079948d` (11EA 0), dismiss `0x00799319` (05EA, answer 06EA), dissolve `0x00798b3d` (10EA), transfer `0x00798b98`.
+
+**The notices (PROVEN unless marked).** Each display builds the text with `_swprintf` and sends it with `FUN_007f32ac(text, 0)` (the 07EA, no sender) after the team log line (`FUN_0073ae38`, only when the log window exists).
+- Promotion `0x0079e8a8`: unitxt 15 0x6f, one `%s` = the chosen row's label (the list item's `+0x20`, the same label the transfer uses).
+- Demotion `0x0079e7f8`: 15 0x74, one `%s` = the row label.
+- Dismissal `0x0079e720`: 15 0x79, two `%s`: the row label, then `DAT_00a95df0 + 0x2cc`. ASSUMED: `DAT_00a95df0` is `g_pKeyTeamConfig` (the team name is at `+0x2cc`, net/team.ts line 756), so this is the team name.
+- Dissolution `0x0079e564`: 15 0x82, `%s` = `g_TeamNameBuffer_00aab1a0` (copied from `g_pKeyTeamConfig->team_name`, the team name).
+- Purchase `0x0079e120`: 15 0x99, `%s` = the own player's name (`FUN_006936b4`) when `GetPlayer(g_LocalPlayerIndex)` is not null, else empty; second `%s` = `g_SelectedGameNameBuffer_00a9f960` (the chosen row's label).
+
+**Purchase is not on the Buying path (PROVEN).** `0x0079e120` is reached only from the 1FEA handler (`0x007c4f5c`, flag 0) when the state is `0x26`. The only writer of `0x26` is `0x0079879c`, called from `0x0079863c` (Buying confirm) only for the list index in `0x1c..0x23` except `0x21`. That path sends no 1BEA. Every other index (the port's rewards 0..0x1a) takes the 1BEA send (`send_packet0xea_subcommand0x1b`), the notice 15 0x8b and state `0x51`: no 1FEA and no 07EA. newserv answers 1BEA with nothing. So the port's purchase sends no 07EA, and the exe sends none on that path. Indices 0x1c..0x23 are the unported ones (2026-10-31 rename entry). Not ported.
+
+**Port.**
+- `classic/teammenu.ts` `sendMemberAction`: on answer 0 the notice and `host.operationNotice` get the same text. Promotion and demotion pass the label only (the exe passes one argument; the text had a second `%s` ignored before). Dismissal passes the label and the team name.
+- `classic/teammenu.ts` `sendDissolve`: on answer 0, the notice and the 07EA with the team name. ASSUMED: newserv drops this line, since the disband removes the sender's team (`c->team()` then null, as for the leave); not verified.
+- No new host method: `operationNotice` (added with the leave) is reused.
+
+**Server (newserv, read only).** `ReceiveCommands.cc` on_EA_BB 0x07EA relays only when the sender has a team and the body ends with two zero bytes, to every member. 11EA promote / demote and 05EA dismiss leave the sender in the team, so the line reaches the team (B included). 
+
+**Tests.**
+- `node tests/teammenu.test.ts`: ALL PASS (343 checks, was 330): promotion (07EA = the notice, `[15:0x6f]` with the row label; answer 3 sends none), demotion (`[15:0x74]`), dismissal (a custom two-`%s` text, the label and the team name), dissolution (`T15[82] Gamma`; a failed 10EA sends none).
+- `node tests/team.test.ts`: unchanged; the packet layout and the 0x7F cut were already covered.
+- `client`: `tsc --noEmit` clean (Node 24).
+- `PW_BASE_URL=http://127.0.0.1:5191 npx playwright test e2e/team-master.spec.ts --trace off`: 1 passed (5.5 min). The spec now promotes B, demotes B and promotes B again, checking B's team log grows after each 07EA; then the Master Transfer as before. Fresh accounts `t7ea...` / `t7eb...`.
+
+**Open / ASSUMED.** The dismissal's team name source (`DAT_00a95df0`); the dissolution 07EA dropped by newserv; the purchase 0x1c..0x23 path (not ported, and it sends no 1BEA in the exe); the 15:0x6f / 0x74 texts (not read, the unitxt is runtime data); the dismissal and dissolution are not in the e2e.

@@ -1,8 +1,9 @@
 // Master Transfer, Buying Privileges and Team Flag Records against a local newserv, with two
 // fresh accounts in one lobby:
-//   A creates a team, invites B (Home > Team > Invite, B accepts), promotes B to leader, then
-//   transfers the master to B: the 6xCD request, B's prompt (Yes twice), the 6xCE answer, 11EA flag
-//   0x40, and the server's 12EA membership updates (A leader 0x30, B master 0x40).
+//   A creates a team, invites B (Home > Team > Invite, B accepts), promotes B to leader, demotes B and
+//   promotes B again (each 07EA notice reaches B's team log), then transfers the master to B: the 6xCD
+//   request, B's prompt (Yes twice), the 6xCE answer, 11EA flag 0x40, and the server's 12EA membership
+//   updates (A leader 0x30, B master 0x40).
 //   The transfer's 07EA notice reaches B's team log (newserv relays it to the team's members).
 //   B (now the master) opens Buying Privileges (a fresh team has no points, every reward is greyed)
 //   and Team Flag Records (greyed without the reward bit; with the bit forced on the page the
@@ -13,8 +14,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { cursorTo, key, peek, reachLobby, type Win } from './classic.ts';
 import { ensureCharacter, freshUser } from './fresh-field.ts';
 
-const USER_A = process.env.PSO_USER_A ?? freshUser('tmx');
-const USER_B = process.env.PSO_USER_B ?? freshUser('tmy');
+const USER_A = process.env.PSO_USER_A ?? freshUser('t7ea');
+const USER_B = process.env.PSO_USER_B ?? freshUser('t7eb');
 
 const membership = (page: Page) => peek(page, (w: Win) => w.classicLobby.hud.team.membership() as { privilege: number; masterGuildCard: number; teamId: number; name: string });
 const teamPhase = (page: Page) => peek(page, (w: Win) => (w.classicLobby.team?.phase?.kind ?? null) as string | null);
@@ -123,12 +124,23 @@ test('two accounts: invite, promote, Master Transfer, Buying Privileges, Team Fl
     }).toBe(false);
   });
 
-  await test.step('A promotes B to leader', async () => {
-    await openMasterRow(a, 0);
+  // Promotion and demotion each send their 07EA (SendTeamOperationSuccessPacket), which newserv relays to
+  // the team, so B's team log grows after each. The transfer below needs B as a leader again.
+  const logLines = () => peek(b, (w: Win) => w.classicLobby.hud.teamChat.log.lines.length as number);
+  const changeB = async (row: number, privilege: number) => {
+    const before = await logLines();
+    await openMasterRow(a, row);
     await key(a, 'Enter');
     await pickMember(a, nameB);
     await continueNotice(a);
-    await expect.poll(async () => (await membership(b)).privilege, { timeout: 15_000 }).toBe(0x30);
+    await expect.poll(async () => (await membership(b)).privilege, { timeout: 15_000 }).toBe(privilege);
+    await expect.poll(logLines, { timeout: 15_000 }).toBeGreaterThan(before);
+  };
+
+  await test.step('A promotes B to leader, then demotes B (B\'s team log grows each time), then promotes B again', async () => {
+    await changeB(0, 0x30); // promotion, 11EA 0x30
+    await changeB(1, 0x00); // demotion, 11EA 0x00
+    await changeB(0, 0x30); // promotion again for the transfer
   });
 
   await test.step('Master Transfer: A asks, B says Yes twice, the server swaps the roles', async () => {
