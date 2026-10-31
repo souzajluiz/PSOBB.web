@@ -29,13 +29,14 @@ eq(low?.x, 4, 'at the launcher point x');
 eq(low?.z, 5, 'and z');
 eq(low?.state, GALMINION_STATE.init, 'starts in state 0');
 
-// The first update leaves state 0 without moving or drawing.
+// The first update leaves state 0 and runs the state-1 code on the same tick (0x004ab295 -> 0x004ab2f2 ->
+// 0x004ab2f9): it moves one step and draws its icon.
 {
   const m = GalgryphonMinionEffect.create(flat(0), 0, 0, 3)!;
   m.update([{ clientId: 3, x: 100, z: 0 }]);
   eq(m.state, GALMINION_STATE.move, 'state 0 goes to 1');
-  eq(m.x, 0, 'no motion on the first tick');
-  eq(m.minimapIcons().length, 0, 'no icon on the first tick');
+  near(m.x, GALMINION.accel * GALMINION.damp, 'the first tick already moves');
+  eq(m.minimapIcons().length, 1, 'the first tick draws its icon');
 }
 
 // Homing: one tick toward +x gives v = (0.01 + 0) * 0.995 and the step is v.
@@ -43,11 +44,13 @@ eq(low?.state, GALMINION_STATE.init, 'starts in state 0');
   const m = GalgryphonMinionEffect.create(flat(0), 0, 0, 3)!;
   const p = [{ clientId: 3, x: 100, z: 0 }];
   m.update(p);
-  m.update(p);
   near(m.vx, GALMINION.accel * GALMINION.damp, 'the velocity after one pull');
   near(m.x, GALMINION.accel * GALMINION.damp, 'the position steps by the velocity');
   near(m.z, 0, 'no sideways drift toward a target on the axis');
   eq(m.minimapIcons().length, 1, 'one icon in state 1');
+  // The second tick adds another pull: v = (0.01 + v1) * 0.995.
+  m.update(p);
+  near(m.vx, (GALMINION.accel + GALMINION.accel * GALMINION.damp) * GALMINION.damp, 'the second pull');
   const ic = m.minimapIcons()[0];
   eq(ic.scale, 1.5, 'the icon is 1.5');
   eq(ic.shape, 1, 'shape 1');
@@ -72,8 +75,8 @@ eq(low?.state, GALMINION_STATE.init, 'starts in state 0');
   eq(n.x, 2, 'a slot not in the party: no motion');
 }
 
-// Life: 361 MOVE ticks, the 362nd moves and goes to WIND (the exe's 0x168 test),
-// WIND counts 60 and the next tick is the dead one.
+// Life: the init tick is the first MOVE tick; the 362nd tick sees timer 361 > 0x168, goes to WIND
+// (timer 0) and still moves (timer 1 after it). WIND dies on the tick that sees its timer above 0x3c.
 {
   const m = GalgryphonMinionEffect.create(flat(0), 0, 0, 0xffff)!;
   let ticks = 0;
@@ -85,13 +88,14 @@ eq(low?.state, GALMINION_STATE.init, 'starts in state 0');
     if (windAt < 0 && m.state === GALMINION_STATE.wind) windAt = ticks;
     if (deadAt < 0 && m.dead) deadAt = ticks;
   }
-  eq(windAt, 363, 'WIND starts on the 362nd move tick (after the init tick)');
-  eq(deadAt, 363 + 61, 'the object is dead on the 62nd WIND tick');
-  // No icons once the minion is winding down.
+  eq(windAt, 362, 'WIND starts on the 362nd tick (the init tick is the first move tick)');
+  eq(deadAt, 362 + 61, 'the object is dead on the 61st WIND tick');
+  // The transition tick still moves and icons; WIND draws none.
   const w = GalgryphonMinionEffect.create(flat(0), 0, 0, 0xffff)!;
-  for (let i = 0; i < 362; i++) w.update(noPlayers);
+  for (let i = 0; i < 361; i++) w.update(noPlayers);
+  eq(w.state, GALMINION_STATE.move, 'still MOVE after 361 ticks');
   w.update(noPlayers);
-  eq(w.state, GALMINION_STATE.wind, 'state 2 after the life (the 363rd tick)');
+  eq(w.state, GALMINION_STATE.wind, 'state 2 on the 362nd tick');
   eq(w.minimapIcons().length, 1, 'the transition tick still moves and icons');
   w.update(noPlayers);
   eq(w.minimapIcons().length, 0, 'no icon in WIND');
@@ -125,12 +129,12 @@ eq(low?.state, GALMINION_STATE.init, 'starts in state 0');
   const m = GalgryphonMinionEffect.create(ground, 100, 200, 0xffff)!;
   const hits: Array<{ x: number; y: number; z: number }> = [];
   const att = (p: { x: number; y: number; z: number }) => hits.push(p);
-  m.update([], att); // init -> move
-  eq(hits.length, 0, 'attack: none on the init tick');
+  m.update([], att); // init -> move, on the same tick
+  eq(hits.length, 1, 'attack: the init tick is a move tick');
   m.update([], att);
-  eq(hits.length, 1, 'attack: one per move tick');
+  eq(hits.length, 2, 'attack: one per move tick');
   m.update([], att);
-  eq(hits.length, 2, 'attack: each move tick');
+  eq(hits.length, 3, 'attack: each move tick');
   near(hits[1]!.y, 4, 'attack: at the minion height (the ground under it, capped at 6)');
   // The wind state (after 360 ticks of move) makes no attack.
   const w = GalgryphonMinionEffect.create(ground, 100, 200, 0xffff)!;

@@ -111,10 +111,9 @@ export class GalgryphonMinionLauncher {
    */
   update(ground: GroundFn): GalgryphonMinionEffect | null {
     if (this.dead) return null;
-    if (this.state === GALMINION_LAUNCH_STATE.init) {
-      this.state = GALMINION_LAUNCH_STATE.fly;
-      return null;
-    }
+    // State 0 only leaves to fly; the exe falls through into the fly code on the same tick
+    // (UpdateGalgryphonMinionEffect_004aa968: je 0x4aaae6 sets 1 and jmp 0x4aaa4d, the state-1 code).
+    if (this.state === GALMINION_LAUNCH_STATE.init) this.state = GALMINION_LAUNCH_STATE.fly;
     if (this.state === GALMINION_LAUNCH_STATE.fly) {
       // The position is sampled first (t = timer / duration), then the end test, then the timer
       // goes up: the tick after the duration ends samples t > 1 and is the one that ends.

@@ -75,7 +75,9 @@ eq(minionFlightFrames({ x: 0, y: 3, z: 4 }, { x: 0, z: 0 }), 30, 'the origin hei
   const ground = flat(4);
   eq(l.update(ground), null, 'state 0 makes nothing');
   eq(l.state, GALMINION_LAUNCH_STATE.fly, 'state 0 goes to fly');
-  eq(l.pos.x, 0, 'no move on the first tick');
+  // The init tick falls through into the fly code (0x004aa975 -> 0x004aaa4d): it samples t = 0 at the origin.
+  eq(l.pos.x, 0, 'the first tick samples the origin');
+  eq(l.timer, 1, 'and the timer goes to 1 on that same tick');
 
   let made: ReturnType<typeof l.update> = null;
   let ticks = 0;
@@ -84,9 +86,10 @@ eq(minionFlightFrames({ x: 0, y: 3, z: 4 }, { x: 0, z: 0 }), 30, 'the origin hei
     ticks++;
     if (r) made = r;
   }
-  // The fly ticks sample timer 0..duration (duration + 1 ticks), the tick that sees
-  // duration < timer ends the fly (1 tick), and the state-2 tick makes the Effect (1 tick).
-  eq(ticks, l.duration + 3, 'the flight takes duration + 3 ticks in total');
+  // The init tick is the first fly tick (timer 0). The fly ticks sample timer 0..duration (duration + 1
+  // ticks, the first one above), the tick that sees duration < timer ends the fly (1 tick), and the
+  // state-2 tick makes the Effect (1 tick): duration + 3 ticks in total, the loop counts all but the first.
+  eq(ticks + 1, l.duration + 3, 'the flight takes duration + 3 ticks in total');
   eq(l.state, GALMINION_LAUNCH_STATE.done, 'the launcher ends in state 3');
   check(made !== null, 'the Effect is made on the state-2 tick');
   // The last sample is at timer = duration + 1 (t > 1, the exe's extrapolation).

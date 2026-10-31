@@ -103,10 +103,9 @@ export class GalgryphonMinionEffect {
   update(players: readonly GalgryphonPlayer[], attack?: (at: { x: number; y: number; z: number }) => void): void {
     this.icons.length = 0;
     if (this.dead) return;
-    if (this.state === GALMINION_STATE.init) {
-      this.state = GALMINION_STATE.move;
-      return;
-    }
+    // State 0 only leaves to move; the exe falls through into the state-1 code on the same tick
+    // (UpdateGalgryphonMinion_004ab283: je 0x4ab2f2 sets 1 and runs on at 0x4ab2f9).
+    if (this.state === GALMINION_STATE.init) this.state = GALMINION_STATE.move;
     if (this.state === GALMINION_STATE.wind) {
       if (this.timer > GALMINION.windDown) {
         this.dead = true;
@@ -117,6 +116,8 @@ export class GalgryphonMinionEffect {
     }
     if (this.state !== GALMINION_STATE.move) return;
 
+    // +0x2c is set to 6.0 before the probe (0x004ab2f9), so it keeps 6.0 when there is no ground.
+    this.y = GALMINION.groundY;
     const gy = this.ground(this.x, this.z, GALMINION.groundY);
     if (gy === null) {
       this.dead = true;
