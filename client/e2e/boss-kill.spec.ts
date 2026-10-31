@@ -7,7 +7,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { consoleLog, key, peek } from './classic.ts';
 import { enterFreshField } from './fresh-field.ts';
 
-const PREFIX = 'bsk';
+const PREFIX = 'drg';
 const STRONG_WEAPON = '0001052c' + '00'.repeat(8);
 
 const floorOf = (page: Page) => peek(page, (w) => w.classicGame.view.debug().floor() as number);
