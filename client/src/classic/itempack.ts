@@ -79,7 +79,8 @@ import { isSRankWeapon, maxStackSize, type ItemData, type ItemNames } from '../f
 import { SPECIAL_STARS_BEGIN_INDEX } from '../formats/itempmt.ts';
 import { statContribution } from '../combat/playerstats.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
-import { DISABLED, drawListWindow, drawPill, drawTextWindow, drawWindowTitle, INSET, listKey, listWindowHeight, ROW, TITLE_GAP, type ListItem } from './fieldwindows.ts';
+import { DISABLED, drawListScrollbar, drawListWindow, drawPill, drawTextWindow, drawWindowTitle, INSET, listKey, listWindowHeight, ROW, TITLE_GAP, type ListItem } from './fieldwindows.ts';
+import type { ListScrollbar } from './listscrollbar.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
 import { EQUIP_PANEL, equipStatRows, hasEquipPanel, IQ_LABEL, MAG_LEVEL_LABEL, magRows, SYNCHRO_LABEL, type StatBlock } from './itemdetail.ts';
 import { wipeElement, WindowAnim, withElementWipe, withWindowAnim } from './windowanim.ts';
@@ -604,6 +605,7 @@ export class ItemPackMenu {
   private state: State = 'list';
   private cursor = 0;
   private top = 0;
+  private scrollDrawn: ListScrollbar | null = null; // the last draw()'s scroll bar (debugState)
   private purpose: { cursor: number; items: ListItem[] } = { cursor: 0, items: [] };
   private sortMenu = { cursor: 0 };
   // Manual sort (states 9..0xB): the item picked first, waiting for the one
@@ -919,6 +921,7 @@ export class ItemPackMenu {
         const sy = cy + (this.cursor - this.top) * ROW;
         wipeElement(ctx, cx, sy, 16, () => drawSelectBar(ctx, skin.bars, cx, sy, cw, 16));
         this.rows.slice(this.top, this.top + VISIBLE_ROWS).forEach((r, i) => this.drawRow(ctx, tex, r, cx, cy + i * ROW, cw));
+        this.scrollDrawn = drawListScrollbar(ctx, L.x, L.y, L.w, L.h, true, this.rows.length, this.top);
       }
       drawWindowTitle(ctx, skin, L.x, L.y, this.env.text(11, 0x37));
     });
@@ -1024,6 +1027,9 @@ export class ItemPackMenu {
       detail: { ...ITEM_DETAIL },
       panel: this.panelDrawn,
       cursorRow: { x: L.x + INSET, y: L.y + INSET + TITLE_GAP + (this.cursor - this.top) * ROW, w: L.w - 2 * INSET, h: 16 },
+      top: this.top,
+      // The track and thumb the last draw() put (null when the exe hides the bar).
+      scrollbar: this.scrollDrawn,
     };
   }
 
