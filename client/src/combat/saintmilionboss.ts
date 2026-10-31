@@ -338,6 +338,8 @@ export class SaintMilionAi extends BrainBase {
   private readonly atp: number;
   private storm: SmStorm | null = null;
   private sonic: SmSandSonic | null = null;
+  // The sand sonic was made on this tick: its first update is the next tick (a wait of 0 launches now).
+  private sonicFresh = false;
   // Node positions the owner recorded: slot -> x, y, z.
   readonly nodes = new Float32Array(SM_NODES.length * 3);
   nodesKnown = false;
@@ -438,7 +440,13 @@ export class SaintMilionAi extends BrainBase {
     }
     // The storm and the sand sonic are objects of their own: they run in whatever state the boss is in.
     if (this.storm) for (const b of this.storm.tick()) this.pendingShots.push(b);
-    this.sandSonicFrame();
+    if (this.sonicFresh) {
+      // Made on this tick (0x0076c790): a wait of 0 or less launches now; else the countdown starts next tick.
+      this.sonicFresh = false;
+      if (this.sonic?.ready()) this.sandSonicFrame();
+    } else {
+      this.sandSonicFrame();
+    }
     // The laser's sound loop ends with the laser (0x00765d7c's end update; seen one frame late here, when the
     // laser is already done).
     if (this.laser?.done) {
@@ -752,6 +760,7 @@ export class SaintMilionAi extends BrainBase {
       this.events.push({ kind: 'effect', name: 'sandsonic', state: 10 });
       // The sand sonic waits trunc(6 * rng) frames (0x009774ac), then launches (sandSonicFrame).
       this.sonic = new SmSandSonic(Math.trunc(SM_SAND.wait * this.rand.float()), this.atp);
+      this.sonicFresh = true;
     }
     if (c.crossed(SM.burstFrame)) {
       const p = this.node(4);
@@ -803,14 +812,15 @@ export class SaintMilionAi extends BrainBase {
     }
   }
 
-  // The sand sonic's launch (0x0076c974) once its wait is over: from node 0x17 toward node 0x17 from node 4.
+  // The sand sonic's countdown and launch (0x0076c2e0 / 0x0076c974) once its wait is over: from node 0x17, heading
+  // atan2(x, z) of node 0x17 (fpatan of the tip alone, PROVEN), the radius pivot node 4 (+0xbc).
   // ASSUMED: without the nodes the launch is from the boss, along its swing angle.
   private sandSonicFrame(): void {
     const s = this.sonic;
     if (!s || s.launched || s.waiting()) return;
     const start = this.node(0x17);
     const pivot = this.node(4);
-    if (start && pivot) s.launch(start[0], start[2], Math.atan2(start[0] - pivot[0], start[2] - pivot[2]), pivot[0], pivot[2]);
+    if (start && pivot) s.launch(start[0], start[2], Math.atan2(start[0], start[2]), pivot[0], pivot[2]);
     else s.launch(this.x, this.z, this.swingAngle * BAMS, this.x, this.z);
     this.pendingShots.push(s);
   }
