@@ -23810,3 +23810,36 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 
 **Tests.** `node tests/teammenu.test.ts`: ALL PASS (330 checks, was 304): the leave's order (05EA, then 07EA) and text; the Master Transfer 07EA on success only; the rename flow (the reward row opens the window, the 1EEA with the name and 26, the 1FEA results 0 / 2 / other, the greyed row, a banned name, Cancel, the 15:0x2f row). `node tests/team.test.ts`: ALL PASS (the operation notice layout, the 0x7F cut, an empty text sends nothing, `TeamClient.operationNotice` writes one 07EA, RENAME_REWARD_ID). `client` tsc clean.
 `PW_BASE_URL=http://127.0.0.1:5191 playwright test e2e/team-master.spec.ts --trace off`: 1 passed (1.2 min). The spec now checks that the transfer's 07EA reaches B's team log (newserv relays it to the team).
+
+## 2026-10-31: Emotes and sit: the exe's emote exit, palette route and stand-up traced (three rules still open, nothing ported)
+
+**Question.** The TODO Emotes line left three rules ASSUMED: the emote's end, the palette-slot route to the sit, and the sitter's state after the stand-up. Traced from the Ghidra dump (`reverse/refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, by line number) and objdump of `~/Downloads/psobb-client/PsoBB.exe` (VAs below).
+
+**1. The emote's end: not the motion's end.**
+- The emote state 0x17 (`handle_input_state_emote`, dump 582309) has step 0 (enter), 2 (speed), 3 (interrupt), 5 (dispatch, 6x58), 6 (end) and 7 (defend / NPC). None of them reads the motion's end.
+- The enter (`HandleEmoteInputStateDispatcher_0069c7dc`, dump 582404) runs the previous state's end step (switch on `field_0x32e`), then `SetPlayerInputState_00694390(0x17, emote_id)` (dump 582484). The end step (`ResetPlayerEmoteState_006a2898`, dump 588220) runs only through another state's enter.
+- The emote key poll `handle_player_emote_input` (dump 587822) has one caller, `unknown_handle_gamepad_input_move_stop` (dump 581478, call at 581500). That runs only from the move-stop state's step 2 (`handle_input_state_move_stop`, dump 587475). So while the state is 0x17 no key poll runs and a movement key does not start a move. This is the 2026-10-25 lock, now read from the poll's callers.
+- The motion tick `FUN_007aa094` (VA 0x007aa094): mode 3 reaches its last frame at 0x007aa2f9..0x007aa310 (`fcompp` of the frame against `+0xc4 - DAT_0097d97c`). The branch at 0x007aa317 sets the mode to 5 (`movw $5, +0xf4`), steps the frame back, and ORs 0x30 into `+0xb0` (0x007aa358). Mode 5 (0x007aa440) holds the last frame. `+0xb0 & 0x40` stops the tick (0x007aa0a8; the emote enter sets 0x40 when flag 0x20000000 is set, dump 582484..582487). The motion holds its last pose and writes a flag; no emote handler reads that flag. The predicate at 0x007aa460 (`+0xb0 & 0x10`) has no caller traced.
+- Result: the exe does not end an emote on its last frame. The port's rule (`ended` ends a non-sit emote in `render/lobbyview.ts` emoteTick) is not the exe's. The exe's state 0x17 is left by an event in another state (a hit, death, NPC dialog, or another state's enter). Which of these ends a lobby emote with no hit is still unknown. ASSUMED: the port keeps its last-frame end.
+- ASSUMED, not proven: `ResetPlayerEmoteState_006a2898` also calls `SessionData_SetCharacterOptionBitfield_007be17c(slot, 0, 0xfff7ffff)` (dump 588220..588232). If the mask is the keep mask, it clears the option 0x80000 (the emote's "opposite" bit).
+
+**2. The palette-slot route to the sit.**
+- The sit's entry from the emote poll (`handle_player_emote_input`, dump 587849..587867): with Alt, `was_key_pressed(u)` gives the plain sit (getter 0x108, slot 48); `was_key_pressed(i)` the chair (0x10c, slot 49). Without Alt, the menu closed, the held mask `g_KeyboardSharedState[0xe]` (`CheckInputStateMask_006a7c58`) and `PlayerHasPaletteSlotEquipped_006a7c24(..., g_KeyboardSharedState[0xc])` give the plain sit; the same with `[0xd]` gives the chair.
+- `PlayerHasPaletteSlotEquipped_006a7c24` (VA 0x006a7c24, dump 593045) is true when the descriptor's enable bit (`this[1] & 1`) is set, `this[2] & mask` is set, and `this[3][2] & mask` is set. So the route is a key bit that the palette's active set holds, not a slot type. The palette loop (`unknown_handle_palette_inputs`, dump 555862) has no case for slot type 1 (dump 555920..555930): a palette slot does not start a sit that way.
+- ASSUMED: what the mask roles are. `g_KeyboardSharedState[0xc..0xe]` are written by the key-config fill (dump 769712..769731, cases 4, 5, 6). The menus use 8..0xd (Up, Down, Left, Right, Decide, Cancel; `client/src/input/keyconfig.ts`), so `[0xc]` and `[0xd]` would be the Decide and Cancel bits. That is not checked against the descriptor's writers.
+- The sit's stand-up (`HandleInputState0xAB_0069c0c8`, VA 0x0069c0c8, dump 581992): the palette test with `GetCharacterKeyIndex_006a7cc4` (VA 0x006a7cc4, dump 593101: `[0xe]` when option 0x800000, else `[0xd]`) goes to `LAB_0069c17e`, `handle_input_state_move_stop(dispatch)`.
+- Not ported: the port's action palette has no sit type, and the mask roles are open.
+
+**3. The sitter's state after the stand-up.**
+- `LAB_0069c17e` calls `handle_input_state_move_stop(param_1, dispatch)` (dump 587459, case `dispatch`), which is only `dispatch_action_move_stop` (6x3E). That path calls no `SetPlayerInputState`, so the exe keeps state 0x18 after the 6x3E.
+- Open: the stand-up test is gated by `field409_0x330 != 0` (dump 582021). The sit's enter clears that word (dump 582298). `SetPlayerActionState_0069c0ac` (dump 581xxx, the interrupt step) sets it to 1 only when `+0xb0 & 0x800`. So for an ordinary sitter the Alt+U and palette stand-up tests are skipped, unless another writer of `+0x330` runs during the sit. Not traced, and it decides whether Alt+U stands the sitter up at all.
+- ASSUMED: the port ends the sit display on the 6x3E, as before (`render/lobbyview.ts` emoteTick, `sitStandsUp`).
+
+**Port.** None. Each rule still has an open reader or writer (above), so a port would not be proven. Behaviour is unchanged.
+
+**Checks.** No client change, so no tsc, Vite or Playwright run for this entry. The existing helper tests are unchanged. No new unit or e2e tests: they would test ASSUMED behaviour.
+
+**Still open (the decisive facts for the next step).**
+- Which event leaves state 0x17 in a lobby with no hit: the callers of `SetPlayerInputState_00694390` (24 call sites, dump 575340) that can run from state 0x17.
+- The writers of `field409_0x330` during the sit (state 0x18): does Alt+U stand the sitter up.
+- The meaning of `g_KeyboardSharedState[0xc..0xe]` as palette descriptor bits (the writers of `this[2]` and `this[3][2]`).
