@@ -17,10 +17,13 @@ import {
   guildCardFromPlayer,
   blockRows,
   cardInfoLines,
+  entityRows,
+  guildCardFromEntity,
   recentRows,
   searchOptionRows,
   subRows,
   T11_GUILD,
+  type GuildEntity,
   type LobbyPlayerCard,
 } from '../client/src/classic/guildcardmenu.ts';
 import { buildGuildCard, GuildCardBook, GuildCardClient, GC_CMD, GC_FILE, sendCardPacket, sentCardValid, type GuildCard } from '../client/src/net/guildcard.ts';
@@ -75,7 +78,7 @@ interface Sent {
   flag: number;
   payload: Uint8Array;
 }
-function menuFor(book: GuildCardBook | null, loggedIn = true, players: LobbyPlayerCard[] = [], self: number | null = 1000): { menu: GuildCardMenu; sent: Sent[]; client: GuildCardClient } {
+function menuFor(book: GuildCardBook | null, loggedIn = true, players: LobbyPlayerCard[] = [], self: number | null = 1000, entities: GuildEntity[] = []): { menu: GuildCardMenu; sent: Sent[]; client: GuildCardClient } {
   const sent: Sent[] = [];
   const link = {
     send: (command: number, flag: number, payload: Uint8Array = new Uint8Array()) => {
@@ -88,7 +91,7 @@ function menuFor(book: GuildCardBook | null, loggedIn = true, players: LobbyPlay
   };
   const client = new GuildCardClient(link);
   client.book = book;
-  const menu = new GuildCardMenu(text, { book: () => book, client: () => client, selfGuildCard: () => self, lobbyPlayers: () => players, loggedIn });
+  const menu = new GuildCardMenu(text, { book: () => book, client: () => client, selfGuildCard: () => self, lobbyPlayers: () => players, entities: () => entities, loggedIn });
   return { menu, sent, client };
 }
 // The target of the last 0040 sent (searchPacket: tag, searcher, target), or -1.
@@ -650,6 +653,86 @@ function chooseAction(menu: GuildCardMenu, value: number): ReturnType<GuildCardM
     threw = true;
   }
   check('drawing the add list with the card info window does not throw', !threw);
+}
+
+// 24. Add from an entity (0x4a..0x4e): the entity rows (value = id), greyed when none; a chosen entity
+// asks first (0x4d, nothing sent); No goes back to the entity list; Yes sends 07E8 with the entity's card
+// (GuildCard_LoadGuestData's fields); an already-blocked number sends nothing.
+{
+  const ents: GuildEntity[] = [
+    { id: 0x10, name: 'Ena', guildCardNumber: 88 },
+    { id: 0x11, name: 'Fox', guildCardNumber: 0 },
+  ];
+  check('entity rows are the ids, greyed when none', entityRows(ents, 'NONE').map((r) => r.value).join(',') === '16,17' && !entityRows([], 'NONE')[0]!.enabled);
+  const c88 = guildCardFromEntity(ents[0]!);
+  check('an entity card: its number and name, the guest fields (class 0xc, section 10, language 8)', c88.guildCardNumber === 88 && c88.name === 'Ena' && c88.charClass === 0xc && c88.sectionId === 10 && c88.language === 8 && c88.present);
+
+  const { menu, sent } = menuFor(bookWith([]), true, [], 1000, ents);
+  menu.key(key('ArrowUp'));
+  menu.key(key('Enter')); // the Block list
+  menu.key(key('ArrowDown'));
+  menu.key(key('Enter')); // the add row
+  menu.key(key('ArrowDown'));
+  menu.key(key('ArrowDown'));
+  menu.key(key('Enter')); // the source list: an entity
+  check('the entity list opens (0x4b)', menu.phase === 'addEntity');
+  menu.key(key('Enter')); // Ena
+  check('a chosen entity asks first (0x4d), nothing sent', menu.phase === 'addAsk' && sent.length === 0);
+  menu.key(key('Enter')); // the cursor is on No
+  check('No goes back to the entity list, nothing sent', menu.phase === 'addEntity' && sent.length === 0);
+  menu.key(key('Enter'));
+  menu.key(key('ArrowUp'));
+  menu.key(key('Enter')); // Yes
+  const block = sent.find((s) => s.command === GC_CMD.blockAdd);
+  check('Yes sends 07E8 with the entity card 88 and the menu comes back', block !== undefined && le32(block.payload, 0) === 88 && menu.phase === 'menu', JSON.stringify(block && [...block.payload.slice(0, 8)]));
+
+  // Escape from the entity list goes back to the menu; the greyed row (no entities) does nothing.
+  const none = menuFor(bookWith([]), true, [], 1000, []);
+  none.menu.key(key('ArrowUp'));
+  none.menu.key(key('Enter'));
+  none.menu.key(key('ArrowDown'));
+  none.menu.key(key('Enter'));
+  none.menu.key(key('ArrowDown'));
+  none.menu.key(key('ArrowDown'));
+  none.menu.key(key('Enter'));
+  none.menu.key(key('Enter')); // the greyed row
+  check('the greyed entity row asks nothing', none.menu.phase === 'addEntity');
+  none.menu.key(key('Escape'));
+  check('Escape from the entity list goes back to the menu', none.menu.phase === 'menu' && none.sent.length === 0);
+
+  // An entity whose number is already blocked: the question is answered Yes and nothing is sent.
+  const blockedBook = bookWith([]);
+  blockedBook.blockAdd(c88);
+  const dup = menuFor(blockedBook, true, [], 1000, ents);
+  dup.menu.key(key('ArrowUp'));
+  dup.menu.key(key('Enter'));
+  dup.menu.key(key('ArrowDown'));
+  dup.menu.key(key('Enter'));
+  dup.menu.key(key('ArrowDown'));
+  dup.menu.key(key('ArrowDown'));
+  dup.menu.key(key('Enter'));
+  dup.menu.key(key('Enter'));
+  dup.menu.key(key('ArrowUp'));
+  dup.menu.key(key('Enter'));
+  check('an already-blocked entity sends nothing', dup.sent.length === 0 && dup.menu.phase === 'menu');
+
+  // Drawing the entity question over the list does not throw.
+  const drawing = menuFor(bookWith([]), true, [], 1000, ents);
+  drawing.menu.key(key('ArrowUp'));
+  drawing.menu.key(key('Enter'));
+  drawing.menu.key(key('ArrowDown'));
+  drawing.menu.key(key('Enter'));
+  drawing.menu.key(key('ArrowDown'));
+  drawing.menu.key(key('ArrowDown'));
+  drawing.menu.key(key('Enter'));
+  drawing.menu.key(key('Enter'));
+  let threw = false;
+  try {
+    drawing.menu.draw(ctx, skin);
+  } catch {
+    threw = true;
+  }
+  check('drawing the entity question over the entity list does not throw', !threw);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

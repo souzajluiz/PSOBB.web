@@ -73,8 +73,17 @@
 //           player_guildcard; 0 means nothing is copied), then the same block copy and
 //           07E8 as the card book path.
 //         * Entity (0x4a, 0x4b): the list at 0x98 = (194, 256), title unitxt(11, 0x41),
-//           the entities of the game (GetEntityByIndex); none -> the greyed row
-//           unitxt(11, 0xf0). The port has no entity with a guild card, so only the empty row.
+//           one row per entity (the loop over g_EntityCount, GetEntityByIndex_0081364c, name at
+//           +8, value = the id at +4; no self filter in the loop); none -> the greyed row
+//           unitxt(11, 0xf0). A chosen row opens the sub confirm (0x4d,
+//           GuildCardMenu_CreateSubMenuConfirmation_00747dec at 0x00747dec, dump 716918): title
+//           unitxt(11, 0x33), question unitxt(11, 0x11f) at 0x9a = (419, 256) width 213, cursor on
+//           No. Yes (value 0, state 0x4e) -> HandleGuildCardMenuGuestDataStack_00782594 (0x00782594)
+//           -> GuildCardUpdateAndSendFromGuest_007825b4 (0x007825b4): GuildCard_LoadGuestData_007817f0
+//           (0x007817f0) finds the entity by id (GetEntityById_00813670, 0x00813670), copies its name
+//           (+8), sets class 0xc, section 10, the player id byte +0x105 = 8 and the card number from
+//           the entity's first dword (+0); then the same copy-if-new and 07E8 as the lobby player
+//           path. No / cancel -> the entity list (0x4b). See the ENTITY notes below.
 //
 // SEARCH (0x0f, 0040 -> 0041): the exe's 0041 handler (handle_ship_packet0x41, 809943)
 // gives the reply to the player-info list window (g_pChallengePlayerInfoWindowList),
@@ -128,6 +137,15 @@
 // NOT ported (logged no-ops, the menu stays open): the search result window 0x8d (not drawn),
 // the row 0x65 sub-list's 0x62 send and rename,
 // the own card's window 0x84, and the send packet 0xc0.
+//
+// ENTITY (0x4a..0x4e, ported 2026-10-31): the entity list is the exe's g_EntityCount table
+// (0x1bc-byte records, the id at +4, the name at +8). The port's rows are the lobby's players
+// (host.entities, homeleaves.ts), each with its clientId as the id and its guild card number as
+// the card. ASSUMED: the lobby's entity table holds the lobby players, the local player included
+// (the exe's loop has no self filter); entity +0 is the player's guild card number (the dump
+// copies +0 as the card number for any entity and the player record's case is not traced).
+// The copy is GuildCard_LoadGuestData's fields (exe literals: class 0xc, section 10, +0x105 = 8).
+// The Yes / No is the port's Question (no title: the exe's 0x33 "Confirm" title is not drawn).
 //
 // ASSUMED (not traced):
 //   - the page keys are ArrowLeft / ArrowRight (the exe reads g_KeyboardSharedState
@@ -285,6 +303,14 @@ export interface LobbyPlayerCard {
   charClass: number;
 }
 
+// An entity as the add-from-entity path reads it (GuildCard_LoadGuestData_007817f0): the id is the
+// list's value (entity +4), the card number is the entity's first dword (+0).
+export interface GuildEntity {
+  id: number;
+  name: string;
+  guildCardNumber: number;
+}
+
 export interface GuildCardHost {
   book(): GuildCardBook | null;
   // The E8 sender of the game-server connection (null before the login sync).
@@ -293,6 +319,8 @@ export interface GuildCardHost {
   selfGuildCard(): number | null;
   // The other players of the lobby (the current player is not in the list).
   lobbyPlayers(): LobbyPlayerCard[];
+  // The entities of the add-from-entity list (the exe's g_EntityCount table; the port: the lobby's players).
+  entities(): GuildEntity[];
   // The scene is logged_in (the lobby always is); 0x117 and search are greyed otherwise.
   loggedIn: boolean;
   // unitxt text of any group (the card info window's class and section names).
@@ -386,6 +414,28 @@ export function guildCardFromPlayer(p: LobbyPlayerCard): GuildCard | null {
     language: p.slot & 0xff,
     sectionId: p.sectionId,
     charClass: p.charClass,
+  };
+}
+
+// The entity list rows (the value is the entity id, GetEntityById's key), the greyed row when none.
+export function entityRows(entities: readonly GuildEntity[], emptyLabel: string): ListItem[] {
+  if (!entities.length) return [{ label: emptyLabel, value: -1, enabled: false }];
+  return entities.map((e) => ({ label: e.name.replace(/\n/g, ' '), value: e.id, enabled: true }));
+}
+
+// The card an entity adds to the block list (GuildCard_LoadGuestData_007817f0): the number is the
+// entity's, the rest are the exe's literals for a guest (class 0xc, section 10, +0x105 = 8).
+// Unlike the player path, no card number is required (the exe's loader does not test it).
+export function guildCardFromEntity(e: GuildEntity): GuildCard {
+  return {
+    guildCardNumber: e.guildCardNumber,
+    name: e.name,
+    teamName: '',
+    description: '',
+    present: true,
+    language: 8,
+    sectionId: 10,
+    charClass: 0xc,
   };
 }
 
@@ -646,8 +696,7 @@ export class GuildCardMenu {
   }
 
   private openAddEntity(): void {
-    // The port has no entity with a guild card: the list holds only the greyed row.
-    this.list = [{ label: this.text(T11_GUILD.noEntities), value: -1, enabled: false }];
+    this.list = entityRows(this.host.entities(), this.text(T11_GUILD.noEntities));
     this.listState.cursor = 0;
     this.phase = 'addEntity';
   }
@@ -1010,10 +1059,24 @@ export class GuildCardMenu {
       if (num !== null) this.host.client()?.unblock(num);
     } else if (this.askBack === 'addCard') {
       this.addFromBook(this.askValue);
+    } else if (this.askBack === 'addEntity') {
+      this.addFromEntity(this.askValue);
     } else {
       this.addFromPlayer(this.askValue);
     }
     this.phase = 'menu';
+  }
+
+  // GuildCardUpdateAndSendFromGuest_007825b4: the entity's card (GuildCard_LoadGuestData), then the
+  // same copy as the player path: an already-blocked number sends nothing, else 07E8.
+  private addFromEntity(id: number): void {
+    const book = this.host.book();
+    const en = this.host.entities().find((x) => x.id === id);
+    const c = this.host.client();
+    if (!book || !en || !c) return;
+    const card = guildCardFromEntity(en);
+    if (book.isBlocked(card.guildCardNumber)) return;
+    c.block(card);
   }
 
   // HandleGuildCardMenuData_007824d4: a card already in the blocked list sends nothing.
@@ -1089,10 +1152,18 @@ export class GuildCardMenu {
     this.startAsk(GUILD_CARD_POS.addAsk, T11_GUILD.addQuestion, 'addPlayer', slot);
   }
 
-  // The entity list (state 0x4b): nothing to choose; cancel -> the menu.
+  // The entity list (state 0x4b): cancel -> the menu (0x4c); an entity -> the confirm (0x4d, the
+  // question with the entity's id as its value). The greyed row does nothing.
   private addEntityKey(e: MenuKey): void {
     const r = listKey(e, this.list, this.listState);
-    if (r === 'cancel') this.phase = 'menu';
+    if (r === 'cancel') {
+      this.phase = 'menu';
+      return;
+    }
+    if (r !== 'decide') return;
+    const id = this.list[this.listState.cursor]!.value;
+    if (id < 0) return;
+    this.startAsk(GUILD_CARD_POS.addAsk, T11_GUILD.addQuestion, 'addEntity', id);
   }
 
   // The menu window at (13, 256) is always drawn while the leaf is open; the
@@ -1175,9 +1246,9 @@ export class GuildCardMenu {
       const p = GUILD_CARD_POS.playerList;
       drawListWindow(ctx, skin, p.x, p.y, windowWidth(this.list, this.text(T11_GUILD.playerTitle)), this.text(T11_GUILD.playerTitle), this.list, this.listState.cursor, !asking);
     }
-    if (this.phase === 'addEntity') {
+    if (under === 'addEntity') {
       const en = GUILD_CARD_POS.entityList;
-      drawListWindow(ctx, skin, en.x, en.y, windowWidth(this.list, this.text(T11_GUILD.entityTitle)), this.text(T11_GUILD.entityTitle), this.list, this.listState.cursor, true);
+      drawListWindow(ctx, skin, en.x, en.y, windowWidth(this.list, this.text(T11_GUILD.entityTitle)), this.text(T11_GUILD.entityTitle), this.list, this.listState.cursor, !asking);
     }
     if ((this.phase === 'delete' || this.phase === 'unblockAsk' || this.phase === 'addAsk') && this.question) {
       this.question.draw(ctx, skin, this.text(T11_GUILD.yes), this.text(T11_GUILD.no));

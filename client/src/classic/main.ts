@@ -619,6 +619,9 @@ async function main(): Promise<void> {
     },
   });
   const enterLobby = async (lobby: Lobby, shipName: string, entry: LobbyEntry) => {
+    // The guild card book syncs once per session on the joined lobby (the session's own enterLobby
+    // does this; the classic path joins through connectGameServer, so it was never started here).
+    session?.startGuildCardSync(lobby.conn);
     showWorld(true);
     showLobby(lobby, await buildLobby(lobby, shipName, entry));
   };
