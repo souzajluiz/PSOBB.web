@@ -48,6 +48,9 @@ import {
   setFlagPacket,
   TEAM_CMD,
   teamChatPacket,
+  teamOperationNoticePacket,
+  RENAME_REWARD_ID,
+  TeamClient,
   TEAM_INVITE_REFUSED,
   TeamInviteReceiver,
   inviteRefusal,
@@ -55,6 +58,7 @@ import {
   parseInviteRequest,
 } from '../client/src/net/team.ts';
 import { KEYS } from '../client/src/input/keyconfig.ts';
+import type { BBConnection } from '../client/src/net/bbconnection.ts';
 import { TeamInviteAnswerWindow, type InviteAnswerHost } from '../client/src/classic/teammenu.ts';
 
 let failures = 0;
@@ -118,6 +122,30 @@ check('1EEA name payload', renameTeamPacket('New', 3).flag === 3 && renameTeamPa
   const back = parseTeamChat(p.payload);
   check('07EA round trip', back.sender === 'Name' && back.text === 'hi there');
   check('07EA text is cut at 0x8F units', parseTeamChat(teamChatPacket('N', 'y'.repeat(300)).payload).text.length === 0x8f);
+}
+
+// The operation notice (SendTeamOperationSuccessPacket_007f32ac, 2026-10-31): no sender, text cut at 0x7F,
+// nothing sent for an empty text; TeamClient.operationNotice writes it straight away (no answer waited for).
+{
+  const p = teamOperationNoticePacket('Left Team [A].');
+  check('operation notice: header 07EA, flag 0', p !== null && p.command === TEAM_CMD.chat && p.flag === 0);
+  check('operation notice: size ((len * 2 + 5) & ~3) + 0x28', p !== null && 8 + p.payload.length === ((('Left Team [A].'.length * 2 + 5) & ~3) + 0x28));
+  check('operation notice: the sender name is empty (NULL in the exe)', p !== null && parseTeamChat(p.payload).sender === '');
+  check('operation notice: the text round trips', p !== null && parseTeamChat(p.payload).text === 'Left Team [A].');
+  check('operation notice: cut at 0x7F units', p !== null && parseTeamChat(teamOperationNoticePacket('y'.repeat(300))!.payload).text.length === 0x7f);
+  check('operation notice: an empty text is not sent', teamOperationNoticePacket('') === null);
+  const sent: Array<{ command: number; flag: number; body: Uint8Array }> = [];
+  const conn = {
+    onCommand: (_c: unknown) => {},
+    send: (command: number, flag: number, body: Uint8Array) => sent.push({ command, flag, body }),
+    poll: () => false,
+    waitFor: async () => null,
+  } as unknown as BBConnection;
+  const client = new TeamClient(conn);
+  client.operationNotice('Master authority was transferred to X.');
+  client.operationNotice('');
+  check('TeamClient.operationNotice sends one 07EA and nothing for an empty text', sent.length === 1 && sent[0].command === 0x07ea && parseTeamChat(sent[0].body).text === 'Master authority was transferred to X.');
+  check('the rename reward id is 0x1a (ProcessLobbyListSelection_00798590)', RENAME_REWARD_ID === 0x1a);
 }
 
 // PSOBBBaseTeamMembership.

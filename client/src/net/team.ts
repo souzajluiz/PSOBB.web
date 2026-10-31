@@ -75,6 +75,13 @@ export const TEAM_RESULT = { ok: 0, generic: 1, nameInUse: 2, alreadyThere: 5 } 
 export const TEAM_NAME_UNITS = 0x10;
 export const FLAG_DATA_UNITS = 0x20 * 0x20;
 export const TEAM_CHAT_MAX_UNITS = 0x8f; // "truncated by the client if longer than 0x8F wchar_ts"
+// SendTeamOperationSuccessPacket_007f32ac copies at most 0x80 units into a 127 unit buffer and
+// writes the terminator over the 128th (ASSUMED frame layout: the buffer is followed by the zero word).
+export const TEAM_NOTICE_MAX_UNITS = 0x7f;
+// The reward id of the Buying Privileges row that opens the team name window instead of the purchase
+// (ProcessLobbyListSelection_00798590: `_g_SelectedGameIndex_00aab198 == 0x1a` -> HandleLobbyJoinTeamServer_0079880c).
+// The index is the one 1BEA sends as the reward id, so the 1EEA flag carries it too.
+export const RENAME_REWARD_ID = 0x1a;
 
 export interface TeamPacket {
   command: number;
@@ -142,14 +149,20 @@ export function setFlagPacket(flagData: Uint16Array): TeamPacket {
 // ((len * 2 + 5) & ~3) + 0x28, sender name[0x10], then the zero terminated text
 // (at most 0x80 units copied). newserv relays it only when the data ends with
 // two zero bytes.
-export function teamChatPacket(sender: string, text: string): TeamPacket {
-  const body = [...text].slice(0, TEAM_CHAT_MAX_UNITS);
+export function teamChatPacket(sender: string, text: string, maxUnits = TEAM_CHAT_MAX_UNITS): TeamPacket {
+  const body = [...text].slice(0, maxUnits);
   const bytes = (body.length * 2 + 5) & ~3;
   const payload = new Uint8Array(0x20 + Math.max(4, bytes));
   payload.set(utf16(sender, TEAM_NAME_UNITS), 0);
   const dv = new DataView(payload.buffer);
   body.forEach((c, i) => dv.setUint16(0x20 + i * 2, c.charCodeAt(0), true));
   return { command: TEAM_CMD.chat, flag: 0, payload };
+}
+
+// The same 07EA as the operation notices the exe sends (leave, Master Transfer, rename): no sender
+// name (the exe passes NULL) and the text is cut at 0x7F units. An empty text sends nothing.
+export function teamOperationNoticePacket(text: string): TeamPacket | null {
+  return text === '' ? null : teamChatPacket('', text, TEAM_NOTICE_MAX_UNITS);
 }
 
 // --- parsers -----------------------------------------------------------------------
@@ -480,6 +493,13 @@ export class TeamClient {
 
   chat(sender: string, text: string): void {
     this.send(teamChatPacket(sender, text));
+  }
+
+  // 07EA as SendTeamOperationSuccessPacket_007f32ac sends it (no answer is waited for). The server relays
+  // it to the sender's team only (newserv on_EA_BB 0x07EA), so a line sent after 05EA is dropped there.
+  operationNotice(text: string): void {
+    const p = teamOperationNoticePacket(text);
+    if (p) this.send(p);
   }
 }
 

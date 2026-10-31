@@ -98,6 +98,7 @@ import {
   memberRowLabel,
   PRIVILEGE,
   inTeam,
+  RENAME_REWARD_ID,
   TEAM_INVITE_ACCEPT,
   TEAM_INVITE_TIMEOUT,
   TEAM_RESULT,
@@ -149,8 +150,12 @@ export const T15_TEAM = {
   // Team Flag Records (0x0078b54c ..): the question, the store question, the notices; the list rows are
   // 0x23 / 0x24 (Yes / No, group 15).
   flag: { ask: 0x8e, store: 0x8f, done: 0x90, notFound: 0x91, format: 0x92, failed: 0x93, yes: 0x23, no: 0x24 },
+  // Team name change (the Buying Privileges row 0x1a, HandleLobbyJoinTeamServer_0079880c): the third row of the
+  // name window (group 15, where the creation window has unitxt 11 0x64), the success notice (display
+  // team_name_changed, 0x94) and its 07EA text (0x9a), the failure notice (team_create_rename_failed, 0x95).
+  rename: { register: 0x2f, done: 0x94, operation: 0x9a, failed: 0x95 },
 } as const;
-export const T11_TEAM = { registration: 0x64, yes: 0x6e, no: 0x6f, noPlayer: 0xf1, points: 0x175, pointsRemaining: 0x176, noItem: 0xee } as const;
+export const T11_TEAM = { registration: 0x64, yes: 0x6e, no: 0x6f, noPlayer: 0xf1, points: 0x175, pointsRemaining: 0x176, noItem: 0xee, leftLine: 0x14d } as const;
 
 // Position table entries (0x00971f40 + 8 * index) and data words read from the
 // executable.
@@ -263,6 +268,12 @@ export interface TeamHost {
   rewardFlags?(): number;
   pickFlag?(): Promise<FlagPick>;
   setFlag?(flag: Uint16Array): void;
+  // Team name change (Buying Privileges row 0x1a): 1EEA -> 1FEA with the reward id as the flag.
+  renameTeam?(name: string, rewardId: number): Promise<number>;
+  // 07EA operation notices (SendTeamOperationSuccessPacket_007f32ac): the leave line, the Master Transfer
+  // and the rename success. `ownName` is the local player's name (the leave line's first part).
+  operationNotice?(text: string): void;
+  ownName?(): string;
 }
 
 // LoadTeamFlagFile's result (0x0082aacc): 1 loaded, 2 file not found, 3 unreadable format, 4 read failed.
@@ -342,12 +353,21 @@ export class Question {
   }
 }
 
-// GuildCardListWindow with 3 rows: the team name entry.
+// GuildCardListWindow with 3 rows: the team name entry. `rename` is the Buying Privileges row 0x1a's window
+// (GameListMenuObject, the same three rows; its third row is group 15 0x2f, not group 11 0x64) and keeps the
+// reward id the 1EEA flag carries.
 export class TeamNameWindow {
   name = '';
   row: 1 | 2 = 1;
   editor: TextEditor | null = null;
   result: 'register' | 'cancel' | null = null;
+  readonly kind: 'create' | 'rename';
+  readonly rewardId: number;
+
+  constructor(kind: 'create' | 'rename' = 'create', rewardId = 0) {
+    this.kind = kind;
+    this.rewardId = rewardId;
+  }
 
   // UpdateActionDataUI: Registration needs a name.
   get canRegister(): boolean {
@@ -648,6 +668,7 @@ export class TeamMenus {
           // ValidatePlayerName (0x00819f28, HandleLobbyMenuInput_00799c28): a banned name takes the
           // "already registered" notice and sends nothing.
           if (isBannedName(p.w.name)) this.notice(format(t15(T15_TEAM.inUse), p.w.name), 'team', 'name');
+          else if (p.w.kind === 'rename') this.sendRename(p.w);
           else this.sendCreate(p.w);
         } else if (p.q.result === 'no') this.other();
         break;
@@ -774,12 +795,38 @@ export class TeamMenus {
     );
   }
 
+  // 1EEA (HandleLobbyMenuConfirm_00799b30 -> send_packet0xea_subcommand0x1e: flag = the reward id, the name
+  // in 0x10 units) and the 1FEA answer (display_team_create_rename_purchase_result, state change_ship_or_block):
+  // 0 -> the notice [15:0x94] and the 07EA [15:0x9a] with the new name; 2 -> [15:0x6b] and Enter goes to the
+  // creation name window (team_name_in_use -> HandleLobbyMenuTeamCreationFailed_007999f4 ->
+  // InitializeTeamCreationLobbyMenu_00799a40, as the exe does); other -> [15:0x95].
+  private sendRename(w: TeamNameWindow): void {
+    const t15 = this.text.t15;
+    const name = w.name;
+    this.phase = { kind: 'creating', w };
+    void this.guard(
+      this.host.renameTeam?.(name, w.rewardId) ?? Promise.resolve(1),
+      (code) => {
+        if (code === 0) {
+          this.notice(format(t15(T15_TEAM.rename.done), name), 'team');
+          this.host.operationNotice?.(format(t15(T15_TEAM.rename.operation), name));
+        } else if (code === 2) this.notice(format(t15(T15_TEAM.inUse), name), 'team', 'name');
+        else this.notice(t15(T15_TEAM.rename.failed), 'team');
+      },
+      () => this.notice(t15(T15_TEAM.rename.failed), 'team'),
+    );
+  }
+
   // HandleLobbyTeamLeaveMenu_007996f8: 05EA with the own card and, at once, the
   // notice (the answer is not waited for).
+  // The exe's team_leave_success_display sends 07EA right after the 05EA, its text the two lines of the
+  // team log: unitxt 11 0x14d with the local player's name, then 15 0x85 with the team name (no separator).
   private leave(): void {
     const name = this.host.membership().name;
     void this.host.removeMember(this.host.selfGuildCard()).catch(() => {});
-    this.notice(format(this.text.t15(T15_TEAM.left), name), 'master');
+    const left = format(this.text.t15(T15_TEAM.left), name);
+    this.host.operationNotice?.(format(this.text.t11(T11_TEAM.leftLine), this.host.ownName?.() ?? '') + left);
+    this.notice(left, 'master');
   }
 
   private sendMemberAction(action: MemberAction, member: TeamMember): void {
@@ -836,7 +883,13 @@ export class TeamMenus {
           this.phase = { kind: 'working', action: 'transfer' };
           void this.guard(
             this.host.setPrivilege(member.guildCard, PRIVILEGE.master),
-            (code) => this.notice(code === 0 ? format(t15(T15_TEAM.transfer.done), label) : t15(T15_TEAM.transfer.failed), 'master'),
+            (code) => {
+              if (code !== 0) return this.notice(t15(T15_TEAM.transfer.failed), 'master');
+              // team_master_transfer_success_display: 07EA with the same text as the notice (the row's label).
+              const done = format(t15(T15_TEAM.transfer.done), label);
+              this.host.operationNotice?.(done);
+              this.notice(done, 'master');
+            },
             () => this.notice(t15(T15_TEAM.transfer.failed), 'master'),
           );
         } else if (action === MASTER_ANSWER.decline) this.notice(format(t15(T15_TEAM.transfer.declined), label), 'master');
@@ -880,6 +933,12 @@ export class TeamMenus {
         return;
       }
       se(SE.ok);
+      // HandleLobbyJoinTeamServer_0079880c: the reward 0x1a opens the team name window, no purchase question.
+      if (reward.rewardId === RENAME_REWARD_ID) {
+        if (!this.host.renameTeam) this.closeAll();
+        else this.phase = { kind: 'name', w: new TeamNameWindow('rename', reward.rewardId) };
+        return;
+      }
       this.phase = { kind: 'buyConfirm', buy, cursor: 1 };
     } else if (k === 'cancel') {
       se(SE.cancel);
@@ -1047,7 +1106,7 @@ export function drawNameWindow(ctx: CanvasRenderingContext2D, skin: WindowSkin, 
   const cy = W.y + INSET + TITLE_GAP;
   const header = text.t15(T15_TEAM.nameHeader);
   const label = text.t15(T15_TEAM.teamName);
-  const reg = text.t11(T11_TEAM.registration);
+  const reg = w.kind === 'rename' ? text.t15(T15_TEAM.rename.register) : text.t11(T11_TEAM.registration);
   if (active && !w.editor) drawSelectBar(ctx, skin.bars, cx, cy + w.row * ROW, W.w - 2 * INSET, 16);
   drawGameText(ctx, header, cx, cy + 1, DISABLED);
   drawGameText(ctx, label, cx, cy + ROW + 1);
