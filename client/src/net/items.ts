@@ -329,6 +329,22 @@ export function buildBankRequest(checksum = 0): Uint8Array {
 export const BANK_DEPOSIT = 0;
 export const BANK_TAKE = 1;
 export const BANK_LEAVE = 3;
+export const BANK_SLOTS = 200; // newserv PlayerBank max_items; the take list's "n/200"
+
+// How many of `data` the bank takes, as newserv's PlayerBank::add_item decides it: a stackable
+// item joins the bank's stack of the same primary identifier (class, type, subtype) up to its
+// max (newserv throws past it, so the client must not send such a deposit); otherwise it needs a
+// free slot. The exe's name for the stackable part: get_stackable_tool_space_in_bank (ASSUMED
+// the same rule; its body is not decoded).
+export function bankRoom(items: ReadonlyArray<{ data: ItemData; amount: number }>, data: ItemData): number {
+  const max = maxStackSize(data);
+  if (max > 1) {
+    const same = items.find((b) => itemKey(b.data.data1) === itemKey(data.data1));
+    if (same) return Math.max(0, max - same.amount);
+  }
+  if (items.length >= BANK_SLOTS) return 0;
+  return max > 1 ? max : 1;
+}
 // The Medical Center's fee: the immediates in HandleSeabedTuriganeChallengeAction
 // _006ceabc (no level dependency); newserv on_medical_center_bb takes 10 too.
 export const MEDICAL_COST = 10;
@@ -1521,7 +1537,11 @@ export class GameItems {
   // same id (newserv: a split stack keeps the inventory id too).
   depositItem(itemId: number, amount: number): void {
     const inv = this.inventory;
-    if (!inv || !this.bank || !inv.find(itemId)) return;
+    const carried = inv?.find(itemId);
+    if (!inv || !this.bank || !carried) return;
+    // Refuse what the bank cannot take (newserv throws "stack size would exceed limit" / "no free
+    // space in bank" and the deposit is undone): the counter already limits the amount.
+    if (amount <= 0 || amount > stackSize(carried.data) || amount > bankRoom(this.bank.items, carried.data)) return;
     this.send62(buildBankAction(BANK_DEPOSIT, { itemId, amount }));
     const data = cloneItem(inv.remove(itemId, amount));
     data.id = itemId;
