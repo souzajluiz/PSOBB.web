@@ -909,7 +909,13 @@ export class Game extends Lobby {
   // 6x76 (G_SetEntitySetFlags_6x76, 8 bytes): {76, 02, entity id, u16 floor,
   // u16 flags}. The client ORs the flags into the entity's set entry; flag 8
   // means the enemy is dead, which is what advances a wave event.
+  // Called for every 6x76 with the defeated flag (8) this client sends: newserv forwards a 6x76 to the OTHER
+  // clients only, so the sender's own wave state (render/waves.ts) must take the kill from here; the exe sets the
+  // set entry's flag in its own wave data at the kill and the event handler (update_quest_event) reads it.
+  onLocalEntityDefeated: ((entityId: number, floor: number) => void) | null = null;
+
   sendEntitySetFlags(entityId: number, floor: number, flags: number): void {
+    if (flags & 0x08) this.onLocalEntityDefeated?.(entityId, floor);
     const body = new Uint8Array(8);
     const dv = new DataView(body.buffer);
     body[0] = 0x76;

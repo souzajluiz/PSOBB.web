@@ -202,6 +202,8 @@ export class GameField {
       }
     };
     game.on('subcommand', onSub); // Lobby has no off(); the handler goes idle on dispose
+    // Our own kills advance our own waves (newserv does not echo a 6x76 to its sender).
+    game.onLocalEntityDefeated = (entity, floor) => this.killEntity(entity, floor);
   }
 
   // The boss's form changed the music (audio/bossbgm.ts): a boss action from
