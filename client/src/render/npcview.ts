@@ -42,6 +42,7 @@ import {
   QUEST_NPC_TYPE,
   questNpcMotionEntry,
   questNpcTemplate,
+  questNpcWeapon,
   parseNpcTownMotions,
   type NpcClass,
   type NpcModelContext,
@@ -58,7 +59,8 @@ import { depthFirstNodes, PlayerAnimator } from './playeranim.ts';
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { NjcmModelBuilder } from './njcmmesh.ts';
-import { inWeaponReach, type WeaponReach } from '../combat/weaponaim.ts';
+import { inMeleeReach, inWeaponReach, type WeaponReach } from '../combat/weaponaim.ts';
+import { HeldWeaponFiles, type HeldWeapon } from './heldweapon.ts';
 import type { CollisionWorld } from './collision.ts';
 import { lerpPoint, type Vec3 } from './playercamera.ts';
 import { TickClock } from './smoothrender.ts';
@@ -267,6 +269,7 @@ export class NpcLayer {
   private motions: NjMotion[] = [];
   // The floor's map collision: the wanderers walk on it, and the NPC
   // hitboxes are handed to it as bodies that block the player.
+  private heldFiles: HeldWeaponFiles;
   private collision: CollisionWorld | null = null;
   private world: NpcWorld = { collision: null, rand: Math.random };
   // Where the players of the floor stand (the NPCs' collision pass).
@@ -275,6 +278,7 @@ export class NpcLayer {
   constructor(viewer: MapViewer, files: ClientFiles) {
     this.viewer = viewer;
     this.assets = new NpcAssets(files);
+    this.heldFiles = new HeldWeaponFiles(files);
     viewer.frameHooks.add(this.hook);
     viewer.renderHooks.add(this.smoothHook);
   }
@@ -302,7 +306,7 @@ export class NpcLayer {
       if (NPC_ENEMY_TYPES.has(e.type)) continue;
       if (e.type === QUEST_NPC_TYPE) {
         try {
-          const built = await this.buildQuestNpc(p);
+          const built = await this.buildQuestNpc(p, ctx);
           if (gen !== this.generation) return done;
           if (!built) {
             stats.unresolved.push(p.name);
@@ -377,22 +381,35 @@ export class NpcLayer {
     return done;
   }
 
+  // The weapon of the quest NPC (formats/npcmodels.ts questNpcWeapon): the table's kind /
+  // variant through ItemPMT to the held-weapon model. Null when the table, the ItemPMT or
+  // the model is missing (the NPC is then drawn without it).
+  private async questWeapon(template: number, ctx: NpcModelContext): Promise<HeldWeapon | null> {
+    const qw = ctx.questWeapon;
+    const key = qw ? questNpcWeapon(qw.difficulty, template) : null;
+    const item = key && qw?.pmt ? qw.pmt.getWeapon(key.kind, key.variant) : undefined;
+    if (!item) return null;
+    return this.heldFiles.load(item.type, item.skin).catch(() => null);
+  }
+
   // The Episode 4 quest NPC (0x118, formats/npcmodels.ts QUEST_NPC_TYPE): an NPC
   // player built from its npcplayerchar.dat record, with the player's town idle /
   // walk motions (ASSUMED: the dispatcher's own motion row is not traced). Returns
   // null when the record does not exist.
-  private async buildQuestNpc(p: PlacedEntity): Promise<{ npc: NpcInstance; missingTextures: number } | null> {
+  private async buildQuestNpc(p: PlacedEntity, ctx: NpcModelContext): Promise<{ npc: NpcInstance; missingTextures: number } | null> {
     const e = p.entity;
     if (e.kind !== 'enemy') return null;
+    const templateIndex = questNpcTemplate(e.params[5]);
     const templates = await this.assets.questTemplates();
-    const t = templates[questNpcTemplate(e.params[5])];
+    const t = templates[templateIndex];
     if (!t) return null;
-    const [assets, motions, apc] = await Promise.all([
+    const [assets, motions, apc, weapon] = await Promise.all([
       this.assets.playerAssets(t.charClass),
       this.assets.playerMotions(),
       this.assets.questNpcMotions(),
+      this.questWeapon(templateIndex, ctx),
     ]);
-    const built = buildPlayerModel(assets, t.appearance);
+    const built = buildPlayerModel(assets, t.appearance, { weapon });
     const body = assets.parts.get(`pl${classLetter(t.charClass)}bdy00.nj`);
     if (!body) return null;
     built.root.updateMatrixWorld(true);
@@ -482,14 +499,22 @@ export class NpcLayer {
   }
 
   // The nearest NPC the Middle key can talk to: shown, with a talk label, and inside the
-  // weapon's reach (combat/weaponaim.ts inWeaponReach). `d2` is its squared distance from the
-  // reach's origin; `act` starts the talk for a player at that origin.
+  // weapon's reach. `d2` is its squared distance from the reach's origin; `act` starts the
+  // talk for a player at that origin.
+  // The test is the melee reticle (combat/weaponaim.ts inMeleeReach, with the NPC's box
+  // radius NPC_RADIUS): the Middle key's target is the reticle's lock (PsoBB.exe
+  // 0x0068a40c -> 0x0068c190 calls the target's vtable +0x2c, the target from the reticle
+  // at player +0x45c +0x108c). The NPC's box radius and centre are ASSUMED (the root's
+  // feet, NPC_RADIUS). Without the melee aim, inWeaponReach (the cone test) is used.
   nearestInReach(reach: WeaponReach, act: (npc: NpcInstance) => void = () => {}): { d2: number; act: () => void } | null {
     let best: NpcInstance | null = null;
     let bestD = Infinity;
     for (const n of this.instances) {
       if (!n.shown || !n.params.script) continue;
-      if (!inWeaponReach(reach, n.root.position.x, n.root.position.y, n.root.position.z)) continue;
+      const inside = reach.melee
+        ? inMeleeReach(reach.melee.weapon, reach.melee.aim, { x: n.root.position.x, y: n.root.position.y, z: n.root.position.z }, NPC_RADIUS)
+        : inWeaponReach(reach, n.root.position.x, n.root.position.y, n.root.position.z);
+      if (!inside) continue;
       const dx = n.root.position.x - reach.x;
       const dz = n.root.position.z - reach.z;
       const d = dx * dx + dz * dz;

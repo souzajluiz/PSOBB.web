@@ -43,6 +43,7 @@
 //           less = the NPC cannot be talked to (EnemyObjectUpdate_0060648c);
 //   draw distance (+0x3a0) 400 when param4 > 0, else 250.
 
+import type { ItemPMT } from './itempmt.ts';
 import { parseNjMotion, type NjMotion } from './njmotion.ts';
 import { prcDecompress } from './prc.ts';
 import { RelFile } from './rel.ts';
@@ -213,6 +214,9 @@ export const MAP_TYPE_BY_AREA: readonly number[] = [
 export interface NpcModelContext {
   area: number;
   sectionId?: number; // the local character's section id (the tekker)
+  // The quest NPC's weapon (0x118): the game's difficulty (g_CurrentFloor) and the ItemPMT
+  // that maps the table's kind / variant to a model (null: the NPC has no weapon yet).
+  questWeapon?: { difficulty: number; pmt: ItemPMT | null };
 }
 
 // Which archive the NPC's constructor draws with, or null when the client
@@ -285,6 +289,77 @@ export const QUEST_NPC_MOTION_SPEED = 1.0; // the row's frames per tick (f32 1.0
 
 export function questNpcMotionEntry(charClass: number): number {
   return charClass === 6 ? 110 : 112;
+}
+
+// --- the Episode 4 quest NPC's weapon (0x118, traced 2026-10-31) ----------------
+//
+// InitializeChallengeEntityWeapon's caller, the dispatcher's state 1 / 2 path (0x00602c1c,
+// .c:463595 and .c:463708): the weapon is `(&g_ChallengeEntityWeaponData)[g_CurrentFloor]`
+// read as a block of 64 dwords indexed by the object's template (+0x3c0, the set entry's
+// param6 bits 8..13, questNpcTemplate). Each dword V is the address of an item's data1
+// (the dispatcher passes V + 8 to LoadItemAsset_005d7868, which reads it as compact item
+// data), so data1[0] is the item type (0 = weapon in every entry) and data1[1] / data1[2]
+// are the weapon's kind and variant, the pair ItemPMT's getWeapon takes (render/combat.ts
+// pmtSync, render/heldweapon.ts). The table is `g_ChallengeEntityWeaponData` at 0x009c3e58
+// (exedata.py read 009c3e58 p 4: its 4 entries are 0x00a038a0 + 0x100 * floor); the blocks
+// are 0x00a038a0 (floor 0), 0x00a039a0, 0x00a03aa0, 0x00a03ba0. g_CurrentFloor is the
+// difficulty_level enum (0 normal .. 3 ultimate; the menu clamps it to 0..3,
+// .c:753442..753467, and the map load copies the difficulty, .c:773381). No entry of the
+// 4 x 64 table is a sentinel (0xfffffff8 would be none; the dispatcher's test is `!= -8`
+// at .c:465091, not read in this pass). Pairs are [kind, variant]. Row 0 of each block is
+// the first entry at the block's address.
+// prettier-ignore
+export const QUEST_NPC_WEAPON_TABLE_VA = 0x009c3e58;
+// prettier-ignore
+export const QUEST_NPC_WEAPONS: readonly (readonly (readonly [number, number])[])[] = [
+  [
+    [6,0], [12,1], [10,2], [20,0], [6,2], [8,6], [151,0], [6,2],
+    [10,2], [14,1], [1,0], [13,2], [17,0], [21,0], [20,0], [7,1],
+    [10,1], [27,0], [10,2], [12,1], [3,1], [4,1], [1,0], [7,1],
+    [7,1], [9,1], [1,0], [6,0], [12,1], [7,1], [5,2], [10,1],
+    [15,0], [15,0], [137,3], [13,2], [12,1], [139,2], [17,0], [21,0],
+    [2,1], [1,1], [10,2], [7,2], [1,1], [6,2], [3,2], [32,0],
+    [7,2], [7,1], [27,0], [8,1], [8,1], [16,1], [8,1], [20,0],
+    [27,0], [22,0], [6,2], [2,1], [2,2], [2,2], [9,1], [22,0],
+  ],
+  [
+    [6,1], [12,1], [10,2], [20,0], [6,3], [8,6], [151,0], [6,3],
+    [10,2], [14,2], [1,1], [13,2], [17,1], [21,0], [20,0], [7,1],
+    [10,2], [27,0], [10,2], [12,2], [3,2], [4,2], [1,2], [7,2],
+    [7,2], [9,2], [1,1], [6,1], [12,2], [7,1], [5,3], [10,2],
+    [15,0], [15,0], [137,3], [13,2], [12,1], [139,2], [17,1], [21,0],
+    [2,2], [1,2], [10,2], [7,3], [1,2], [6,3], [3,3], [32,1],
+    [7,3], [7,3], [27,0], [8,2], [8,2], [16,1], [8,2], [20,0],
+    [10,2], [22,0], [6,3], [2,2], [2,3], [2,3], [9,2], [22,0],
+  ],
+  [
+    [6,1], [12,1], [10,2], [20,0], [6,3], [8,6], [151,0], [6,3],
+    [12,5], [14,2], [1,1], [13,2], [17,1], [21,1], [20,0], [7,4],
+    [12,5], [27,0], [10,2], [12,2], [3,2], [4,2], [1,2], [7,2],
+    [7,2], [9,2], [1,1], [6,1], [12,2], [7,1], [5,3], [10,2],
+    [15,0], [15,0], [137,3], [13,2], [12,1], [139,2], [17,1], [21,1],
+    [2,2], [1,2], [10,2], [7,3], [1,2], [6,3], [3,3], [32,1],
+    [7,3], [7,3], [27,0], [8,2], [8,2], [16,1], [8,2], [20,0],
+    [27,0], [22,0], [6,3], [2,2], [2,3], [2,3], [9,2], [22,0],
+  ],
+  [
+    [6,1], [12,1], [10,2], [20,0], [6,3], [8,6], [151,0], [6,3],
+    [12,5], [14,2], [1,1], [13,2], [17,1], [21,1], [20,0], [7,4],
+    [12,5], [27,0], [10,2], [12,2], [3,2], [4,2], [1,2], [7,2],
+    [7,2], [9,2], [1,1], [6,1], [12,2], [7,1], [5,3], [10,2],
+    [15,0], [15,0], [137,3], [13,2], [12,1], [139,2], [17,1], [21,1],
+    [2,2], [1,2], [10,2], [7,3], [1,2], [6,3], [3,3], [32,1],
+    [7,3], [7,3], [27,0], [8,2], [8,2], [16,1], [8,2], [20,0],
+    [27,0], [22,0], [6,3], [2,2], [2,3], [2,3], [9,2], [22,0],
+  ],
+];
+
+// The weapon of the quest NPC of template `template` on `difficulty` (0..3): its kind and
+// variant (the ItemPMT key), or null when either index is outside the table.
+export function questNpcWeapon(difficulty: number, template: number): { kind: number; variant: number } | null {
+  const row = QUEST_NPC_WEAPONS[difficulty];
+  const e = row?.[template];
+  return e ? { kind: e[0], variant: e[1] } : null;
 }
 
 // --- set entry parameters -----------------------------------------------------
