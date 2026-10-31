@@ -23751,3 +23751,31 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 - The intro camera (not traced).
 
 **Checks.** `node tests/dragon.test.ts`: dragon: ok (section 32 is new: the root is node 0 scaled 2.0; the take-off starts the altitude from the record (12.5) and from the guess (0); the landing sub 0 reads the root height, the frame-18 flip reads it once more and then holds; NaN keeps the guess). `node tests/enemies.test.ts`: ALL PASS. `node tests/derolle.test.ts`: ALL PASS. `node tests/goldragon.test.ts`: goldragon: ok. `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures. `node client/node_modules/typescript/bin/tsc --noEmit -p client`: clean (Node 24).
+
+## 2026-10-31: Item Pack list scroll bar ported (track and thumb)
+
+**What changed:** the Item Pack's list (`itempack.ts`, `ITEM_LIST` 13, 256, 308 x 184, title) draws the scroll bar of `RenderScrollbarPrimitives_0073f6b2` after its rows. The geometry is the pure helper `client/src/classic/listscrollbar.ts` (`listScrollbar`); `fieldwindows.ts` `drawListScrollbar` draws the two rects. `hud.debug().itemPack` gained `top` and `scrollbar` (the rects of the last draw). Unit test `tests/listscrollbar.test.ts`; Playwright `client/e2e/item-scrollbar.spec.ts` (fresh account, 9 weapons added offline, bar at the top, then the cursor scrolls the list and the thumb moves down).
+
+**Correction to the entry above.** The `H / (T + e)` formulas in the 2026-10-31 research entry are not track or thumb geometry. They are the texture V scales of the triangle fans (`local_14`, passed to `unknown_render_primitive_geometry_triangle_fan`). The geometry is the rect arithmetic below. Those scales are not ported (the bar is a solid fill).
+
+**The exe's rect (`UiTextGeometryUpdate_0071b900`, dump 683122, disassembled at 0x71b900).** `get_position_of_list_menu` returns the focus element `E` that `UiTextGeometryUpdate` fills from the list window's `render_position` (window+0x40 x, +0x44 y, +0x48 w, +0x4c h, copied from the source rect by `set_list_window_render_position`) and its scale pair (window+0x68 / +0x6c) and `window+0x54` (scale, stored as `E+0x38`). Constants (`tools/exedata.py read`):
+- 0x009700b4 = -0.5 (g_UiTextPadding), 0x009700b8 = 0.5 (g_UiTextGeometryScaleFactor), 0x009700bc = 0.0 (g_Float0, flag 0x800), 0x009700c0 = 10.0 (g_TextGeometryScale).
+- With the scale pair at 1.0 (ASSUMED for this list), `E+0x00 = x`, `E+0x04 = y`, `E+0x08 = w`, `E+0x0c = h`, `E+0x1c = h - 20` (2 x 10), and under flag 0x40 (the title) `E+0x1c += g_UIElementVerticalOffset` (0x009700a0 = -6, `UIElement_AdjustPosition_0071bc28`), so `h - 26`.
+- Visibility (`IsListEntryInView_0073f878`, asm 0x73f878): drawn only when `E+0x1c < settings+4` and `E+0x0c >= 35` (0x00972d30). The dump's `-1 < (int)param_2[0xc]` test is not in the asm; the render's only gate is that call.
+
+**Track and thumb (`RenderScrollbarPrimitives_0073f6b2`, asm 0x73f6b2..0x73f8a4):**
+- Constants: 0x00972d3c = 17 (g_ScrollbarBaseYOffset), 0x00972d6c = 7 (g_ScrollbarThumbPositionBase), 0x00972d38 = 3 (g_ScrollbarTrackWidth), 0x00972d34 = 3 (g_ScrollbarThumbWidth), 0x00972d60 = 34 (g_ScrollbarThickness), 0x00972d48 = 35 (g_ScrollbarThumbResizeThreshold), 0x00972d30 = 35 (g_ListEntryVisibilityThreshold), 0x00972d2c = 0 (g_MinRenderPosition).
+- Track: x = `E0 - 7 + E2`, y = `17 + E1`, w = 3, length `L = E3 - 34`.
+- Thumb: x as the track, w = 3. Its length is `E7 * L / F` and its top is `(17 + E1) + R * L / F`, where `F = settings+4` and `R = window+0x74` clamped to `[0, F]` (`ClampRenderPosition_0073f8a4`). `settings+4 = lines * 20 - 6` (`ListWindowObject_UpdateScrollbarMetrics_00736358`, reads `+0x86` = the allocated line count, incremented per added item).
+- Colours: the track is the hud texture modulated by 0xff646464; the thumb is `InterpolateColorByProgress_007a919c(0x86, 0xff, 0x41, settings+8, 450, 300, 315, 330)`. `settings+8` is set to 1 at allocation (`ListWindowObject_CreateScrollbar_007362a4` / `InitializeScrollbar_00737b8c`), and 1 is outside the 300..330 band, so the exe draws the fallback `0xff86ff41`.
+
+**Open, and what is ASSUMED:**
+- **The scroll offset (window+0x74).** Its only writer on a list window found in the dump is `ClampRenderPosition`; the cursor functions (`ChatShortcutMenuYesNoWindow_MoveSelectionUp_00736768`) and `ListWindowObject_UpdateScrollPosition_00736138` do not write it. The port uses `R = top * 20` (the first visible row times the row pitch). This is ASSUMED: the thumb moves with `top` because the exe's text rows scroll by the same offset. Not traced to an exe writer.
+- The item list's scale pair (window+0x68 / +0x6c = 1.0) and its source height (= `ITEM_LIST.h` 184) are ASSUMED; the frame is drawn at that height, so the exe's source height is taken as the same.
+- The collapsed status-rows state (`collapsed` in `ItemPackMenu.draw`) draws no bar (ASSUMED).
+- With the offset `top * 20` and the thumb length `E7 * L / F`, the thumb can run past the track by a few px at the last scroll position (e.g. 14 lines, last scroll position top 6: the track is 150 px, the thumb ends about 2 px past it). This is what the exe's formula gives under the ASSUMED offset; not verified against a screenshot of the exe.
+- The hud texel for the track and thumb (UV 0.9375..0.9766, 0.2305..0.25 of the hud texture) is not sampled; the bar is a solid fill (`#646464` track, `#86ff41` thumb).
+
+**Not done:** the brief asked for the bar in `drawListWindow` (fieldwindows.ts). The Item Pack is drawn by `itempack.ts` (its own rows, `ITEM_LIST`, `top`), not by `drawListWindow`, which has no scroll state and is used by other windows. The helper is in `listscrollbar.ts`, and `drawListWindow` is unchanged.
+
+**Checks:** `node tests/listscrollbar.test.ts` passes. `tsc --noEmit` (client) is clean. `PW_BASE_URL=http://127.0.0.1:5192 playwright test e2e/item-scrollbar.spec.ts --trace off` passes (2.1 min; the account had 14 items: the starting items plus the 9 added). The screenshot `client/test-results/item-scrollbar-top.png` shows the bar at the list's right edge at the top: a grey track with a green thumb from the top.

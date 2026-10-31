@@ -20,6 +20,7 @@ import { se, SE } from '../audio/se.ts';
 import { menuKeyOf } from '../input/keyconfig.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { drawSelectBar, drawTitlePill, drawWindowFrame, pillWidth, type WindowSkin } from './stage.ts';
+import { listScrollbar, type ListScrollbar, SCROLL_THUMB_COLOR, SCROLL_TRACK_COLOR } from './listscrollbar.ts';
 import { titleTextShown, wipeElement } from './windowanim.ts';
 
 export const ROW = 20; // FUN_00735c90
@@ -93,6 +94,20 @@ export function drawListWindow(
   });
   if (title !== null) drawWindowTitle(ctx, skin, x, y, title);
   return { x, y, w, h };
+}
+
+// Scroll bar of a list window (listscrollbar.ts has the exe's geometry): the track,
+// then the thumb over it, both 3 px wide at the window's right edge. Drawn after the
+// rows, as RenderScrollbarPrimitives_0073f6b2 follows the rows in
+// ListWindowObject_Render_007352f4. Nothing is drawn when the exe hides it.
+export function drawListScrollbar(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, titled: boolean, items: number, top: number): ListScrollbar | null {
+  const sb = listScrollbar(x, y, w, h, titled, items, top);
+  if (!sb) return null;
+  for (const [r, color] of [[sb.track, SCROLL_TRACK_COLOR], [sb.thumb, SCROLL_THUMB_COLOR]] as const) {
+    ctx.fillStyle = color;
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+  }
+  return sb;
 }
 
 // Plain text window (FUN_0073aa40 / ListWindowObject_AddItem_0073ae38): the
