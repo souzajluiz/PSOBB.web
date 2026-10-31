@@ -40,13 +40,58 @@
 // 0x006cd0xx / 0x006cbbxx with received / total bytes): a bar at (473, 440),
 // 142 x 8, a "m\"ss.t" estimate and a percentage above it.
 //
-// ASSUMED (not traced): the particle wipes (22 / 19 / 32 effect-6 particles
-// and their 0xf0-frame timer, 0x0040d0xx) and the middle particle are not
-// drawn, nor is the d3d clear colour (black); the percent format is read as
-// "%3d" because the wide string at 0x00979bb8 ends in a lone '%'; the
-// estimate's float to int conversions truncate.
+// THE PARTICLES (decoded 2026-10-31, Ghidra 0040ce9c / 0040cf30 / 0040d234 /
+// 0040b990 / 0040bb70; constants by tools/exedata.py; entries from
+// particleentry.dat, data.gsl):
+//   QuestLoadingScreenInitialize 0x0040cf30 (called by 0040ce9c for the
+//   particles2 objects 0, 1, 2; the vtable 0x00af2a80, update slot 0x0040d234):
+//     mode 0  22 x effect 0xf ("quest_load_b", a free sprite, rate 1 a frame),
+//             x = 8.0, y = 72 + 16 i (0x008fa1ac, 0x008fa1d4), z 0.002
+//     mode 1  19 x effect 0x8 ("quest_load", rate 0.1): x = 50 + 16 i and y 35
+//             for i < 10; x = 462 + 16 (i - 9) and y 444 for i >= 10 (0x008fa1c4,
+//             0x008fa1c0)
+//     mode 2  32 x effect 0x8: x = 555 + 16 (i % 4), y = 99 + 40 (i / 4)
+//             (0x008fa1d8, 0x008fa1d0, 0x008fa1cc), z 0.1
+//   Only the mode 0 instance has an update: 0x0040d234 begins with `if (+0x220
+//   == 0)` and +0x220 is the mode. Its timer t (+0x224) goes up by one a frame
+//   and wraps to 0 at 0xf1 (so t = 1..240, then 0). Particle i of mode 0 is
+//   shown while 20 i < t < 20 i + 40 (0x14 / 0x28); then its x grows by 15.6
+//   (0x008fa1a4) a frame (copied into its position), and outside it x is 0 and
+//   the effect is hidden (SetObjectActiveFlag). Particles 12..21 never have a
+//   window in the 241-frame cycle. Modes 1 and 2 never move (their update is the
+//   early return) and are shown from the first frame.
+//   create_quest_loading_screen_middle_particle 0x0040b990 (0x158 bytes, the
+//   object's vtable 0x00af2870, update slot 0x0040bb70): four effects 0x1b
+//   ("questload_d", a ring of radius 20, rate 20) at target * 100 + (-11, 0, 0)
+//   (0x008f9ec0 / 0x008f9ec4) with target (0, 0, -1) and current (0, 0, 0)
+//   (the camera 9 that 0x00417ccc sets). Their object angles start at
+//   (k * 0xaaa, 0, k * 0xaaa) BAMS for emitter k, and the update turns Z by
+//   91, -91, 182, -91 BAMS a frame (the constructor's 0x94 / 0xa0 / 0xac / 0xb8;
+//   the X turn is the mouse's, 0x0040bb70 when DAT_00aae8b0 / 2 is not 0, not
+//   ported). The colour is the ARGB of 0x008f9ea0[bbc], bbc moved by a button
+//   (0x0040e210), not ported: it stays 0.
+//   The screen projection of the wipes is ASSUMED (the exe's view of their
+//   z of 0.002 is behind the camera of the connect warp, so they cannot be 3D
+//   points here; their x / y are pixels of the 640 x 480 screen, as the bars'
+//   are): a pixel at (x, y) with proj 1. The middle is drawn with the camera
+//   projection of classic/particles.ts (centre 320 x 240, D 437.44).
+//
+// THE MIDDLE RING'S SHAPE: 0x0050f3fc (the ring update) places a ring of kind 1
+// in the XZ plane at the owner's height: x = r cos + pos.x, z = r sin + pos.z,
+// y = pos.y + rise (rise 0 for 0x1b). Its object angles are not read there when
+// the renderer angles (+0x9c..+0xa4) are zero, which they are for these
+// emitters, so the ring is a flat streak on the screen (seen in the e2e
+// snapshot). classic/particles.ts draws rings the same way (ASSUMED that the
+// exe's matrix branch, which is not traced, does not run for these).
+//
+// ASSUMED (not traced): the d3d clear colour (black); the order of the
+// particles against the bars (the bars first, the particles, the grey lines
+// last); the wipe effects' 0xc0 flags (0x40 / 0x80) are not modelled; the
+// percent format is read as "%3d" because the wide string at 0x00979bb8 ends in
+// a lone '%'; the estimate's float to int conversions truncate.
 
 import { gameTextWidth, drawGameText } from './gametext.ts';
+import { makeTinter, ParticleSystem, parseParticleEntry, type Orient } from './particles.ts';
 import type { Screen } from './stage.ts';
 
 export const SCREEN_W = 640;
@@ -306,9 +351,8 @@ function quad(ctx: CanvasRenderingContext2D, pts: ReadonlyArray<readonly [number
   ctx.fill();
 }
 
-export function drawDecoration(ctx: CanvasRenderingContext2D): void {
-  // Back to front: the scan lines (-500), the letterbox and panels (-490),
-  // the grey lines (-1).
+// The black bars (depth -500 and -490): the scan lines, the letterbox, the panels.
+export function drawBackdrop(ctx: CanvasRenderingContext2D): void {
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, SCREEN_W, SCREEN_H);
@@ -321,10 +365,163 @@ export function drawDecoration(ctx: CanvasRenderingContext2D): void {
   ctx.globalAlpha = PANEL_ALPHA;
   fillRects(ctx, PANELS, '#000000');
   ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// The grey bars (depth -1): the panel corners, the letterbox lines and jogs.
+export function drawFrameLines(ctx: CanvasRenderingContext2D): void {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, SCREEN_W, SCREEN_H);
+  ctx.clip();
   fillRects(ctx, BRACKETS, GREY);
   fillRects(ctx, FRAME_LINES, GREY);
   for (const [x0, y0, x1, y1] of DIAGONALS) quad(ctx, [[x0, y0], [x0, y0 + 1], [x1, y1], [x1, y1 - 1]], GREY);
   ctx.restore();
+}
+
+export function drawDecoration(ctx: CanvasRenderingContext2D): void {
+  drawBackdrop(ctx);
+  drawFrameLines(ctx);
+}
+
+// --- the particles ----------------------------------------------------------------
+
+export interface QuestLoadingAssets {
+  particleEntries: Uint8Array; // particleentry.dat
+  effect: Map<number, ImageBitmap>; // effect_nt.xvm by GBIX
+}
+
+export const WIPE_CYCLE = 0xf1; // 0x0040d234: the timer wraps when it would reach 0xf1
+export const WIPE_STAGGER = 0x14; // particle i of mode 0 is shown from t = 20 i ...
+export const WIPE_WINDOW = 0x28; // ... to t = 20 i + 40 (exclusive)
+export const WIPE_SPEED = Math.fround(15.6); // 0x008fa1a4, a frame, while shown
+export const WIPE_SWEEP_EFFECT = 0xf; // mode 0 ("quest_load_b")
+export const WIPE_SPARK_EFFECT = 0x8; // modes 1 and 2 ("quest_load")
+
+export interface WipeSpawn {
+  mode: 0 | 1 | 2;
+  effect: number;
+  x: number; // the start x (pixels); mode 0's is reset by its first hidden frame
+  y: number;
+}
+
+// The particles of QuestLoadingScreenInitialize (0x0040cf30), in creation order.
+export function wipeSpawns(): WipeSpawn[] {
+  const out: WipeSpawn[] = [];
+  for (let i = 0; i < 22; i++) out.push({ mode: 0, effect: WIPE_SWEEP_EFFECT, x: 8, y: 72 + 16 * i });
+  for (let i = 0; i < 19; i++) out.push({ mode: 1, effect: WIPE_SPARK_EFFECT, x: i < 10 ? 50 + 16 * i : 462 + 16 * (i - 9), y: i < 10 ? 35 : 444 });
+  for (let i = 0; i < 32; i++) out.push({ mode: 2, effect: WIPE_SPARK_EFFECT, x: 555 + 16 * (i % 4), y: 99 + 40 * Math.floor(i / 4) });
+  return out;
+}
+
+// The middle particle (create_quest_loading_screen_middle_particle, 0x0040b990).
+export const MIDDLE = {
+  effect: 0x1b, // "questload_d", a ring
+  count: 4,
+  distance: 100, // 0x008f9ec0 (the positions scale)
+  offsetX: -11, // 0x008f9ec4
+  target: [0, 0, -1] as const, // the camera 9 target (0x00417ccc, FUN_004d33c0's second vector)
+  current: [0, 0, 0] as const, // its position
+  turn: 0xaaa, // the start turn of emitter k about X and Z: k * 0xaaa BAMS (15 degrees)
+  spinZ: [0x5b, -0x5b, 0xb6, -0x5b] as const, // BAMS a frame, emitters 0..3 (0x94 / 0xa0 / 0xac / 0xb8)
+  // The six colours (ARGB) of 0x008f9ea0; index 0 until the button that moves
+  // bbc is ported.
+  colours: [4286054207, 4281545591, 4289927799, 4289927706, 4294921498, 4289940736] as const,
+} as const;
+
+// The middle's emitter position: target * distance + (offsetX, 0, 0) + current.
+export function middlePosition(): [number, number, number] {
+  const [tx, ty, tz] = MIDDLE.target;
+  const [cx, cy, cz] = MIDDLE.current;
+  return [tx * MIDDLE.distance + MIDDLE.offsetX + cx, ty * MIDDLE.distance + cy, tz * MIDDLE.distance + cz];
+}
+
+const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
+
+// The object angles (X, Y, Z, radians) of middle emitter k after `frames`
+// updates: X stays at k * 0xaaa, Z starts there and turns by spinZ[k] a frame
+// (BAMS, wrapped to 16 bits as the exe's ints are).
+export function middleAngles(k: number, frames: number): Orient {
+  const z = (k * MIDDLE.turn + Math.imul(MIDDLE.spinZ[k]!, frames)) & 0xffff;
+  return [k * MIDDLE.turn * BAMS_TO_RAD, 0, z * BAMS_TO_RAD];
+}
+
+export interface WipeParticle {
+  spawn: WipeSpawn;
+  index: number; // the index within mode 0 (the stagger), or -1
+  sys: ParticleSystem;
+  x: number; // the current x (mode 0 only moves)
+  active: boolean; // shown this frame (SetObjectActiveFlag / ClearFlag0)
+}
+
+// The wipe and middle particles of one quest loading screen. Each wipe particle
+// is its own system with one emitter, so it can be hidden as a whole.
+export class QuestLoadingParticles {
+  readonly wipes: WipeParticle[] = [];
+  readonly middle: ParticleSystem;
+  private assets: QuestLoadingAssets;
+  private timer = 0; // +0x224 of mode 0
+  private tint = makeTinter();
+  private frames = 0;
+
+  constructor(assets: QuestLoadingAssets) {
+    this.assets = assets;
+    const slots = new Map<number, number>();
+    [...assets.effect.keys()].forEach((gbix, slot) => slots.set(gbix, slot));
+    let mode0 = 0;
+    for (const spawn of wipeSpawns()) {
+      const sys = new ParticleSystem();
+      // The screen pixels: the projection is 1 and the centre is the origin;
+      // the y is negated because the system draws y upwards.
+      sys.centre = [0, 0];
+      sys.D = 1;
+      sys.slots = slots;
+      sys.add(parseParticleEntry(assets.particleEntries, spawn.effect), [spawn.x, -spawn.y, -1], null);
+      this.wipes.push({ spawn, index: spawn.mode === 0 ? mode0++ : -1, sys, x: spawn.x, active: true });
+    }
+    this.middle = new ParticleSystem();
+    this.middle.slots = slots;
+    const entry = parseParticleEntry(assets.particleEntries, MIDDLE.effect);
+    const pos = middlePosition();
+    for (let k = 0; k < MIDDLE.count; k++) this.middle.add(entry, [...pos], middleAngles(k, 0), MIDDLE.colours[0]);
+  }
+
+  // One update: the timer and the mode 0 windows, the middle's spin, then the particles.
+  step(): void {
+    this.timer = this.timer + 1 < WIPE_CYCLE ? this.timer + 1 : 0;
+    for (const w of this.wipes) {
+      if (w.spawn.mode !== 0) {
+        w.sys.step(true);
+        continue;
+      }
+      const lo = w.index * WIPE_STAGGER;
+      const shown = this.timer > lo && this.timer < lo + WIPE_WINDOW;
+      w.active = shown;
+      w.x = shown ? Math.fround(w.x + WIPE_SPEED) : 0;
+      const e = w.sys.emitters[0]!;
+      e.pos[0] = w.x;
+      e.pos[1] = -w.spawn.y;
+      w.sys.step(shown);
+    }
+    this.frames++;
+    for (let k = 0; k < MIDDLE.count; k++) {
+      const e = this.middle.emitters[k];
+      if (e) e.orient = middleAngles(k, this.frames);
+    }
+    this.middle.step(true);
+  }
+
+  // The shown wipe particles (the mode 0 sweep and the two static groups) and the middle.
+  shownWipes(): number {
+    return this.wipes.filter((w) => w.active).length;
+  }
+
+  draw(ctx: CanvasRenderingContext2D): void {
+    const texture = (gbix: number) => this.assets.effect.get(gbix) ?? null;
+    for (const w of this.wipes) if (w.active) w.sys.draw(ctx, texture, this.tint);
+    this.middle.draw(ctx, texture, this.tint);
+  }
 }
 
 // DrawOutlinedText_00783f50: right-aligned at x, eight black copies 2 px
@@ -360,8 +557,15 @@ const FRAME = 1 / 30;
 export class QuestLoadingScreen implements Screen {
   layout = 'stretch' as const;
   readonly bars = new QuestLoadingBars();
+  // The wipe and middle particles; none without the particle assets (the bars
+  // and lines still draw).
+  readonly particles: QuestLoadingParticles | null;
   private acc = 0;
   private calls = 0;
+
+  constructor(assets?: QuestLoadingAssets) {
+    this.particles = assets ? new QuestLoadingParticles(assets) : null;
+  }
 
   // The download callback of the quest client: bytes received / total.
   progress(loaded: number, total: number): void {
@@ -374,13 +578,17 @@ export class QuestLoadingScreen implements Screen {
       this.acc -= FRAME;
       this.calls++;
       this.bars.step();
+      this.particles?.step();
     }
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-    if (decorationVisible(this.calls)) drawDecoration(ctx);
+    const bars = decorationVisible(this.calls);
+    if (bars) drawBackdrop(ctx);
+    this.particles?.draw(ctx);
+    if (bars) drawFrameLines(ctx);
     if (this.bars.bar) drawBar(ctx, this.bars.bar);
   }
 }

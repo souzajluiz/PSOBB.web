@@ -22,6 +22,8 @@ export interface QuestLink {
   client: QuestClient;
   // Set by the game that runs now (null: no game, the quest is dropped).
   target: ((q: LoadedQuest) => void) | null;
+  // Set by the game that runs now: the bytes of a quest transfer (null: none).
+  progress: ((loaded: number, total: number) => void) | null;
   // Hands a loaded quest to the target (the QuestClient's onQuest).
   route(q: LoadedQuest): void;
 }
@@ -35,11 +37,12 @@ export function questLink(conn: BBConnection, log: (msg: string) => void = () =>
   const link: QuestLink = {
     client: null!,
     target: null,
+    progress: null,
     route(q) {
       link.target?.(q);
     },
   };
-  link.client = new QuestClient(conn, { log, onQuest: (q) => link.route(q) });
+  link.client = new QuestClient(conn, { log, onQuest: (q) => link.route(q), onProgress: (l, t) => link.progress?.(l, t) });
   links.set(conn, link);
   return link;
 }
@@ -51,6 +54,15 @@ export interface FieldTownOptions {
   canvas: HTMLCanvasElement;
   character: () => CharacterFile | null;
   log?: (msg: string) => void;
+  // The quest loading screen (classic/questloading.ts): shown from the first byte of a
+  // quest transfer until the quest is started. Optional (the field keeps its screen).
+  loading?: QuestLoadingHooks;
+}
+
+export interface QuestLoadingHooks {
+  begin(): void;
+  progress(loaded: number, total: number): void;
+  end(): void;
 }
 
 // One game's town: the QuestTown (talk, counters, area script) and the running quest.
@@ -66,6 +78,7 @@ export class FieldTown {
     const log = opts.log ?? (() => {});
     this.link = questLink(opts.game.conn, log);
     this.link.target = this.target;
+    this.link.progress = (loaded, total) => this.transfer(loaded, total);
     this.town = new QuestTown({
       game: opts.game,
       view: opts.view,
@@ -78,6 +91,17 @@ export class FieldTown {
       log,
     });
   }
+
+  // The loading screen covers the field from the first byte of the transfer.
+  private transfer(loaded: number, total: number): void {
+    if (!this.loadingShown) {
+      this.loadingShown = true;
+      this.opts.loading?.begin();
+    }
+    this.opts.loading?.progress(loaded, total);
+  }
+
+  private loadingShown = false;
 
   private async start(q: LoadedQuest): Promise<void> {
     const { game, view } = this.opts;
@@ -95,11 +119,21 @@ export class FieldTown {
       log(`quest "${this.runner.session.name}" loaded`);
     } catch (err) {
       log(`quest failed to start: ${(err as Error).message}`);
+    } finally {
+      if (this.loadingShown) {
+        this.loadingShown = false;
+        this.opts.loading?.end();
+      }
     }
   }
 
   dispose(): void {
     if (this.link.target === this.target) this.link.target = null;
+    this.link.progress = null;
+    if (this.loadingShown) {
+      this.loadingShown = false;
+      this.opts.loading?.end();
+    }
     this.runner?.dispose();
     this.runner = null;
     this.town.dispose();
