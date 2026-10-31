@@ -16,7 +16,7 @@
 // unnamed: the vtables, the dispatcher jump tables, the float constants).
 // Sound effects are cited, not played.
 
-import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
+import { BAMS_TO_RAD, lineOfSightBlocked, lockonPoint, type AiFrame, type AiTarget, type EnemyAiMotion, type MapRay } from './enemyai.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, once, turnToward, wrap } from './enemyfsm.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
@@ -81,7 +81,10 @@ const fr = Math.fround;
 // The handlers are in the exe (6 at 0x0055ebb8, 10 at 0x0055d8d4) and are left
 // out: porting unreachable code would be guesswork.
 //
-// Not reproduced: the line-of-sight rays (a Gee sees a player through walls),
+// Not reproduced: the line-of-sight rays (a Gee sees a player through walls;
+// OPEN, 2026-10-31: melee's visibility test is CheckEnemyTargetVisibility_00521238 at
+// 0x0055ddc7, whose retry counter (enemy+0x3c0 / +0x3c4) and its target re-resolve are not
+// traced yet; the map ray itself is lineOfSightBlocked / weaponVisibleFrom in enemyai.ts),
 // the knockback slide in the flinch (0x30c velocity), the ground height
 // (ASSUMED flat: heights are above the ground under the Gee), the death
 // effect (a killed Gee goes to state 14, which only plays SE 0x250 / 0x2f3 and
@@ -2168,6 +2171,7 @@ export class GibblesAi extends BrainBase {
   private gateOn = false; // the radar icon and the reticle (the handler's own calls)
   private engaged = false; // GetTargetableNPC != 0 in state 3 (the approach's gate)
   private boxOn = false; // bit 0 of the box (+0xa4 -> +0x18): the hit
+  private readonly ray: MapRay | null; // the map's wall ray (EnemyAI_CheckLineOfSight), null = open ground
 
   constructor(opts: {
     x: number;
@@ -2178,8 +2182,11 @@ export class GibblesAi extends BrainBase {
     movement: EnemyMovementData | null;
     radius?: number;
     rng?: () => number;
+    // The map's wall ray (cast_ray_at_map_collision_geometry2); none = open ground.
+    ray?: MapRay | null;
   }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
+    this.ray = opts.ray ?? null;
     const p = (i: number) => opts.params[i] ?? 0;
     this.guard = Math.trunc(GIBBLES.guardBase + p(0));
     this.leapChance = p(2);
@@ -2291,6 +2298,9 @@ export class GibblesAi extends BrainBase {
         if (t.dead) continue;
         const d = (t.x - this.x) ** 2 + (t.z - this.z) ** 2;
         if (d >= bestSq) continue;
+        // The nearest player with a clear sight line (the exe's search keeps only a visible candidate,
+        // see the header). ASSUMED: the eye is at the target's feet height (the brain has no y).
+        if (lineOfSightBlocked(lockonPoint(this.x, t.y ?? 0, this.z), { x: t.x, y: t.y ?? 0, z: t.z }, this.ray)) continue;
         best = t;
         bestSq = d;
       }

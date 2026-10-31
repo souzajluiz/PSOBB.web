@@ -836,3 +836,55 @@ export class EnemyAi {
     this.z += Math.cos(this.angle) * step;
   }
 }
+
+// --- Map rays of the Episode 2 enemies (PsoBB.exe, Ephinea 1.25.13) -------------
+//
+// EnemyAI_CheckLineOfSight_00771e14 (this = the enemy, args = the target point):
+//   from = the enemy's lockon cursor (this+0x300), which DerolleUpdateLockonCursorPosition_00562dc4
+//   (0x00562dc4) sets to (x, y + 15, z); the constant 15 is 0x00925a28 (PROVEN).
+//   When the XZ distance squared is above g_fMaxMovementSpeed (0x00a9b1a0 = 90000.0, written at
+//   0x0077a26a, compared at 0x00771e58: PROVEN) the far end is moved to 300 units along the XZ bearing,
+//   at the height of `from` (the rotated (0, 0, 300) has y 0). The ray is
+//   cast_ray_at_map_collision_geometry2 (0x00757472), which keeps the meshes and faces whose flag
+//   word has 0x8000 (PROVEN from its filters). It returns 1 when a wall is hit: blocked.
+// IsPlayerWeaponVisibleFromPoint_005212ec (through CheckEnemyTargetVisibility_00521238): the same
+//   ray from the enemy's lockon cursor to the player's weapon_position, no clamp.
+export const ENEMY_WALL_MASK = 0x8000;
+export const LOCKON_HEIGHT = 15;
+export const LOS_RANGE = 300;
+export const MAX_MOVEMENT_SQ = 90000;
+
+export interface RayPoint {
+  x: number;
+  y: number;
+  z: number;
+}
+
+// The owner's map ray: the first wall hit of the segment, or null (render/combat.ts wallHit).
+export type MapRay = (from: RayPoint, to: RayPoint, mask: number) => RayPoint | null;
+
+// The lockon cursor of an enemy standing with its feet at (x, y, z).
+export function lockonPoint(x: number, y: number, z: number): RayPoint {
+  return { x, y: y + LOCKON_HEIGHT, z };
+}
+
+// EnemyAI_CheckLineOfSight_00771e14: true when a wall blocks the sight line (the exe returns 1).
+export function lineOfSightBlocked(eye: RayPoint, to: RayPoint, ray: MapRay | null): boolean {
+  if (!ray) return false;
+  let end = to;
+  const dx = to.x - eye.x;
+  const dz = to.z - eye.z;
+  const sq = dx * dx + dz * dz;
+  if (sq > MAX_MOVEMENT_SQ) {
+    // ASSUMED: matrix_rotation_y's sign convention is read as the plain bearing (+Z toward the target).
+    const len = Math.sqrt(sq);
+    end = { x: eye.x + (dx / len) * LOS_RANGE, y: eye.y, z: eye.z + (dz / len) * LOS_RANGE };
+  }
+  return ray(eye, end, ENEMY_WALL_MASK) !== null;
+}
+
+// IsPlayerWeaponVisibleFromPoint_005212ec: true when no wall stands between the eye and the point.
+export function weaponVisibleFrom(eye: RayPoint, weapon: RayPoint, ray: MapRay | null): boolean {
+  if (!ray) return true;
+  return ray(eye, weapon, ENEMY_WALL_MASK) === null;
+}

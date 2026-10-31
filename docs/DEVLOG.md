@@ -24278,3 +24278,37 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 - The Gibarta-class object (`FUN_006e4058`, 0x178): group 2 and its flight are ASSUMED.
 - SE 0x90 plays in the port even with no live player (the exe plays it only with one). Not changed.
 - The leader's own rod action 2 (see above) still runs on the leader only.
+## 2026-10-31: Episode 2 enemies: wall / ground rays, Gee states, Gibbles sink (status per part; Gibbles' sight line ported)
+
+**Question:** TODO section C ("Episode 2 enemies: wall / ground rays, Gee states, Gibbles sink", status unclear). What does the port do, and what does the exe do for each?
+
+**Port status before this pass.** None of the three had a map ray: `GeeAi`, `GibblesAi` and `GiGueAi` were built without a `wall` option (`render/combat.ts`), so every sight line was open and the ground was flat. The Zu's wall option (`enemyfsmep4.ts`) is wired (`render/combat.ts`, `wall: wallHit ? ...`), so the older note "a `wall` option is passed by nobody yet" (2026-10-21 Zu entry) is stale.
+
+**Exe: the ray primitives (PROVEN unless marked).**
+- `EnemyAI_CheckLineOfSight_00771e14` (0x00771e14): from = `this+0x300` (the enemy's lockon cursor), to = the argument. The cursor is written by `DerolleUpdateLockonCursorPosition_00562dc4` (0x00562dc4) as (x, y + 15, z), 15 = 0x00925a28. When the XZ distance squared is above `g_fMaxMovementSpeed` (0x00a9b1a0, written 0x0077a26a with 0x47afc800 = 90000.0; compared 0x00771e58), the far end moves to 300 units along the bearing (atan2 of the XZ offset, 0x10000 = a turn), at the eye's height (the rotated (0, 0, 300) has y 0). The ray is `cast_ray_at_map_collision_geometry2` (0x00757472), which filters both the mesh and the face by flag 0x8000. The function returns 1 on a wall hit (blocked). The sign of the rotation is ASSUMED to be the plain bearing.
+- `IsPlayerWeaponVisibleFromPoint_005212ec` (0x005212ec) through `CheckEnemyTargetVisibility_00521238` (0x00521238) and `cast_ray_from_enemy_to_target`: the same ray from the lockon cursor to the player's `weapon_position`, no clamp. The visibility function first tests the target's vtable +0x194; below `0xfff` of the target index it re-resolves (the counter at +0x3c0 against +0x3c4) before any ray is cast. ASSUMED for the counter semantics: not traced here.
+- `Enemygetgroundinfo007b4c58` (0x007b4c58): get_ground at (x, y + g_GroundCheckHeightOffset, z), flags 0x55 or 0x15. `GibblesCheckGroundType_0056a2a0` (0x0056a2a0): `get_ground(pos, this+0x128, 5)` and refuses a hit whose `ground_type` has `deep_water` (= 4, dump .c:70412). Called from Gibbles' code at 0x00569a0d, 0x00569d53, 0x00569dd6 and 0x00569f1b (its walk / ground checks; the per-state use is not traced).
+- `EnemyUpdateCollisionAndStep_007b6894` (0x007b6894) is enemy-against-enemy and player body collision (`CheckTwoHitboxCollision_007b5e40`), not a wall ray. Not the sight line.
+
+**Gibbles: where the sight line is used.** `EnemyAI_CheckLineOfSight` is called 5 times in the Gibbles range (0x00562009, 0x00563763, 0x005638f5, 0x00563930, 0x0056b415). The ones in 0x00563763 / 0x005638f5 are the target search: the nearest player whose sight line is clear is kept (a blocked candidate does not update the best distance). `CheckEnemyTargetVisibility` is called 4 times (0x0056696c, 0x00566ff7, 0x005676e1, 0x00567a99). The state 4 handler (0x00561798) reads the sight line at its contact case (0x00562009): blocked resets the approach counters, clear hands the walk to 0x00771f5c.
+
+**Change (this pass).**
+- `client/src/combat/enemyai.ts`: `ENEMY_WALL_MASK` (0x8000), `LOCKON_HEIGHT` (15), `LOS_RANGE` (300), `MAX_MOVEMENT_SQ` (90000), `lockonPoint`, `lineOfSightBlocked` (EnemyAI_CheckLineOfSight), `weaponVisibleFrom` (IsPlayerWeaponVisibleFromPoint). Pure math; a `MapRay` is the owner's segment query.
+- `client/src/combat/enemyfsmep2a.ts` `GibblesAi`: an optional `ray` option; the target search (`findTarget`, every `GIBBLES.retarget` ticks, also the dormant wake-up) keeps the nearest player whose sight line is clear. ASSUMED: the eye is at the target's feet height plus 15 (the brain has no y of its own), and the candidate point is its feet. With no ray (no wall data) the search is unchanged.
+- `client/src/render/combat.ts`: the Gibbles constructor passes `ray: wallHit(from, to, ENEMY_WALL_MASK)` when the owner has the map's wall query.
+- `TODO.md` section C: the line is split per part (below).
+
+**Gee.** The state table and the entries of states 6 and 10 were re-read: the dispatch table at 0x00925500 (18 entries) gives 0x0055d1c2 for entry 6 (`call 0x0055ebb8`) and 0x0055d18f for entry 10 (`call 0x0055d8d4`), matching the 2026-10-20 entry. Per-state timings and attacks were NOT re-traced in this pass; the 2026-10-20 values stand (marked ASSUMED where that entry said so). Gee has no sight line in the port yet: the melee state's visibility test (0x0055ddc7, `CheckEnemyTargetVisibility`) is open because its retry counter (+0x3c0 / +0x3c4) and the target re-resolve are not traced. Its spike's ground / wall stop is also open.
+
+**Gibbles sink.** Re-checked the constants: 0x00925b04 = 0.10000000149 (`fr(0.1)`, the sink step and the velocity gain) and 0x00925b00 = 25.0 (the end of the sink), both as in `GIBBLES.sinkStep` / `sinkLimit`. Matches the 2026-10-21 entry (250 ticks, `tickDead`). Not re-traced: the death motion's wait and the invulnerability flags of the lie-in-wait.
+
+**Ground rays (open).** The port's Ep2 enemies stand on flat ground (the owner keeps the feet height). Gibbles' `get_ground` mask 5 with the deep-water refusal (0x0056a2a0) is not ported: the mask's bits in the mesh flag word and the walk's use per state are not traced.
+
+**Tests.**
+- `tests/enemyfsmep2a.test.ts` (new block): the lockon cursor (feet + 15), mask 0x8000, blocked / clear / no-ray, the 300 clamp at the eye height, the clamp keeps the bearing (atan2(300, 400)), the weapon ray without a clamp, and the Gibbles search (open: nearest; wall at z 50: the far one; only a walled player: no target, stays dormant). `node tests/enemyfsmep2a.test.ts`: all checks passed.
+- Also passing: `tests/enemyfsmep2.test.ts`, `enemyfsmep2b`, `enemyfsmep2c`, `enemyfsmep2d`, `enemyfsm`, `enemysplits`, `combatdepth` (836 checks), and `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` (5860 checks, 0 failures). `cd client && npx tsc --noEmit -p .` clean (Node 24).
+- Not run in Chrome (no browser pass for the Gibbles search change).
+
+**Open (reasons).** Gee's melee visibility and the Gee spike's ground / wall stop: the counter path (+0x3c0 / +0x3c4) and the spike's stop are not traced. Gibbles' remaining sight-line sites (0x00562009 contact case, 0x0056b415, and the `CheckEnemyTargetVisibility` sites): the implicit register arguments of the decompile need a per-site read. Ground rays for all three: flat ground; Gibbles' deep-water refusal not ported.
+
+**Decisive fact to verify:** `g_fMaxMovementSpeed` is 90000.0 (`objdump` of PsoBB.exe at 0x0077a26a: `movl $0x47afc800, 0xa9b1a0`), so the sight ray is clamped at 300 units.

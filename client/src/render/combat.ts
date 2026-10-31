@@ -27,6 +27,7 @@ import {
   AI_PROFILES,
   aiConfig,
   collisionRadius,
+  ENEMY_WALL_MASK,
   EnemyAi,
   enemySpeeds,
   movementIndex,
@@ -1335,7 +1336,9 @@ export class CombatView {
         else if (className === 'TObjEneGibbles') {
           // AttackData [0] slams, then the two shockwave / swing rows (ENEMY_TYPE_PARAMS order).
           const attacks = params && def ? def.attack.map((i) => params.attack(difficulty, i)) : attack ? [attack] : [];
-          ai = new GibblesAi({ ...at, params: setParams, attacks, movement, rng: () => this.rng() });
+          // The sight line of the target search: the map's wall ray at mask 0x8000 (EnemyAI_CheckLineOfSight).
+          const wallHit = this.opts.wallHit;
+          ai = new GibblesAi({ ...at, params: setParams, attacks, movement, rng: () => this.rng(), ray: wallHit ? (from, to) => wallHit(from, to, ENEMY_WALL_MASK) : null });
         }
         else if (className === 'TObjEneIllGill') {
           // Attack1..3 rows (battle params 38..41: the scythe, the ice / thunder rows, the

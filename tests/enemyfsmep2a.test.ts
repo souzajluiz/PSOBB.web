@@ -7,7 +7,7 @@
 // Nothing may hang.
 // Run: node tests/enemyfsmep2a.test.ts
 import { GEE, GIBBLES, GIGUE, GeeAi, GibblesAi, GiGueAi, GiGueBomb, GiGueSpit, GroundBlast, type GeeState, type GibblesState } from '../client/src/combat/enemyfsmep2a.ts';
-import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
+import { ENEMY_WALL_MASK, lineOfSightBlocked, lockonPoint, weaponVisibleFrom, type AiFrame, type AiTarget, type MapRay, type RayPoint } from '../client/src/combat/enemyai.ts';
 import { STATUS } from '../client/src/combat/status.ts';
 import { motionFrames, realLen } from './lib/motionframes.ts';
 
@@ -760,6 +760,55 @@ near(GIBBLES.sinkStep, 0.1, 1e-7, 'Gibbles: the sink steps 0.1');
   const b = new GiGueBomb(0, 20, 0, 0, 0, 100, 3, 10);
   b.tick([]);
   check(b.y < 20, 'bomb: flies down toward the feet aim (y 0)');
+}
+
+// --- Map rays (enemyai.ts lineOfSightBlocked / weaponVisibleFrom: EnemyAI_CheckLineOfSight_00771e14,
+// IsPlayerWeaponVisibleFromPoint_005212ec). A fake ray records every segment it is asked.
+{
+  const segs: { from: RayPoint; to: RayPoint; mask: number }[] = [];
+  const hitAll = (hit: boolean): MapRay => (from, to, mask) => {
+    segs.push({ from, to, mask });
+    return hit ? { x: 0, y: 0, z: 0 } : null;
+  };
+  const eye: RayPoint = lockonPoint(0, 0, 0);
+  eq(eye, { x: 0, y: 15, z: 0 }, 'lockon cursor: the feet plus 15 (0x00925a28)');
+  eq(ENEMY_WALL_MASK, 0x8000, 'the sight ray filters 0x8000 (cast_ray_at_map_collision_geometry2)');
+  check(lineOfSightBlocked(eye, { x: 0, y: 0, z: 100 }, hitAll(true)), 'sight: a wall on the segment blocks (the exe returns 1)');
+  check(!lineOfSightBlocked(eye, { x: 0, y: 0, z: 100 }, hitAll(false)), 'sight: a clear segment does not block');
+  check(!lineOfSightBlocked(eye, { x: 0, y: 0, z: 100 }, null), 'sight: no ray (open ground) never blocks');
+  segs.length = 0;
+  lineOfSightBlocked(eye, { x: 0, y: 0, z: 100 }, hitAll(false));
+  eq(segs[0].to, { x: 0, y: 0, z: 100 }, 'sight: a target within 300 is the ray end (XZ 100)');
+  segs.length = 0;
+  lineOfSightBlocked(eye, { x: 0, y: 0, z: 400 }, hitAll(false));
+  eq(segs[0].to, { x: 0, y: 15, z: 300 }, 'sight: beyond 300 (XZ distance squared above 90000) the end is 300 out, at the eye height');
+  segs.length = 0;
+  lineOfSightBlocked(eye, { x: 300, y: 0, z: 400 }, hitAll(false));
+  const end = segs[0].to;
+  const r = Math.hypot(end.x, end.z);
+  check(Math.abs(r - 300) < 1e-9 && Math.abs(end.x / r - 0.6) < 1e-9, 'sight: the clamped end keeps the bearing (atan2(300, 400))');
+  segs.length = 0;
+  eq(weaponVisibleFrom(eye, { x: 0, y: 5, z: 400 }, hitAll(false)), true, 'weapon: a clear ray is visible, no clamp');
+  eq(segs[0].to, { x: 0, y: 5, z: 400 }, 'weapon: the ray ends at the weapon point even beyond 300');
+  eq(weaponVisibleFrom(eye, { x: 0, y: 5, z: 400 }, hitAll(true)), false, 'weapon: a wall on the ray hides the player');
+  eq(weaponVisibleFrom(eye, { x: 0, y: 5, z: 400 }, null), true, 'weapon: no ray is visible');
+}
+
+// Gibbles' target search keeps the nearest player whose sight line is clear (the wall at z = 50 hides it).
+{
+  const near = player(0, 50, 1);
+  const far = player(0, 80, 2);
+  const wallAt50: MapRay = (_from, to) => (to.z === 50 ? { x: 0, y: 0, z: 0 } : null);
+  const open = new GibblesAi({ x: 0, z: 0, angle: 0, params: [0, 0, 0, 0], attacks: gibAttacks, movement: gibMove, rng: () => 0.9 });
+  for (let i = 0; i < GIBBLES.retarget; i++) open.tick([near, far]);
+  eq(open.targetId, 1, 'Gibbles search, open ground: the nearest player is the target');
+  const walled = new GibblesAi({ x: 0, z: 0, angle: 0, params: [0, 0, 0, 0], attacks: gibAttacks, movement: gibMove, rng: () => 0.9, ray: wallAt50 });
+  for (let i = 0; i < GIBBLES.retarget; i++) walled.tick([near, far]);
+  eq(walled.targetId, 2, 'Gibbles search, wall at z 50: the nearer player behind it is passed over for the far one');
+  const hidden = new GibblesAi({ x: 0, z: 0, angle: 0, params: [0, 0, 0, 0], attacks: gibAttacks, movement: gibMove, rng: () => 0.9, ray: wallAt50 });
+  for (let i = 0; i < GIBBLES.retarget; i++) hidden.tick([near]);
+  eq(hidden.targetId, null, 'Gibbles search, only a walled-off player: no target');
+  check(hidden.state === 'dormant', 'Gibbles search, only a walled-off player: it stays in lie-in-wait');
 }
 
 if (failures) {
