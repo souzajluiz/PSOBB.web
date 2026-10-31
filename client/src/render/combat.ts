@@ -2647,8 +2647,9 @@ export class CombatView {
         const p = ai.attachAt(i);
         g.position.set(p[0], p[1], p[2]);
         g.rotation.order = 'YXZ';
-        // ASSUMED: +0x120 lifts the tentacle about its x axis.
-        g.rotation.set(-t.lift * BAMS_TO_RAD + t.pitch * BAMS_TO_RAD, (ai.yaw + t.yaw) * BAMS_TO_RAD, 0);
+        // ASSUMED: +0x120 lifts the tentacle about its x axis (one register:
+        // the raise, the reach's pitch table and the lower all write it).
+        g.rotation.set(-t.lift * BAMS_TO_RAD, (ai.yaw + t.yaw) * BAMS_TO_RAD, 0);
       });
       ai.stings.forEach((s, k) => {
         const g = v.stings[k];
