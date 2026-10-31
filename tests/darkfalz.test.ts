@@ -10,9 +10,9 @@
 //
 // Run: node tests/darkfalz.test.ts
 import { DARVANT, DarkFalzAi, DarkFalzPartAi, Darvant, DF_ID, SCENE, SCENE_NAMES, darvantBoxStart, darvantBoxStep, darvantRingIcon, darvantRowSpeed } from '../client/src/combat/darkfalz.ts';
-import { DfForm1, F1, F1_ANIM_ROWS, F1_BOX_COUNT, F1_BOX_FLAGS, pickWeighted } from '../client/src/combat/darkfalz1.ts';
+import { DfForm1, F1, F1_ANIM_ROWS, F1_BOX_COUNT, F1_BOX_FLAGS, pickWeighted, pushedOutOfBody, BODY_CIRCLES } from '../client/src/combat/darkfalz1.ts';
 import { DfForm2, F2, F2_ANIM_ROWS } from '../client/src/combat/darkfalz2.ts';
-import { advanceScale, DfForm3, F3, F3_ANIM_ROWS, HomingBolt, f3Spot } from '../client/src/combat/darkfalz3.ts';
+import { advanceScale, BOLT, DfForm3, F3, F3_ANIM_ROWS, HomingBolt, f3Spot } from '../client/src/combat/darkfalz3.ts';
 import { CASKET, CIRCLE, DfAnim, NO_PACKED, SCENE_FRAMES, STALL_TICKS, angDiff, ease, type DfEvent, type DfRow } from '../client/src/combat/darkfalzcommon.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyShot } from '../client/src/combat/enemyshots.ts';
@@ -38,16 +38,19 @@ function seeded(seed = 1): () => number {
 
 // BattleParamEntry_on.dat, rows 53..57 (hp, atp, fparam1, iparam1..4) by
 // difficulty, as tools/exedata.py and the table reader give them.
-const row = (hp: number, atp: number, f1: number, i1 = 0, i2 = 0, i3 = 0, i4 = 0): DfRow => ({ hp, atp, f1, i1, i2, i3, i4 });
+const row = (hp: number, atp: number, f1: number, i1 = 0, i2 = 0, i3 = 0, i4 = 0, i5 = 0): DfRow => ({ hp, atp, f1, i1, i2, i3, i4, i5 });
+// The form 3 rows' iparam5 (the homing bolt's power) read from the same file:
+// movement row 56 at 0xae00 + (difficulty * 0x60 + 56) * 0x30, +0x28 = 700, 1000,
+// 1600, 2000 (fparam1 0.3, 0.4, 0.5, 0.5, the fixture's f1).
 const ROWS = [
   // Normal
-  { darvant: row(125, 80, 0.38, 3), df1: row(5900, 700, 13, 9, 6, 550), df2: row(6500, 750, 5, 2, 4), df3: row(9000, 800, 0.3, 3, 3, 3, 20000), darvantFalz: row(250, 220, 0.5, 4) },
+  { darvant: row(125, 80, 0.38, 3), df1: row(5900, 700, 13, 9, 6, 550), df2: row(6500, 750, 5, 2, 4), df3: row(9000, 800, 0.3, 3, 3, 3, 20000, 700), darvantFalz: row(250, 220, 0.5, 4) },
   // Hard
-  { darvant: row(150, 190, 0.42, 5), df1: row(8500, 1100, 10, 12, 7, 900), df2: row(9000, 1300, 4, 2, 7), df3: row(8000, 1400, 0.4, 4, 10, 4, 10000), darvantFalz: row(300, 500, 0.9, 10) },
+  { darvant: row(150, 190, 0.42, 5), df1: row(8500, 1100, 10, 12, 7, 900), df2: row(9000, 1300, 4, 2, 7), df3: row(8000, 1400, 0.4, 4, 10, 4, 10000, 1000), darvantFalz: row(300, 500, 0.9, 10) },
   // Very Hard
-  { darvant: row(250, 350, 0.48, 10), df1: row(18000, 1900, 7, 14, 9, 1800), df2: row(10000, 2000, 3, 1, 14), df3: row(16500, 2100, 0.5, 5, 12, 6, 10000), darvantFalz: row(500, 700, 1.6, 14) },
+  { darvant: row(250, 350, 0.48, 10), df1: row(18000, 1900, 7, 14, 9, 1800), df2: row(10000, 2000, 3, 1, 14), df3: row(16500, 2100, 0.5, 5, 12, 6, 10000, 1600), darvantFalz: row(500, 700, 1.6, 14) },
   // Ultimate
-  { darvant: row(300, 1390, 0.55, 10), df1: row(20000, 2400, 5, 24, 24, 2100), df2: row(16500, 2980, 1, 1, 24), df3: row(21000, 2560, 0.5, 5, 5, 3, 15000), darvantFalz: row(600, 1550, 1.6, 14) },
+  { darvant: row(300, 1390, 0.55, 10), df1: row(20000, 2400, 5, 24, 24, 2100), df2: row(16500, 2980, 1, 1, 24), df3: row(21000, 2560, 0.5, 5, 5, 3, 15000, 2000), darvantFalz: row(600, 1550, 1.6, 14) },
 ];
 
 const player = (clientId: number, x: number, z: number, dead = false): AiTarget => ({ clientId, x, z, charClass: 0, dead });
@@ -171,7 +174,7 @@ function toArena(fi: Fight, x = 0, z = 0): void {
 }
 {
   const fi = fight();
-  const f3 = new DfForm3(fi.c, { hp: 9000, atp: 800, lMagic: 3, megid: 3, orbs: 3 }, 10000, 0);
+  const f3 = new DfForm3(fi.c, { hp: 9000, atp: 800, lMagic: 3, megid: 3, orbs: 3, f1: 0.3, power: 700 }, 10000, 0);
   f3.receive(DfForm3.pack(F3.libera, 0x11, 0x10, 3, 7, 2, 0xf));
   eq(`${f3.st} ${f3.from} ${f3.to} ${f3.oldFace} ${f3.face} ${f3.aim} ${f3.held}`, '16 17 16 3 7 2 -1', 'form 3 receive, state 0x10 is LIBERA');
   f3.receive(0x11);
@@ -866,6 +869,76 @@ function toType3(fi: Fight): void {
     for (const b of bolts) if (b.tick(t).length) hit = true;
   }
   check(hit, 'a homing bolt reaches its player');
+}
+
+{
+  // The homing bolt's own flight (exe: ctor 0x00453030, update 0x00452BCC).
+  const tune = (o: { f1?: number; power?: number; ultimate?: boolean; live?: boolean } = {}) => ({
+    f1: o.f1 ?? 0.3,
+    power: o.power ?? 700,
+    ultimate: o.ultimate ?? false,
+    shooterLive: () => o.live ?? true,
+  });
+  const far = [{ clientId: 0, x: 1e6, y: 0, z: 0, charClass: 0, dead: false }];
+  // Life: the counter starts at 150 (300 in Ultimate) and the bolt is removed
+  // on the tick it goes below 0, so 151 (301) ticks with no hit.
+  for (const ult of [false, true]) {
+    const b = new HomingBolt(0, 40, 0, 0, tune({ ultimate: ult }));
+    let n = 0;
+    while (!b.done && n < 1000) {
+      b.tick(far);
+      n++;
+    }
+    eq(n, ult ? 301 : 151, `a bolt with no hit lives ${ult ? 301 : 151} ticks (${ult ? 'Ultimate' : 'Normal'})`);
+  }
+  // Speed: 6 units a tick.
+  const s = new HomingBolt(0, 40, 0, 0, tune());
+  s.tick(far);
+  const p0 = [s.x, s.y, s.z];
+  s.tick(far);
+  const step = Math.hypot(s.x - p0[0], s.y - p0[1], s.z - p0[2]);
+  check(Math.abs(step - BOLT.speed) < 1e-9, `a bolt moves ${BOLT.speed} a tick (got ${step.toFixed(6)})`);
+  // The start: it dives (no sideways part) before it turns.
+  const first = new HomingBolt(0, 40, 0, 0, tune());
+  first.tick(far);
+  check(Math.abs(first.x) < 1e-9 && first.y < 40 - 5 && first.z > 0, 'the start heads down and forward (heading 0)');
+  // A target that is gone removes the bolt at once.
+  const gone = new HomingBolt(0, 40, 0, 0, tune());
+  eq(gone.tick([]).length, 0, 'no hit when the target is gone');
+  check(gone.done, 'a bolt whose target is gone is removed');
+  // A player on the spot is hit with the row's iparam5 as the power; a shooter
+  // that cannot hit (WAITKILL / DEAD) removes the bolt with no hit.
+  const on = [{ clientId: 0, x: 10000, y: 0, z: 100, charClass: 0, dead: false }];
+  const hitting = new HomingBolt(10000, 40, 100, 0, tune({ power: 1000 }));
+  eq(hitting.tick(on).length, 1, 'a bolt on a player hits it');
+  eq(hitting.effect.power, 1000, 'the hit power is iparam5, passed raw');
+  const blocked = new HomingBolt(10000, 40, 100, 0, tune({ live: false }));
+  eq(blocked.tick(on).length, 0, 'a shooter that cannot hit: no hit');
+  check(blocked.done, 'and the bolt is removed');
+}
+
+{
+  // Form 1's body pushes players out of its six circles (0x004551F4).
+  const body = { x: 0, z: 0, yaw: 0, variant: 0 };
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+  // The circles run in order, each on the position the last one left. A player on
+  // the centre goes out to 75.75 along +x (the origin fallback), then the (50, 0)
+  // circle takes it to 110.75 and the head circle (130, 0), radius 30, back to 99.25.
+  const c0 = pushedOutOfBody(body, { x: 0, z: 0 });
+  check(c0 !== null && near(c0.dx, 99.25) && near(c0.dz, 0), 'a player on the centre ends at 99.25 (the circles chain)');
+  // Outside every circle: no push.
+  eq(pushedOutOfBody(body, { x: 0, z: 200 }), null, 'a player outside the body is not pushed');
+  // At (100, 0): the (50, 0) circle (radius 60) gives 110.75, the head circle 99.25.
+  const p1 = pushedOutOfBody(body, { x: 100, z: 0 });
+  check(p1 !== null && near(p1.dx, -0.75) && near(p1.dz, 0), 'at (100, 0) the chain ends at 99.25');
+  // The sixth circle follows the variant: (130, 0) for 0, (0, 130) for 1.
+  const s0 = pushedOutOfBody(body, { x: 150, z: 0 });
+  check(s0 !== null && near(s0.dx, 10.75), 'variant 0: the head circle at (130, 0) pushes to 160.75');
+  eq(pushedOutOfBody({ ...body, variant: 1 }, { x: 150, z: 0 }), null, 'variant 1: the head circle is at (0, 130), not here');
+  // The body's yaw turns the circles: yaw 0x4000 (90 degrees) moves (130, 0) to (0, -130).
+  const turned = pushedOutOfBody({ ...body, yaw: 0x4000 }, { x: 0, z: -150 });
+  check(turned !== null && near(turned.dx, 0) && near(turned.dz, -10.75), 'a quarter turn moves the head circle to (0, -130)');
+  check(BODY_CIRCLES.radii.length === 6 && BODY_CIRCLES.points.length + 1 === BODY_CIRCLES.radii.length, 'six circles');
 }
 
 {

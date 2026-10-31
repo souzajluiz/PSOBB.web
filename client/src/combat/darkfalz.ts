@@ -664,7 +664,7 @@ export class DarkFalzAi extends BrainBase implements DfFight {
 
   private form3Row(): Form3Row {
     const r = this.rows.df3;
-    return { hp: r.hp, atp: r.atp, lMagic: r.i1, megid: r.i2, orbs: r.i3 >= 1 && r.i3 <= 8 ? r.i3 : 4 };
+    return { hp: r.hp, atp: r.atp, lMagic: r.i1, megid: r.i2, orbs: r.i3 >= 1 && r.i3 <= 8 ? r.i3 : 4, f1: r.f1, power: r.i5 };
   }
 
   // InitializeVoloptSpawnConfig (0x0044C430): rings of 5, 15, 25, 35.

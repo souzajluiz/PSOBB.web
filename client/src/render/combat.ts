@@ -4474,11 +4474,12 @@ export class CombatView {
     const row = (i: number): DfRow => {
       if (!params) {
         const f = fall[i - 53];
-        return { hp: f[0], atp: f[1], f1: f[2], i1: f[3][0], i2: f[3][1], i3: f[3][2], i4: f[3][3] };
+        // The fallback has no iparam5: 0 (ASSUMED, the homing bolt's power).
+        return { hp: f[0], atp: f[1], f1: f[2], i1: f[3][0], i2: f[3][1], i3: f[3][2], i4: f[3][3], i5: 0 };
       }
       const st = params.stats(difficulty, i);
       const mv = params.movement(difficulty, i);
-      return { hp: st.hp, atp: st.atp, f1: mv.fparam1, i1: mv.iparam[0], i2: mv.iparam[1], i3: mv.iparam[2], i4: mv.iparam[3] };
+      return { hp: st.hp, atp: st.atp, f1: mv.fparam1, i1: mv.iparam[0], i2: mv.iparam[1], i3: mv.iparam[2], i4: mv.iparam[3], i5: mv.iparam[4] };
     };
     return { darvant: row(53), df1: row(54), df2: row(55), df3: row(56), darvantFalz: row(57) };
   }
@@ -4796,6 +4797,9 @@ export class CombatView {
       }
       case 'killed':
         this.falzKilled(e, ev.x, ev.z);
+        return;
+      case 'push':
+        if (ev.clientId === this.game.selfId) this.view?.pushPlayer(ev.clientId, ev.dx, ev.dz);
         return;
       default:
         return;

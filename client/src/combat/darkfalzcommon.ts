@@ -209,21 +209,26 @@ export type DfEvent =
   // A Darvant appeared (the owner gives it a hit proxy).
   | { kind: 'darvant'; entity: number }
   // The local player is pulled to a point (the captured player of form 3).
-  | { kind: 'pull'; clientId: number; x: number; z: number };
+  | { kind: 'pull'; clientId: number; x: number; z: number }
+  // The player is pushed out of form 1's body by (dx, dz) (pushedOutOfBody); the
+  // render layer moves the local player through the map collision.
+  | { kind: 'push'; clientId: number; dx: number; dz: number };
 
 // The BattleParamEntry rows of the fight (the dump's names are in the comments).
 export interface DfRow {
   hp: number;
   atp: number;
   // MovementData (fparam1.., iparam1..): the "animation speeds" struct whose
-  // field 0 is fparam1, +0x18 iparam1, +0x1c iparam2, +0x20 iparam3.
+  // field 0 is fparam1, +0x18 iparam1, +0x1c iparam2, +0x20 iparam3, +0x24
+  // iparam4, +0x28 iparam5 (the homing bolt's power, form 3).
   f1: number;
   i1: number;
   i2: number;
   i3: number;
   i4: number;
+  i5: number;
 }
-export const EMPTY_ROW: DfRow = { hp: 1, atp: 0, f1: 0, i1: 0, i2: 0, i3: 0, i4: 0 };
+export const EMPTY_ROW: DfRow = { hp: 1, atp: 0, f1: 0, i1: 0, i2: 0, i3: 0, i4: 0, i5: 0 };
 
 export interface DfRows {
   darvant: DfRow; // 53 ep1_Darvant

@@ -21,9 +21,8 @@
 // prisoner), 16 LIBERA (98: lets go). While it holds a player every point of
 // damage it takes also hurts that player (VoloptForm7ContextOnPlayerHit).
 //
-// ASSUMED (neither the dump nor the JP C has it): the homing bolts' flight (speed,
-// reach, power: the object 0x00453030 was read only as far as its 150 frame
-// life, its target and its first velocity), what LMAGIC's technique object
+// The homing bolts' flight is read from the exe (BOLT below, DEVLOG 2026-10-31).
+// ASSUMED (neither the dump nor the JP C has it): what LMAGIC's technique object
 // (0x006E6BF4, a list technique) is (Gizonde here), and the hit sphere.
 
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
@@ -43,7 +42,6 @@ import {
   type DfFight,
   type Vec3,
 } from './darkfalzcommon.ts';
-import { TECH, techPower } from './techniques.ts';
 import { FALZ3_DEFAULT_COLOR, fadeColor, falz3Icons, falz3TargetColor, type Icon } from '../classic/minimap.ts';
 
 // Animation table 0x009A6440 (stride 0x14: mode, next, body, wing, wing 1).
@@ -100,7 +98,6 @@ export const F3 = {
   // n = row 56 iparam3 (1..8 else 4).
   homingFirst: 117,
   homingSpan: 66,
-  homingOrbs: 147,
   // LMAGIC fires at timer 69, DMAGIC's Megid at 70, CAPTURE shows at 49 and holds
   // at 33, LIBERA lets go at 49.
   lMagicFire: 69,
@@ -111,54 +108,164 @@ export const F3 = {
   turn: 0x888, // BAMS a tick the body turns (ClampAngleDifference)
   animStep: 1, // ASSUMED: +0x3dc was set by 0x0045B4B4's neighbours, not traced
   hitRadius: 40, // ASSUMED
-  // The hits.
-  bolt: { speed: 4, radius: 6, life: 150 }, // ASSUMED
   // After this many BURA glides (5, or from 2 on half the time) it goes up.
   buraMax: 5,
   buraMore: 0.5,
 } as const;
 
-// The homing bolt of HORMING (object 0x00453030, life 0x96).
+// The homing bolt of HORMING (PsoBB.exe, Ephinea 1.25.13): the constructor
+// 0x00453030 (0x388 bytes, vtable 0x00AF72C0), the update 0x00452BCC and the
+// steering modes at +0x370: 0 = 0x00452FD0 (climb to the target's height),
+// 1 = 0x00452E88 (turn toward the target), 2 = 0x00452E50 (cruise; Ultimate
+// re-steers). Helpers: 0x0082DF08 normalises (only above length 0), 0x00836208
+// is the distance (0 below 0.158), 0x007714CC is the hit search. The constants
+// are the floats at the addresses in the comments.
+export const BOLT = {
+  // +0x35c (0x40c00000): the unit velocity is scaled by this every tick.
+  speed: 6,
+  // +0x340 (0x96), 0x12c in Ultimate (g_CurrentDifficulty 0x00a9cd68 == 3).
+  // The counter drops one a tick without a hit; the bolt is removed below 0.
+  lifeNormal: 150,
+  lifeUltimate: 300,
+  // The constructor's velocity when the target is found (it is: the
+  // not-found branch reads [0 + 0x38]): heading 0, (0, -6, 1.2) / sqrt(1.08)
+  // (0x008ffaa0 -6.0, 0x008ffaa4 1.2; 1.08 = 0x3f8a3d71).
+  startY: -6 / Math.sqrt(1.08),
+  startZ: 1.2 / Math.sqrt(1.08),
+  // Mode 0: vy moves 0.05 a tick toward the target's height (0x008ffa0c)
+  // until |dy| is below 50 (0x008ffa08); then mode 1.
+  climbStep: 0.05,
+  climbDone: 50,
+  // Mode 1: v = k v + (1 - k) T, v and T unit, T = target - bolt, k = 0.8 - 0.3 f
+  // (0x008ffa04, 0x008ffaec), f = row 56 fparam1 (0.5 outside 0..1). The bolt
+  // dies when |T| or |v| is 0.01 or less (0x008ffaf0). Mode 2 once the distance
+  // is within 60 - 50 f (0x008ffa20, 0x008ffa90) and the step settled
+  // (0x008ffae4).
+  steerBase: 0.8,
+  steerSlope: -0.3,
+  reachFar: 60,
+  reachSlope: -50,
+  arrive: 0.01,
+  settle: 0.001,
+  // Mode 2 in Ultimate: back to mode 1 while life > 119 (0x77) and the distance
+  // is above 2.5 x the reach (0x008ffa00).
+  ultimateLifeMin: 119,
+  ultimateRehome: 2.5,
+  // The hit search: the nearest living player whose XZ distance from the bolt
+  // is below 7.5 (0x40f00000), no player radius added.
+  radius: 7.5,
+} as const;
+
+// FUN_00836208: 0 when the squared distance is below 0.025.
+function exeDistance(a: readonly number[], b: readonly number[]): number {
+  const s = (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]);
+  return s < 0.025 ? 0 : Math.sqrt(s);
+}
+
+// v / |v| when |v| is above 0 (FUN_0082df08).
+function unit(v: readonly number[]): number[] {
+  const n = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+  return n > 0 ? [v[0] / n, v[1] / n, v[2] / n] : [v[0], v[1], v[2]];
+}
+
+// What the bolt reads from its shooter.
+export interface BoltTune {
+  f1: number; // row 56 fparam1 (+0x36c)
+  power: number; // row 56 iparam5 (+0x28): the hit's power, passed raw
+  ultimate: boolean; // g_CurrentDifficulty == 3
+  // Form 3 can hit: DAT_00a44d5c's state (+0x37c) is neither WAITKILL (2) nor
+  // DEAD (3) (0x0044d05c, ASSUMED to be the shooting form). A bolt that finds a
+  // player is removed either way.
+  shooterLive(): boolean;
+}
+
+// The homing bolt of HORMING. ASSUMED: the spawn point (the constructor's
+// position argument is a pointer the caller passes, not traced here); the wall
+// test of the hit search (0x00780d3c) is not applied; the freeze of
+// 0x0067e408 (a same-room player in state 2) is not applied.
 export class HomingBolt extends EnemyShot {
   override readonly absolute = true;
   readonly effect: ShotEffect;
   readonly look: ShotLook = { color: 0xb060ff, size: 2.5 };
-  private vx: number;
-  private vz: number;
+  // The velocity (+0x350..+0x358).
+  private readonly v: number[] = [0, BOLT.startY, BOLT.startZ];
+  private mode = 0;
+  private life: number;
   private readonly target: number;
-  constructor(x: number, y: number, z: number, angle: number, power: number, target: number) {
+  private readonly tune: BoltTune;
+  private readonly k: number;
+  private readonly reach: number;
+  constructor(x: number, y: number, z: number, target: number, tune: BoltTune) {
     super(x, y, z);
-    this.vx = Math.sin(angle) * F3.bolt.speed;
-    this.vz = Math.cos(angle) * F3.bolt.speed;
     this.target = target;
-    this.effect = { kind: 'tech', power: Math.max(0, power) };
+    this.tune = tune;
+    const f = tune.f1 < 0 || tune.f1 > 1 ? 0.5 : tune.f1;
+    this.k = BOLT.steerBase + BOLT.steerSlope * f;
+    this.reach = BOLT.reachFar + BOLT.reachSlope * f;
+    this.life = tune.ultimate ? BOLT.lifeUltimate : BOLT.lifeNormal;
+    this.effect = { kind: 'tech', power: tune.power };
   }
+
   tick(targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return [];
     this.frames++;
-    const t = targets.find((p) => p.clientId === this.target && !p.dead);
-    if (t) {
-      // Steer toward the target (a quarter of the velocity per frame).
-      const dx = t.x - this.x;
-      const dz = t.z - this.z;
-      const d = Math.hypot(dx, dz) || 1;
-      this.vx += ((dx / d) * F3.bolt.speed - this.vx) * 0.25;
-      this.vz += ((dz / d) * F3.bolt.speed - this.vz) * 0.25;
-      const n = Math.hypot(this.vx, this.vz) || 1;
-      this.vx = (this.vx / n) * F3.bolt.speed;
-      this.vz = (this.vz / n) * F3.bolt.speed;
-    }
-    this.x += this.vx;
-    this.z += this.vz;
-    if (this.frames >= F3.bolt.life) {
+    // The update's last branch: a target that is gone removes the bolt. A dead
+    // player is still the target (the exe's entity lookup does not check it).
+    const t = targets.find((p) => p.clientId === this.target);
+    if (!t) {
       this.done = true;
       return [];
     }
-    const hit = this.within(targets, F3.bolt.radius)[0];
+    const ty = t.y ?? 0;
+    const dist = exeDistance([this.x, this.y, this.z], [t.x, ty, t.z]);
+    const v = this.v;
+    let arrived = false;
+    if (this.mode === 0) {
+      const dy = ty - this.y;
+      v[1] += dy <= 0 ? -BOLT.climbStep : BOLT.climbStep;
+      if (Math.abs(dy) < BOLT.climbDone) this.mode = 1;
+    } else if (this.mode === 1) {
+      const T = [t.x - this.x, ty - this.y, t.z - this.z];
+      if (Math.hypot(T[0], T[1], T[2]) <= BOLT.arrive || Math.hypot(v[0], v[1], v[2]) <= BOLT.arrive) {
+        arrived = true;
+      } else {
+        const tn = unit(T);
+        const vn = unit(v);
+        const old = [vn[0], vn[1], vn[2]];
+        for (let i = 0; i < 3; i++) v[i] = vn[i] * this.k + tn[i] * (1 - this.k);
+        if (dist <= this.reach && exeDistance(v, old) <= BOLT.settle) this.mode = 2;
+      }
+    } else if (this.tune.ultimate && this.life > BOLT.ultimateLifeMin && BOLT.ultimateRehome * this.reach < dist) {
+      this.mode = 1;
+    }
+    // Unit velocity, then the speed; then the move.
+    const vu = unit(v);
+    for (let i = 0; i < 3; i++) v[i] = vu[i] * BOLT.speed;
+    this.x += v[0];
+    this.y += v[1];
+    this.z += v[2];
+    // The hit search: the nearest living player in XZ. The bolt is removed on a
+    // find whether or not the shooter can hit.
+    let hit: AiTarget | null = null;
+    let best = BOLT.radius * BOLT.radius;
+    for (const p of targets) {
+      if (p.dead) continue;
+      const d2 = (p.x - this.x) * (p.x - this.x) + (p.z - this.z) * (p.z - this.z);
+      if (d2 < best) {
+        best = d2;
+        hit = p;
+      }
+    }
     if (hit) {
       this.done = true;
-      return [hit];
+      return this.tune.shooterLive() ? [hit] : [];
     }
+    if (arrived) {
+      this.done = true;
+      return [];
+    }
+    this.life -= 1;
+    if (this.life < 0) this.done = true;
     return [];
   }
 }
@@ -169,6 +276,8 @@ export interface Form3Row {
   lMagic: number; // iparam1
   megid: number; // iparam2
   orbs: number; // iparam3 clamped to 1..8 else 4
+  f1: number; // fparam1: the homing bolt's steering (BOLT)
+  power: number; // iparam5: the homing bolt's hit power
 }
 
 // The position of a slot.
@@ -584,7 +693,6 @@ export class DfForm3 extends DfEntity {
       }
       case F3.homing: {
         if (this.aim >= 0) this.faceTarget(this.aim);
-        if (this.timer === F3.homingOrbs) f.events.push({ kind: 'se', id: 0x386 });
         const n = this.row.orbs;
         const step = Math.max(1, Math.trunc(F3.homingSpan / n));
         for (let i = 0, at = F3.homingFirst; i < n; i++, at += step) {
@@ -658,15 +766,24 @@ export class DfForm3 extends DfEntity {
   }
 
   // Two bolts from the hands at the aimed player.
+  // The exe's volley (0x0045D2FA): the SE 0x386 and two bolts, each with the
+  // same target. The bolts' spawn points are ASSUMED (see HomingBolt).
   private volley(): void {
     const f = this.fight;
+    f.events.push({ kind: 'se', id: 0x386 });
     if (this.aim < 0) return;
     const p = f.playerPos(this.aim);
     if (!p) return;
     const angle = Math.atan2(p.x - this.x, p.z - this.z);
+    const tune: BoltTune = {
+      f1: this.row.f1,
+      power: this.row.power,
+      ultimate: f.ultimate,
+      shooterLive: () => this.st !== F3.waitKill && this.st !== F3.dead,
+    };
     for (let i = 0; i < 2; i++) {
       const side = i === 0 ? -0.6 : 0.6;
-      f.shoot(new HomingBolt(this.x + Math.sin(angle + side) * 20, 40, this.z + Math.cos(angle + side) * 20, angle + side, techPower(TECH.gizonde, this.row.lMagic), this.aim));
+      f.shoot(new HomingBolt(this.x + Math.sin(angle + side) * 20, 40, this.z + Math.cos(angle + side) * 20, this.aim, tune));
     }
   }
 
