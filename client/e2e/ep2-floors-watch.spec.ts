@@ -3,7 +3,9 @@
 // waves that need a trigger never started on floors 1, 5, 7 and 10. Here, for each wave group
 // (room, wave) of the floor that has enemies, the spec:
 //  - warps away to the Lab (floor 0) and back, so the floor loads with its events unrun
-//    (warpTo returns early on the current floor);
+//    (warpTo returns early on the current floor). The round trip keeps the wave flags of this game, so
+//    after any chain kill in the game the group runs in a fresh game (startGame: a new login and party);
+//    the summary's `session` says which game a group ran in and `fresh` counts those games;
 //  - places the player inside the group's room: on the event trigger object (o.dat type 8, the
 //    TObjEvtCollision) of one of the group's wave events when the floor has one, else at the
 //    room's map section (render/gamefield roomAt is the nearest section circle);
@@ -75,6 +77,7 @@ interface TypeStat {
 
 interface GroupResult extends GroupInfo {
   placedBy: 'trigger' | 'section' | 'none' | 'chained';
+  session: number; // the game (1 = the first; each fresh game after a chain kill is a new one)
   chainKilled: string[];
   playerRoom: number;
   eventFlagsBefore: number[];
@@ -153,25 +156,36 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
     if (r.status() >= 400) failed.push(`${r.status()} ${r.url()}`);
   });
   page.on('requestfailed', (r) => failed.push(`failed ${r.failure()?.errorText ?? '?'} ${r.url()}`));
-  const name = `e2w${Date.now() % 100000}`;
-
-  await logInWithCharacter(page, USER, PASSWORD);
-  await reachLobby(page);
-  await openPartyMenu(page);
-  await key(page, 'ArrowDown'); // Create a PARTY
-  await key(page, 'Enter');
-  if (EPISODE === 2) await key(page, 'ArrowDown'); // EPISODE 2
-  await key(page, 'Enter');
-  await expect.poll(() => peek(page, (w) => w.classicLobby.party?.create?.episode)).toBe(EPISODE);
-  await key(page, 'Enter'); // Party Name
-  await page.keyboard.type(name, { delay: 30 });
-  await key(page, 'Enter');
-  await cursorTo(page, (w) => w.classicLobby.party.create.row, 4); // Registration (Normal)
-  await key(page, 'Enter');
-  await expectInGame(page, logs, name);
+  // A new game (a fresh page load, a new party): its floors' wave flags are the ones the load gives.
+  // The Lab round trip inside one game keeps the finished flags (0x18) of a chain killed earlier, so
+  // a group whose events a kill finished is watched in a fresh game (see `linked` below).
+  let session = 0;
+  // Chain links a kill finished in the current game (a kill also starts the next link's events, so any
+  // kill makes the rest of the game's floors dirty: every group after one runs in a fresh game).
+  const killed = new Set<string>();
+  const startGame = async (): Promise<void> => {
+    session++;
+    killed.clear();
+    const name = `e2w${Date.now() % 100000}`;
+    await logInWithCharacter(page, USER, PASSWORD);
+    await reachLobby(page);
+    await openPartyMenu(page);
+    await key(page, 'ArrowDown'); // Create a PARTY
+    await key(page, 'Enter');
+    if (EPISODE === 2) await key(page, 'ArrowDown'); // EPISODE 2
+    await key(page, 'Enter');
+    await expect.poll(() => peek(page, (w) => w.classicLobby.party?.create?.episode)).toBe(EPISODE);
+    await key(page, 'Enter'); // Party Name
+    await page.keyboard.type(name, { delay: 30 });
+    await key(page, 'Enter');
+    await cursorTo(page, (w) => w.classicLobby.party.create.row, 4); // Registration (Normal)
+    await key(page, 'Enter');
+    await expectInGame(page, logs, name);
+  };
+  await startGame();
 
   const results: GroupResult[] = [];
-  const floorSummary: Record<number, { groups: number; notRun: number; noTrigger: string[]; absent: string[]; states: Record<string, string[]> }> = {};
+  const floorSummary: Record<number, { groups: number; notRun: number; fresh: number; noTrigger: string[]; absent: string[]; states: Record<string, string[]> }> = {};
 
   for (const floor of FLOORS) {
     // Discovery: the floor's groups, from one load.
@@ -188,17 +202,37 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
     expect(d.floor, `floor ${floor} reached`).toBe(floor);
     const groups = groupsOf(d, floor);
     console.log(`ep2w floor ${floor} (area 0x${d.area.toString(16)}): ${groups.length} groups, ${d.triggers.length} triggers, ${d.events.length} events, ${d.enemies.length} set entries ${discoveryError}`);
-    floorSummary[floor] = { groups: groups.length, notRun: 0, noTrigger: [], absent: [], states: {} };
+    floorSummary[floor] = { groups: groups.length, notRun: 0, fresh: 0, noTrigger: [], absent: [], states: {} };
     const floorStart = Date.now();
 
-    for (const g0 of groups) {
-      if (ONLY.length && !ONLY.includes(`${g0.room}/${g0.wave}`)) continue;
+    // A game keeps the wave variants it was given (its floor loads repeat them), and a new game gives new
+    // ones: a group is watched in a game whose load has it. Pending groups are picked from each load,
+    // non-chained first (a trigger or section group finishes nothing); a chain kill ends the game (its
+    // events stay finished), so the next group runs in a fresh game. Four games in a row without a
+    // pending group give up on the rest (absent).
+    const pending = groups.filter((g) => !ONLY.length || ONLY.includes(`${g.room}/${g.wave}`)).map((g) => `${g.room}/${g.wave}`);
+    let misses = 0;
+    let forceFresh = false;
+    while (pending.length) {
       if (Date.now() - floorStart > FLOOR_CAP_MS) {
-        floorSummary[floor].notRun++;
-        continue;
+        floorSummary[floor].notRun += pending.length;
+        pending.length = 0;
+        break;
       }
-      await test.step(`floor ${floor} room ${g0.room} wave ${g0.wave}`, async () => {
+      if (misses > 4) {
+        floorSummary[floor].absent.push(...pending.map((k) => `room ${k}: not in any of the games tried`));
+        pending.length = 0;
+        break;
+      }
+      await test.step(`floor ${floor}: ${pending.length} groups pending`, async () => {
         const mark = { errors: errors.length, failed: failed.length, logs: logs.length };
+        // A kill in this game leaves its events finished (0x18) for the rest of the game, and the Lab round
+        // trip keeps them: a group after a kill runs in a fresh game (its events are unrun again).
+        if (killed.size > 0 || forceFresh) {
+          await startGame();
+          forceFresh = false;
+          floorSummary[floor].fresh++;
+        }
         // A fresh load of the floor for each group: its events have not run yet.
         await warp(page, LAB_FLOOR).catch(() => {});
         await page.waitForTimeout(1000);
@@ -210,16 +244,21 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
         }
         await page.waitForTimeout(2500);
         const before = await floorData(page);
-        // Every load of a floor picks its own wave variants (the event set differs between loads: 33 events
-        // on one load of Seabed Upper, 32 on the next), so the group's events, trigger and chain are read
+        // Every game's loads pick the floor's wave variants (the event set differs between games: 33 events
+        // on one game of Seabed Upper, 32 on the next), so the group's events, trigger and chain are read
         // from THIS load; a chain taken from the discovery load pointed at events that were not here and
         // the next link never started (its enemies stayed built but not shown).
-        const g = groupsOf(before, floor).find((x) => x.room === g0.room && x.wave === g0.wave);
-        if (!g) {
-          floorSummary[floor].absent.push(`room ${g0.room} wave ${g0.wave}`);
-          console.log(`ep2w floor ${floor} room ${g0.room} wave ${g0.wave}: not in this load`);
+        const present = groupsOf(before, floor).filter((x) => pending.includes(`${x.room}/${x.wave}`));
+        if (!present.length) {
+          misses++;
+          forceFresh = true;
+          console.log(`ep2w floor ${floor}: none of ${pending.length} pending groups in this game's load`);
           return;
         }
+        misses = 0;
+        present.sort((a, b) => Number(a.kind === 'chained') - Number(b.kind === 'chained'));
+        const g = present[0];
+        pending.splice(pending.indexOf(`${g.room}/${g.wave}`), 1);
         const trig = before.triggers.filter((t) => g.eventIds.includes(t.eventId));
         const t = trig[0] ?? null;
         // A chained group: the first link of its chain with a trigger object is placed on it (the root
@@ -259,6 +298,7 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
             for (const id of k.ids) deadIds.add(id);
             chainKilled.push(`event ${link.id} (room ${link.room} wave ${link.wave}): ready after ${ready.secs} s, hit ${k.hit}, dead ${k.ids.length}, alive after ${k.alive}`);
             if (k.alive > 0) break;
+            killed.add(`${floor}:${link.id}`); // the floor is part of the key: a floor's events are its own
             await page.waitForTimeout(1000); // the next link's trigger_event and its delay
             const fd = await floorData(page);
             const li = fd.events.findIndex((ev) => ev.id === link.id);
@@ -316,6 +356,7 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
         const r: GroupResult = {
           ...g,
           placedBy: target ? target.by : 'none',
+          session,
           playerRoom,
           eventFlagsBefore,
           eventFlagsAfter,
@@ -342,7 +383,7 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
       });
     }
     const secs = Math.round((Date.now() - floorStart) / 1000);
-    console.log(`ep2w floor ${floor} done in ${secs} s, ${floorSummary[floor].notRun} groups not run (cap ${FLOOR_CAP_MS / 1000} s)`);
+    console.log(`ep2w floor ${floor} done in ${secs} s, ${floorSummary[floor].notRun} groups not run (cap ${FLOOR_CAP_MS / 1000} s), ${floorSummary[floor].fresh} groups in a fresh game, ${session} games in all`);
     await page.screenshot({ path: info.outputPath(`ep2-floor-${floor}.jpg`), type: 'jpeg', quality: 50 });
   }
 
