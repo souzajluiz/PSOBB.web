@@ -202,7 +202,7 @@ export const DRAGON = {
   flameRadius: 10, // the ctx's field 2 (UpdateItemDisplayTransform_00424f78)
   fireballSpeed: 25, // 0x008fc394 (the update 0x00426790)
   fireballRadius: 30, // the ctx's field 2 (UpdateItemDisplayTransform_00425004)
-  hoverReach: 150, // 0x008fbc40 (the random aim distance of the flying volley is 125)
+  hoverReach: 150, // unused; 0x008fbc40 is 125 (volleyAim), so this 150 has no exe source here
   volleyAim: 125, // 0x008fbc40
   volleySpread: 0x1000, // the second and third fireball's turn
   trailRadius: 45, // 0x0042... ProcessEnemySinowbeatTeleport's ctx field 2
@@ -385,6 +385,10 @@ const shortOf = (a: number): number => (a << 16) >> 16;
 const bamsOf = (x: number, z: number): number => Math.trunc((Math.atan2(x, z) * 65536) / TWO_PI);
 // b_minus_a: the signed 16-bit turn from a to b.
 const turnTo = (a: number, b: number): number => shortOf(b - a);
+
+// The breath's direction in the mouth node's space (flame()): sin and cos of the
+// angle the init 0x00425334 passes (ECX = 0xffffeaab, i.e. BAMS 0xeaab = 330 degrees).
+const FLAME_DIR = { down: sinB(0xeaab), forward: cosB(0xeaab) } as const;
 // ClampAngleDifference_007a8c74(from, to, max).
 function clampAngle(from: number, to: number, max: number): number {
   const d = turnTo(from, to);
@@ -573,13 +577,19 @@ export class DragonFireball extends DragonShot {
     if (this.done) return [];
     this.frames++;
     if (!this.arrived) {
-      this.travelled = Math.min(this.length, this.travelled + DRAGON.fireballSpeed);
+      // 0x00426790 phase 0: the counter +0x3c grows by 25 a frame and the flight
+      // arrives on the first frame the counter is ABOVE the length (+0x40 < counter,
+      // a strict test): that frame moves the remaining distance and lands on the aim.
+      const next = this.travelled + DRAGON.fireballSpeed;
+      if (next > this.length) {
+        this.travelled = this.length;
+        this.arrived = true;
+      } else this.travelled = next;
       this.x = this.ox + this.dx * this.travelled;
       this.y = this.oy + this.dy * this.travelled;
       this.z = this.oz + this.dz * this.travelled;
       // The arrival frame still makes the flight emitter (0x00426865 follows the arrival).
       this.queued.push(this.ids.f00);
-      if (this.travelled >= this.length) this.arrived = true;
       return [];
     }
     // The impact (counter 1: the hit, +0x04, and the +0x08 puff); counter 2 is one more +0x08.
@@ -1849,18 +1859,20 @@ export class DragonAi extends BrainBase {
     }
   }
 
-  // GameListObject_Constructor_004264a4: a flame from the mouth, along the
-  // line to the aim point (the target, or 115 ahead of the mouth).
+  // The breath's flame (0x00422a08 case 1 -> GameListObject_Constructor_004264a4).
+  // The origin is the mouth (+0x414). The direction is NOT the target: the ctor
+  // takes +0x420 * 5, and 0x0042496e subtracts the mouth from +0x420, so the
+  // velocity is 5 * (P1' - P0') with P1 = (0, sin, cos) of the angle 0xffffeaab
+  // (330 degrees: the init 0x00425334 calls sin / cos with ECX = 0xffffeaab) and
+  // P0 the mouth point (0, 0, 5). The init's add (0x0042546e: P1 += P0) cancels in
+  // the subtraction, leaving the node-space vector (0, -0.5, 0.866): 30 degrees
+  // down, forward along the body, unit length (so 5 a frame). PROVEN for the
+  // vector; ASSUMED the node's rotation is the body's yaw (the same heading the
+  // mouth fallback uses).
   private flame(): void {
     const m = this.mouth();
-    const t = this.targetNow();
-    const ax = t ? t.x : m[0] + sinB(this.yaw) * DRAGON.mouthAhead;
-    const az = t ? t.z : m[2] + cosB(this.yaw) * DRAGON.mouthAhead;
-    const vx = ax - m[0];
-    const vy = -m[1];
-    const vz = az - m[2];
-    const len = Math.hypot(vx, vy, vz) || 1;
-    this.pendingShots.push(new DragonFlame(m[0], m[1], m[2], vx / len, vy / len, vz / len, this.mv.fparam1));
+    const fwd = FLAME_DIR.forward;
+    this.pendingShots.push(new DragonFlame(m[0], m[1], m[2], sinB(this.yaw) * fwd, FLAME_DIR.down, cosB(this.yaw) * fwd, this.mv.fparam1));
   }
 
   // Whether the owner should record the tail's nodes this frame (only the
@@ -2087,7 +2099,6 @@ export class DragonAi extends BrainBase {
     const ux = d > 0 ? vx / d : 0;
     const uz = d > 0 ? vz / d : 0;
     const power = this.mv.fparam2;
-    this.launch(m);
     this.fireball(m, [this.velX, 0, this.velZ], power);
     for (const a of [DRAGON.volleySpread, -DRAGON.volleySpread]) {
       const c = cosB(a);
@@ -2095,14 +2106,15 @@ export class DragonAi extends BrainBase {
       // RotateVector2D: x' = x cos + z sin, z' = z cos - x sin.
       const rx = ux * c + uz * s;
       const rz = uz * c - ux * s;
-      this.launch(m);
       this.fireball(m, [rx * d + this.x, 0, rz * d + this.z], power);
     }
+    // ONE launch flash for the whole volley: 0x004218eb (create_particle_effect,
+    // table +0x1c, flag 0x40 at the mouth) follows the three 0x004266b0 calls.
+    this.launch(m);
   }
 
-  // The launch flash of a flyShoot fireball at the mouth (0x004218eb: the
-  // mouth node +0x414 is in ebx, the table's +0x1c). ASSUMED: one flash per
-  // fireball of the volley.
+  // The launch flash of a flyShoot volley at the mouth (0x004218eb: the mouth
+  // node +0x414 is in ebx, the table's +0x1c), once after the three fireballs.
   private launch(m: readonly [number, number, number]): void {
     const ids = this.ultimate ? DRAGON_PARTICLE_IDS.ultimate : DRAGON_PARTICLE_IDS.normal;
     this.emit({ kind: 'particle', id: ids.launch, x: m[0], y: m[1], z: m[2] });
@@ -2115,27 +2127,38 @@ export class DragonAi extends BrainBase {
     this.emit({ kind: 'se', id: DRAGON_SE.fireball });
   }
 
-  // 0x00420ee8 phase 0: land with the land motion; from its frame 18 the body
-  // falls under 0.2 gravity, and 4 ticks after it touches the ground the stomp
-  // goes off (radius MovementData fparam4).
+  // 0x00420ee8 phase 0: land with the land motion. The fall starts after frame 18
+  // and sub 1 (the touch-down test) at frame 44; 4 ticks after the touch-down the
+  // stomp goes off (radius MovementData fparam4, see the ASSUMED note in the header).
   private tickLand(): void {
     this.animate();
-    // 0x00420ee8 sub-state 0 (0x00421235): SE 0x318 at frame 2 (0x41300000 is frame 11, below).
-    // ASSUMED: the port's sub 0 (before frame 18) is the exe's sub 0 (the counter at +0x21b).
+    // 0x00420ee8 sub 0 (0x00421235): SE 0x318 at frame 2 (0x41300000 is frame 11, below).
     if (this.c86c === 0 && this.passed(2)) this.emit({ kind: 'se', id: 0x318 });
-    // 0x00420ee8 (state 8, phase 0): while +0x86c is 0, +0x888 = GetPlayerYPosition
-    // each frame; the frame the animation passes the threshold it is read once more
-    // and then holds (DRAGON_ROOT). The port's sub 0 is the exe's +0x86c == 0 (ASSUMED).
-    if (this.c86c === 0) this.f888 = this.rootY;
-    if (this.c86c === 0 && this.mframe >= 18) this.c86c = 1;
+    // The sub-state is read once, before the sub 0 branch: the frame that flips
+    // to sub 1 is still a sub 0 frame (the exe loads +0x21b, flips it at frame 44,
+    // then runs `if (sub == 0)`). While sub 0 the root height is read each frame
+    // (GetPlayerYPosition, DRAGON_ROOT) and holds once sub 1 starts.
     const sub = this.c86c;
-    if (sub === 1) {
+    if (sub === 0) {
+      this.f888 = this.rootY;
+      // 0x00420ee8 sub 0: the fall starts once the frame passes 18 (_DAT_008fbc68),
+      // with the same accumulation as sub 1 (+0x221 += 0x00a436f4), and there is no
+      // touch-down test in sub 0. Sub 1 starts at frame 44 (_DAT_008fbc6c), so the
+      // body can not touch down before frame 45.
+      if (this.mframe > 18) {
+        this.f884 += DRAGON.gravityLand;
+        this.alt += this.f884;
+      }
+      if (this.mframe >= 44) this.c86c = 1;
+    } else if (sub === 1) {
       this.f884 += DRAGON.gravityLand;
       this.alt += this.f884;
       if (this.alt < this.f888) {
         this.c86c = 2;
         this.alt = 0;
         this.air = 0;
+        // 0x00420ee8 sub 1 -> 2 (the call at 0x004212f9): SE 0x322 at the touch-down.
+        this.emit({ kind: 'se', id: 0x322 });
       }
     } else if (sub === 2 && ++this.c870 === 4) {
       // 0x004213b5: the body's particle (+0x08) at the stomp (the gate is the counter, not the frame).
