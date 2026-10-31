@@ -24,7 +24,8 @@ import { ChatShortcutMenu } from './chatshortcutmenu.ts';
 import { MailCompose, SimpleMailMenu, type SimpleMailHost } from './simplemail.ts';
 import { SymbolChatList } from './symbolchatlist.ts';
 import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
-import { MEET_FRAMES, TeamInfoWindow, TeamInviteAnswerWindow, TeamInviteWindow, TeamLogWindow, TeamMemberListWindow, TeamPointWindow, type InviteAnswerHost, type TeamHost } from './teammenu.ts';
+import { masterBusyAnswer } from '../net/team.ts';
+import { MasterTransferPromptWindow, MEET_FRAMES, TeamInfoWindow, TeamInviteAnswerWindow, TeamInviteWindow, TeamLogWindow, TeamMemberListWindow, TeamPointWindow, type InviteAnswerHost, type MasterPromptHost, type TeamHost } from './teammenu.ts';
 import type { TeamChat } from './teamchat.ts';
 import type { WindowSkin } from './stage.ts';
 
@@ -65,6 +66,8 @@ export class HomeLeaves {
   private teamPoint: TeamPointWindow | null = null;
   // The invitee's prompt (6xC1 received, classic/teammenu.ts TeamInviteAnswerWindow). It takes the keys first.
   private inviteAnswer: TeamInviteAnswerWindow | null = null;
+  // The Master Transfer prompt (6xCD received, classic/teammenu.ts MasterTransferPromptWindow). It takes the keys too.
+  private masterPrompt: MasterTransferPromptWindow | null = null;
   // The owner's menus other than the Home leaves (the exe's quick-menu gate, 0x00717754). Set by the view.
   inviteFreeOwner: () => boolean = () => true;
   // Team Member List > Send Mail (exe states 0xb..0xe): the keyboard over the list.
@@ -83,7 +86,7 @@ export class HomeLeaves {
   }
 
   get open(): boolean {
-    return this.windowsOpen || !!this.inviteAnswer;
+    return this.windowsOpen || !!this.inviteAnswer || !!this.masterPrompt;
   }
 
   // Any Home window but the invitee's prompt.
@@ -93,7 +96,7 @@ export class HomeLeaves {
 
   // The receiver's gate for a 6xC1 (net/team.ts TeamInviteReceiver): no menu open.
   inviteFree(): boolean {
-    return this.inviteFreeOwner() && !this.windowsOpen && !this.inviteAnswer;
+    return this.inviteFreeOwner() && !this.windowsOpen && !this.inviteAnswer && !this.masterPrompt;
   }
 
   // Opens the leaf for a Home menu id; false when this leaf cannot open here (no session, no team).
@@ -234,6 +237,7 @@ export class HomeLeaves {
   // The windows' own clocks (the Team Member List's search and meet timers).
   tick(): void {
     this.tickInvite();
+    this.tickMaster();
     this.teamInvite?.tick();
     // The Invite window closes itself when the invitee's answer comes (its promise), so the owner's menu gets the keys back here.
     if (this.teamInvite && !this.teamInvite.open) {
@@ -268,6 +272,9 @@ export class HomeLeaves {
     if (this.inviteAnswer) {
       this.inviteAnswer.key(e);
       if (!this.inviteAnswer.open) this.endInvite(h);
+    } else if (this.masterPrompt) {
+      this.masterPrompt.key(e);
+      if (!this.masterPrompt.open) this.endMaster(h);
     } else if (this.searchMail) {
       const m = this.searchMail;
       m.key(e); // its callbacks may clear the field, so the check uses the local
@@ -405,6 +412,7 @@ export class HomeLeaves {
   // Draws the team windows (the lobby's and the field's middle band, with the view's extra width).
   drawTeam(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
     this.inviteAnswer?.draw(ctx, skin, extra);
+    this.masterPrompt?.draw(ctx, skin, extra);
     this.teamList?.draw(ctx, skin, extra);
     this.teamInfo?.draw(ctx, skin, extra);
     this.teamLog?.draw(ctx, skin, extra);
@@ -443,6 +451,7 @@ export class HomeLeaves {
     this.teamInvite?.close();
     this.teamInvite = null;
     this.inviteAnswer = null;
+    this.masterPrompt = null;
     this.teamPoint?.close();
     this.teamPoint = null;
     this.teamMail = null;
@@ -480,6 +489,44 @@ export class HomeLeaves {
   private endInvite(h: HomeLeafHost | null): void {
     this.inviteAnswer = null;
     h?.lobby.teamInvites.close();
+  }
+
+  // The Master Transfer prompt (classic/teammenu.ts MasterTransferPromptWindow), the same shape as the
+  // invitee's: a pending 6xCD opens it when the menus are free; one the menus cannot show is answered
+  // busy (0x00717754, LAB_00717989: 6xCE with action 1) and dropped.
+  private tickMaster(): void {
+    const h = this.host();
+    if (!h) return;
+    const recv = h.lobby.masterRequests;
+    h.lobby.masterFree = () => this.inviteFree() && !this.masterPrompt;
+    const canOpen = this.inviteFreeOwner() && !this.windowsOpen && !this.inviteAnswer;
+    if (recv.pending && !this.masterPrompt && !canOpen) {
+      const request = recv.pending;
+      recv.close();
+      h.lobby.conn.send(0x62, request.target, masterBusyAnswer(request.body));
+      return;
+    }
+    if (!this.masterPrompt && recv.pending && canOpen) this.masterPrompt = new MasterTransferPromptWindow(recv.pending, this.masterHost(h));
+    if (this.masterPrompt) {
+      this.masterPrompt.tick();
+      if (!this.masterPrompt.open) this.endMaster(h);
+    }
+  }
+
+  private endMaster(h: HomeLeafHost | null): void {
+    this.masterPrompt = null;
+    h?.lobby.masterRequests.close();
+  }
+
+  private masterHost(h: HomeLeafHost): MasterPromptHost {
+    const lobby = h.lobby;
+    return {
+      text: (group, index) => h.text(group, index),
+      ownCard: () => h.team()?.selfGuildCard() ?? 0,
+      ownName: () => lobby.self?.name ?? '',
+      send: (target, body) => lobby.conn.send(0x62, target, body),
+      withdrawn: () => lobby.masterRequests.withdrawn,
+    };
   }
 
   private answerHost(h: HomeLeafHost): InviteAnswerHost {

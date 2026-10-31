@@ -1,6 +1,17 @@
 // The EA team packets: builders match the exe's send_packet0xea_subcommand*
 // layouts and the parsers read the newserv layouts. Run: node tests/team.test.ts
 import {
+  flagFromRgba,
+  flagToRgba,
+  MASTER_ANSWER,
+  MASTER_ANSWER_FRAMES,
+  masterAnswerSubcommand,
+  masterBusyAnswer,
+  MasterPrompt,
+  MasterTransferReceiver,
+  masterTransferSubcommand,
+  parseMasterAnswer,
+  parseMasterRequest,
   addMemberPacket,
   buyRewardPacket,
   createTeamPacket,
@@ -400,6 +411,52 @@ async function runWindowTests(): Promise<void> {
     win.key(cancel);
     check('window: cancel on the first list counts as No (3)', sent.length === 1 && parseInviteAnswer(sent[0].body).action === 3);
   }
+}
+
+// Master Transfer 6xCD / 6xCE, the flag words and the receiver gate (2026-10-30).
+{
+  const req = masterTransferSubcommand({ selfId: 3, name: 'Boss', teamName: 'Reds' });
+  const dv = new DataView(req.buffer);
+  check('6xCD: 0x5C bytes, [0xCD, 0x17], client id at +4, action 0 at +8', req.length === 0x5c && req[0] === 0xcd && req[1] === 0x17 && dv.getUint32(4, true) === 3 && dv.getUint32(8, true) === 0);
+  const p = parseMasterRequest(req);
+  check('6xCD parse: master name at +0xC, team name at +0x3C, relay target', p.masterName === 'Boss' && p.teamName === 'Reds' && p.target === 3);
+  const ans = masterAnswerSubcommand({ ownCard: 0x1234, ownName: 'Lead', action: MASTER_ANSWER.accept });
+  check('6xCE: [0xCE, 0x17], card at +4, action 2 at +8, name at +0xC', ans[0] === 0xce && ans[1] === 0x17 && JSON.stringify(parseMasterAnswer(ans)) === JSON.stringify({ guildCard: 0x1234, action: 2, name: 'Lead' }));
+  const busy = masterBusyAnswer(req);
+  check('busy answer keeps the request body (+4..) and sets action 1', busy[0] === 0xce && parseMasterAnswer(busy).action === 1 && parseMasterRequest(busy).teamName === 'Reds' && new DataView(busy.buffer).getUint32(4, true) === 3);
+  const rx = new MasterTransferReceiver();
+  check('receiver: a free gate keeps the request', rx.receive(req, true) === null && rx.pending?.masterName === 'Boss');
+  const again = rx.receive(req, true);
+  check('receiver: a second request while one is pending is answered busy to the master', !!again && again.target === 3 && parseMasterAnswer(again.answer).action === 1);
+  rx.close();
+  const shut = rx.receive(req, false);
+  check('receiver: a shut gate answers busy at once', !!shut && !rx.pending);
+  const wd = new MasterTransferReceiver();
+  wd.receive(req, true);
+  wd.receive(masterTransferSubcommand({ selfId: 3, name: 'Boss', teamName: 'Reds', action: 4 }), true);
+  check('receiver: action 4 withdraws the pending request', wd.withdrawn);
+
+  const pr = new MasterPrompt();
+  pr.choose(true);
+  pr.dismissNotice();
+  pr.choose(true);
+  check('prompt: Yes, notice, Yes accepts (2)', pr.action === 2);
+  const pn = new MasterPrompt();
+  pn.choose(false);
+  check('prompt: No declines (3)', pn.action === 3);
+  const pt = new MasterPrompt();
+  for (let i = 0; i < MASTER_ANSWER_FRAMES; i++) pt.tick();
+  check('prompt: 450 frames answer 1', pt.action === 1 && pt.timedOut);
+
+  const rgba = new Uint8ClampedArray(32 * 32 * 4);
+  rgba.set([255, 0, 0, 255], 0);
+  rgba.set([0, 255, 0, 0], 4);
+  const words = flagFromRgba(rgba);
+  check('flag: ARGB1555 words (opaque red 0xFC00, transparent green 0x03E0)', words[0] === 0xfc00 && words[1] === 0x03e0 && words.length === 1024);
+  const back = flagToRgba(words);
+  check('flag: back to RGBA keeps red and the alpha bit', back[0] === 255 && back[1] === 0 && back[3] === 255 && back[7] === 0);
+  check('setFlag payload is 0x800 bytes at command 0FEA', setFlagPacket(words).payload.length === 0x800 && setFlagPacket(words).command === 0x0fea);
+  check('1BEA carries the reward id in the flag', buyRewardPacket(9).flag === 9 && buyRewardPacket(9).command === 0x1bea);
 }
 
 runWindowTests().then(() => {

@@ -30,7 +30,9 @@ import {
 import { TeamChat } from '../client/src/classic/teamchat.ts';
 import { yesNoRect } from '../client/src/classic/titleflow.ts';
 import { MailCompose } from '../client/src/classic/simplemail.ts';
-import { NO_TEAM, PRIVILEGE, type TeamMember, type TeamMembership } from '../client/src/net/team.ts';
+import { BUY_POS, FLAG_POS, MasterTransferPromptWindow, rewardAffordable, type FlagPick } from '../client/src/classic/teammenu.ts';
+import { BANNED_NAMES, isBannedName } from '../client/src/classic/bannednames.ts';
+import { masterTransferSubcommand, NO_TEAM, parseMasterAnswer, parseMasterRequest, PRIVILEGE, type TeamMember, type TeamMembership } from '../client/src/net/team.ts';
 
 // A stub canvas: every glyph is 7 px wide and drawing does nothing.
 const noop = () => {};
@@ -278,7 +280,7 @@ async function openMaster(h: TeamHost) {
   const { m, closed } = await openMaster(h);
   check(m.phase.kind === 'master', 'Master Menu opens the master list');
   if (m.phase.kind === 'master') {
-    eq(m.phase.list.items.map((i) => i.enabled), [true, true, true, false, true, false, false], 'Master Transfer, Buying Privileges and Flag Records are greyed (see the header)');
+    eq(m.phase.list.items.map((i) => i.enabled), [true, true, true, false, true, false, false], 'a host without the 6xCD pair, the 18EA / 1AEA requests and the flag picker greys Master Transfer, Buying Privileges and Flag Records');
     eq(m.phase.list.items.length, 7, 'seven rows');
   }
   // Greyed row: the buzzer, no phase change.
@@ -1061,6 +1063,316 @@ async function openMaster(h: TeamHost) {
   pt.close();
   pt.draw(ctx, skin, 0);
   check(true, 'Point Regist draw smoke');
+}
+
+// --- Master Transfer (2026-10-30): the leader list, the 6xCD wait, 11EA flag 0x40 -----------------
+{
+  const lobby = new Map<number, string>([[901, 'LeadInLobby']]);
+  const extra = (answer: number, transferred: number[]) => ({
+    lobbyPlayerName: (card: number) => lobby.get(card) ?? null,
+    transfer: async (card: number) => (transferred.push(card), answer),
+    cancelTransfer: () => transferred.push(-1),
+  });
+  const run = async (answer: number, priv = 0) => {
+    const { host: h, calls } = host(team(PRIVILEGE.master), { privilege: priv });
+    const sent: number[] = [];
+    Object.assign(h, extra(answer, sent));
+    const { m } = await openMaster(h);
+    if (m.phase.kind === 'master') eq(m.phase.list.items[3].enabled, true, 'Master Transfer is enabled with the host pair');
+    for (let i = 0; i < 3; i++) m.key(k('ArrowDown'));
+    m.key(k('Enter'));
+    eq(m.phase.kind, 'loading', 'Master Transfer asks for the member list (08EA)');
+    await tick();
+    return { m, calls, sent };
+  };
+
+  const a = await run(2);
+  check(a.m.phase.kind === 'pick', 'the leader list arrives');
+  if (a.m.phase.kind === 'pick') {
+    eq(a.m.phase.list.items.map((i) => i.value), [901], 'only leaders that are in the lobby are offered');
+    eq(a.m.phase.title, 'T15[7b] %s', 'titled [15:0x7b]');
+  }
+  a.m.key(k('Enter'));
+  eq(a.m.phase.kind, 'pickConfirm', 'a leader asks the question [15:0x7c]');
+  if (a.m.phase.kind === 'pickConfirm') {
+    check(a.m.phase.q.text.startsWith('T15[7c]'), 'question text 0x7c');
+    eq(a.m.phase.q.cursor, 1, 'the cursor starts on No');
+  }
+  a.m.key(k('ArrowUp'));
+  a.m.key(k('Enter'));
+  eq(a.m.phase.kind, 'transferWait', 'Yes sends the 6xCD and waits (state 68)');
+  if (a.m.phase.kind === 'transferWait') {
+    check(a.m.phase.info.text.startsWith('T15[7d]') || a.m.phase.info.text.includes('LeadInLobby') || a.m.phase.info.text.includes('T15[7d]'), 'the wait text [15:0x7d]');
+    eq([a.m.phase.info.x, a.m.phase.info.y, a.m.phase.info.w, a.m.phase.info.h], [294, 305, 342, 144], 'the wait window is the info window at 0xd5, 342 x 144');
+  }
+  eq(a.sent, [901], 'transfer() called for the chosen card');
+  await tick();
+  await tick();
+  eq(a.calls.privileges, [[901, 0x40]], 'the accept sends 11EA with flag 0x40');
+  check(a.m.phase.kind === 'notice' && a.m.phase.info.text.includes('T15[7e]'), 'the 11EA answer 0 shows [15:0x7e]');
+  a.m.key(k('Enter'));
+  eq(a.m.phase.kind, 'closed', 'Enter closes the menus');
+
+  const d = await run(3);
+  d.m.key(k('Enter'));
+  d.m.key(k('ArrowUp'));
+  d.m.key(k('Enter'));
+  await tick();
+  await tick();
+  eq(d.calls.privileges, [], 'a refusal sends no 11EA');
+  check(d.m.phase.kind === 'notice' && d.m.phase.info.text.includes('T15[7f]'), 'action 3: [15:0x7f] "has declined"');
+
+  const b = await run(1);
+  b.m.key(k('Enter'));
+  b.m.key(k('ArrowUp'));
+  b.m.key(k('Enter'));
+  await tick();
+  await tick();
+  eq(b.calls.privileges, [], 'a busy answer sends no 11EA');
+  check(b.m.phase.kind === 'notice' && b.m.phase.info.text.includes('T15[80]'), 'action 1: [15:0x80] "Transfer failed."');
+
+  const f = await run(2, 3);
+  f.m.key(k('Enter'));
+  f.m.key(k('ArrowUp'));
+  f.m.key(k('Enter'));
+  await tick();
+  await tick();
+  check(f.m.phase.kind === 'notice' && f.m.phase.info.text.includes('T15[80]'), 'a failed 11EA shows [15:0x80]');
+
+  // The player left the lobby between the list and the Yes: the failure notice, no 6xCD.
+  const g = await run(2);
+  g.m.key(k('Enter'));
+  lobby.delete(901);
+  g.m.key(k('ArrowUp'));
+  g.m.key(k('Enter'));
+  check(g.m.phase.kind === 'notice' && g.m.phase.info.text.includes('T15[80]') && g.sent.length === 0, 'a card no longer in the lobby fails without a 6xCD');
+  lobby.set(901, 'LeadInLobby');
+
+  // No leader in the lobby: the "No Player" row goes back to the master menu.
+  lobby.delete(901);
+  const n = await run(2);
+  if (n.m.phase.kind === 'pick') eq(n.m.phase.list.items.map((i) => [i.label, i.value]), [['T11[f1]', 0]], 'no leader in the lobby: one "No Player" row');
+  n.m.key(k('Enter'));
+  eq(n.m.phase.kind, 'master', 'the "No Player" row returns to the master menu');
+  lobby.set(901, 'LeadInLobby');
+
+  // Cancel while waiting drops the wait.
+  const c = await run(2);
+  c.m.key(k('Enter'));
+  c.m.key(k('ArrowUp'));
+  c.m.key(k('Enter'));
+  const closedBefore = c.sent.length;
+  c.m.key(k('Backspace'));
+  eq([c.m.phase.kind, c.sent.slice(closedBefore)], ['closed', [-1]], 'Cancel while waiting closes and cancels the wait (port convenience)');
+}
+
+// --- Buying Privileges --------------------------------------------------------------------------
+{
+  const rewards = [
+    { name: 'Dressing room', description: 'desc A', teamPoints: 500, rewardId: 7 },
+    { name: 'Team flag', description: 'desc B', teamPoints: 2500, rewardId: 0 },
+    { name: 'Ticket', description: 'desc C', teamPoints: 100, rewardId: 12 },
+  ];
+  const { host: h } = host(team(PRIVILEGE.master));
+  const bought: number[] = [];
+  let asked = 0;
+  Object.assign(h, {
+    intraRanking: async () => (asked++, { rankingPoints: 0, pointsRemaining: 1200, entries: [] }),
+    rewards: async (owned: boolean) => (owned ? [] : rewards),
+    buyReward: (id: number) => bought.push(id),
+  });
+  const { m } = await openMaster(h);
+  if (m.phase.kind === 'master') eq(m.phase.list.items[5].enabled, true, 'Buying Privileges is enabled with the host pair');
+  for (let i = 0; i < 5; i++) m.key(k('ArrowDown'));
+  m.key(k('Enter'));
+  eq(m.phase.kind, 'buyLoading', 'row 5 asks 18EA (state 77)');
+  await tick();
+  await tick();
+  eq(m.phase.kind, 'buy', 'the 1AEA list opens the window (state 79)');
+  if (m.phase.kind === 'buy') {
+    eq(m.phase.buy.points, 1200, 'the points remaining come from 18EA');
+    eq(m.phase.buy.rewards.map((r) => rewardAffordable(m.phase.kind === 'buy' ? m.phase.buy.points : 0, r)), [true, false, true], 'a reward dearer than the points is greyed');
+  }
+  m.key(k('ArrowDown')); // the 2500 row
+  m.key(k('Enter'));
+  eq(m.phase.kind, 'buy', 'Decide on a greyed reward does nothing');
+  m.key(k('ArrowUp'));
+  m.key(k('Enter'));
+  eq(m.phase.kind, 'buyConfirm', 'Decide on an affordable reward asks Buy / Don\'t Buy');
+  if (m.phase.kind === 'buyConfirm') eq(m.phase.cursor, 1, 'the cursor starts on Don\'t Buy');
+  m.key(k('Enter')); // Don't Buy: 18EA again
+  eq(m.phase.kind, 'buyLoading', 'Don\'t Buy refreshes the window');
+  await tick();
+  await tick();
+  eq([m.phase.kind, asked], ['buy', 2], 'the refresh asked 18EA again and came back to the list');
+  m.key(k('Enter'));
+  m.key(k('ArrowUp'));
+  m.key(k('Enter'));
+  eq(bought, [7], 'Buy sends 1BEA with the reward id');
+  check(m.phase.kind === 'notice' && m.phase.info.text.includes('T15[8b]'), 'the notice [15:0x8b] "Purchased %s."');
+  m.key(k('Enter'));
+  eq(m.phase.kind, 'closed', 'Enter closes the menus');
+
+  // Cancel on the list asks "any other business?".
+  const r2 = await openMaster(h);
+  for (let i = 0; i < 5; i++) r2.m.key(k('ArrowDown'));
+  r2.m.key(k('Enter'));
+  await tick();
+  await tick();
+  r2.m.key(k('Backspace'));
+  eq(r2.m.phase.kind, 'other', 'Cancel on the list asks the other-business question');
+
+  // Draw smoke over the three phases.
+  const skin = { frame: {} as CanvasImageSource, bars: {} as CanvasImageSource };
+  const r3 = await openMaster(h);
+  for (let i = 0; i < 5; i++) r3.m.key(k('ArrowDown'));
+  r3.m.key(k('Enter'));
+  await tick();
+  await tick();
+  r3.m.draw(ctx, skin, 0);
+  r3.m.key(k('Enter'));
+  r3.m.draw(ctx, skin, 0);
+  check(r3.m.phase.kind === 'buyConfirm', 'Buying Privileges draw smoke');
+  eq([BUY_POS.list, BUY_POS.detail, BUY_POS.points], [{ x: 12, y: 50, w: 385, h: 184 }, { x: 400, y: 50, w: 228, h: 184 }, { x: 428, y: 234, w: 200, h: 40 }], 'window geometry from the exe');
+}
+
+// --- Team Flag Records --------------------------------------------------------------------------
+{
+  const flag = new Uint16Array(32 * 32).fill(0x8000 | (31 << 10));
+  const stored: Uint16Array[] = [];
+  const mk = (flags: number, pick: FlagPick) => {
+    const { host: h } = host(team(PRIVILEGE.master));
+    Object.assign(h, { rewardFlags: () => flags, pickFlag: async () => pick, setFlag: (f: Uint16Array) => stored.push(f) });
+    return h;
+  };
+  // Without the team flag reward (1DEA bit 0) the row is greyed.
+  const off = await openMaster(mk(2, { status: 1, flag }));
+  if (off.m.phase.kind === 'master') eq(off.m.phase.list.items[6].enabled, false, 'rewards bit 0 clear: Team Flag Records is greyed');
+  const on = await openMaster(mk(1, { status: 1, flag }));
+  if (on.m.phase.kind === 'master') eq(on.m.phase.list.items[6].enabled, true, 'rewards bit 0 set: Team Flag Records is enabled');
+  for (let i = 0; i < 6; i++) on.m.key(k('ArrowDown'));
+  on.m.key(k('Enter'));
+  eq(on.m.phase.kind, 'flagAsk', 'row 6 opens the question [15:0x8e]');
+  if (on.m.phase.kind === 'flagAsk') eq(on.m.phase.cursor, 0, 'the Yes / No list starts on Yes (no SetSelection in the exe)');
+  on.m.key(k('Enter'));
+  eq(on.m.phase.kind, 'flagPicking', 'Yes asks the host for the picture');
+  await tick();
+  eq(on.m.phase.kind, 'flagStore', 'the picture opens the store question [15:0x8f]');
+  const skin = { frame: {} as CanvasImageSource, bars: {} as CanvasImageSource };
+  on.m.draw(ctx, skin, 0);
+  on.m.key(k('Enter'));
+  eq(stored.length, 1, 'Yes sends 0FEA (setFlag)');
+  eq(stored[0]?.length, 1024, 'with the 32 x 32 words');
+  check(on.m.phase.kind === 'flagMessage' && on.m.phase.text === 'T15[90] %s', 'the message [15:0x90] "Recording complete."');
+  on.m.key(k('Enter'));
+  eq(on.m.phase.kind, 'other', 'the accept key ends the object (state 7: any other business?)');
+
+  // No on the store question stores nothing.
+  const no = await openMaster(mk(1, { status: 1, flag }));
+  for (let i = 0; i < 6; i++) no.m.key(k('ArrowDown'));
+  no.m.key(k('Enter'));
+  no.m.key(k('Enter'));
+  await tick();
+  no.m.key(k('ArrowDown'));
+  no.m.key(k('Enter'));
+  eq([no.m.phase.kind, stored.length], ['other', 1], 'No on the store question stores nothing');
+
+  // The load errors: 2 not found, 3 format, 4 read failed.
+  for (const [status, id] of [[2, 0x91], [3, 0x92], [4, 0x93]] as const) {
+    const e = await openMaster(mk(1, { status }));
+    for (let i = 0; i < 6; i++) e.m.key(k('ArrowDown'));
+    e.m.key(k('Enter'));
+    e.m.key(k('Enter'));
+    await tick();
+    check(e.m.phase.kind === 'flagMessage' && e.m.phase.text === `T15[${id.toString(16)}] %s`, `load status ${status}: message [15:0x${id.toString(16)}]`);
+  }
+  // No on the first question ends it.
+  const n1 = await openMaster(mk(1, { status: 1, flag }));
+  for (let i = 0; i < 6; i++) n1.m.key(k('ArrowDown'));
+  n1.m.key(k('Enter'));
+  n1.m.key(k('ArrowDown'));
+  n1.m.key(k('Enter'));
+  eq(n1.m.phase.kind, 'other', 'No on the first question ends the object');
+  eq([FLAG_POS.preview, FLAG_POS.message, FLAG_POS.list], [{ x: 100, y: 180, w: 100, h: 100 }, { x: 220, y: 180, w: 320, h: 100 }, { x: 460, y: 280 }], 'window geometry from the exe');
+}
+
+// --- banned team names ----------------------------------------------------------------------------
+{
+  eq(BANNED_NAMES.length, 90, 'the exe lists 90 banned strings (0x168 / 4)');
+  check(isBannedName('SEGA') && isBannedName('MySegaTeam') && isBannedName('xGameMasterx') && isBannedName('ソニックチーム'), 'a name containing an entry is banned');
+  check(!isBannedName('sega') && !isBannedName('Sonic') && !isBannedName('Reds'), 'wcsstr is case sensitive and needs the whole entry');
+  const { host: h, calls } = host(NO_TEAM);
+  const { m } = menus(h);
+  m.begin(0);
+  m.key(k('ArrowUp'));
+  m.key(k('Enter'));
+  m.key(k('Enter'));
+  for (const c of 'MySegaTeam') m.key(k(c));
+  m.key(k('Enter'));
+  m.key(k('Enter'));
+  eq(m.phase.kind, 'nameConfirm', 'a banned name still reaches the confirmation');
+  m.key(k('ArrowUp'));
+  m.key(k('Enter'));
+  check(m.phase.kind === 'notice' && m.phase.info.text.includes('T15[6b]') && m.phase.next === 'name', 'Yes on a banned name shows [15:0x6b] and Enter reopens the name window');
+  eq(calls.created, [], 'no 01EA is sent for a banned name');
+}
+
+// --- the Master Transfer prompt (the chosen leader's side) -------------------------------------------
+{
+  const request = parseMasterRequest(masterTransferSubcommand({ selfId: 3, name: 'Boss', teamName: 'Reds' }));
+  const mkp = (withdrawn = false) => {
+    const sent: Array<{ target: number; body: Uint8Array }> = [];
+    const state = { withdrawn };
+    const w = new MasterTransferPromptWindow(request, {
+      text: (g, i) => `T${g}[${i.toString(16)}] %s %s`,
+      ownCard: () => 0x1234,
+      ownName: () => 'Leader',
+      send: (target, body) => sent.push({ target, body }),
+      withdrawn: () => state.withdrawn,
+    });
+    return { w, sent, state };
+  };
+  const yes = () => [k('ArrowUp'), k('Enter')];
+  const { w, sent } = mkp();
+  eq(w.state, 'intro', 'the intro text first');
+  w.key(k('Enter'));
+  eq(w.state, 'ask', 'a key moves to the first Yes / No');
+  eq(w.cursorRow, 1, 'the cursor starts on No');
+  yes().forEach((e) => w.key(e));
+  eq(w.state, 'notice', 'Yes shows the notice [11:0x17b]');
+  w.key(k('Enter'));
+  eq([w.state, w.cursorRow], ['confirm', 1], 'the second Yes / No, cursor on No');
+  yes().forEach((e) => w.key(e));
+  eq([sent.length, sent[0]?.target, w.open], [1, 3, false], 'the second Yes answers the master and closes with no text');
+  const a = parseMasterAnswer(sent[0].body);
+  eq([a.guildCard, a.action, a.name], [0x1234, 2, 'Leader'], 'the 6xCE carries the own card, action 2 and the name');
+
+  const dn = mkp();
+  dn.w.key(k('Enter'));
+  dn.w.key(k('Enter')); // No
+  eq(dn.sent.length, 1, 'No on the first list answers');
+  eq(parseMasterAnswer(dn.sent[0].body).action, 3, 'action 3 (declined)');
+  check(dn.w.state === 'message' && dn.w.open, 'the refusal text is shown');
+  dn.w.draw(ctx, { frame: {} as CanvasImageSource, bars: {} as CanvasImageSource }, 0);
+  dn.w.key(k('Enter'));
+  eq(dn.w.open, false, 'a key closes it');
+
+  const cn = mkp();
+  cn.w.key(k('Enter'));
+  cn.w.key(k('Escape'));
+  eq(parseMasterAnswer(cn.sent[0].body).action, 3, 'Cancel on the first list declines');
+
+  const to = mkp();
+  to.w.key(k('Enter'));
+  for (let i = 0; i < 449; i++) to.w.tick();
+  eq(to.sent.length, 0, '449 frames: still waiting');
+  to.w.tick();
+  eq(parseMasterAnswer(to.sent[0].body).action, 1, 'the 450th frame answers 1 (busy / time-out)');
+  check(to.w.state === 'message', 'with the cancelled text');
+
+  const wd = mkp(true);
+  wd.w.tick();
+  check(wd.w.state === 'message' && wd.sent.length === 0, 'a withdrawn request shows the cancelled text and answers nothing');
 }
 
 console.log(failures ? `${failures} of ${checks} FAILED` : `ALL PASS (${checks} checks)`);

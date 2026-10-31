@@ -345,6 +345,10 @@ export class TeamClient {
   onChat: (sender: string, text: string) => void = () => {};
   // The membership changed (12EA).
   onMembership: (m: TeamMembership) => void = () => {};
+  // The team rewards bitmask (1DEA, header.flag; the exe keeps it at g_pKeyTeamConfig + 0xaec, the
+  // handler 0x007c4f40). Bit 0 is the team flag (the Master Menu's Team Flag Records row).
+  rewardFlags = 0;
+  onRewardFlags: (flags: number) => void = () => {};
   private readonly conn: BBConnection;
   private readonly self: number;
 
@@ -373,6 +377,9 @@ export class TeamClient {
     } else if (c.command === TEAM_CMD.chat) {
       const { sender, text } = parseTeamChat(c.data);
       this.onChat(sender, text);
+    } else if (c.command === TEAM_CMD.rewardFlags) {
+      this.rewardFlags = c.flag >>> 0;
+      this.onRewardFlags(this.rewardFlags);
     }
   }
 
@@ -463,6 +470,12 @@ export class TeamClient {
 
   setFlag(flagData: Uint16Array): void {
     this.send(setFlagPacket(flagData));
+  }
+
+  // 1BEA. The exe does not wait (send_packet0xea_subcommand0x1b); newserv answers nothing and drops
+  // a client that cannot pay, so the window greys the rows the team cannot afford.
+  buyReward(rewardId: number): void {
+    this.send(buyRewardPacket(rewardId));
   }
 
   chat(sender: string, text: string): void {
@@ -710,6 +723,198 @@ export function exchangeTeamPointsPayload(itemId: number, amount: number): Uint8
   dv.setUint32(0, itemId >>> 0, true);
   dv.setUint32(4, amount >>> 0, true);
   return b;
+}
+
+// --- Master Transfer (Master Menu > Master Transfer, 6xCD / 6xCE) -------------------------------
+//
+// The master asks the chosen leader with a peer message and waits for the answer, then sends
+// 11EA flag 0x40 (the server swaps the roles; newserv ReceiveCommands.cc 0x11EA case 0x40). Both
+// messages have the layout of the invite (newserv G_TeamInvitationAction_BB_6xC1_6xC2_6xCD_6xCE,
+// "Same format as 6xC1"). From the exe (Ghidra, objdump):
+//   6xCD request   sent by 0x00798c80 (lobby menu state 0x43 on Yes): bytes [0xCD, 0x17], +4 u32 the
+//                  master's own client id ([0x00a9c4f4]), +8 u32 0, +0xC the master's name (0x18 units,
+//                  0x006936b4), +0x3C the team name (0xF units of g_pKeyTeamConfig + 0x2cc), 0x5C bytes,
+//                  relayed to the chosen player's client id (0x00800464; 0x62 to a client).
+//   receiver       0x0078c0d8: when the gate byte 0x009ff3d4 is 1 and flag bit 0x40 of 0x00a98474 is clear
+//                  the body (+4..+0x5B) is copied to 0x00a9c940.. and the flag is set (the prompt window
+//                  0x00724430 / 0x0072455c opens); otherwise the receiver answers 6xCE at once with the
+//                  body and +8 = 1 (0x0078c1a2), relayed to the body's +4 word.
+//   6xCE answer    built in 0x0072455c: [0xCE, 0x17], +4 u32 the answerer's guild card (player +0xeb4),
+//                  +8 u32 the action, +0xC the answerer's name (0x10 units). Action 2 = accept, 3 =
+//                  declined, 1 = busy / time-out. The master's receiver 0x0078bff4 copies +4..+0x5B to the
+//                  same globals and sets bit 0x80; the wait state 0x44 (0x00798b48) reads the action
+//                  (0x0078c0a8): 1 -> "Transfer failed.", 2 -> 11EA, 3 -> the refusal notice.
+export const TEAM_MASTER_SUB = 0xcd;
+export const TEAM_MASTER_ANSWER_SUB = 0xce;
+export const MASTER_ANSWER = { busy: 1, accept: 2, decline: 3 } as const;
+// The request's action word is 0; a 4 there withdraws it (the prompt's check of 0x00a9c944 == 4,
+// 0x0072455c; ASSUMED sent by nobody in this port).
+export const MASTER_WITHDRAWN = 4;
+// Both Yes / No lists of the prompt count 450 frames (0x1c2, 0x0072455c) and then answer 1.
+export const MASTER_ANSWER_FRAMES = 450;
+const MASTER_NAME_UNITS = 0x18;
+
+export function masterTransferSubcommand(o: { selfId: number; name: string; teamName: string; action?: number }): Uint8Array {
+  const b = new Uint8Array(TEAM_INVITE_SIZE);
+  const dv = new DataView(b.buffer);
+  b[0] = TEAM_MASTER_SUB;
+  b[1] = TEAM_INVITE_SIZE / 4;
+  dv.setUint16(2, o.selfId, true); // not written by the exe (stack); the sender id like the other 6x
+  dv.setUint32(4, o.selfId >>> 0, true);
+  dv.setUint32(8, (o.action ?? 0) >>> 0, true);
+  b.set(utf16(o.name, MASTER_NAME_UNITS), 0x0c);
+  b.set(utf16(o.teamName, TEAM_NAME_UNITS), 0x3c);
+  return b;
+}
+
+export function masterAnswerSubcommand(o: { ownCard: number; ownName: string; action: number }): Uint8Array {
+  const b = new Uint8Array(TEAM_INVITE_SIZE);
+  const dv = new DataView(b.buffer);
+  b[0] = TEAM_MASTER_ANSWER_SUB;
+  b[1] = TEAM_INVITE_SIZE / 4;
+  dv.setUint32(4, o.ownCard >>> 0, true);
+  dv.setUint32(8, o.action >>> 0, true);
+  b.set(utf16(o.ownName, 0x10), 0x0c);
+  return b;
+}
+
+export interface MasterRequest {
+  body: Uint8Array;
+  target: number; // +4: the master's client id, the relay target of the answer
+  action: number;
+  masterName: string; // +0xC, unitxt 11 0x17a's first argument
+  teamName: string; // +0x3C, its second argument
+}
+
+export function parseMasterRequest(body: Uint8Array): MasterRequest {
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return {
+    body: body.slice(0, TEAM_INVITE_SIZE),
+    target: dv.getUint32(4, true),
+    action: dv.getUint32(8, true),
+    masterName: stripTeamMarker(readUtf16(body, 0x0c, MASTER_NAME_UNITS)),
+    teamName: stripTeamMarker(readUtf16(body, 0x3c, TEAM_NAME_UNITS)),
+  };
+}
+
+export function parseMasterAnswer(body: Uint8Array): { guildCard: number; action: number; name: string } {
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return { guildCard: dv.getUint32(4, true), action: dv.getUint32(8, true), name: stripTeamMarker(readUtf16(body, 0x0c, 0x10)) };
+}
+
+// The receiver's immediate refusal (0x0078c1a2): the request's +4..+0x5B with +8 = 1.
+export function masterBusyAnswer(request: Uint8Array): Uint8Array {
+  const b = new Uint8Array(TEAM_INVITE_SIZE);
+  b[0] = TEAM_MASTER_ANSWER_SUB;
+  b[1] = TEAM_INVITE_SIZE / 4;
+  b.set(request.subarray(4, TEAM_INVITE_SIZE), 4);
+  new DataView(b.buffer).setUint32(8, MASTER_ANSWER.busy, true);
+  return b;
+}
+
+// The receive side of 6xCD (0x0078c0d8): a free gate and no request already pending keep the
+// request for the prompt; anything else is answered busy at once.
+export class MasterTransferReceiver {
+  pending: MasterRequest | null = null;
+  // The request's action went to 4 while the prompt was up (0x0072455c: status == 4 -> the cancelled text).
+  withdrawn = false;
+
+  receive(body: Uint8Array, free: boolean): { answer: Uint8Array; target: number } | null {
+    if (body.length < TEAM_INVITE_SIZE) return null;
+    const request = parseMasterRequest(body);
+    if (request.action === MASTER_WITHDRAWN) {
+      if (this.pending) this.withdrawn = true;
+      return null;
+    }
+    if (!free || this.pending) return { answer: masterBusyAnswer(body), target: request.target };
+    this.pending = request;
+    this.withdrawn = false;
+    return null;
+  }
+
+  close(): void {
+    this.pending = null;
+    this.withdrawn = false;
+  }
+}
+
+// The prompt's pure model (0x0072455c, states 0..7): the intro text, then a first Yes / No (cursor
+// on No, 450 frames), a notice (unitxt 11 0x17b), a second Yes / No (cursor on No, 450 frames).
+// Yes twice accepts (2); No, Cancel on either list declines (3); a count that runs out answers
+// busy (1). The window (classic/teammenu.ts MasterTransferPromptWindow) adds the texts and keys.
+export class MasterPrompt {
+  phase: 'ask' | 'notice' | 'confirm' | 'done' = 'ask';
+  action: number | null = null;
+  timedOut = false;
+  private frames = MASTER_ANSWER_FRAMES;
+
+  private finish(action: number): void {
+    this.phase = 'done';
+    this.action = action;
+  }
+
+  choose(yes: boolean): void {
+    if (this.phase === 'ask') {
+      if (yes) {
+        this.phase = 'notice';
+        this.frames = MASTER_ANSWER_FRAMES;
+      } else this.finish(MASTER_ANSWER.decline);
+    } else if (this.phase === 'confirm') {
+      this.finish(yes ? MASTER_ANSWER.accept : MASTER_ANSWER.decline);
+    }
+  }
+
+  cancel(): void {
+    if (this.phase === 'ask' || this.phase === 'confirm') this.finish(MASTER_ANSWER.decline);
+  }
+
+  dismissNotice(): void {
+    if (this.phase !== 'notice') return;
+    this.phase = 'confirm';
+    this.frames = MASTER_ANSWER_FRAMES;
+  }
+
+  tick(): void {
+    if (this.phase !== 'ask' && this.phase !== 'confirm') return;
+    if (--this.frames <= 0) {
+      this.timedOut = true;
+      this.finish(MASTER_ANSWER.busy);
+    }
+  }
+}
+
+// --- Team Flag Records (Master Menu row 6) ------------------------------------------------------
+//
+// The team flag is a 32 x 32 image sent whole in 0FEA (0x800 bytes). newserv reads each u16 as
+// ARGB1555 (TeamIndex.cc decode_flag_data: rgba8888_for_argb1555), so the client converts the
+// picked picture to that. The exe loads "\\teamflag\\flag.bmp" through D3DX into its 32 x 32
+// texture (LoadTeamFlagFile 0x0082aacc, LoadTeamFlagTexture 0x00839c68); the port gets the pixels
+// from the host (a file picker) and converts them here. The scaling of a bigger picture is ASSUMED
+// (D3DX's default surface copy scales to the destination size).
+export const FLAG_SIZE = 32;
+
+// RGBA bytes (length 32 * 32 * 4) -> ARGB1555 words (alpha bit set from alpha >= 128).
+export function flagFromRgba(rgba: Uint8ClampedArray | Uint8Array): Uint16Array {
+  if (rgba.length !== FLAG_SIZE * FLAG_SIZE * 4) throw new Error('team flag needs 32 x 32 RGBA pixels');
+  const out = new Uint16Array(FLAG_SIZE * FLAG_SIZE);
+  for (let i = 0; i < out.length; i++) {
+    const o = i * 4;
+    out[i] = (rgba[o + 3] >= 128 ? 0x8000 : 0) | ((rgba[o] >> 3) << 10) | ((rgba[o + 1] >> 3) << 5) | (rgba[o + 2] >> 3);
+  }
+  return out;
+}
+
+// ARGB1555 words -> RGBA bytes (the preview; 5 bits widened as (v << 3) | (v >> 2)).
+export function flagToRgba(flag: Uint16Array): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(flag.length * 4);
+  const wide = (v: number) => (v << 3) | (v >> 2);
+  flag.forEach((w, i) => {
+    out[i * 4] = wide((w >> 10) & 31);
+    out[i * 4 + 1] = wide((w >> 5) & 31);
+    out[i * 4 + 2] = wide(w & 31);
+    out[i * 4 + 3] = w & 0x8000 ? 255 : 0;
+  });
+  return out;
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {

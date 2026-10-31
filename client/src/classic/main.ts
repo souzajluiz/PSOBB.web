@@ -12,7 +12,8 @@ import type { BBConnection } from '../net/bbconnection.ts';
 import type { Lobby } from '../net/lobby.ts';
 import type { GuildCardSearchResult } from '../net/guildcard.ts';
 import { setLiveTeamSource } from '../combat/playerstats.ts';
-import { exchangeTeamPointsPayload, inviteSubcommand, membershipFromSave, TEAM_INVITE_ACCEPT, TEAM_INVITE_DECLINE, TEAM_POINTS_SUB, TeamClient } from '../net/team.ts';
+import { exchangeTeamPointsPayload, inviteSubcommand, MASTER_ANSWER, masterTransferSubcommand, membershipFromSave, TEAM_INVITE_ACCEPT, TEAM_INVITE_DECLINE, TEAM_POINTS_SUB, TeamClient } from '../net/team.ts';
+import { pickFlagImage } from './flagpick.ts';
 import { InventoryModel } from '../net/items.ts';
 import { TeamChat } from './teamchat.ts';
 import { GameView } from '../render/gameview.ts';
@@ -526,6 +527,24 @@ async function main(): Promise<void> {
       },
       // The invitee's add-member result after an accept (04EA; classic/teammenu.ts TeamInviteAnswerWindow).
       joinResult: () => c.joinResult(),
+      // Master Transfer (Master Menu row 3): the member list keeps the leaders whose card is a player of
+      // this lobby (CreateTeamMasterActionList_0079db38 matches GetPlayer); the 6xCD goes to that player
+      // (0x62 relay) and the 6xCE answer's action comes back (net/team.ts).
+      lobbyPlayerName: (card) => [...owner.players.values()].find((p) => p.guildCardNumber === card)?.name ?? null,
+      transfer: async (card) => {
+        const target = [...owner.players.values()].find((p) => p.guildCardNumber === card);
+        if (!target) return MASTER_ANSWER.busy;
+        const answer = owner.waitMasterAnswer();
+        conn.send(0x62, target.clientId, masterTransferSubcommand({ selfId: owner.selfId, name: owner.self?.name ?? '', teamName: c.membership.name }));
+        return (await answer).action;
+      },
+      cancelTransfer: () => owner.cancelMasterWait(),
+      // Buying Privileges: 1BEA (18EA / 1AEA are `intraRanking` and `rewards` above).
+      buyReward: (id) => c.buyReward(id),
+      // Team Flag Records: the rewards bitmask (1DEA), the picture and 0FEA.
+      rewardFlags: () => c.rewardFlags,
+      pickFlag: pickFlagImage,
+      setFlag: (flag) => c.setFlag(flag),
       // Point Regist (0x2d): 6xCC in a game only (send_packet0x60_subcommand0xcc returns in the lobby);
       // the local inventory loses the amount, as the exe's local run of the subcommand does.
       exchangeItem: (itemId, amount) => {
