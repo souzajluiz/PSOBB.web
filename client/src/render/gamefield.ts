@@ -327,7 +327,7 @@ export class GameField {
     for (const p of e.placed) {
       const o = p.entity;
       if (o.kind !== 'object' || (o.type !== TRAP_HOLD && o.type !== TRAP_TECH)) continue;
-      this.traps.push({ index: o.index, trap: new PillarTrap({ type: o.type, x: p.world[0], z: p.world[2], params: o.params, difficulty }) });
+      this.traps.push({ index: o.index, trap: new PillarTrap({ type: o.type, x: p.world[0], y: p.world[1], z: p.world[2], params: o.params, difficulty }) });
     }
     // The floor's trade collision objects (entity type 0x57) drive the trade zone bits.
     this.tradeObjects = [];
@@ -655,10 +655,10 @@ export class GameField {
   private trapFrames(ticks: number, pos: { x: number; y: number; z: number } | null): void {
     const players: TrapPlayer[] = [];
     const me = this.game.self;
-    if (me && pos) players.push({ clientId: me.clientId, x: pos.x, z: pos.z, radius: PLAYER_RADIUS });
+    if (me && pos) players.push({ clientId: me.clientId, x: pos.x, y: pos.y, z: pos.z, radius: PLAYER_RADIUS });
     for (const p of this.game.players.values()) {
       if (p.clientId === me?.clientId || p.floor !== this.floor || p.visible === false) continue;
-      players.push({ clientId: p.clientId, x: p.position.x, z: p.position.z, radius: PLAYER_RADIUS });
+      players.push({ clientId: p.clientId, x: p.position.x, y: p.position.y, z: p.position.z, radius: PLAYER_RADIUS });
     }
     const switchOn = (flag: number) => this.flagsOf(this.floor).has(flag);
     for (const { index, trap } of this.traps) {

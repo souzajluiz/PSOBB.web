@@ -26,6 +26,7 @@ import {
   techTpCost,
 } from '../client/src/combat/techniques.ts';
 import { TOOK_DAMAGE_NEVER } from '../client/src/combat/formulas.ts';
+import { trapFire } from '../client/src/combat/techfire.ts';
 import {
   buildCastTechnique,
   buildCastTechniqueComplete,
@@ -194,6 +195,18 @@ eq([releaseFrame(0, 0), releaseFrame(1, 0), releaseFrame(2, 0), releaseFrame(0, 
   eq(restaAppliesToCopy(0, false), true, 'local caster: applied to every copy');
   // The amount is chop(MST * 0.5 + power) with the 0.5 read at 0x00978278 (case 6 of 0x00773afc).
   eq(restaHeal(2, 400, 0) - restaHeal(2, 0, 0), 200, 'the MST term is MST * 0.5 (PROVEN, 0x00978278)');
+}
+
+// The 02R's objects (combat/techfire.ts trapFire): the Foie family by the exe's index (0 Foie, 2 Gibarta, 4 Gifoie),
+// absolute heights (the trap's own world y), group 1 / 2 as their constructors' hit group; Megid is not a FireObject.
+{
+  const f = trapFire({ tech: TECH.foie, level: 3, x: 1, y: 50, z: 2, heading: 0, aim: { x: 5, y: 20, z: 2 }, enemy: true });
+  eq(!!f && f.absolute && f.fire.kind === 'foie' && (f.effect as { group?: number }).group === 1, true, 'Foie object: absolute, group 1');
+  const gb = trapFire({ tech: TECH.gibarta, level: 3, x: 1, y: 50, z: 2, heading: Math.PI / 2, enemy: true });
+  eq(!!gb && gb.absolute && (gb.effect as { group?: number }).group === 2, true, 'Gibarta object: absolute, group 2');
+  const gf = trapFire({ tech: TECH.gifoie, level: 3, x: 1, y: 50, z: 2, heading: 0, enemy: true });
+  eq(!!gf && gf.fire.kind === 'gifoie', true, 'Gifoie object');
+  eq(trapFire({ tech: TECH.megid, level: 3, x: 1, y: 50, z: 2, heading: 0, enemy: true }), null, 'Megid is not a FireObject (MegidOrb)');
 }
 
 if (failures) {
