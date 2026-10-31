@@ -31,6 +31,9 @@ import { TeamChat } from '../client/src/classic/teamchat.ts';
 import { yesNoRect } from '../client/src/classic/titleflow.ts';
 import { MailCompose } from '../client/src/classic/simplemail.ts';
 import { BUY_POS, FLAG_POS, MasterTransferPromptWindow, rewardAffordable, type FlagPick } from '../client/src/classic/teammenu.ts';
+import { drawNameWindow, TeamNameWindow, type TeamText } from '../client/src/classic/teammenu.ts';
+import { MASTER_ANSWER } from '../client/src/net/team.ts';
+const T15_TEAM_DONE_TEXT = `T15[7e] %s`;
 import { BANNED_NAMES, isBannedName } from '../client/src/classic/bannednames.ts';
 import { masterTransferSubcommand, NO_TEAM, parseMasterAnswer, parseMasterRequest, PRIVILEGE, type TeamMember, type TeamMembership } from '../client/src/net/team.ts';
 
@@ -1373,6 +1376,177 @@ async function openMaster(h: TeamHost) {
   const wd = mkp(true);
   wd.w.tick();
   check(wd.w.state === 'message' && wd.sent.length === 0, 'a withdrawn request shows the cancelled text and answers nothing');
+}
+
+// --- the 07EA operation notices (2026-10-31): leave, Master Transfer --------------------------------
+{
+  // team_leave_success_display: 05EA, then 07EA with unitxt 11 0x14d (the own name) and 15 0x85 (the team).
+  const order: string[] = [];
+  const notes: string[] = [];
+  const { host: h } = host(team(PRIVILEGE.member, 'Beta'));
+  Object.assign(h, {
+    removeMember: async () => (order.push('05EA'), 0),
+    ownName: () => 'Me',
+    operationNotice: (t: string) => (order.push('07EA'), notes.push(t)),
+  });
+  const { m } = menus(h);
+  m.begin(3);
+  m.key(k('ArrowUp'));
+  m.key(k('Enter'));
+  eq(order, ['05EA', '07EA'], 'Leave: 05EA, then the 07EA without waiting');
+  eq(notes, [format(t11(0x14d), 'Me') + format(t15(T15_TEAM.left), 'Beta')], 'the 07EA text is the two team log lines, no separator');
+}
+{
+  // team_master_transfer_success_display: 07EA with [15:0x7e] and the row's label, sent on the 11EA 0 only.
+  const sent: string[] = [];
+  const { host: h } = host(team(PRIVILEGE.master));
+  Object.assign(h, {
+    lobbyPlayerName: (card: number) => (card === 901 ? 'LeadInLobby' : null),
+    transfer: async () => MASTER_ANSWER.accept,
+    operationNotice: (t: string) => sent.push(t),
+  });
+  const { m } = await openMaster(h);
+  for (let i = 0; i < 3; i++) m.key(k('ArrowDown'));
+  m.key(k('Enter'));
+  await tick();
+  m.key(k('Enter')); // the leader (901)
+  m.key(k('ArrowUp'));
+  m.key(k('Enter')); // Yes: 6xCD
+  await tick();
+  await tick();
+  eq(sent, [format(T15_TEAM_DONE_TEXT, '<0002> Lead')], 'the transfer 07EA: [15:0x7e] with the row label');
+  check(m.phase.kind === 'notice' && m.phase.info.text.includes('T15[7e]'), 'and the notice shows the same text');
+}
+{
+  // A refused transfer (11EA 1) sends no 07EA.
+  const sent: string[] = [];
+  const { host: h } = host(team(PRIVILEGE.master), { privilege: 1 });
+  Object.assign(h, {
+    lobbyPlayerName: (card: number) => (card === 901 ? 'LeadInLobby' : null),
+    transfer: async () => MASTER_ANSWER.accept,
+    operationNotice: (t: string) => sent.push(t),
+  });
+  const { m } = await openMaster(h);
+  for (let i = 0; i < 3; i++) m.key(k('ArrowDown'));
+  m.key(k('Enter'));
+  await tick();
+  m.key(k('Enter'));
+  m.key(k('ArrowUp'));
+  m.key(k('Enter'));
+  await tick();
+  await tick();
+  eq(sent, [], 'a failed 11EA sends no 07EA');
+}
+
+// --- Team name change (Buying Privileges row 0x1a, 2026-10-31) -------------------------------------
+{
+  const rewards = [
+    { name: 'Ticket', description: 'desc', teamPoints: 100, rewardId: 12 },
+    { name: 'Team name change', description: 'desc', teamPoints: 300, rewardId: 26 },
+  ];
+  const run = async (answer: number, points = 1200) => {
+    const renamed: Array<[string, number]> = [];
+    const notes: string[] = [];
+    const { host: h } = host(team(PRIVILEGE.master));
+    Object.assign(h, {
+      intraRanking: async () => ({ rankingPoints: 0, pointsRemaining: points, entries: [] }),
+      rewards: async () => rewards,
+      buyReward: () => {},
+      renameTeam: async (name: string, id: number) => (renamed.push([name, id]), answer),
+      operationNotice: (t: string) => notes.push(t),
+    });
+    const r = await openMaster(h);
+    for (let i = 0; i < 5; i++) r.m.key(k('ArrowDown'));
+    r.m.key(k('Enter'));
+    await tick();
+    await tick();
+    r.m.key(k('ArrowDown')); // the 0x1a row
+    return { ...r, renamed, notes };
+  };
+
+  // The rename row opens the name window at once (no Buy / Don't Buy), the 1EEA carries the name and 0x1a.
+  const a = await run(0);
+  a.m.key(k('Enter'));
+  eq(a.m.phase.kind, 'name', 'the rename row opens the team name window');
+  if (a.m.phase.kind === 'name') eq([a.m.phase.w.kind, a.m.phase.w.rewardId, a.m.phase.w.row], ['rename', 26, 1], 'a rename window, the cursor on the name row');
+  a.m.key(k('Enter'));
+  check(a.m.textInput() !== null, 'the name editor takes text');
+  for (const c of 'New Team') a.m.key(k(c));
+  a.m.key(k('Enter'));
+  if (a.m.phase.kind === 'name') eq([a.m.phase.w.name, a.m.phase.w.row], ['NewTeam', 2], 'spaces are removed; Registration is reachable');
+  a.m.key(k('Enter'));
+  eq(a.m.phase.kind, 'nameConfirm', 'Registration asks the same question');
+  if (a.m.phase.kind === 'nameConfirm') eq(a.m.phase.q.text, 'T15[67] NewTeam', 'the question names the new team name');
+  a.m.key(k('ArrowUp'));
+  a.m.key(k('Enter'));
+  eq(a.m.phase.kind, 'creating', 'Yes sends 1EEA and waits for 1FEA');
+  eq(a.renamed, [['NewTeam', 26]], 'renameTeam called with the name and the reward id');
+  await tick();
+  eq(a.m.phase.kind, 'notice', 'the 1FEA answer is a notice');
+  if (a.m.phase.kind === 'notice') check(a.m.phase.info.text.includes('T15[94]') && a.m.phase.next === 'close', 'result 0: [15:0x94] and Enter closes');
+  eq(a.notes, ['T15[9a] NewTeam'], 'result 0 sends the 07EA with [15:0x9a] and the new name');
+  a.m.key(k('Enter'));
+  eq(a.m.phase.kind, 'closed', 'Enter closes everything');
+
+  // Greyed: a 300 row with 100 points left buzzes and opens nothing.
+  const g = await run(0, 100);
+  g.m.key(k('Enter'));
+  eq([g.m.phase.kind, g.renamed.length], ['buy', 0], 'a greyed rename row opens nothing');
+
+  // Result 2: [15:0x6b] and Enter goes to the creation name window (the exe's HandleLobbyMenuTeamCreationFailed).
+  const d = await run(2);
+  d.m.key(k('Enter'));
+  d.m.key(k('Enter'));
+  for (const c of 'Dup') d.m.key(k(c));
+  d.m.key(k('Enter'));
+  d.m.key(k('Enter'));
+  d.m.key(k('ArrowUp'));
+  d.m.key(k('Enter'));
+  await tick();
+  check(d.m.phase.kind === 'notice' && d.m.phase.info.text.includes('T15[6b]') && d.m.phase.next === 'name', 'result 2: [15:0x6b], the next window is the name window');
+  d.m.key(k('Enter'));
+  eq(d.m.phase.kind === 'name' ? d.m.phase.w.kind : null, 'create', 'Enter opens the creation name window');
+  eq(d.notes, [], 'no 07EA for a name in use');
+
+  // Result 1 (or any failure): [15:0x95], no 07EA.
+  const f = await run(1);
+  f.m.key(k('Enter'));
+  f.m.key(k('Enter'));
+  for (const c of 'Fail') f.m.key(k(c));
+  f.m.key(k('Enter'));
+  f.m.key(k('Enter'));
+  f.m.key(k('ArrowUp'));
+  f.m.key(k('Enter'));
+  await tick();
+  check(f.m.phase.kind === 'notice' && f.m.phase.info.text.includes('T15[95]') && f.m.phase.next === 'close', 'a failed 1FEA shows [15:0x95]');
+  eq(f.notes, [], 'a failed rename sends no 07EA');
+
+  // A banned name (the company list) is refused before the packet, as for the creation.
+  const b = await run(0);
+  b.m.key(k('Enter'));
+  b.m.key(k('Enter'));
+  for (const c of 'Sega') b.m.key(k(c));
+  b.m.key(k('Enter'));
+  b.m.key(k('Enter'));
+  b.m.key(k('ArrowUp'));
+  b.m.key(k('Enter'));
+  eq([b.renamed.length, b.m.phase.kind === 'notice' && b.m.phase.info.text.includes('T15[6b]')], [0, true], 'a banned name: [15:0x6b], no 1EEA');
+
+  // Cancel in the name window closes.
+  const c = await run(0);
+  c.m.key(k('Enter'));
+  c.m.key(k('Backspace'));
+  eq(c.m.phase.kind, 'closed', 'Cancel in the rename window closes');
+
+  // The window's third row is group 15 0x2f (the creation window has unitxt 11 0x64).
+  const seen: Array<[string, number]> = [];
+  const spy: TeamText = {
+    t11: (i: number) => (seen.push(['11', i]), 'x'),
+    t15: (i: number) => (seen.push(['15', i]), 'x'),
+  };
+  const skin = { frame: {} as CanvasImageSource, bars: {} as CanvasImageSource };
+  drawNameWindow(ctx, skin, new TeamNameWindow('rename', 26), spy, 0, true);
+  check(seen.some(([g2, i]) => g2 === '15' && i === 0x2f) && !seen.some(([g2, i]) => g2 === '11' && i === 0x64), 'the rename window draws 15:0x2f, not 11:0x64');
 }
 
 console.log(failures ? `${failures} of ${checks} FAILED` : `ALL PASS (${checks} checks)`);

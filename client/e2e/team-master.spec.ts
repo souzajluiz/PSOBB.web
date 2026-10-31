@@ -3,6 +3,7 @@
 //   A creates a team, invites B (Home > Team > Invite, B accepts), promotes B to leader, then
 //   transfers the master to B: the 6xCD request, B's prompt (Yes twice), the 6xCE answer, 11EA flag
 //   0x40, and the server's 12EA membership updates (A leader 0x30, B master 0x40).
+//   The transfer's 07EA notice reaches B's team log (newserv relays it to the team's members).
 //   B (now the master) opens Buying Privileges (a fresh team has no points, every reward is greyed)
 //   and Team Flag Records (greyed without the reward bit; with the bit forced on the page the
 //   question, the picture and the store question run and the 0FEA goes out).
@@ -131,6 +132,7 @@ test('two accounts: invite, promote, Master Transfer, Buying Privileges, Team Fl
   });
 
   await test.step('Master Transfer: A asks, B says Yes twice, the server swaps the roles', async () => {
+    const logBefore = await peek(b, (w: Win) => w.classicLobby.hud.teamChat.log.lines.length as number);
     await openMasterRow(a, 3);
     await key(a, 'Enter');
     await pickMember(a, nameB);
@@ -145,6 +147,8 @@ test('two accounts: invite, promote, Master Transfer, Buying Privileges, Team Fl
     await continueNotice(a);
     await expect.poll(async () => (await membership(b)).privilege, { timeout: 15_000 }).toBe(0x40);
     await expect.poll(async () => (await membership(a)).privilege, { timeout: 15_000 }).toBe(0x30);
+    // The old master's 07EA operation notice (SendTeamOperationSuccessPacket) is relayed to the team: B's log gets the line.
+    await expect.poll(() => peek(b, (w: Win) => w.classicLobby.hud.teamChat.log.lines.length as number), { timeout: 15_000 }).toBeGreaterThan(logBefore);
     const mb = await membership(b);
     expect(mb.masterGuildCard).toBe((await membership(a)).masterGuildCard);
     expect(mb.masterGuildCard).toBe(await peek(b, (w: Win) => w.classicLobby.lobby.self.guildCardNumber as number));

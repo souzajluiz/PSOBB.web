@@ -545,6 +545,10 @@ async function main(): Promise<void> {
       rewardFlags: () => c.rewardFlags,
       pickFlag: pickFlagImage,
       setFlag: (flag) => c.setFlag(flag),
+      // Team name change (Buying Privileges row 0x1a): 1EEA -> 1FEA, and the 07EA operation notices.
+      renameTeam: (name, rewardId) => c.renameTeam(name, rewardId),
+      operationNotice: (text) => c.operationNotice(text),
+      ownName: () => owner.self?.name ?? '',
       // Point Regist (0x2d): 6xCC in a game only (send_packet0x60_subcommand0xcc returns in the lobby);
       // the local inventory loses the amount, as the exe's local run of the subcommand does.
       exchangeItem: (itemId, amount) => {
