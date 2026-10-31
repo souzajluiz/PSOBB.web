@@ -321,22 +321,27 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
   }
 }
 
-// 8. The missiles (state 18): one on entry, two more on frame 5 in arenas 3 / 4; each flies 5.0 a
-//    frame for 240 frames and then explodes once, iparam3 to the living players within 100 (XZ).
+// 8. The missiles (state 18): a pair on entry (scan starts id and id + 1), a pair more on frame 5 in arenas 3 / 4
+//    (id + 2, id + 3). Launch: 5.0 a frame along the boss's heading. From the 32nd update on (the frame counter
+//    must pass 30) each steers toward the first living player in sight from its scan start. The blast (iparam3,
+//    the living within 100 on XZ) comes on the first frame within 20.0 of the locked player (ASSUMED); a wall
+//    or the 240-frame cap ends it with no blast.
 {
   const drive = (ai: SaintMilionAi) => ai as unknown as { setState(s: number, first?: boolean): void; pendingShots: EnemyShot[]; arena: number };
   const missiles = (shots: readonly EnemyShot[]) => shots.filter((x): x is SmMissile => x instanceof SmMissile);
   const row = { ...MV2, iparam: [1013, 1100, 750, 1360, 500, 0] };
-  // Entry (phase 4): one missile, carrying iparam3 (750) as its blast.
+  // Entry: two missiles, carrying iparam3 (750) as their blast, scanning from the id and id + 1.
   {
-    const b = make(true, { movement: [row, row] });
+    const b = make(true, { movement: [row, row], id: 7 });
     b.tick([player(1, 5000, 5000)]);
     drive(b).arena = 0;
     drive(b).setState(18);
     const m = missiles(drive(b).pendingShots);
-    eq(m.length, 1, 'state 18 entry makes one missile');
+    eq(m.length, 2, 'state 18 entry makes two missiles');
     eq(m[0]?.effect.kind === 'blast' ? m[0].effect.damage : -1, 750, 'the blast is iparam3');
     eq(m[0]?.effect.kind === 'blast' ? m[0].effect.knockback : -1, 3, 'the blast knockback is 3.0');
+    eq(m[0]?.start, 7, 'the first scans from the boss id');
+    eq(m[1]?.start, 8, 'the second scans from the boss id + 1');
   }
   // Phase 0: on the clock's frame 5 two more in arenas 3 and 4 only.
   for (const arena of [0, 1, 2, 3, 4]) {
@@ -349,44 +354,94 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     for (let i = 0; i < 12 && b.sid === 18; i++) extra += missiles(b.tick([player(1, 5000, 5000)]).shots ?? []).length;
     eq(extra, arena === 3 || arena === 4 ? 2 : 0, `arena ${arena}: phase 0 missiles`);
   }
-  // Flight without an aim: 5.0 a frame along the launch vector; at the 240-frame cap it is removed with no blast.
+  // Launch: 5.0 along the heading (0 is +Z, a quarter turn is +X), no height.
   {
-    const m = new SmMissile(0, 0, 0, 750, null);
-    const near = player(1, 0, 1200);
-    for (let i = 1; i <= SM_MISSILE.life; i++) {
-      const hits = m.tick([near]);
-      if (i === 1) eq(m.z, 5, 'one frame is 5.0 along the launch vector');
-      eq(hits.length, 0, `no blast at frame ${i}`);
+    const m = new SmMissile(0, 0, 0, 0, 750, { start: 0 });
+    m.tick([]);
+    eq(m.z, 5, 'one frame is 5.0 along the heading');
+    eq(m.x, 0, 'no sideways drift on heading 0');
+    eq(m.y, 0, 'no height');
+    const q = new SmMissile(0, 0, 0, Math.PI / 2, 750, { start: 0 });
+    q.tick([]);
+    check(Math.abs(q.x - 5) < 1e-9 && Math.abs(q.z) < 1e-9, 'a quarter turn flies along +X');
+  }
+  // No steering before the 31st update: a player far off to the side does not bend it.
+  {
+    const m = new SmMissile(0, 0, 0, 0, 750, { start: 0 });
+    const side = player(1, 1000, 0);
+    for (let i = 1; i <= SM_MISSILE.homingAfter + 1; i++) m.tick([side]);
+    eq(m.x, 0, 'no steering on the first 31 updates');
+    eq(m.lock, -1, 'nothing locked before the homing frame');
+    m.tick([side]);
+    check(m.x > 0, 'the 32nd update steers toward the player');
+    eq(m.lock, 0, 'the locked index is the player');
+    check(Math.abs(Math.hypot(m.vx, m.vy, m.vz) - 4.9) < 1e-9, 'steering costs 0.1 of speed');
+  }
+  // Speed: a player straight ahead keeps it on the line, losing 0.1 a steering frame down to 1.45.
+  {
+    const m = new SmMissile(0, 0, 0, 0, 750, { start: 0 });
+    const ahead = player(1, 0, 100000);
+    for (let i = 1; i <= SM_MISSILE.homingAfter + 1 + 10; i++) m.tick([ahead]);
+    check(Math.abs(m.vx) < 1e-9, 'a player ahead keeps the missile on the line');
+    check(Math.abs(Math.hypot(m.vx, m.vy, m.vz) - (5 - 0.1 * 10)) < 1e-9, 'the speed loss is 0.1 a steering frame (10 steers)');
+    for (let i = 0; i < 40; i++) m.tick([ahead]);
+    check(Math.abs(Math.hypot(m.vx, m.vy, m.vz) - 1.45) < 1e-9, 'the speed stops at 1.45');
+  }
+  // Scan: the first player in line of sight from the start wins; a blocked one is skipped, a dead one too.
+  {
+    // The line to x = 500 is blocked by a wall; the rest is clear.
+    const m = new SmMissile(0, 0, 0, 0, 750, { start: 0, wall: (_f, t) => (t.x === 500 ? 1 : null) });
+    const hidden = player(1, 500, 3000);
+    const dead = { ...player(2, 0, 3000), dead: true };
+    const seen = player(3, -300, 3000);
+    for (let i = 1; i <= SM_MISSILE.homingAfter + 1; i++) m.tick([hidden, dead, seen]);
+    m.tick([hidden, dead, seen]);
+    eq(m.lock, 2, 'the blocked and the dead are skipped; the first in sight is locked');
+    eq(m.start, 2, 'the scan restarts at the locked player');
+  }
+  // The scan starts at the id mod the count: start 4 with 3 players tries index 1 first.
+  {
+    const m = new SmMissile(0, 0, 0, 0, 750, { start: 4 });
+    const ps = [player(1, 0, 3000), player(2, 0, 3001), player(3, 0, 3002)];
+    for (let i = 1; i <= SM_MISSILE.homingAfter + 1; i++) m.tick(ps);
+    m.tick(ps);
+    eq(m.lock, 1, 'the scan starts at 4 mod 3');
+  }
+  // The blast: the frame the missile first comes within 20.0 of the locked player; iparam3 to the living within 100.
+  {
+    const m = new SmMissile(0, 0, 0, 0, 750, { start: 0 });
+    const target = player(1, 0, 400);
+    const near = player(2, 60, 380);
+    const dead = { ...player(3, 0, 400), dead: true };
+    const far = player(4, 0, 600);
+    let blast: AiTarget[] = [];
+    let at = { x: 0, z: 0 };
+    for (let i = 1; i <= 400 && !m.done; i++) {
+      const hits = m.tick([target, near, dead, far]);
+      if (hits.length > 0) {
+        blast = hits;
+        at = { x: m.x, z: m.z };
+      }
     }
-    eq(m.z, 5 * SM_MISSILE.life, 'after 240 frames the missile is 1200 along');
-    eq(m.x, 0, 'a straight line');
-    check(!m.done, 'the missile is still flying at 240 frames');
-    eq(m.tick([near]).length, 0, 'the cap removes it with no blast, even on a player');
-    check(m.done, 'removed at the cap');
-  }
-  // Aimed at a player 400 ahead: the flight ends within 20.0 of the aim point (380 along), with the blast there.
-  {
-    const m = new SmMissile(0, 0, 0, 750, 400 - SM_MISSILE.arrive);
-    for (let i = 1; i < 76; i++) eq(m.tick([]).length, 0, `still flying at frame ${i}`);
-    // The 76th tick moves it onto the end (380 along, 20.0 short of the aim) and blasts there.
-    const at = { x: m.x, z: m.z + SM_MISSILE.speed };
-    const inside = player(1, at.x, at.z + 99);
-    const edge = player(2, at.x + 60, at.z + 80);
-    const outside = player(3, at.x, at.z + 101);
-    const dead = { ...player(4, at.x, at.z + 1), dead: true };
-    const high = player(5, at.x + 10, at.z);
-    const all = [inside, edge, outside, dead, high];
-    const hits = m.tick(all);
     eq(m.done, true, 'the missile is spent after the blast');
-    eq(hits.map((t) => t.clientId).join(','), '1,2,5', 'the blast reaches the living within 100 on the XZ plane');
-    eq(m.tick(all).length, 0, 'it explodes once');
-    eq(hits.length, 3, 'each player once');
+    check(Math.hypot(target.x - at.x, target.z - at.z) <= 20 + 1e-6, 'the blast is within 20.0 of the locked player');
+    eq(blast.map((t) => t.clientId).join(','), '1,2', 'the blast reaches the living within 100 on the XZ plane');
+    eq(m.tick([target]).length, 0, 'it explodes once');
   }
-  // Aimed at a player who is already within 20.0: the blast comes on the first frame.
+  // A wall ends it with no blast, even with a player next to it; so does the 240-frame cap.
   {
-    const m = new SmMissile(0, 0, 0, 750, 0);
-    const hits = m.tick([player(1, 0, 5)]);
-    eq(hits.length, 1, 'an aim within 20.0 explodes at once');
+    const m = new SmMissile(0, 0, 0, 0, 750, { start: 0, wall: (_f, t) => (t.z >= 100 ? 1 : null) });
+    const under = player(1, 0, 110);
+    let blasts = 0;
+    for (let i = 1; i <= 40; i++) blasts += m.tick([under]).length;
+    eq(blasts, 0, 'a wall gives no blast');
+    check(m.done, 'the wall ends the missile');
+    const cap = new SmMissile(0, 0, 0, 0, 750, { start: 0 });
+    const away = player(1, 5000, 5000);
+    for (let i = 1; i <= SM_MISSILE.life; i++) cap.tick([away]);
+    check(!cap.done, 'still flying at 240 frames');
+    eq(cap.tick([away]).length, 0, 'the cap removes it with no blast');
+    check(cap.done, 'removed at the cap');
   }
 }
 

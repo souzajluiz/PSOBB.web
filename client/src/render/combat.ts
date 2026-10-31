@@ -1442,6 +1442,8 @@ export class CombatView {
             variant: v as 0 | 1 | 2,
             param1: head.slot.set.params[0],
             seed: head.index + 1,
+            // The entity id the missiles scan from (combat/saintmilionents.ts SmMissile; ASSUMED the index).
+            id: head.index,
             movement: [mv(32 + v * 4), mv(34 + v * 4)],
             hp: [hp(32 + v * 4), hp(34 + v * 4)],
             tentacleHp: [hp(33 + v * 4), hp(35 + v * 4)],

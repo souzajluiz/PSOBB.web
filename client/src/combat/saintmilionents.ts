@@ -225,55 +225,133 @@ export class SmTouch extends EnemyShot {
   }
 }
 
-// --- the missile (0x0076619c, update 0x007663d4) -----------------------------------------
+// --- the missile (SaintEmilionPart: ctor 0x0076619c, launch 0x0076681c, update 0x007663d4) ----
 //
-// The missile flies along its launch vector at 5.0 a frame (0x00976174). Its
-// model's motion (track 0 of the flags at [motion+0xa4], 0x007b5290 with
-// 0x80000) ends the flight: that is the explosion 0x007667e4 (type 3, radius
-// 30.0 passed on), then the kill 0x007667a8. The motion's length is in the
-// missile's model file, which the port does not read.
-// ASSUMED: the flight ends when the missile comes within 20.0 (0x00976190, the
-// test that sets motion state 4 in 0x00766650..0x007666f7) of the point it was
-// aimed at (the nearest player at launch); the motion's frames after state 4
-// are not read, so the blast is at that point. ASSUMED: the path is a straight
-// line on flat ground.
-// The 240-frame cap (`cmp [+0x68], 0xf0`, 0x0076661d) only removes the missile
-// (0x007667a8: the effect 0x6f7 and the dead bit): no blast on that path.
-// The blast (0x00521cf8 with the 100.0 of 0x00521cdc): every living player
-// within 100 on the XZ plane (no height test) takes iparam3 once.
-export const SM_MISSILE = { speed: 5, life: 240, blast: 100, knockback: 3, arrive: 20 } as const;
-// ASSUMED: the height the missile is drawn at (the player's aim height).
-const SM_MISSILE_HEIGHT = 10;
+// Made by 0x0076b8f4 on the entry of state 18 (two: node 0x27 with the boss's id word, node 0x28 with
+// id + 1) and by 0x0076968c on the clock's frame 5 in arenas 3 / 4 (two more, id + 2 and id + 3). The
+// position is the node's (+0xdd4 for 0x27, +0xe14 for 0x28), the heading is the boss's (+0x60, BAMS):
+// the velocity is 5.0 * (sin h, 0, cos h) with no height (0x00976174, the launch at 0x0076681c).
+// The launch waits for the trail effect's flag (0x00765a90: child 0's bit 2, set by its motion), which
+// the port does not read: ASSUMED it is set at once.
+// Per update (0x007663d4): the frame counter goes up first; past 30 frames (the global 0x00a9b008, written
+// 30 at 0x00766966) the missile steers: it scans the players from its stored index (the id mod the player
+// count, then the last one it locked on) and takes the first who is alive and in line of sight (the ray
+// 0x0077fffc from the missile to the feet, mask -1). With a target: speed s = max(|v| - 0.1, 1.45); the
+// step is min(distance, 1.2) toward the target, added to v when the step is over 0.08; v is then scaled to s.
+// Then the ray from the missile to its next position: a wall ends the missile with no blast (0x007667a8:
+// effect 0x6f7 and the dead bit). Past 240 frames it ends the same way. Otherwise it moves.
+// The blast comes from the motion event 0x80000 (0x007667e4: GalgryphonApplyBattleParams type 3, the row's
+// iparam3, at the missile). The event is in the model's motion, which the port does not read: ASSUMED it is
+// the first frame the missile is within 20.0 (0x00976190 is the band above the ground there) of its target.
+// The blast reaches the living players within 100 on the XZ plane (ASSUMED: the exe passes the 30.0 radius
+// of 0x007667e4 to the battle-params routine, whose threshold is 100.0 at 0x009216cc, and the 100 is not read).
+export const SM_MISSILE = {
+  speed: 5,
+  life: 240,
+  blast: 100,
+  knockback: 3,
+  // ASSUMED detonation distance (see above).
+  arrive: 20,
+  // The frame after which it steers (the frame counter must exceed 0x00a9b008 = 30).
+  homingAfter: 30,
+  // The steering step cap and its floor (0x00976184, 0x00976180).
+  steer: 1.2,
+  steerMin: 0.08,
+  // The speed loss a steering frame (0x0097618c) and its floor (0x00976188).
+  speedLoss: 0.1,
+  speedFloor: 1.45,
+} as const;
+
+export interface SmMissileOptions {
+  // The index the player scan starts at (the boss's id word, ASSUMED the entity index; the exe takes it mod the count).
+  start: number;
+  // The map's first wall on a segment (0x0077fffc, mask -1): the distance to it, or null when clear.
+  wall?: ((from: SmPoint3, to: SmPoint3) => number | null) | undefined;
+}
 
 export class SmMissile extends EnemyShot {
   readonly effect: ShotEffect;
   readonly look: ShotLook = { color: 0xff8040, size: 1.5 };
-  private vx: number;
-  private vz: number;
-  private travelled = 0;
-  private range: number | null;
+  // The exe's velocity (+0x50, +0x54, +0x58).
+  vx: number;
+  vy = 0;
+  vz: number;
+  // The scan's start (the exe's +0x6c): the player index it last locked on, or the first one to try.
+  start: number;
+  // The index of the player it is locked on, or -1.
+  lock = -1;
+  private readonly wall: SmMissileOptions['wall'];
 
-  // range: the distance the flight lasts (null: no aim, it only ends at the cap).
-  constructor(x: number, z: number, angle: number, damage: number, range: number | null) {
-    super(x, SM_MISSILE_HEIGHT, z);
-    this.vx = Math.sin(angle) * SM_MISSILE.speed;
-    this.vz = Math.cos(angle) * SM_MISSILE.speed;
-    this.range = range;
+  // heading: radians, the boss's heading (BAMS * BAMS_TO_RAD). damage: the row's iparam3.
+  constructor(x: number, y: number, z: number, heading: number, damage: number, opts: SmMissileOptions) {
+    super(x, y, z);
+    this.vx = Math.sin(heading) * SM_MISSILE.speed;
+    this.vz = Math.cos(heading) * SM_MISSILE.speed;
+    this.start = opts.start;
+    this.wall = opts.wall;
     this.effect = { kind: 'blast', damage, knockback: SM_MISSILE.knockback };
   }
 
+  // The steering (0x007663d4's homing branch): the first living player in sight from the scan start.
+  private steer(targets: readonly AiTarget[]): void {
+    const n = targets.length;
+    if (n === 0) return;
+    const from = { x: this.x, y: this.y, z: this.z };
+    let pick = -1;
+    for (let k = 0; k < n; k++) {
+      const i = (this.start + k) % n;
+      const t = targets[i];
+      if (!t || t.dead) continue;
+      if (this.wall && this.wall(from, { x: t.x, y: t.y ?? 0, z: t.z }) !== null) continue;
+      pick = i;
+      break;
+    }
+    if (pick < 0) return;
+    this.start = pick;
+    this.lock = pick;
+    const t = targets[pick];
+    if (!t) return;
+    const dx = t.x - this.x;
+    const dy = (t.y ?? 0) - this.y;
+    const dz = t.z - this.z;
+    const dist = Math.hypot(dx, dy, dz);
+    const speed = Math.max(Math.hypot(this.vx, this.vy, this.vz) - SM_MISSILE.speedLoss, SM_MISSILE.speedFloor);
+    const step = Math.min(dist, SM_MISSILE.steer);
+    if (step <= SM_MISSILE.steerMin || dist === 0) return;
+    const ax = this.vx + (dx / dist) * step;
+    const ay = this.vy + (dy / dist) * step;
+    const az = this.vz + (dz / dist) * step;
+    const len = Math.hypot(ax, ay, az) || 1;
+    this.vx = (ax / len) * speed;
+    this.vy = (ay / len) * speed;
+    this.vz = (az / len) * speed;
+  }
+
+  // Returns the blast on the detonation frame (once), else nothing.
   tick(targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return [];
+    const old = this.frames;
     this.frames++;
-    this.x += this.vx;
-    this.z += this.vz;
-    this.travelled += SM_MISSILE.speed;
-    if (this.range !== null && this.travelled >= this.range) {
+    if (old > SM_MISSILE.homingAfter) this.steer(targets);
+    const nx = this.x + this.vx;
+    const ny = this.y + this.vy;
+    const nz = this.z + this.vz;
+    if (this.wall && this.wall({ x: this.x, y: this.y, z: this.z }, { x: nx, y: ny, z: nz }) !== null) {
       this.done = true;
-      return targets.filter((t) => !t.dead && Math.hypot(t.x - this.x, t.z - this.z) <= SM_MISSILE.blast);
+      return [];
     }
-    if (this.frames > SM_MISSILE.life) this.done = true;
-    return [];
+    if (this.frames > SM_MISSILE.life) {
+      this.done = true;
+      return [];
+    }
+    this.x = nx;
+    this.y = ny;
+    this.z = nz;
+    const t = this.lock >= 0 ? targets[this.lock] : undefined;
+    if (!t || t.dead) return [];
+    if (Math.hypot(t.x - this.x, (t.y ?? 0) - this.y, t.z - this.z) > SM_MISSILE.arrive) return [];
+    this.done = true;
+    return targets.filter((p) => !p.dead && Math.hypot(p.x - this.x, p.z - this.z) <= SM_MISSILE.blast);
   }
 }
 

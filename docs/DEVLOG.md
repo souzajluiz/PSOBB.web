@@ -23950,3 +23950,41 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 - **Not covered:** the port has no talk prompt; the check is the window hook (`classicGame.view.npcs.nearestInReach` on `combat.middleReach`), not a key press. The 0x118 weapon is not seen in the browser (no Episode 4 hub run); the table is covered by the unit test only.
 
 **Still open.** The 0x118 walk row (no walk call in the dispatcher; the player's move code is not traced for this object). The 0x33 per-class motion id. The NPC box radius and kind mask (the value at 0x009c3ecc is written at runtime). The safe-map condition of the weapon load.
+
+## 2026-10-31: Saint-Milion missiles: homing, two on entry, the heading launch (read from the exe, corrects 2026-10-21)
+
+**Outcome: the missiles fly the exe's homing path now.** The 2026-10-21 entries had three things wrong, all from the port's reading of the first part of the object: (1) the entry makes **two** missiles, not one; (2) the launch follows the **boss's heading**, not the nearest player; (3) the missile **steers** (it homes), it does not fly a straight line. The 2026-10-21 note "UNCLEAR whether the missile homes at all" is answered: it does. Corrected in code, not in the old entries.
+
+**Constructor and pairs.**
+- `0x0076b8f4` (the state 18 entry, phase 4, `CallbackHandler`): two `SaintEmilionPart` objects (ctor `0x0076619c`), the first with node `0x27` (`+0xdd4`, `ValidateMatrixIndex` 0x00768964) and the boss's id word `+0x394` (`0x76b966`), the second with node `0x28` (`+0xe14`) and id + 1 (`0x76b9f4`). No arena test.
+- `0x0076968c` (phase 0): on the clock's frame 5 in arenas 3 / 4 (the `cmp` on `+0xf80` at `0x7696d1` / `0x7696da`), two more: nodes 0x27 / 0x28 with id + 2 / id + 3 (ctors at `0x769746` and after the validate call at `0x769785`).
+- The ctor's arguments: `param_1` = `+0x3cc` (the role), `param_2` = the node's position pointer, `param_3` = the boss's heading `+0x60` (BAMS, kept in `+0x48`), `param_4` = the motion table entry, `param_5` = the scan start id (kept in `+0x6c`). The old "one on entry" was the first half of `0x0076b8f4`.
+
+**Launch (`0x0076681c`).** Position = the node's world position (`+0x30..0x38` of the pointer). Velocity = `5.0 * (sin h, 0, cos h)`, no height (`0x00976174` = 5.0, `int_sin` / `int_cos` of `+0x48`). Sound 0x6f6 (directional SE). The trail effect 0xf starts (`0x661448`, flag 0). **The launch waits** for `0x00765a90`: the trail's child 0 with bit 2 of `+0x9c` (set by its motion, not read): ASSUMED set at once.
+
+**Update (`0x007663d4`).**
+- The frame counter `+0x68` goes up first. The gate is `0x00a9b008` = **30**: written at `0x00766966` by the init function `0x00766948` (`mov dword [0xa9b008], 0x1e`); the homing branch runs when the old count is above 30, so the first steer is the 32nd update.
+- Scan: from `+0x6c` (the id mod the player count, then the last player it locked on), `g_EntityArray[(start + k) % N]`; skip the flag `0x2000000` (ASSUMED: the dead or absent) and the blocked: the ray `0x0077fffc` from the missile to the feet (mask -1) (`cast_ray_at_map_collision_geometry2`). First clear one wins; `+0x6c` = its index.
+- Steer (only with a target): `s = max(|v| - 0.1, 1.45)` (`0x0097618c`, `0x00976188`); `step = min(|d|, 1.2)` (`0x00976184`) toward the player's position (3D); `v += d/|d| * step` only when `0.08 < step` (`0x00976180`); then `v` is scaled to `s`. So the speed falls 0.1 a steering frame to 1.45. The velocity's heading also drives the model's angles (`+0x44`, `+0x48`, not used).
+- The wall: the ray from the missile to `pos + v` (`0x0077fffc`, mask -1): a hit ends the missile with **no blast** (`0x007667a8`: effect 0x6f7, SE 0x6f7, dead bit).
+- Life: frames > 240 (`0xf0`): the same silent end.
+- Otherwise `pos += v`. A player with flag `0x800` within the hitbox radius sets the frame count to 240 (UNCLEAR meaning, not ported).
+- **The blast** is the motion event: the flag `0x80000` on the model's motion (`check_hitbox_flag`), tested only in the band near the ground (`0x00976190` = 20.0 is the band height above it). Then `0x007667e4`: `GalgryphonApplyBattleParams_0076a724(boss, 3, pos, 30.0, 0)`, which passes `GetGalgryphonAttackParameter(3)` (the row's **iparam3**, `row+0x20`, `0x768990` case 3) to `EnemyApplyBattleParamsNormal`. The 30.0 is compared with `0x009216cc` = 100.0 to choose vtable +0x3c or +0x40 of `g_pDerolleObject` (both not read): ASSUMED the reach is 100 on XZ, as the port had it.
+
+**The port now.**
+- `client/src/combat/saintmilionents.ts`: `SM_MISSILE` (speed 5, life 240, blast 100, knockback 3, arrive 20 ASSUMED, `homingAfter` 30, steer 1.2, steerMin 0.08, speedLoss 0.1, speedFloor 1.45, each with its address); `SmMissileOptions` (`start`, `wall`); `SmMissile(x, y, z, heading, damage, opts)` with `steer()` and the tick above. `lock` is public for the tests.
+- `client/src/combat/saintmilionboss.ts`: `launchMissiles(k)` makes the pair from nodes 0x27 / 0x28 (the boss's ground point until the render has the nodes), heading `this.heading * BAMS`, damage `row.iparam[2]` (the iparam3 row slot), scan starts `opts.id + k (+1)`. Entry = k 0; frame 5 = k 2. The `SM_MISSILE` import is gone.
+- `client/src/render/combat.ts`: `id: head.index` to the brain (ASSUMED: `head.index` stands for the id word `+0x394`).
+- `tests/saintmilionboss.test.ts` section 8 rewritten: the pair on entry (scan starts 7 and 8 for id 7), the pair in arenas 3 / 4 only, the heading launch (0 is +Z, π/2 is +X), no steering on the first 31 updates and steering on the 32nd (speed 4.9), the speed loss to 1.45, the scan (blocked and dead skipped, start mod count), the blast within 20.0 of the locked player (living within 100, the dead and the far out), a wall with no blast, the 240-frame cap.
+
+**Checks.**
+- `node tests/saintmilionboss.test.ts`: ALL PASS. Also `tests/saintmilion.test.ts`, `tests/enemyfsmep4.test.ts`, `tests/bossrooms.test.ts`, `tests/enemies.test.ts`, `tests/combat.test.ts` (5860 checks, 0 failures): all pass.
+- `client`: `npx tsc --noEmit` clean (Node 24).
+- e2e: not passed, not a game failure. `e2e/ep4-battle-smoke.spec.ts` "Saint-Milion" with a fresh account (PSO_USER=smi1031) timed out in `reachLobby` (classic.ts:70) after 90 s on the character select: the spec expects a character already in slot 0, which a new account lacks. Login reached the select, so the servers answered. The shot path was not exercised; a run with a prepared character is still to do.
+
+**Open / ASSUMED.**
+- The launch gate (child 0's flag) and the detonation (the motion event 0x80000 and its band): not read; the port fires at once and blasts at 20.0 from the locked player.
+- The blast's reach (30.0 passed vs the 100 threshold) and the knockback 3.0 (the vtable's own value not read).
+- The missile model (the `SaintEmilionPart`'s njcm from `g_SaintEmilionBmlData`, its file name not identified here), the trail effect 0xf, and the SEs 0x6f6 / 0x6f7: not drawn or played. The missile is still the coloured shot ball.
+- The flag `0x2000000` (skipped as dead) and `0x800` (the 240-frame jump) are unknown.
+- The wave, storm and sand sonic: not re-read in this pass (their entries of 2026-10-21 stand as written).
