@@ -60,15 +60,25 @@
 //        without waiting for the answer, the notice [15:0x85] "You left Team
 //        [%s]." at (190, 180) 260 x 120 (44); Enter closes.
 //
-// NOT done (left, see ROADMAP): Master Transfer (the exe asks the chosen player
-// with a 6x message and waits for his answer: state 68, the 6x subcommand is not
-// decoded; the row is greyed here), Buying Privileges / Team Flag Records (the
-// 19EA / 1AEA / 1BEA / 0FEA packets exist in net/team.ts, the windows do not),
-// the Home menu's Invite (0x29) and Point Regist (0x2d) are in the Home leaves, see the
+// Ported 2026-10-30 (DEVLOG): Master Transfer (the Master Menu's row 3: the member list of leaders in
+// the lobby, the 6xCD request / 6xCE answer pair in net/team.ts, then 11EA flag 0x40; the chosen
+// player's prompt is MasterTransferPromptWindow below), Buying Privileges (row 5: 18EA, 1AEA, 1BEA,
+// drawBuy), Team Flag Records (row 6: the picture, 0FEA, drawFlagPreview) and the banned team names
+// (classic/bannednames.ts, checked on the name question's Yes).
+// The Home menu's Invite (0x29) and Point Regist (0x2d) are in the Home leaves, see the
 // TeamInviteWindow and TeamPointWindow sections below (the Invite's texts are unitxt group 11, the
-// invitee's prompt its own; see the DEVLOG 2026-10-25 entries),
-// the team chat line, the banned-name check (ValidatePlayerName 0x00819f28 against the 90
-// strings of banned_names_list; the server is the only check here).
+// invitee's prompt its own; see the DEVLOG 2026-10-25 entries).
+// Master Transfer, from the exe (state numbers are g_CurrentLobbyMenuId):
+//   3 Master Transfer  InitializeLobbyMenuTeamMasterDissolve_00799994: 08EA, state 65; the 09EA answer
+//        (CreateTeamMasterActionList_0079db38) lists the members with privilege 0x30 whose card matches a
+//        lobby player (GetPlayer loop), titled [15:0x7b], or [11:0xf1] "No Player" (back to the master
+//        menu); Enter -> question [15:0x7c] at (180, 240) / 300, cursor on No (0x0079905c, state 67);
+//        Yes -> the 6xCD to that player (0x00798c80), the info text [15:0x7d] with his name in the
+//        info window (294, 305) 342 x 144 (state 68), no cancel; the 6xCE action decides (1 failed
+//        [15:0x80], 2 -> 11EA flag 0x40 and state 69, 3 -> [15:0x7f] "%s has declined"); the 11EA answer
+//        0 -> [15:0x7e] "Master authority was transferred to %s.", else [15:0x80]; notices at (190, 180).
+//   5 Buying Privileges  HandleLobbyJoinStandardServer_00798618: see BUY_POS.
+//   6 Team Flag Records  HandleLobbyMenuTeamSelection_007998d8: see FLAG_POS.
 // ASSUMED (undecodable from the dump): the width of the master menu and of the
 // member lists (widest row + 20), eight visible rows with scrolling, the
 // question text left aligned with 20 px lines, the greyed "Please input a Team
@@ -78,8 +88,13 @@
 import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
 import {
+  FLAG_SIZE,
+  flagToRgba,
   InviteAnswerPrompt,
   inviteAnswerSubcommand,
+  MASTER_ANSWER,
+  masterAnswerSubcommand,
+  MasterPrompt,
   memberRowLabel,
   PRIVILEGE,
   inTeam,
@@ -88,11 +103,13 @@ import {
   TEAM_RESULT,
   type InviteRequest,
   type IntraRanking,
+  type MasterRequest,
   type TeamMember,
   type TeamMembership,
   type TeamRank,
   type TeamReward,
 } from '../net/team.ts';
+import { isBannedName } from './bannednames.ts';
 import { wrapGameText } from './chat.ts';
 import { DISABLED, drawListWindow, drawWindowTitle, INSET, listKey, ROW, SELECTED, TITLE_GAP, type ListItem } from './fieldwindows.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
@@ -116,14 +133,24 @@ export const T15_TEAM = {
   promote: { list: 0x6d, confirm: 0x6e, done: 0x6f, already: 0x70, failed: 0x71 },
   demote: { list: 0x72, confirm: 0x73, done: 0x74, already: 0x75, failed: 0x76 },
   dismiss: { list: 0x77, confirm: 0x78, done: 0x79, already: 0x7a, failed: 0x7a },
+  // Master Transfer (0x00799324 / 0x0079905c / 0x00798c80 / 0x00798b48): the list title, the question, the
+  // wait text, the success, the refusal and the failure notice.
+  transfer: { list: 0x7b, confirm: 0x7c, wait: 0x7d, done: 0x7e, declined: 0x7f, failed: 0x80 },
   dissolveConfirm: 0x81,
   dissolved: 0x82,
   dissolveFailed: 0x83,
   leaveConfirm: 0x84,
   left: 0x85,
   otherBusiness: 0x87,
+  // Buying Privileges (0x00798618 .. 0x00798990): the list title is `master[5]` (0x62), the rows Buy /
+  // Don't Buy are 0x64 / 0x65, the info line 0x89 ("Please select ...") then 0x8a ("Is this okay?"), the
+  // notice 0x8b ("Purchased %s."). 0x8c ("You don't have enough points.") has no reader in the dump.
+  buy: { yes: 0x64, no: 0x65, select: 0x89, okay: 0x8a, purchased: 0x8b },
+  // Team Flag Records (0x0078b54c ..): the question, the store question, the notices; the list rows are
+  // 0x23 / 0x24 (Yes / No, group 15).
+  flag: { ask: 0x8e, store: 0x8f, done: 0x90, notFound: 0x91, format: 0x92, failed: 0x93, yes: 0x23, no: 0x24 },
 } as const;
-export const T11_TEAM = { registration: 0x64, yes: 0x6e, no: 0x6f, noPlayer: 0xf1, points: 0x175 } as const;
+export const T11_TEAM = { registration: 0x64, yes: 0x6e, no: 0x6f, noPlayer: 0xf1, points: 0x175, pointsRemaining: 0x176, noItem: 0xee } as const;
 
 // Position table entries (0x00971f40 + 8 * index) and data words read from the
 // executable.
@@ -135,11 +162,43 @@ export const TEAM_POS = {
   masterPanel: { x: 190, y: 180, w: 260, h: 120 }, // 0xeb, 0xec
   masterMenu: { x: 96, y: 333 }, // 0xc8
   memberList: { x: 190, y: 180 }, // 0xeb
+  // Master Transfer's wait text (0x00798c80): the info window at 0xd5 = (294, 305), 342 x 144 (literals 0x43ab0000 / 0x43100000).
+  transferWait: { x: 294, y: 305, w: 342, h: 144 },
 } as const;
 export const MAX_TEAM_NAME = 14; // TKeyboardControl(.., 0xe, ..)
 export const VISIBLE_ROWS = 8; // ASSUMED
 export const MEMBER_ACTIONS = ['promote', 'demote', 'dismiss'] as const;
-export type MemberAction = (typeof MEMBER_ACTIONS)[number];
+export type MemberAction = (typeof MEMBER_ACTIONS)[number] | 'transfer';
+
+// Buying Privileges (Master Menu row 5). Positions from the exe's static table 0x00971f40 + 8 * index
+// (tools/exedata.py) and literals:
+//   list      the ship-select style window (12, 50) 385 x 184 (CreateGameListMenuWindow, entry 0x28), titled
+//             unitxt 15 0x62; one row per reward: name left, the team points right aligned (ASSUMED right edge);
+//             a reward costing more than the points remaining is grey (0xff909090, flag 0x80) (0x0079f614).
+//   detail    the highlighted reward's description in a box at entry 0x29 = (400, 50), 228 x 184 (0x43640000 /
+//             0x43380000), text width factor 0.7.
+//   points    "<unitxt 11 0x176> : <n> pt" in a window at entry 0x29 + (28, 184) = (428, 234), 200 x 40
+//             (0x0079f534, the 18EA answer's points remaining).
+//   info      the info window (294, 305) 342 x 144: 15:0x89 and, after Enter, 15:0x8a.
+//   confirm   Buy / Don't Buy at (320, 240) (literals 0x43a00000 / 0x43700000), cursor on Don't Buy.
+export const BUY_POS = {
+  list: { x: 12, y: 50, w: 385, h: 184 },
+  detail: { x: 400, y: 50, w: 228, h: 184 },
+  points: { x: 428, y: 234, w: 200, h: 40 },
+  info: { x: 294, y: 305, w: 342, h: 144 },
+  confirm: { x: 320, y: 240 },
+} as const;
+
+// Team Flag Records (Master Menu row 6, TeamFlagObject 0x0078b54c). Entries 0xef..0xf2 of the table:
+//   preview   the window (100, 180) 100 x 100 (entries 0xef / 0xf0); the flag is drawn 1:1 (32 x 32) at the
+//             window's centre minus 16 (0x0078baac: position + size * 0.5 - 16, size 32)
+//   message   the text window (220, 180) 320 x 100 (entries 0xf1 / 0xf2)
+//   list      Yes / No at (460, 280) = entry 0xf1 + 0xf2 + (-80, 0) (0x0078b774, the x constant 0x0097a99c)
+export const FLAG_POS = {
+  preview: { x: 100, y: 180, w: 100, h: 100 },
+  message: { x: 220, y: 180, w: 320, h: 100 },
+  list: { x: 460, y: 280 },
+} as const;
 
 // One row of the Sent Item list: a local inventory item (the meseta row is not one), its name
 // and its stack count (1 for an unstacked item).
@@ -189,7 +248,25 @@ export interface TeamHost {
   joinResult?(): Promise<number | null>;
   // Point Regist (0x2d, TeamPointWindow): the 6xCC exchange (the local inventory loses the amount).
   exchangeItem?(itemId: number, amount: number): void;
+  // Master Transfer (Master Menu row 3). The member list only offers leaders that are in the lobby
+  // (CreateTeamMasterActionList_0079db38 matches each card with GetPlayer): `lobbyPlayerName` is that
+  // match (null when the card is not in the lobby). `transfer` sends the 6xCD to the player and resolves
+  // with the 6xCE action (net/team.ts MASTER_ANSWER); `cancelTransfer` drops the wait.
+  lobbyPlayerName?(guildCard: number): string | null;
+  transfer?(guildCard: number): Promise<number>;
+  cancelTransfer?(): void;
+  // Buying Privileges (Master Menu row 5): 18EA (`intraRanking`, its points remaining), 1AEA
+  // (`rewards(false)`) and the 1BEA purchase (`buyReward`, no answer).
+  buyReward?(rewardId: number): void;
+  // Team Flag Records (Master Menu row 6): enabled when team_rewards & 1 (1DEA's bit 0). `pickFlag` is the
+  // exe's LoadTeamFlagFile (a picture of the host's choice as 32 x 32 ARGB1555 words); `setFlag` is 0FEA.
+  rewardFlags?(): number;
+  pickFlag?(): Promise<FlagPick>;
+  setFlag?(flag: Uint16Array): void;
 }
+
+// LoadTeamFlagFile's result (0x0082aacc): 1 loaded, 2 file not found, 3 unreadable format, 4 read failed.
+export type FlagPick = { status: 1; flag: Uint16Array } | { status: 2 | 3 | 4 };
 
 export interface TeamText {
   t11: Text;
@@ -362,9 +439,30 @@ export type TeamPhase =
   | { kind: 'loading'; action: MemberAction } // 45, 52, 59: waiting for 09EA
   | { kind: 'pick'; action: MemberAction; list: PickList; title: string; members: TeamMember[] } // 46, 53, 60
   | { kind: 'pickConfirm'; action: MemberAction; q: Question; member: TeamMember } // 47, 54, 61
-  | { kind: 'working'; action: MemberAction | 'dissolve' } // 48, 55, 62, 74: waiting for the answer
+  | { kind: 'working'; action: MemberAction | 'dissolve' } // 48, 55, 62, 74, 69: waiting for the answer
   | { kind: 'dissolveConfirm'; q: Question } // 73
-  | { kind: 'ranking'; rows: RankRows }; // 39, 40
+  | { kind: 'ranking'; rows: RankRows } // 39, 40
+  | { kind: 'transferWait'; member: TeamMember; info: InfoWindow } // 68: the 6xCD is out, waiting for the 6xCE
+  | { kind: 'buyLoading' } // 77, 78: waiting for 18EA and 1AEA
+  | { kind: 'buy'; buy: BuyState } // 79: the reward list
+  | { kind: 'buyConfirm'; buy: BuyState; cursor: number } // 80: Buy / Don't Buy
+  | { kind: 'flagAsk'; cursor: number } // flag object state 0: "Loading flag ... Is this okay?"
+  | { kind: 'flagPicking' } // the host's picture choice (LoadTeamFlagFile)
+  | { kind: 'flagStore'; flag: Uint16Array; cursor: number } // state 1: "Do you want to store this flag?"
+  | { kind: 'flagMessage'; text: string }; // states 2, 3, 4, 6: a message, the accept key ends it
+
+// The Buying Privileges window's data (0x0079f534 points, 0x0079f614 list).
+export interface BuyState {
+  points: number;
+  rewards: TeamReward[];
+  cursor: number;
+  top: number;
+}
+
+// A reward row is grey when the team cannot pay it (0x0079f614: points remaining < the cost).
+export function rewardAffordable(points: number, reward: TeamReward): boolean {
+  return points >= reward.teamPoints;
+}
 
 export interface RankRows {
   header: [string, string];
@@ -377,9 +475,12 @@ const ACTION_TEXT = {
   promote: T15_TEAM.promote,
   demote: T15_TEAM.demote,
   dismiss: T15_TEAM.dismiss,
+  // Master Transfer's texts (the 11EA answer: 0 -> done, any other -> failed; there is no "already").
+  transfer: { list: T15_TEAM.transfer.list, confirm: T15_TEAM.transfer.confirm, done: T15_TEAM.transfer.done, already: T15_TEAM.transfer.failed, failed: T15_TEAM.transfer.failed },
 } as const;
 
-export function memberFilter(action: MemberAction, m: TeamMember): boolean {
+// `inLobby`: Master Transfer lists only leaders whose card matches a player of the lobby.
+export function memberFilter(action: MemberAction, m: TeamMember, inLobby: (guildCard: number) => boolean = () => true): boolean {
   switch (action) {
     case 'promote':
       return m.privilege < PRIVILEGE.leader;
@@ -387,6 +488,8 @@ export function memberFilter(action: MemberAction, m: TeamMember): boolean {
       return m.privilege > 0 && m.privilege < PRIVILEGE.master;
     case 'dismiss':
       return m.privilege < PRIVILEGE.master;
+    case 'transfer':
+      return m.privilege === PRIVILEGE.leader && inLobby(m.guildCard);
   }
 }
 
@@ -445,6 +548,7 @@ export class TeamMenus {
   }
 
   close(): void {
+    if (this.phase.kind === 'transferWait') this.host.cancelTransfer?.();
     this.epoch++;
     this.phase = { kind: 'closed' };
   }
@@ -492,9 +596,11 @@ export class TeamMenus {
 
   private openMaster(): void {
     const t15 = this.text.t15;
-    const hasRewards = false; // team_rewards[0] & 1: no reward flags are read yet
-    // Master Transfer needs the 6x peer answer (state 68): greyed (see header).
-    const enabled = [true, true, true, false, true, false, hasRewards];
+    // Row 6 (Team Flag Records) is enabled by team_rewards[0] & 1 (1DEA's bit 0, 0x00799108); the
+    // others always are (a host without the 6xCD pair, the 18EA / 1AEA requests or the flag picker
+    // greys its row: the port cannot run them).
+    const hasRewards = ((this.host.rewardFlags?.() ?? 0) & 1) !== 0 && !!this.host.pickFlag;
+    const enabled = [true, true, true, !!this.host.transfer, true, !!this.host.intraRanking && !!this.host.rewards, hasRewards];
     const items: ListItem[] = T15_TEAM.master.map((id, value) => ({ label: t15(id), value, enabled: enabled[value] }));
     this.phase = { kind: 'master', list: new PickList(items) };
   }
@@ -503,7 +609,8 @@ export class TeamMenus {
     this.phase = { kind: 'loading', action };
     void this.guard(this.host.members(), (members) => {
       const t = ACTION_TEXT[action];
-      const rows = members.filter((m) => memberFilter(action, m));
+      const lobby = this.host.lobbyPlayerName;
+      const rows = members.filter((m) => memberFilter(action, m, (card) => (lobby ? lobby.call(this.host, card) !== null : true)));
       const items: ListItem[] = rows.length
         ? rows.map((m) => ({ label: memberRowLabel(m), value: m.guildCard, enabled: true }))
         : [{ label: this.text.t11(T11_TEAM.noPlayer), value: 0, enabled: true }];
@@ -537,8 +644,12 @@ export class TeamMenus {
         break;
       case 'nameConfirm':
         p.q.key(e);
-        if (p.q.result === 'yes') this.sendCreate(p.w);
-        else if (p.q.result === 'no') this.other();
+        if (p.q.result === 'yes') {
+          // ValidatePlayerName (0x00819f28, HandleLobbyMenuInput_00799c28): a banned name takes the
+          // "already registered" notice and sends nothing.
+          if (isBannedName(p.w.name)) this.notice(format(t15(T15_TEAM.inUse), p.w.name), 'team', 'name');
+          else this.sendCreate(p.w);
+        } else if (p.q.result === 'no') this.other();
         break;
       case 'notice':
         if (menuKeyOf(e) === 'decide' || menuKeyOf(e) === 'cancel') {
@@ -554,7 +665,10 @@ export class TeamMenus {
           const which = p.list.selected?.value ?? -1;
           p.list.result = null;
           if (which <= 2) this.startMemberAction(MEMBER_ACTIONS[which]);
+          else if (which === 3) this.startMemberAction('transfer'); // 08EA, state 65
           else if (which === 4) this.phase = { kind: 'dissolveConfirm', q: new Question(t15(T15_TEAM.dissolveConfirm), TEAM_POS.confirmQuestion) };
+          else if (which === 5) this.startBuy(); // 18EA, state 77
+          else if (which === 6) this.phase = { kind: 'flagAsk', cursor: 0 }; // TeamFlagObject, state 0x52
         }
         break;
       case 'leaveConfirm':
@@ -576,8 +690,10 @@ export class TeamMenus {
         break;
       case 'pickConfirm':
         p.q.key(e);
-        if (p.q.result === 'yes') this.sendMemberAction(p.action, p.member);
-        else if (p.q.result === 'no') this.other();
+        if (p.q.result === 'yes') {
+          if (p.action === 'transfer') this.startTransfer(p.member);
+          else this.sendMemberAction(p.action, p.member);
+        } else if (p.q.result === 'no') this.other();
         break;
       case 'dissolveConfirm':
         p.q.key(e);
@@ -586,6 +702,34 @@ export class TeamMenus {
         break;
       case 'ranking':
         this.rankingKey(p.rows, e);
+        break;
+      case 'buy':
+        this.buyKey(p, e);
+        break;
+      case 'buyConfirm':
+        this.buyConfirmKey(p, e);
+        break;
+      case 'flagAsk':
+        this.flagAskKey(p, e);
+        break;
+      case 'flagStore':
+        this.flagStoreKey(p, e);
+        break;
+      case 'flagMessage':
+        // The accept key ends the message (state 7 -> ResetLobbyStateAndShowTeamMenu).
+        if (menuKeyOf(e) === 'decide') {
+          se(SE.ok);
+          this.other();
+        }
+        break;
+      case 'transferWait':
+      case 'buyLoading':
+      case 'flagPicking':
+        // No key in the exe (the states only look at the answer); Cancel leaving is a browser convenience.
+        if (menuKeyOf(e) === 'cancel') {
+          se(SE.cancel);
+          this.closeAll(); // close() drops a Master Transfer wait
+        }
         break;
       case 'creating':
       case 'loading':
@@ -669,10 +813,162 @@ export class TeamMenus {
     );
   }
 
+  // Master Transfer, after the question's Yes (CreateLobbyTeamTransferMenu_0079905c ->
+  // HandleLobbyTeamFlagTransferOrJoinParty_00798c80): the chosen card must match a lobby player (else
+  // the failure notice); the 6xCD goes to that player and the info text 0x7d waits (state 68,
+  // HandleLobbyTeamFlagAction_00798b48) for the 6xCE: 2 -> 11EA flag 0x40 and state 69 (the 11EA answer:
+  // 0 -> 0x7e, else 0x80), 3 -> the refusal 0x7f, anything else (1) -> 0x80. Every notice is at (190, 180),
+  // Enter closes the menus.
+  private startTransfer(member: TeamMember): void {
+    const t15 = this.text.t15;
+    const label = memberRowLabel(member);
+    const name = this.host.lobbyPlayerName?.(member.guildCard) ?? null;
+    if (name === null || !this.host.transfer) {
+      this.notice(t15(T15_TEAM.transfer.failed), 'master');
+      return;
+    }
+    const info = this.newInfo(format(t15(T15_TEAM.transfer.wait), name));
+    this.phase = { kind: 'transferWait', member, info };
+    void this.guard(
+      this.host.transfer(member.guildCard),
+      (action) => {
+        if (action === MASTER_ANSWER.accept) {
+          this.phase = { kind: 'working', action: 'transfer' };
+          void this.guard(
+            this.host.setPrivilege(member.guildCard, PRIVILEGE.master),
+            (code) => this.notice(code === 0 ? format(t15(T15_TEAM.transfer.done), label) : t15(T15_TEAM.transfer.failed), 'master'),
+            () => this.notice(t15(T15_TEAM.transfer.failed), 'master'),
+          );
+        } else if (action === MASTER_ANSWER.decline) this.notice(format(t15(T15_TEAM.transfer.declined), label), 'master');
+        else this.notice(t15(T15_TEAM.transfer.failed), 'master');
+      },
+      () => this.notice(t15(T15_TEAM.transfer.failed), 'master'),
+    );
+  }
+
+  // Buying Privileges (HandleLobbyJoinStandardServer_00798618: 18EA, state 77): the answer's points
+  // remaining open the points window (0x0079f534) and ask 1AEA (state 78), whose list opens the
+  // window (0x0079f614, state 79).
+  private startBuy(): void {
+    this.phase = { kind: 'buyLoading' };
+    const host = this.host;
+    if (!host.intraRanking || !host.rewards) {
+      this.closeAll();
+      return;
+    }
+    void this.guard(host.intraRanking(), (ranking) => {
+      void this.guard(host.rewards!(false), (rewards) => {
+        this.phase = { kind: 'buy', buy: { points: ranking.pointsRemaining, rewards, cursor: 0, top: 0 } };
+      });
+    });
+  }
+
+  private buyKey(p: { kind: 'buy'; buy: BuyState }, e: MenuKey): void {
+    const buy = p.buy;
+    const n = buy.rewards.length;
+    const k = menuKeyOf(e);
+    if ((k === 'up' || k === 'down') && n) {
+      buy.cursor = (buy.cursor + (k === 'up' ? n - 1 : 1)) % n;
+      if (buy.cursor < buy.top) buy.top = buy.cursor;
+      if (buy.cursor >= buy.top + VISIBLE_ROWS) buy.top = buy.cursor - VISIBLE_ROWS + 1;
+      se(SE.cursor);
+    } else if (k === 'decide') {
+      const reward = buy.rewards[buy.cursor];
+      // A greyed row is not chosen (ASSUMED buzzer, as the other greyed rows).
+      if (!reward || !rewardAffordable(buy.points, reward)) {
+        se(SE.buzzer);
+        return;
+      }
+      se(SE.ok);
+      this.phase = { kind: 'buyConfirm', buy, cursor: 1 };
+    } else if (k === 'cancel') {
+      se(SE.cancel);
+      this.other();
+    }
+  }
+
+  // State 80 (ProcessLobbyListSelection_00798590): Buy sends 1BEA and shows "Purchased %s." (state 81, Enter
+  // closes the menus); Don't Buy and Cancel ask 18EA again (the window is rebuilt with the new points).
+  private buyConfirmKey(p: { kind: 'buyConfirm'; buy: BuyState; cursor: number }, e: MenuKey): void {
+    const k = menuKeyOf(e);
+    if (k === 'up' || k === 'down') {
+      p.cursor = 1 - p.cursor;
+      se(SE.cursor);
+    } else if (k === 'decide') {
+      se(SE.ok);
+      if (p.cursor === 0) this.purchase(p.buy);
+      else this.startBuy();
+    } else if (k === 'cancel') {
+      se(SE.cancel);
+      this.startBuy();
+    }
+  }
+
+  private purchase(buy: BuyState): void {
+    const reward = buy.rewards[buy.cursor];
+    if (!reward) return;
+    this.host.buyReward?.(reward.rewardId);
+    this.notice(format(this.text.t15(T15_TEAM.buy.purchased), reward.name), 'master');
+  }
+
+  // Team Flag Records, state 0 (TeamFlagObject_HandleMenuSelection_0078b844): Yes loads the picture.
+  private flagAskKey(p: { kind: 'flagAsk'; cursor: number }, e: MenuKey): void {
+    const k = menuKeyOf(e);
+    if (k === 'up' || k === 'down') {
+      p.cursor = 1 - p.cursor;
+      se(SE.cursor);
+    } else if (k === 'decide') {
+      se(SE.ok);
+      if (p.cursor === 0) this.pickFlag();
+      else this.other();
+    } else if (k === 'cancel') {
+      se(SE.cancel);
+      this.other();
+    }
+  }
+
+  private pickFlag(): void {
+    const t15 = this.text.t15;
+    const pick = this.host.pickFlag;
+    this.phase = { kind: 'flagPicking' };
+    const message = (id: number) => (this.phase = { kind: 'flagMessage', text: t15(id) });
+    if (!pick) {
+      message(T15_TEAM.flag.notFound);
+      return;
+    }
+    void this.guard(
+      pick.call(this.host),
+      (r) => {
+        if (r.status === 1) this.phase = { kind: 'flagStore', flag: r.flag, cursor: 0 };
+        else message(r.status === 2 ? T15_TEAM.flag.notFound : r.status === 3 ? T15_TEAM.flag.format : T15_TEAM.flag.failed);
+      },
+      () => message(T15_TEAM.flag.failed),
+    );
+  }
+
+  // State 1 (TeamFlagObject_HandleSelection_0078b6d8): Yes sends 0FEA with the 0x800 bytes and shows
+  // "Recording complete." (state 6); No and Cancel end the object (state 7).
+  private flagStoreKey(p: { kind: 'flagStore'; flag: Uint16Array; cursor: number }, e: MenuKey): void {
+    const k = menuKeyOf(e);
+    if (k === 'up' || k === 'down') {
+      p.cursor = 1 - p.cursor;
+      se(SE.cursor);
+    } else if (k === 'decide') {
+      se(SE.ok);
+      if (p.cursor === 0) {
+        this.host.setFlag?.(p.flag);
+        this.phase = { kind: 'flagMessage', text: this.text.t15(T15_TEAM.flag.done) };
+      } else this.other();
+    } else if (k === 'cancel') {
+      se(SE.cancel);
+      this.other();
+    }
+  }
+
   tick(): void {
     this.frame++;
     const p = this.phase;
-    if (p.kind === 'notice') p.info.tick();
+    if (p.kind === 'notice' || p.kind === 'transferWait') p.info.tick();
     if (p.kind === 'other') this.info.tick();
   }
 
@@ -710,11 +1006,30 @@ export class TeamMenus {
       case 'ranking':
         drawRanking(ctx, skin, p.rows, this.text.t15(T15_TEAM.rankingTitle));
         break;
+      case 'buy':
+        drawBuy(ctx, skin, p.buy, this.text, this.text.t15(T15_TEAM.master[5]), this.text.t15(T15_TEAM.buy.select));
+        break;
+      case 'buyConfirm':
+        drawBuy(ctx, skin, p.buy, this.text, this.text.t15(T15_TEAM.master[5]), this.text.t15(T15_TEAM.buy.okay));
+        drawMenuWindow(ctx, skin, { x: BUY_POS.confirm.x, y: BUY_POS.confirm.y, w: YES_NO.w, h: YES_NO.h }, [{ label: this.text.t15(T15_TEAM.buy.yes) }, { label: this.text.t15(T15_TEAM.buy.no) }], p.cursor);
+        break;
+      case 'flagAsk':
+        drawTextBox(ctx, skin, this.text.t15(T15_TEAM.flag.ask), FLAG_POS.message);
+        drawFlagChoice(ctx, skin, this.text, p.cursor);
+        break;
+      case 'flagStore':
+        drawFlagPreview(ctx, skin, p.flag);
+        drawTextBox(ctx, skin, this.text.t15(T15_TEAM.flag.store), FLAG_POS.message);
+        drawFlagChoice(ctx, skin, this.text, p.cursor);
+        break;
+      case 'flagMessage':
+        drawTextBox(ctx, skin, p.text, FLAG_POS.message);
+        break;
       default:
         break;
     }
     ctx.restore();
-    if (p.kind === 'notice') p.info.draw(ctx, skin, extra);
+    if (p.kind === 'notice' || p.kind === 'transferWait') p.info.draw(ctx, skin, extra);
     if (p.kind === 'other') this.info.draw(ctx, skin, extra);
   }
 }
@@ -765,6 +1080,49 @@ export function drawRanking(ctx: CanvasRenderingContext2D, skin: WindowSkin, row
     drawGameText(ctx, right, cx + cw - gameTextWidth(right), y, color);
   });
   drawWindowTitle(ctx, skin, W.x, W.y, title);
+}
+
+// Buying Privileges (see BUY_POS): the reward list, the detail box, the points window and the info box.
+export function drawBuy(ctx: CanvasRenderingContext2D, skin: WindowSkin, buy: BuyState, text: TeamText, title: string, info: string): void {
+  const W = BUY_POS.list;
+  drawWindowFrame(ctx, skin.frame, W.x, W.y, W.w, W.h);
+  const cx = W.x + INSET;
+  const cy = W.y + 16;
+  const cw = W.w - 2 * INSET;
+  if (!buy.rewards.length) {
+    // 0x0079f614: no reward -> the single text unitxt 11 0xee ("No Item"), not selectable.
+    drawGameText(ctx, text.t11(T11_TEAM.noItem), cx, cy + 1, DISABLED);
+  } else {
+    drawSelectBar(ctx, skin.bars, cx, cy + (buy.cursor - buy.top) * ROW, cw, 16);
+    buy.rewards.slice(buy.top, buy.top + VISIBLE_ROWS).forEach((reward, i) => {
+      const y = cy + i * ROW + 1;
+      const color = !rewardAffordable(buy.points, reward) ? DISABLED : buy.top + i === buy.cursor ? SELECTED : '#ffffff';
+      const points = String(reward.teamPoints);
+      drawGameText(ctx, reward.name, cx, y, color);
+      drawGameText(ctx, points, cx + cw - gameTextWidth(points), y, color);
+    });
+  }
+  drawWindowTitle(ctx, skin, W.x, W.y, title);
+  drawTextBox(ctx, skin, buy.rewards[buy.cursor]?.description ?? '', BUY_POS.detail);
+  drawTextBox(ctx, skin, `${text.t11(T11_TEAM.pointsRemaining)} : ${buy.points} pt`, BUY_POS.points);
+  drawTextBox(ctx, skin, info, BUY_POS.info);
+}
+
+// Team Flag Records' Yes / No (group 15 0x23 / 0x24) and the flag preview.
+function drawFlagChoice(ctx: CanvasRenderingContext2D, skin: WindowSkin, text: TeamText, cursor: number): void {
+  drawMenuWindow(ctx, skin, { x: FLAG_POS.list.x, y: FLAG_POS.list.y, w: YES_NO.w, h: YES_NO.h }, [{ label: text.t15(T15_TEAM.flag.yes) }, { label: text.t15(T15_TEAM.flag.no) }], cursor);
+}
+
+function drawFlagPreview(ctx: CanvasRenderingContext2D, skin: WindowSkin, flag: Uint16Array): void {
+  const W = FLAG_POS.preview;
+  drawWindowFrame(ctx, skin.frame, W.x, W.y, W.w, W.h);
+  // 0x0078baac: the 32 x 32 texture at the window's centre minus 16 (size * 0.5 + position - 16), 1:1.
+  if (typeof OffscreenCanvas === 'undefined' || typeof ImageData === 'undefined') return;
+  const c = new OffscreenCanvas(FLAG_SIZE, FLAG_SIZE);
+  const g = c.getContext('2d');
+  if (!g) return;
+  g.putImageData(new ImageData(flagToRgba(flag) as unknown as Uint8ClampedArray<ArrayBuffer>, FLAG_SIZE, FLAG_SIZE), 0, 0);
+  ctx.drawImage(c, W.x + W.w / 2 - 16, W.y + W.h / 2 - 16);
 }
 
 // --- Home menu > Team > Team Member List (menu id 0x25) ------------------------------
@@ -1682,6 +2040,164 @@ export class TeamInviteAnswerWindow {
     if (this.phase === 'notice') this.box(ctx, skin, this.t11(T11_INVITE_ANSWER.notice), p.notice);
     if (this.phase === 'confirm') this.yesNo(ctx, skin, p.confirm);
     if (this.phase === 'message') this.box(ctx, skin, this.text, p.result);
+    ctx.restore();
+  }
+}
+
+// --- The Master Transfer prompt (6xCD received; the window object 0x00724430, its update
+// ProcessPlayerListSelection_0072455c, dump 689170) -----------------------------------------------
+//
+// The chosen leader's side of Master Menu > Master Transfer. It is the same kind of window as the
+// invitee's prompt (the intro list at 0xed / 0xee = (10, 277) 264 x 104, the first Yes / No at
+// (152, 370), the notice at 0xe9 / 0xea = (31, 118) 572 x 124, the second Yes / No at (488, 240),
+// the result notice at 0xeb / 0xec = (190, 180) 260 x 120), with the transfer's texts (unitxt 11):
+//   intro    0x17a (master name, team name)
+//   notice   0x17b ("The Master is responsible for ..."), after the first Yes
+//   result   0x17d "Request to be made Team Master was refused." after a No / Cancel / second No (the
+//            6xCE action is 3); 0x17e "Request to transfer Team Master status was cancelled." after a
+//            time-out of 450 frames (the action is 1) or when the request was withdrawn.
+//   accept   the second Yes sends action 2 and closes with no text (state 7 with no window, 0x0072455c).
+// The exe moves from the intro to the first Yes / No when the typed text is complete or the accept key is
+// held (state 0); the port waits for the decide key (the same simplification as the invite prompt).
+export const T11_MASTER_PROMPT = { request: 0x17a, notice: 0x17b, refused: 0x17d, cancelled: 0x17e } as const;
+export const MASTER_PROMPT_POS = INVITE_ANSWER_POS;
+
+export interface MasterPromptHost {
+  text: (group: number, index: number) => string;
+  ownCard(): number;
+  ownName(): string;
+  // The 6xCE answer, relayed to the master's client id (the request's +4 word).
+  send(target: number, body: Uint8Array): void;
+  withdrawn(): boolean;
+}
+
+type MasterPromptPhase = 'intro' | 'ask' | 'notice' | 'confirm' | 'message';
+
+export class MasterTransferPromptWindow {
+  private phase: MasterPromptPhase = 'intro';
+  readonly prompt = new MasterPrompt();
+  private cursor = 1;
+  private text = '';
+  private visible = true;
+  private readonly request: MasterRequest;
+  private readonly host: MasterPromptHost;
+
+  constructor(request: MasterRequest, host: MasterPromptHost) {
+    this.request = request;
+    this.host = host;
+  }
+
+  get open(): boolean {
+    return this.visible;
+  }
+
+  get state(): MasterPromptPhase {
+    return this.phase;
+  }
+
+  get answer(): number | null {
+    return this.prompt.action;
+  }
+
+  get cursorRow(): number {
+    return this.cursor;
+  }
+
+  private t11(index: number): string {
+    return this.host.text(0x0b, index);
+  }
+
+  private message(text: string): void {
+    this.text = text;
+    this.phase = 'message';
+  }
+
+  private settle(): void {
+    const action = this.prompt.action;
+    if (action === null) return;
+    this.host.send(this.request.target, masterAnswerSubcommand({ ownCard: this.host.ownCard(), ownName: this.host.ownName(), action }));
+    if (action === MASTER_ANSWER.accept) this.visible = false;
+    else if (action === MASTER_ANSWER.busy) this.message(this.t11(T11_MASTER_PROMPT.cancelled));
+    else this.message(this.t11(T11_MASTER_PROMPT.refused));
+  }
+
+  // The owner's per-frame clock: the withdrawal (any state but the message) and the 450-frame counts.
+  tick(): void {
+    if (!this.visible) return;
+    if (this.phase !== 'message' && this.host.withdrawn()) {
+      this.message(this.t11(T11_MASTER_PROMPT.cancelled));
+      return;
+    }
+    if (this.phase === 'ask' || this.phase === 'confirm') {
+      this.prompt.tick();
+      this.settle();
+    }
+  }
+
+  // Returns whether the window is still open.
+  key(e: MenuKey): boolean {
+    if (!this.visible) return false;
+    const k = menuKeyOf(e);
+    if (this.phase === 'intro') {
+      if (k === 'decide') {
+        se(SE.ok);
+        this.phase = 'ask';
+      }
+    } else if (this.phase === 'ask' || this.phase === 'confirm') {
+      if (k === 'up' || k === 'down') {
+        this.cursor = 1 - this.cursor;
+        se(SE.cursor);
+      } else if (k === 'decide') {
+        se(SE.ok);
+        this.choose(this.cursor === 0);
+      } else if (k === 'cancel') {
+        se(SE.cancel);
+        this.prompt.cancel();
+        this.settle();
+      }
+    } else if (this.phase === 'notice') {
+      if (k === 'decide') {
+        se(SE.ok);
+        this.prompt.dismissNotice();
+        this.phase = 'confirm';
+        this.cursor = 1;
+      }
+    } else if (this.phase === 'message') {
+      if (k === 'decide') {
+        se(SE.ok);
+        this.visible = false;
+      }
+    }
+    return this.visible;
+  }
+
+  private choose(yes: boolean): void {
+    if (this.phase === 'ask' && yes) {
+      this.prompt.choose(true);
+      this.phase = 'notice';
+      this.cursor = 1;
+      return;
+    }
+    this.prompt.choose(yes);
+    this.settle();
+  }
+
+  private yesNo(ctx: CanvasRenderingContext2D, skin: WindowSkin, at: { x: number; y: number }): void {
+    drawMenuWindow(ctx, skin, { x: at.x, y: at.y, w: YES_NO.w, h: YES_NO.h }, [{ label: this.t11(T11_TEAM.yes) }, { label: this.t11(T11_TEAM.no) }], this.cursor);
+  }
+
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
+    if (!this.visible) return;
+    ctx.save();
+    ctx.translate(extra / 2, 0);
+    const p = MASTER_PROMPT_POS;
+    if (this.phase === 'intro' || this.phase === 'ask') {
+      drawTextBox(ctx, skin, format(this.t11(T11_MASTER_PROMPT.request), this.request.masterName, this.request.teamName), p.intro);
+    }
+    if (this.phase === 'ask') this.yesNo(ctx, skin, p.ask);
+    if (this.phase === 'notice') drawTextBox(ctx, skin, this.t11(T11_MASTER_PROMPT.notice), p.notice);
+    if (this.phase === 'confirm') this.yesNo(ctx, skin, p.confirm);
+    if (this.phase === 'message') drawTextBox(ctx, skin, this.text, p.result);
     ctx.restore();
   }
 }

@@ -23,7 +23,7 @@ import { WORD_SELECT_SUBCOMMAND, wordSelectSubcommandPayload, type WordSelectMes
 import { parseWordSelectSubcommand } from './wordselect.ts';
 import { tradeIO, type TradeHost } from './tradeio.ts';
 import { TradeZone } from './tradezone.ts';
-import { parseInviteAnswer, TEAM_INVITE_ANSWER_SUB, TEAM_INVITE_SIZE, TEAM_INVITE_SUB, TeamInviteReceiver } from './team.ts';
+import { MasterTransferReceiver, parseInviteAnswer, parseMasterAnswer, TEAM_INVITE_ANSWER_SUB, TEAM_INVITE_SIZE, TEAM_INVITE_SUB, TEAM_MASTER_ANSWER_SUB, TEAM_MASTER_SUB, TeamInviteReceiver } from './team.ts';
 
 export interface LobbyPlayer {
   clientId: number;
@@ -182,6 +182,9 @@ export class Lobby {
   // gate: the menus set it (classic/homeleaves.ts); a refused invite is answered here at once.
   readonly teamInvites = new TeamInviteReceiver();
   teamInviteFree: () => boolean = () => true;
+  // Master Transfer requests received (6xCD, net/team.ts MasterTransferReceiver); the same gate rule.
+  readonly masterRequests = new MasterTransferReceiver();
+  masterFree: () => boolean = () => true;
   // Player trade (net/trade.ts, the Home menu's Trade Window). The host gives the
   // session the character and the notices; the session is made for the current self id
   // on first use (6xA6 / D1 / D4 may arrive before any window is open).
@@ -401,6 +404,17 @@ export class Lobby {
         this.inviteWaiter = null;
         w(parseInviteAnswer(body));
       }
+      // 6xCD: a Master Transfer request (0x0078c0d8); a refused one is answered busy at once.
+      if (sub === TEAM_MASTER_SUB && body.length >= TEAM_INVITE_SIZE) {
+        const refusal = this.masterRequests.receive(body, this.masterFree());
+        if (refusal) this.conn.send(0x62, refusal.target, refusal.answer);
+      }
+      // 6xCE: the chosen player's answer to our request (0x0078bff4); the waiter takes the next one.
+      if (sub === TEAM_MASTER_ANSWER_SUB && body.length >= TEAM_INVITE_SIZE && this.masterWaiter) {
+        const w = this.masterWaiter;
+        this.masterWaiter = null;
+        w(parseMasterAnswer(body));
+      }
       // 6x74 word select, in the lobby and in a game (handle_packet0x60_subcommand0x74, dump 664363:
       // the same handler in both): the balloon is drawn by the screen (classic/chat.ts receiveWord).
       if (sub === WORD_SELECT_SUBCOMMAND) {
@@ -483,6 +497,18 @@ export class Lobby {
     return new Promise((resolve) => {
       this.inviteWaiter = resolve;
     });
+  }
+
+  // The next 6xCE answer to a Master Transfer request (net/team.ts). One waiter at a time.
+  private masterWaiter: ((a: { guildCard: number; action: number; name: string }) => void) | null = null;
+  waitMasterAnswer(): Promise<{ guildCard: number; action: number; name: string }> {
+    return new Promise((resolve) => {
+      this.masterWaiter = resolve;
+    });
+  }
+  // A window that stops waiting drops the waiter, so a late answer is not taken for the next request's.
+  cancelMasterWait(): void {
+    this.masterWaiter = null;
   }
 
   // The header's client id is this client's unless `clientId` names another player (an NPC player's
