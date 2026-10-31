@@ -80,7 +80,7 @@ import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import { GalgryphonMinionManager } from '../combat/galgryphon.ts';
 import { GalgryphonAi } from '../combat/galgryphonai.ts';
 import { OlgaFlowAi, decodeOlgaA4 } from '../combat/olgaflowai.ts';
-import { OLGA_AREA, OLGA_LANCER, OLGA_SWORD_WAVE, OlgaSwordTrail, OlgaStabObject, lancerBlade, lancerGate, lancerQuad, lancerTouches, olgaStabRange, randomlyAdjust, olgaBattlePower, stabGroundPoint, swordWaveTouches, type XYZ } from '../combat/olgaflowhits.ts';
+import { OLGA_AREA, OLGA_LANCER, OLGA_SWORD_WAVE, OlgaSwordTrail, OlgaStabObject, lancerBlade, lancerGate, lancerQuad, lancerTouches, olgaStabRange, randomlyAdjust, olgaBattlePower, olgaStabPower, stabGroundPoint, swordWaveTouches, type XYZ } from '../combat/olgaflowhits.ts';
 import { galgryphonAttackBurst, GALFX_RING, GALFX_RING_PARTICLES } from '../combat/galgryphonfx.ts';
 import { DARVANT, Darvant, DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES, darvantRingIcon } from '../combat/darkfalz.ts';
 import { DEMO_WARP_PARTS } from '../formats/enemymodels.ts';
@@ -3318,7 +3318,7 @@ export class CombatView {
       for (const o of st.objs) {
         if (!o.alive) continue;
         if (o.touches({ x: me.x, z: me.z })) {
-          const power = randomlyAdjust(olgaBattlePower(speed?.fparam1 ?? 0), 0.1, this.rng());
+          const power = randomlyAdjust(olgaStabPower(speed?.fparam1 ?? 0), 0.1, this.rng());
           this.enemyTechHitsPlayer(e, power, o.pos.x, o.pos.z, `E-${e.index.toString(16)} (${e.slot.type}) sword stab`);
         }
         o.tick();

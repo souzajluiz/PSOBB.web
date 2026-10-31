@@ -59,8 +59,10 @@ export function closestOnSwordLine(p: XZ, a: XZ, tip: XZ): { x: number; z: numbe
 
 // The sword's hit on a player at `p` (CheckForSwordWaveHittingPlayers_00494f58's inner test): the
 // distance to the sword's line within the radius, and the closest point lies between `a` and `tip`
-// (the dot of (a - c) and (tip - c) is at most the threshold). ASSUMED: the exe's dot is taken on the
-// XZ plane (the dump's 2D vector copy of the Y component is not reproduced literally).
+// (the dot of (a - c) and (tip - c) is at most the threshold). ASSUMED: the exe's dot is taken on the XZ plane.
+// 2026-10-31 (asm 0x00494f58: the vectors are built at 0x004950bd..0x00495135): the first vector's Z is stack slot
+// esp+0x44, which the function never writes (its X is a.x, its Y is a.z stored at esp+0x40, zeroed later), so the exe's
+// dot has a stale-stack Z term. UNCLEAR, not reproducible; the port uses the intended XZ dot.
 export function swordWaveTouches(p: XZ, a: XZ, tip: XZ): boolean {
   const c = closestOnSwordLine(p, a, tip);
   if (c.dist > OLGA_SWORD_WAVE.radius) return false;
@@ -68,13 +70,15 @@ export function swordWaveTouches(p: XZ, a: XZ, tip: XZ): boolean {
   return dot <= OLGA_SWORD_WAVE.dotThreshold;
 }
 
-// The exe's randomly_adjust_value_by_fraction (dump line 210422): rnd in [0, 1) stands for
-// _rand() / 32768; the value moves by sin(BAMS of rnd * 65535) * fraction * value and is at least 1.
-// ASSUMED: int_sin's table is the sine of the BAMS angle.
+// The exe's randomly_adjust_value_by_fraction (0x0048e9d4, dump line 210422, re-read 2026-10-31): rnd in [0, 1)
+// stands for _rand() / 32768. Both int conversions run under the x87 control word with RC = 11 (`or 0xc00` at
+// 0x0048e9f7 and 0x0048ea32, then `fistp`), so they TRUNCATE: the angle is trunc(_rand / 32768 * 65535) and the
+// result is trunc(value + sin * fraction * value), at least 1 (0x0048ea50). The exe's constants: 32768 (0x009015a8),
+// 65535 (0x009015ac). ASSUMED: int_sin (0x0082dcbc, a table) is the sine of the BAMS angle.
 export function randomlyAdjust(value: number, fraction: number, rnd: number): number {
-  const angle = Math.round(Math.floor(rnd * 32768) / 32768 * 65535);
+  const angle = Math.trunc((Math.floor(rnd * 32768) / 32768) * 65535);
   const s = Math.sin(angle * BAMS_TO_RAD);
-  const v = Math.round(value + s * fraction * value);
+  const v = Math.trunc(value + s * fraction * value);
   return v < 1 ? 1 : v;
 }
 
@@ -84,6 +88,14 @@ export function randomlyAdjust(value: number, fraction: number, rnd: number): nu
 export function olgaBattlePower(fparam: number): number {
   const r = Math.trunc(fparam);
   return r > 0 ? r : OLGA_SWORD_WAVE.fallbackPower;
+}
+
+// The stab object's power (+0x34) is set in its constructor (olga1_sword_stab_constructor, 0x0049171c), not in
+// InitializeOlga1AnimationSpeeds: the field is the truncated BattleParam value, and only an exact 0.0 (the
+// compare with 0x009021e4 = 0.0 at 0x004917c8) gives the 0x14 fallback. A negative field is kept (the hit then
+// clamps to 1 in randomly_adjust). PROVEN from the asm (fist RC = 11 at 0x004917c2, fcomp at 0x004917c8).
+export function olgaStabPower(fparam: number): number {
+  return fparam === 0 ? OLGA_SWORD_WAVE.fallbackPower : Math.trunc(fparam);
 }
 
 // The sword trail: the exe keeps the sword's other point across ticks (unk_0x5e0); this keeps the
@@ -132,6 +144,13 @@ export interface XYZ {
   z: number;
 }
 
+// 2026-10-31 (map section 18): the stab's gate needs the sword's two Y values to differ across the floor plane.
+// The only decoded writers of the sword Y (+0x5e4, +0x5f0, +0x5fc) are SetOlga1SwordAttackYPosition_0049536c
+// (0x0049536c, called only inside the sword wave's window, 0x00494ffd), which set all three to 10.0. No literal
+// store to +0x5e0..+0x600 (X or Z either) exists in 0x00488000..0x004a2000. So with the decoded writers the gate
+// (CheckOlga1SwordStab_00495508, 0x00495508..0x004955f0: `tip.y < a.y && tip.y < 0`, or the reverse) is never true,
+// and the port's bone-based stab (below) is NOT the exe's proven behaviour. UNCLEAR: the writer of the sword points
+// is not bound; the port keeps the bone-based gate (ASSUMED) until it is.
 export const OLGA_SWORD_STAB = {
   // The object lives for 8 updates (counter +0x30 0..7; destroyed when > 7). PROVEN.
   lifeTicks: 8,

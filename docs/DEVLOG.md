@@ -24200,3 +24200,40 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 - The player list the minion homes on is the port's living party. The exe's `GetPlayer_0068d5a8(slot)` was not checked for dead players.
 
 **Decisive fact to verify.** objdump: launcher `0x004aa975` `movl 0x1c(%ebx),%eax`, `0x004aa97a` `je 0x4aaae6`, and at `0x004aaae6` `movl $0x1,0x1c(%ebx)` followed by `jmp 0x4aaa4d`, the state-1 code. Minion: `0x004ab290` `movl 0x1c(%edi),%eax`, `0x004ab295` `je 0x4ab2f2`, and at `0x004ab2f2` `movl $0x1,0x1c(%edi)` followed by the state-1 code at `0x004ab2f9`. A minion launched at tick 0 therefore takes its first step on tick 1, not tick 2.
+## 2026-10-31: Olga Flow attack objects re-checked against the exe (wave, stab, lancer): two fixes, the stab gate OPEN
+
+**Outcome.** The three ported attacks (sword wave, sword stab, fire lancer) were compared with PsoBB.exe. Two real mismatches were fixed in the port: `randomlyAdjust` (the attack power of all three) rounded where the exe truncates, and the stab's power used the sword wave's rule (positive or 20) where the stab constructor uses its own (exact 0.0 gives 20, other values are truncated and kept). The sword stab's spawn gate cannot pass with the exe's decoded writers (the sword's Y is 10.0 at both points), so the bone-based stab stays as an ASSUMED port and is now marked OPEN. The tail swipe, mines and form 2 are still not ported (map section 17 and 12.2). Map: `docs/bosses/olgaflow-map.md` section 18.
+
+**Exe evidence (PsoBB.exe; dump `Psobb.exe-05112026.c`; asm by `objdump -d -M intel`; constants by `tools/exedata.py read`; the distance function by `tools/ghidra/decomp.sh 0x0083a0dc`):**
+- Sword wave test `CheckForSwordWaveHittingPlayers` (0x00494f58): window (chunk, animation counter in [12.5, 22]); the line through A = +0x5e0 with direction tip - A (XZ, Y zeroed, 0x0049504d..0x0049509e); the distance is to the INFINITE line (FUN_0083a0dc has no clamp to [0, 1]); hit at distance <= 15.0 (0x00902b04) and dot(a - c, tip - c) <= 0 (0x00902b14); power `randomly_adjust(+0x484, 0.1)`; damage group 0 with `fixed_damage_maybe` = 0.
+- Its dot has an unbound term: the first vector's Z is stack slot esp+0x44, never written by that function (the Y is `a.z`, written to esp+0x40 and zeroed before the dot at 0x00495118). Recorded as UNCLEAR; the port keeps the intended XZ dot.
+- `randomly_adjust_value_by_fraction` (0x0048e9d4): both int conversions run under RC = 11 (`or 0xc00`, then `fistp`), so the angle is `trunc(_rand / 32768 * 65535)` (0x009015a8 = 32768, 0x009015ac = 65535) and the result is `trunc(value + sin * fraction * value)`, at least 1 (0x0048ea50). PROVEN.
+- Stab spawn `CheckOlga1SwordStab` (0x00495508): one object per gate pass (the create at 0x004916a0 allocates one 0x38-byte object; no loop). The mult-4 flag (0x00495628) gates only the particles (0x212 / 0x213 in the ctor) and, in the caller, the sound 0x3c4 and the lock-on call. The range index is `g_CurrentDifficulty` (0xa9cd68, 0x004955f3; the dump's `g_CurrentFloor` name is a mislabel), `{15, 20, 25, 50}` (0x0090264c), outside 0..3 row 0.
+- Stab update (`olga1_sword_stab_update`, dump 212391): every `can_olga_hit_player` player within `<=` range on XZ takes `randomly_adjust(+0x34, 0.1)`; the counter goes up after the hits and the object is dead once it passes 7: 8 updates, the 8th still hits. A photon-blast gate skips the whole update (not modelled).
+- Stab power (ctor 0x0049171c): `fist` of field0 under RC = 11 (0x004917c2), `fcomp` against 0.0 (0x009021e4 = 0.0, 0x004917c8); equal gives 0x14 (0x00491876), otherwise the truncated value, negative kept.
+- Lancer (row 22, 0x0049876c): the frame reads the timer before its decrement (0x00498781), hits when `0x1e <= timer <= +0x4a8` (0x004987d0..0x004987df), progress first (0x004967ec on a hit tick, 0x00496810 otherwise). The gate: `ValidateDoorAnimation_00836208(A = +0x5b0, B = +0x5c8) >= 10.0` (call at 0x00495960, `fcomp [0x902670]`), and 0x00836208 returns `g_DoorAnimThresholds` (0x0098a600 = 0.0) below the squared threshold 0.025 (0x0098a604). Constants -500 / 0.5 / 0 / 10 / 1/30 / -2/15 match the port.
+
+**Stab gate, OPEN (the new finding).** The gate (0x00495508..0x0049553a) needs the sword's tip and A on opposite sides of Y = 0. The only decoded writers of the sword Y (+0x5e4, +0x5f0, +0x5fc) are `SetOlga1SwordAttackYPosition_0049536c` (0x0049536c, 10.0 each), which runs only inside the wave's window (0x00494ffd). A search for literal stores to +0x5e0..+0x600 in 0x00488000..0x004a2000 (any base register, and the `lea` forms) finds none except that setter, and none for the X / Z components either. So with the decoded writers the gate is never true. Either the sword points are written by an unbound path, or the stab does not fire in this build. The port keeps the bone-based gate (ASSUMED) and says so in `olgaflowhits.ts`.
+
+**Port.**
+- `client/src/combat/olgaflowhits.ts`: `randomlyAdjust` truncates (the angle and the result); `olgaStabPower(fparam)` (new): 0 gives 20, else `Math.trunc`; comments on the dot and the gate.
+- `client/src/render/combat.ts` `olgaSwordStab`: the stab's power is `olgaStabPower(fparam1)` (was `olgaBattlePower`). The wave and the lancer keep `olgaBattlePower`, which matches the InitializeOlga1AnimationSpeeds rule.
+- `tests/olgaflowai.test.ts`: the truncation cases (rnd 0.25 gives 10 for value 10, where round gave 11), a 200-value check of the formula, and the stab power cases (0 gives 20, -3 kept, 43.9 gives 43).
+
+**Corrections to earlier entries.** Map 14.2 said the animation speed is "rounded when > 0": it is truncated (map 16.4 and 18.4). The 2026-10-24 stab and 2026-10-25 lancer entries stand; their ASSUMED lists are extended by the points above.
+
+**Checks.**
+- `node tests/olgaflowai.test.ts`: all checks passed.
+- `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures.
+- `node tests/bossrooms.test.ts`: ALL PASS.
+- `node client/node_modules/typescript/bin/tsc --noEmit -p client` (Node 24): clean.
+- Not run: Chrome, Playwright (no room with Olga Flow was driven).
+
+**ASSUMED / open (still).**
+- The stab gate (above): OPEN; the port's bone pair (tip and the previous tip) is ASSUMED.
+- The sword points' X / Z writer: not bound; the tip is the model's bone 4 (ASSUMED).
+- The wave's dot Z term: stale stack, UNCLEAR.
+- The wave's animation time (ticks since the state entered, ASSUMED) and the stab's same-tick first hit (the object's first update is in the same frame, ASSUMED).
+- `can_olga_hit_player`'s `character_flags & 0x2000800` test is not ported (the local player and the port's `dead` flag only, ASSUMED).
+- `int_sin` (0x0082dcbc, a table) is taken as the sine (ASSUMED).
+- Not ported: the tail swipe's hit (the anchor, map 17), the mines (no objects), form 2, the lancer's push-out and orbit (map 16.6), the lancer's anchors A / B (ASSUMED).
