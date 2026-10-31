@@ -19,7 +19,7 @@
 // Once a group's wave is built, the player is walked into its reach if the trigger left it more than
 // 150 units away (engageWave): the Sinow search radius is 200, so a trigger that far from the wave
 // otherwise never engages it (the enemies cycle lost -> home -> spawn, invulnerable throughout).
-// Each floor has a time cap (EP2_FLOOR_CAP_S, default 300 s): a group that starts after the cap is not
+// Each floor has a time cap (EP2_FLOOR_CAP_S, default 1500 s; the old 300 s cap ran only 2 of floor 10's 33 groups): a group that starts after the cap is not
 // run (counted in notRun). One screenshot per floor (client/test-results, JPEG).
 // Against a local newserv (e2e/README.md).
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
@@ -31,9 +31,13 @@ const USER = process.env.PSO_USER ?? freshUser('wep');
 const PASSWORD = process.env.PSO_PASSWORD ?? USER;
 const WATCH_MS = Number(process.env.EP2_WATCH_SECONDS ?? 30) * 1000;
 const FLOORS = (process.env.EP2_WATCH_FLOORS ?? '1,5,7,10').split(',').map((s) => Number(s.trim()));
+// EP2_WATCH_GROUPS=80/2,71/4 runs only those (room/wave) groups.
+const ONLY = (process.env.EP2_WATCH_GROUPS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
 const POLL_MS = 500;
 const LAB_FLOOR = 0;
-const FLOOR_CAP_MS = Number(process.env.EP2_FLOOR_CAP_S ?? 300) * 1000;
+// EP2_WATCH_EPISODE=1 watches Episode 1 floors instead (Mines 6..10 etc.; the floor 0 warp is Pioneer 2).
+const EPISODE = Number(process.env.EP2_WATCH_EPISODE ?? 2);
+const FLOOR_CAP_MS = Number(process.env.EP2_FLOOR_CAP_S ?? 1500) * 1000;
 
 // One wave event above the group in its chain: its room / wave and its trigger object, if any.
 interface ChainLink {
@@ -49,6 +53,7 @@ interface GroupInfo {
   room: number;
   wave: number;
   eventIds: number[];
+  delays: number[]; // the group's wave events' start delays, frames (waves.ts: the handler counts it down before building)
   trigger: { index: number; x: number; y: number; z: number; radius: number; eventId: number } | null;
   // trigger: the group's own event has a trigger object; chained: it is started by a trigger_event of
   // the chain (chain = its links, root first); event-untriggered: it has a wave event but nothing
@@ -83,6 +88,8 @@ interface GroupResult extends GroupInfo {
   failed: string[];
   consoleIssues: string[];
   warpError: string;
+  engage: { moved: boolean; dist: number } | null;
+  raw: Array<{ type: string; ai: string; state: string; cs: string; vis: boolean; inv: boolean; locked: boolean }>;
 }
 
 // Floor data for the room lookup: the wave events, the enemy entries of the floor's set data, the
@@ -128,6 +135,9 @@ const enemyStates = (page: Page) =>
       // invulnerable: the spawn state (the exe's 0x4040000 flags); vis: the enemy object is shown.
       inv: !!e.ai?.invulnerable,
       vis: !!e.instance?.root?.visible,
+      // the combat's own state (tickEnemies runs only 'idle' ones) and whether a status holds the enemy.
+      cs: String(e.state ?? '-'),
+      locked: !!e.status?.active,
     }));
   });
 
@@ -150,9 +160,9 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
   await openPartyMenu(page);
   await key(page, 'ArrowDown'); // Create a PARTY
   await key(page, 'Enter');
-  await key(page, 'ArrowDown'); // EPISODE 2
+  if (EPISODE === 2) await key(page, 'ArrowDown'); // EPISODE 2
   await key(page, 'Enter');
-  await expect.poll(() => peek(page, (w) => w.classicLobby.party?.create?.episode)).toBe(2);
+  await expect.poll(() => peek(page, (w) => w.classicLobby.party?.create?.episode)).toBe(EPISODE);
   await key(page, 'Enter'); // Party Name
   await page.keyboard.type(name, { delay: 30 });
   await key(page, 'Enter');
@@ -161,7 +171,7 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
   await expectInGame(page, logs, name);
 
   const results: GroupResult[] = [];
-  const floorSummary: Record<number, { groups: number; notRun: number; noTrigger: string[]; states: Record<string, string[]> }> = {};
+  const floorSummary: Record<number, { groups: number; notRun: number; noTrigger: string[]; absent: string[]; states: Record<string, string[]> }> = {};
 
   for (const floor of FLOORS) {
     // Discovery: the floor's groups, from one load.
@@ -178,15 +188,16 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
     expect(d.floor, `floor ${floor} reached`).toBe(floor);
     const groups = groupsOf(d, floor);
     console.log(`ep2w floor ${floor} (area 0x${d.area.toString(16)}): ${groups.length} groups, ${d.triggers.length} triggers, ${d.events.length} events, ${d.enemies.length} set entries ${discoveryError}`);
-    floorSummary[floor] = { groups: groups.length, notRun: 0, noTrigger: [], states: {} };
+    floorSummary[floor] = { groups: groups.length, notRun: 0, noTrigger: [], absent: [], states: {} };
     const floorStart = Date.now();
 
-    for (const g of groups) {
+    for (const g0 of groups) {
+      if (ONLY.length && !ONLY.includes(`${g0.room}/${g0.wave}`)) continue;
       if (Date.now() - floorStart > FLOOR_CAP_MS) {
         floorSummary[floor].notRun++;
         continue;
       }
-      await test.step(`floor ${floor} room ${g.room} wave ${g.wave}`, async () => {
+      await test.step(`floor ${floor} room ${g0.room} wave ${g0.wave}`, async () => {
         const mark = { errors: errors.length, failed: failed.length, logs: logs.length };
         // A fresh load of the floor for each group: its events have not run yet.
         await warp(page, LAB_FLOOR).catch(() => {});
@@ -199,6 +210,16 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
         }
         await page.waitForTimeout(2500);
         const before = await floorData(page);
+        // Every load of a floor picks its own wave variants (the event set differs between loads: 33 events
+        // on one load of Seabed Upper, 32 on the next), so the group's events, trigger and chain are read
+        // from THIS load; a chain taken from the discovery load pointed at events that were not here and
+        // the next link never started (its enemies stayed built but not shown).
+        const g = groupsOf(before, floor).find((x) => x.room === g0.room && x.wave === g0.wave);
+        if (!g) {
+          floorSummary[floor].absent.push(`room ${g0.room} wave ${g0.wave}`);
+          console.log(`ep2w floor ${floor} room ${g0.room} wave ${g0.wave}: not in this load`);
+          return;
+        }
         const trig = before.triggers.filter((t) => g.eventIds.includes(t.eventId));
         const t = trig[0] ?? null;
         // A chained group: the first link of its chain with a trigger object is placed on it (the root
@@ -239,6 +260,9 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
             chainKilled.push(`event ${link.id} (room ${link.room} wave ${link.wave}): ready after ${ready.secs} s, hit ${k.hit}, dead ${k.ids.length}, alive after ${k.alive}`);
             if (k.alive > 0) break;
             await page.waitForTimeout(1000); // the next link's trigger_event and its delay
+            const fd = await floorData(page);
+            const li = fd.events.findIndex((ev) => ev.id === link.id);
+            chainKilled.push(`  after: event ${link.id} flags ${fd.flags[li]}, next-link events ${fd.events.map((ev, k) => `${ev.id}:${fd.flags[k]}`).filter((x) => g.eventIds.some((id) => x.startsWith(`${id}:`))).join(' ')}`);
           }
         }
         const playerRoom = (await floorData(page)).playerRoom;
@@ -251,13 +275,14 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
         let waveSpawned = false;
         const ticks = Math.ceil(WATCH_MS / POLL_MS);
         let engaged = false;
+        let engage: { moved: boolean; dist: number } | null = null;
         for (let i = 0; i < ticks; i++) {
           await page.waitForTimeout(POLL_MS);
           const list = (await enemyStates(page)).filter((e) => e.room === g.room && e.wave === g.wave);
           if (list.length && !engaged) {
             // The wave is built: walk the player into its reach once (engageWave), then just watch.
             engaged = true;
-            await engageWave(page, g.room, g.wave);
+            engage = await engageWave(page, g.room, g.wave);
           }
           if (list.length) waveSpawned = true;
           maxBuilt = Math.max(maxBuilt, list.length);
@@ -304,6 +329,8 @@ test('Episode 2: wave groups of floors 1, 5, 7, 10 watched for a long time, one 
           consoleIssues: logs.slice(mark.logs).filter((l) => /^(error|warning|pageerror)/.test(l)).slice(0, 20),
           chainKilled,
           warpError: discoveryError || warpError,
+          engage,
+          raw: finalList.map((e) => ({ type: e.type, ai: e.ai, state: e.state, cs: e.cs, vis: e.vis, inv: e.inv, locked: e.locked })),
         };
         results.push(r);
         if (!target) floorSummary[floor].noTrigger.push(`room ${g.room} wave ${g.wave}`);
@@ -350,6 +377,7 @@ function groupsOf(d: Awaited<ReturnType<typeof floorData>>, floor: number): Grou
       room: e.room,
       wave: e.wave,
       eventIds,
+      delays: d.events.filter((ev) => eventIds.includes(ev.id)).map((ev) => ev.delay),
       trigger: trig,
       kind: trig ? 'trigger' : chain.length ? 'chained' : eventIds.length ? 'event-untriggered' : 'section',
       chain,

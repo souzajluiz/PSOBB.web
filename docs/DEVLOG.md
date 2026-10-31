@@ -23641,3 +23641,24 @@ All four read from the exe (dump `Psobb.exe-05112026.c` lines 776xxx..778xxx, Gh
 **Dark Belra.** Not an Episode 2 boss: it is an ordinary Ruins / Mines monster (several per floor, floor 8 here had 7, all wave-gated and hidden until a wave trigger). The spec wakes one through the floor's event triggers (as boss-fights.spec.ts), kills it with one `applyEnemyHit` and asserts the EXP award; the boss "defeated" log and an exit warp of its own do not exist for it (the floor keeps its ordinary warps). A Belra has no exit path of its own; the exe address of its death handler was not traced (ASSUMED the generic EnemyOnKilledHandler 0x0051f894). The corpse keeps its death motion (no model hiding added).
 
 **Tests.** `PW_BASE_URL=http://127.0.0.1:5193 NEWSERV_SYSTEM=.../vendor/newserv/system playwright test e2e/boss-kill.spec.ts --trace off --workers=1` 3 boss-kill tests (Dragon, De Rol Le, Vol Opt) passed in one run (6.8 min); the Dark Belra test passed on its own re-run (1.1 min) after its assertions were corrected (the first version expected a boss log and no area warp)..
+## 2026-10-30: Episode 2 watch on Seabed Upper and Lower, own kills advance own waves
+
+**Why only 2 of 33 groups ran.** `client/e2e/ep2-floors-watch.spec.ts` capped a floor at `EP2_FLOOR_CAP_S` = 300 s; one group costs the watch (30 s) plus two warps and, for chained groups, the chain kills. The cap is now 1500 s by default. The spec already steps onto the event trigger objects (o.dat type 8) as `boss-fights.spec.ts` does.
+
+**What ran** (Vite on 5194, `--trace off`, fresh accounts `ep2w...`, `EP2_WATCH_SECONDS=15 EP2_FLOOR_CAP_S=1500`):
+- `EP2_WATCH_FLOORS=10`: 33 of 33 groups ran (1018 s), 0 page errors, 0 groups not run. Brains seen: Recobox, Recon, Sinow Zoa, Delbiter, Dolmolm / Dolmdarl, Deldepth, with state changes.
+- `EP2_WATCH_FLOORS=11` (Seabed Lower): 35 of 35 groups ran (1021 s), 0 page errors. Brains: Dolmolm, Dolmdarl, Recobox, Recon, Sinow Zoa, Sinow Zele, Morfos, Delbiter; all walk their states (Morfos start -> appear -> rise -> walk -> search -> laser, Delbiter hidden -> runIn -> swing -> chase).
+- Episode 2 has no Mines floor (Mines are Episode 1 floors 6..10); the spec takes `EP2_WATCH_EPISODE=1` for an Episode 1 party, not run here.
+
+**Bug found and fixed (client, not an FSM).** Chained waves (room N wave 2 started by a `trigger_event` of wave 1) never started: the groups stayed built but hidden in their first state (Dolmolm `emerge`, Morfos `start`, Sinow `spawn`, Delbiter `hidden`, 0 state changes). The wave state machine (`render/waves.ts`) only learned of a kill from an incoming 6x76 (`render/gamefield.ts`), and newserv forwards a 6x76 to the other clients only (`ReceiveSubcommands.cc` `on_set_entity_set_flag`, `forward_subcommand...` at its end; it checks the wave server-side for its own set flags). So the killer's own wave events never reached `EVENT_ENEMIES_DEAD`. `net/game.ts` `sendEntitySetFlags` now calls `onLocalEntityDefeated` for flag 8, which `gamefield.ts` wires to `killEntity`. This matches the exe, which sets the set entry's defeated flag in its own wave data at the kill (update_quest_event reads it; ASSUMED from the 2026-10-17 wave port notes, the 6x76 is the broadcast of that). Check: floor 11 groups 20/2, 71/4 and 90/2 after the fix show event flags 6 after the chain kill and the wave enemies visible and walking (Dolmdarl idle, Morfos hidden / appear).
+
+**Spec changes.** Groups are re-read from each load (a load of a floor picks its own wave variants, 33 vs 32 events on Seabed Upper; the discovery chain pointed at events that were not there); `EP2_WATCH_GROUPS=80/2,71/4` runs chosen groups; each result has `engage`, `raw` (per-enemy FSM state, combat state, visibility) and `delays`; `EP2_WATCH_EPISODE`.
+
+**Lobby ping.** `net/wstransport.ts` `send` drops frames while the socket is not OPEN (the 900-frame ping in `classic/lobby.ts` threw "WebSocket is already in CLOSING or CLOSED state" ~200 times after a disconnect).
+
+**Open.** The Lab warp does not reset finished wave events: on a repeated load 13 of 35 floor-11 groups report event flags 24 (finished) and show no enemy (their wave is spent), and the groups without any wave event (`section` kind, e.g. 70/2, 71/2) are built by another group's construct_enemies, so the section placement never shows them. No FSM bug was exposed by Seabed Lower beyond the wave fix; the Tower (floor 17) has no enemies. Episode 1 Mines not run.
+
+
+## 2026-10-30: Ep2 watch merge note
+
+The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with its own hook (`onLocalEntityDefeated`). The merge keeps main's `Game.onLocalEntityFlags` (flag 8 marks the wave set entry, the corpse is not hidden, see "Local 6x76 keeps the corpse") and drops the duplicate; the branch's spec, `wstransport.ts` send guard and docs are kept.

@@ -23,7 +23,11 @@ export function connectBridge(port: number, base = bridgeUrl()): Promise<Transpo
     const early: Uint8Array[] = [];
     let handler: ((d: Uint8Array) => void) | null = null;
     const t: Transport = {
-      send: (d) => ws.send(d),
+      // A send on a closing / closed socket is dropped (the lobby ping, every 900 frames, kept
+      // throwing "WebSocket is already in CLOSING or CLOSED state"); onClose has already told the owner.
+      send: (d) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(d);
+      },
       close: () => ws.close(),
       get onData() {
         return handler ?? ((d: Uint8Array) => void early.push(d));
