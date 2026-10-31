@@ -67,7 +67,7 @@ import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_RADIUS } from './enemyshots.ts';
 import { chopToInt } from './chop.ts';
-import { SM_LASER, SM_MISSILE, SM_SAND, SmClock, SmField, SmLaser, laserLength, laserRamp, SmMissile, type SmPoint3, SmRng, SmSandSonic, SmStorm, SmTouch, SmWave, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
+import { SM_LASER, SM_SAND, SmClock, SmField, SmLaser, laserLength, laserRamp, SmMissile, type SmPoint3, SmRng, SmSandSonic, SmStorm, SmTouch, SmWave, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
 
 const BAMS = BAMS_TO_RAD;
 const f32 = Math.fround;
@@ -286,6 +286,8 @@ export interface SmBossOptions {
   dead?: boolean;
   // The boss's base ATP (the stats row's atp, [boss+0x2c4]): the sand sonic's damage.
   atp?: number;
+  // The boss's entity id (the id word [boss+0x394], ASSUMED the entity index): the missiles' scan starts.
+  id?: number;
   rng?: () => number;
 }
 
@@ -658,7 +660,7 @@ export class SaintMilionAi extends BrainBase {
       case 18:
         if (phase === 4) {
           this.events.push({ kind: 'effect', name: 'missiles', state: s });
-          this.launchMissiles(1);
+          this.launchMissiles(0);
         } else if (phase === 0) this.missileFrame();
         return;
       case 19:
@@ -786,23 +788,19 @@ export class SaintMilionAi extends BrainBase {
     if (this.clock.crossed(SM.missileFrame) && (this.arena === 3 || this.arena === 4)) this.launchMissiles(2);
   }
 
-  // Missiles (0x0076b8f4 / 0x0076968c) leave the boss with the MovementData iparam3 as their blast.
-  // ASSUMED: each one aims at the nearest living player at launch (FindNearestPlayer), or along the heading,
-  // and flies until it is within SM_MISSILE.arrive of that point (see SmMissile).
-  private launchMissiles(count: number): void {
-    let best: AiTarget | null = null;
-    let bestSq = Infinity;
-    for (const t of this.targets) {
-      if (t.dead) continue;
-      const d = (t.x - this.x) ** 2 + (t.z - this.z) ** 2;
-      if (d < bestSq) {
-        best = t;
-        bestSq = d;
-      }
+  // Missiles (0x0076b8f4 on entry, 0x0076968c on frame 5 in arenas 3 / 4): a pair each time, the first from
+  // node 0x27 (+0xdd4) and the second from node 0x28 (+0xe14), with the boss's id word + k and + k + 1 as the
+  // scan start, the boss's heading and iparam3 as the blast. Without the nodes (no render yet) they leave the
+  // boss's ground point (ASSUMED). The exe's node 0x27 / 0x28 pass is the ValidateMatrixIndex gate (ASSUMED
+  // always true here).
+  private launchMissiles(k: number): void {
+    const heading = this.heading * BAMS;
+    const damage = this.row.iparam[2];
+    const id = this.opts.id ?? 0;
+    for (let i = 0; i < 2; i++) {
+      const p = this.node(0x27 + i) ?? [this.x, 0, this.z];
+      this.pendingShots.push(new SmMissile(p[0], p[1], p[2], heading, damage, { start: id + k + i, wall: this.opts.wall }));
     }
-    const angle = best ? Math.atan2(best.x - this.x, best.z - this.z) : this.heading * BAMS;
-    const range = best ? Math.max(0, Math.sqrt(bestSq) - SM_MISSILE.arrive) : null;
-    for (let i = 0; i < count; i++) this.pendingShots.push(new SmMissile(this.x, this.z, angle, this.row.iparam[2], range));
   }
 
   // The sand sonic's launch (0x0076c974) once its wait is over: from node 0x17 toward node 0x17 from node 4.
