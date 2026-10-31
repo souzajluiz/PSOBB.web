@@ -31,22 +31,29 @@
 // pillar's hatch (combat/volopt.ts, VoloptLid) and 0x0044BB80 the Dark Falz
 // scene's music timer.
 //
+// Checked 2026-10-31 (the reference dump's names, Ghidra for the constants and
+// the arm, exedata for the floats): the bars, the cage, the missiles, the heal,
+// the laser and the arm's timeline (two passes of three rounds, see tickArm).
 // ASSUMED (neither the dump nor the exe's data has it): the launch points of the
-// missiles; which part a strike touched (the nearest box to the attacker); the
-// ability of the Ultimate arm (state 0xC, only its timeline and the arc are
-// ported); the player's height in the bars' and the cage's contact tests (they
-// are flat tests here), the cage's ray cast against the map (0x0077FFFC, not
-// reproduced) and the drawing of all of them (a ball per bar and per cage).
+// missiles (the exe's model nodes, u___01_009a5570, not traced); which part a
+// strike touched (the nearest box to the attacker); the arm's arc measured from
+// the player's position (the exe uses the aim point); the Ultimate arm's hold
+// (sub 6: its table 0x00a44bcc is not in the image; 20 for every round); the
+// players' push-out inside the interaction radius (laser sub 3, arm subs 1 and 5,
+// missile sub 1: _g_VoloptInteractionRadius is not in the dump); the map ray of
+// the cage and of the missile's ground (0x0077FFFC: the exe deletes a cage that
+// meets the map; not reproduced); the player's height in the bars' and the
+// cage's contact tests (they are flat tests here); the drawing of all of them
+// (a ball per bar and per cage); the beams the arm and the laser draw (not ported).
 
 import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
-import { EnemyShot, PLAYER_AIM_HEIGHT, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { EnemyShot, PLAYER_AIM_HEIGHT, PLAYER_RADIUS, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { NO_HITS, VO_ID, VoloptAnim, VoloptPart, VoloptWatchdog, type Vec3, type VoloptEvent, type VoloptForm2Link, type VoloptSlot } from './volopt.ts';
 import { chopToInt } from './chop.ts';
 
 const BAMS = BAMS_TO_RAD;
-const PLAYER_RADIUS = 5;
 
 // Motion table 0x009a5340: 0 wait, 2 the laser, 3 the hit, 4 the death
 // (holds), 5 the heal, 6 the capture, 7 the missiles, 8 standing up.
@@ -76,14 +83,22 @@ export const FORM2_BOXES: readonly { x: number; y: number; z: number; r: number 
 export const PART_NAMES = ['capture', 'laser', 'heal', 'missile'] as const;
 
 // The numbers of the state functions, one place.
+// Checked 2026-10-31 against the exe's state functions (the reference dump's
+// ProcessPlayerState 0xc/2/9/10/11 and the two ProcessVoloptInteractionPhases,
+// Ghidra FUN_00446f90 for the arm) and the float constants (exedata.py):
+// 0x008fe758 / 0x008fe7d0 / 0x008fe7e0 / 0x008fe814 = 33 / 22 / 38 / 33,
+// 0x008fe75c / 0x008fe7d8 / 0x008fe80c = 1225 (35 squared), 0x008fe808 = 100,
+// 0x008fe7b4 = 20, 0x008fe748 = 55, 0x008fe8f8 = 1/6.
 export const F2 = {
-  turn: 0x566, // the heading step of the aim (ClampAngleDifference)
-  missileArc: 0x1c72, // players in front of the muzzle (+/- 40 degrees)
+  turn: 0x566, // the heading step of the aim (EntityUpdateRotation, 0x0052cc54)
+  missileArc: 0x1c72, // players in front of the muzzle (+/- 40 degrees, heading + 0x8000)
   missileAim: 60, // frames of aiming (0x344)
   missileWait: 10,
   missileGap: 15,
-  missileWaves: 2, // logged in; offline it is 4
+  missileWaves: 2, // logged in (get_current_scene() == logged_in); offline it is 4
   missileLaunchFrame: 22,
+  missileGroup: 0x11, // Ultimate only: a missile's explosion is group 0x11 with chance 1/6
+  missileGroupChance: 0.1666666716337204, // 0x008fe8f8
   healFrame: 38,
   healWait: 30,
   healPause: 60,
@@ -97,7 +112,7 @@ export const F2 = {
   laserHit: 10, // a player this close to a point starts the bars
   laserRadius: [75, 25, 0x400] as const, // 75 + 25 * sin(phase), phase += 0x400
   pushRadius: 35,
-  pushTo: 40, // ASSUMED: _g_VoloptInteractionRadius was not read
+  pushTo: 40, // ASSUMED: _g_VoloptInteractionRadius was not read (its global is not in the dump)
   captureAim: 45,
   captureHold: 120, // + row 37 iparam5
   captureRelease: 15,
@@ -106,39 +121,60 @@ export const F2 = {
   prisonRise: 6, // the prison's ticks before its hold timer runs (state 7: 1 + 5 of 5 units)
   standFrame: 38,
   flinch: 6,
+  // The arm (state 0xC): the arc (0x31c7 Normal, 0x471c Ultimate, from heading + 0x4000),
+  // the turn offset -0x4000 (ProcessVoloptInteractionPhases #2 calls the turn with it),
+  // 90 frames of countdown, the wind-up to frame 33, a 30-frame charge, the rounds.
   armArc: [0x31c7, 0x471c] as const,
+  armTurn: -0x4000,
   armWait: 0x5a,
+  armFrame: 33,
+  armCharge: 30,
+  armRounds: 3,
+  armPasses: 2, // +0x3a0 < 2: the arm runs its countdown and rounds twice
+  armHold: 20, // sub 6 (Normal); Ultimate reads a per-round table (0x00a44bcc, not in the image): ASSUMED 20
+  armTail: 5, // sub 7 (Normal); Ultimate 0
   deathHold: 60,
   deathFrame: 47,
   deathLeave: 0x10,
 } as const;
 
-// The missile (the PrisonCore object, ConstructVoloptPrisonCoreEntity,
-// update SpawnVoloptPrisonItem): the velocity gains fparam2 of row 37 toward
-// the player's weapon point and is brought back to fparam1 every tick, life
-// round(fparam4) + 240 frames, a 5 unit box; entity_hit_by_tech group 0
-// (group 0x11, slow, one time in ten in Ultimate) with iparam1.
+// The turn offsets of the state functions: capture 0 (EntityUpdateRotation
+// with 0), missiles -0x8000 (heading + 0x8000 is the front), arm -0x4000.
+const TURN_CAPTURE = 0;
+const TURN_MISSILE = -0x8000;
+
+// The missile (the PrisonCore object, ConstructVoloptPrisonCoreEntity 0x0044xxxx
+// dump name, update SpawnVoloptPrisonItem): built with zero velocity (the ctor
+// zeroes +0xb4); each tick, while its target lives, the vector from the missile to
+// the target's weapon point is brought to fparam2 and added to the velocity, the
+// velocity is brought back to fparam1, and the missile moves. Its life is
+// round(fparam4) + 240 ticks: it explodes on the tick after that (the counter is
+// stored and compared with `<=`). The explosion (at the life's end, when a player
+// is in the blast, or on the ground) hits every player in the blast with
+// entity_hit_by_tech(owner, group, power = iparam1); the group is 0, or 0x11 in
+// Ultimate with the chance 1/6 (0x008fe8f8), rolled at the explosion.
+// ASSUMED: the target's height is PLAYER_AIM_HEIGHT (the exe aims at the player's
+// weapon_position); the ground is y < 0 (the exe's map ray is not reproduced).
 export class VoloptMissile extends EnemyShot {
   override readonly absolute = true;
   readonly effect: ShotEffect;
   readonly look: ShotLook = { color: 0xff7040, size: 2 };
-  private vx: number;
-  private vy: number;
-  private vz: number;
+  private vx = 0;
+  private vy = 0;
+  private vz = 0;
   private readonly speed: number;
   private readonly accel: number;
   private readonly life: number;
   private readonly target: number;
-  constructor(x: number, y: number, z: number, dir: Vec3, speed: number, accel: number, life: number, power: number, target: number) {
+  private readonly roll: () => number;
+  constructor(x: number, y: number, z: number, speed: number, accel: number, life: number, power: number, target: number, roll: () => number) {
     super(x, y, z);
     this.speed = speed;
     this.accel = accel;
     this.life = life;
     this.target = target;
-    this.vx = dir[0] * speed;
-    this.vy = dir[1] * speed;
-    this.vz = dir[2] * speed;
-    this.effect = { kind: 'tech', power: Math.max(0, power) };
+    this.roll = roll;
+    this.effect = { kind: 'tech', power: Math.max(0, power), group: 0 };
   }
   tick(targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return NO_HITS;
@@ -148,7 +184,7 @@ export class VoloptMissile extends EnemyShot {
       if (t.dead || t.clientId !== this.target) continue;
       // Toward the weapon point: add the pull, then back to the flight speed.
       const dx = t.x - this.x;
-      const dy = 10 - this.y;
+      const dy = PLAYER_AIM_HEIGHT - this.y;
       const dz = t.z - this.z;
       const d = Math.hypot(dx, dy, dz) || 1;
       this.vx += (dx / d) * this.accel;
@@ -163,18 +199,23 @@ export class VoloptMissile extends EnemyShot {
     this.x += this.vx;
     this.y += this.vy;
     this.z += this.vz;
-    // The explosion damages the players it touches (at the end of its life
-    // too); a player standing in it is hit once.
+    const blast = this.blast(targets);
+    if (blast.length || this.frames > this.life || this.y < 0) {
+      this.done = true;
+      (this.effect as { group?: number }).group = this.roll();
+      return blast;
+    }
+    return NO_HITS;
+  }
+  // The players the blast reaches (the collision box of 5 against the player's 5).
+  private blast(targets: readonly AiTarget[]): AiTarget[] {
+    const hits: AiTarget[] = [];
     for (let i = 0; i < targets.length; i++) {
       const t = targets[i];
       if (t.dead) continue;
-      if (Math.hypot(t.x - this.x, t.z - this.z) <= 5 + PLAYER_RADIUS && Math.abs(this.y - 10) <= 20) {
-        this.done = true;
-        return [t];
-      }
+      if (Math.hypot(t.x - this.x, t.z - this.z) <= 5 + PLAYER_RADIUS && Math.abs(this.y - PLAYER_AIM_HEIGHT) <= 20) hits.push(t);
     }
-    if (this.frames >= this.life || this.y < 0) this.done = true;
-    return NO_HITS;
+    return hits;
   }
 }
 
@@ -427,6 +468,9 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
   private phase = 0;
   private radius = 75;
   private sweep = 0;
+  private pass = 0; // the arm's pass (+0x3a0)
+  private round = 0; // the arm's round (+0x3a2)
+  private sfxDone = 0; // the one-shot sounds of this state (check_entity_animation_elapsed_threshold)
   private rotation = 0;
   private readonly anim: VoloptAnim;
   private readonly dog = new VoloptWatchdog();
@@ -593,8 +637,10 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         }
         break;
       case 7:
-        // UpdateVoloptPlayerEntityState: the arm, radius param + 55.
+        // UpdateVoloptPlayerEntityState: the arm (the target is the order's;
+        // the param is stored at +0x510 as param + 55, not read by the arm).
         if (this.canStart(this.partHp[1] >= 1, 0xc)) {
+          if (target !== 0xffff) this.aim = target;
           this.sweep = param + 55;
           this.go(0xc);
         }
@@ -613,6 +659,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
     this.st = st;
     this.sub = 0;
     this.timer = 0;
+    this.sfxDone = 0;
     this.anim.set(0);
     this.state = FORM2_NAMES[st] ?? `state ${st}`;
   }
@@ -777,13 +824,23 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
     this.sustained.add(id);
   }
 
-  private turnToward(x: number, z: number): number {
-    const want = (Math.round(Math.atan2(x - this.x, z - this.z) / BAMS) + 0x10000 - 0x8000) & 0xffff;
+  // EntityUpdateRotation (0x0052cc54): the heading steps by 0x566 toward
+  // atan2(dx, dz) + offset. Returns the gap before the step.
+  private turnToward(x: number, z: number, offset: number = TURN_MISSILE): number {
+    const want = (Math.round(Math.atan2(x - this.x, z - this.z) / BAMS) + 0x10000 + offset) & 0xffff;
     let diff = ((want - this.heading + 0x18000) & 0xffff) - 0x8000;
     const step = Math.max(-F2.turn, Math.min(F2.turn, diff));
     this.heading = (this.heading + step + 0x10000) & 0xffff;
     diff = Math.abs(diff);
     return diff;
+  }
+
+  // check_entity_animation_elapsed_threshold: true once, when the animation has
+  // run `frame` frames in this state (bit: the sound's slot in this state).
+  private crossed(frame: number, bit: number): boolean {
+    if (this.anim.frame < frame || (this.sfxDone & bit) !== 0) return false;
+    this.sfxDone |= bit;
+    return true;
   }
 
   private targetOf(targets: readonly AiTarget[]): AiTarget | null {
@@ -829,6 +886,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         break;
       case 2:
         this.anim.step();
+        if (this.crossed(15, 1)) this.events.push({ kind: 'se', id: 0x34b });
         if (this.anim.reached(F2.missileLaunchFrame)) {
           this.timer = F2.missileWait;
           this.sub = 3;
@@ -839,9 +897,9 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         break;
       case 4:
         this.waves++;
-        this.launchMissiles(targets);
-        this.events.push({ kind: 'se', id: 0x34d });
-        this.timer = F2.missileGap;
+        if (this.launchMissiles(targets) > 0) this.events.push({ kind: 'se', id: 0x34d });
+        // The gap's first tick is this one (the exe decrements in the same tick).
+        this.timer = F2.missileGap - 1;
         this.sub = 5;
         break;
       case 5:
@@ -855,20 +913,26 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         break;
       case 6:
         this.anim.step();
+        if (this.crossed(35, 2)) this.events.push({ kind: 'se', id: 0x34c });
         if (this.anim.flag !== 4) this.done();
         break;
     }
   }
 
-  // Up to four players in front of the body get a homing missile each (state
-  // 10 sub 4). ASSUMED: they leave from 30 units in front, 26 up.
-  private launchMissiles(targets: readonly AiTarget[]): void {
+  // Up to four players in the front arc (facing() = heading + 0x8000, 0x1c72)
+  // get a homing missile each (state 10 sub 4). The exe's launch points are model
+  // nodes (u___01_009a5570, not traced); ASSUMED: 30 in front, 26 up.
+  private launchMissiles(targets: readonly AiTarget[]): number {
     const face = this.facing();
     let n = 0;
     const speed = this.move.fparam1;
     const accel = this.move.fparam2;
     const life = Math.round(this.move.fparam4) + 240;
     const power = this.move.iparam[0];
+    // The explosion's group: 0x11 with chance 1/6 in Ultimate (rolled when it bursts).
+    const roll = (): number => (this.ultimate && this.rng() < F2.missileGroupChance ? F2.missileGroup : 0);
+    const fx = Math.sin(face * BAMS);
+    const fz = Math.cos(face * BAMS);
     for (let i = 0; i < targets.length && n < 4; i++) {
       const p = targets[i];
       if (p.dead) continue;
@@ -876,13 +940,9 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
       const diff = Math.abs(((a - face + 0x18000) & 0xffff) - 0x8000);
       if (diff >= F2.missileArc) continue;
       n++;
-      const fx = Math.sin(face * BAMS);
-      const fz = Math.cos(face * BAMS);
-      const sx = this.x + fx * 30;
-      const sz = this.z + fz * 30;
-      const dir: Vec3 = [fx, 0, fz];
-      this.pending.push(new VoloptMissile(sx, 26, sz, dir, speed, accel, life, power, p.clientId));
+      this.pending.push(new VoloptMissile(this.x + fx * 30, 26, this.z + fz * 30, speed, accel, life, power, p.clientId, roll));
     }
+    return n;
   }
 
   // --- state 0xB: the heal ------------------------------------------------------------
@@ -891,11 +951,12 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
     switch (this.sub) {
       case 0:
         this.anim.set(5);
-        this.sustain(0x351);
+        this.events.push({ kind: 'se', id: 0x351 });
         this.sub = 1;
         break;
       case 1:
         this.anim.step();
+        if (this.crossed(20, 1)) this.events.push({ kind: 'se', id: 0x345 });
         if (this.anim.reached(F2.healFrame)) {
           this.timer = F2.healWait;
           this.sub = 2;
@@ -912,7 +973,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
       case 3:
         if (--this.timer < 1) {
           this.sub = 4;
-          this.sustain(0x351);
+          this.events.push({ kind: 'se', id: 0x351 });
         }
         break;
       case 4:
@@ -943,6 +1004,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         break;
       case 1:
         this.anim.step();
+        if (this.crossed(15, 1)) this.events.push({ kind: 'se', id: 0x352 });
         if (this.anim.reached(F2.laserFrame)) {
           this.timer = F2.laserCharge;
           this.sub = 2;
@@ -985,18 +1047,16 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         break;
       }
       case 5:
-        // A bar is built at each of the four points (laser case 5).
+        // A bar is built at each of the four points (laser case 5); the exe
+        // then runs sub 6 in the same tick (goto).
         this.timer = this.move.iparam[5];
         this.spawnBars(4);
         this.events.push({ kind: 'se', id: 0x35c });
         this.sub = 6;
+        this.laserHold();
         break;
       case 6:
-        this.sustain(0x350);
-        if (--this.timer < 1) {
-          this.timer = 20;
-          this.sub = 7;
-        }
+        this.laserHold();
         break;
       case 7:
         if (--this.timer < 1) {
@@ -1016,6 +1076,15 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
     }
   }
 
+  // Sub 6 of the laser: the hold after the bars (the exe's case 6).
+  private laserHold(): void {
+    this.sustain(0x350);
+    if (--this.timer < 1) {
+      this.timer = 20;
+      this.sub = 7;
+    }
+  }
+
   // The four points turn round the body (0x180 a tick).
   private placePoints(): void {
     this.pointCount = 4;
@@ -1027,37 +1096,137 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
     }
   }
 
-  // --- state 0xC: the Ultimate arm -------------------------------------------------------
+  // --- state 0xC: the Ultimate arm (dump: ProcessVoloptInteractionPhases #2; Ghidra FUN_00446f90) ---
 
-  // The same bars at the players in a side arc (heading + 0x4000, 0x31c7 /
-  // 0x471c); ASSUMED timeline: 90 frames, then the row's pause.
+  // Two passes of: a 90-frame countdown (sub 2, which sub 1 falls into in its
+  // tick), the wind-up to animation frame 33 (sub 3), a 30-frame charge (sub 4),
+  // then three rounds (sub 5: a bar under each collected player, the iparam6
+  // wait; sub 6: a hold of 20; sub 7: a hold of 5 (Normal; 0 in Ultimate); sub 8:
+  // the round's end). The arc is collected every tick of subs 2..4 at heading +
+  // 0x4000 (0x31c7 Normal, 0x471c Ultimate, from the player's position), and the
+  // rounds of a pass build their bars at the same points. The turn is -0x4000.
+  // Subs 2..5 end the state when there is no target.
+  // ASSUMED: the arc is measured from the player's position (the exe uses the
+  // player's aim point, +0x300, against the body's weapon position); the beams
+  // the exe draws in subs 2..4 are not reproduced; the push of the players inside
+  // 35 (subs 1 and 5, _g_VoloptInteractionRadius) is not applied; the Ultimate
+  // hold (sub 6) is 20 for every round (the exe's table 0x00a44bcc is not in the image).
   private tickArm(targets: readonly AiTarget[]): void {
-    const t = this.targetOf(targets);
     if (this.sub === 0) {
-      this.timer = F2.armWait;
+      this.pass = 0;
+      this.round = 0;
       this.sub = 1;
     }
-    if (t) this.turnToward(t.x, t.z);
+    if (this.sub === 1) {
+      // Falls into the countdown in the same tick.
+      this.timer = F2.armWait;
+      this.sub = 2;
+    }
+    const t = this.targetOf(targets);
+    if (this.sub >= 2 && this.sub <= 5 && !t) {
+      this.done();
+      return;
+    }
+    switch (this.sub) {
+      case 2:
+        if (t) this.turnToward(t.x, t.z, F2.armTurn);
+        this.sustain(0x350);
+        this.sustain(0x348);
+        this.anim.step();
+        if (--this.timer < 1) {
+          this.events.push({ kind: 'se', id: 0x351 });
+          this.sub = 3;
+        }
+        this.collectArc(targets);
+        break;
+      case 3:
+        if (t) this.turnToward(t.x, t.z, F2.armTurn);
+        this.sustain(0x350);
+        this.sustain(0x348);
+        this.anim.step();
+        if (this.anim.reached(F2.armFrame)) {
+          this.timer = F2.armCharge;
+          this.sub = 4;
+        }
+        this.collectArc(targets);
+        if (this.crossed(15, 1)) this.events.push({ kind: 'se', id: 0x352 });
+        break;
+      case 4:
+        if (t) this.turnToward(t.x, t.z, F2.armTurn);
+        this.sustain(0x350);
+        this.sustain(0x354);
+        if (--this.timer < 1) {
+          this.sub = 5;
+          this.round = 0;
+        }
+        this.collectArc(targets);
+        break;
+      case 5:
+        this.armBars();
+        this.armHoldStep();
+        break;
+      case 6:
+        this.armHoldStep();
+        break;
+      case 7:
+        if (--this.timer < 1) {
+          this.timer = this.ultimate ? 0 : F2.armTail;
+          this.sub = 8;
+          this.events.push({ kind: 'se', id: 0x351 });
+        }
+        break;
+      case 8:
+        this.anim.step();
+        if (--this.timer < 1) {
+          this.round++;
+          if (this.round < F2.armRounds) {
+            this.sub = 5;
+          } else {
+            this.pass++;
+            if (this.pass < F2.armPasses) this.sub = 1;
+            else {
+              this.done();
+              return;
+            }
+          }
+        }
+        break;
+    }
+  }
+
+  // Sub 6 of the arm (sub 5 hands over to it in the same tick): the hold after the bars.
+  private armHoldStep(): void {
     this.sustain(0x350);
     if (--this.timer < 1) {
-      this.pointCount = 0;
-      let n = 0;
-      const arc = this.ultimate ? F2.armArc[1] : F2.armArc[0];
-      for (let i = 0; i < targets.length && n < 4; i++) {
-        const p = targets[i];
-        if (p.dead) continue;
-        const a = Math.round(Math.atan2(p.x - this.x, p.z - this.z) / BAMS + 0x10000) & 0xffff;
-        const diff = Math.abs(((a - ((this.heading + 0x4000) & 0xffff) + 0x18000) & 0xffff) - 0x8000);
-        if (diff > arc) continue;
-        this.points[n][0] = p.x;
-        this.points[n][2] = p.z;
-        n++;
-      }
-      this.pointCount = n;
-      this.spawnBars(n);
-      this.events.push({ kind: 'se', id: 0x35c });
-      this.done();
+      this.timer = F2.armHold;
+      this.sub = 7;
     }
+  }
+
+  // Sub 5 of the arm: the bars at the points collected last (the iparam6 wait).
+  private armBars(): void {
+    this.timer = this.move.iparam[5];
+    this.spawnBars(this.pointCount);
+    this.events.push({ kind: 'se', id: 0x35c });
+    this.sub = 6;
+  }
+
+  // The players in the arc (heading + 0x4000), at most four, in list order.
+  private collectArc(targets: readonly AiTarget[]): void {
+    const arc = this.ultimate ? F2.armArc[1] : F2.armArc[0];
+    const front = (this.heading + 0x4000) & 0xffff;
+    let n = 0;
+    for (let i = 0; i < targets.length && n < 4; i++) {
+      const p = targets[i];
+      if (p.dead) continue;
+      const a = Math.round(Math.atan2(p.x - this.x, p.z - this.z) / BAMS + 0x10000) & 0xffff;
+      const diff = Math.abs(((a - front + 0x18000) & 0xffff) - 0x8000);
+      if (diff > arc) continue;
+      this.points[n][0] = p.x;
+      this.points[n][2] = p.z;
+      n++;
+    }
+    this.pointCount = n;
   }
 
   // ConstructVoloptPrisonBarEntity for the first `n` points: each bar waits
@@ -1090,7 +1259,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
           this.done();
           break;
         }
-        if (this.turnToward(t.x, t.z) < F2.turn) {
+        if (this.turnToward(t.x, t.z, TURN_CAPTURE) <= F2.turn) {
           this.timer = F2.captureAim;
           this.sub = 2;
         }
@@ -1121,6 +1290,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         }
         break;
       case 5:
+        if (t) this.turnToward(t.x, t.z, TURN_CAPTURE);
         this.sustain(0x346);
         if (--this.timer < 1 || this.captured === 0xffff) {
           this.timer = F2.captureRelease;
@@ -1152,7 +1322,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
   // for iparam1 ticks.
   private throwCage(t: AiTarget | null): void {
     const pm = this.prisonMove;
-    this.cage = new VoloptCage(this.x, this.z, this.facing(), pm.fparam1 || 1.24, pm.fparam2 || 0.7, pm.iparam[0] || 130, t ? t.clientId : 0xffff);
+    this.cage = new VoloptCage(this.x, this.z, this.heading, pm.fparam1 || 1.24, pm.fparam2 || 0.7, pm.iparam[0] || 130, t ? t.clientId : 0xffff);
     this.events.push({ kind: 'se', id: 0x356 });
   }
 

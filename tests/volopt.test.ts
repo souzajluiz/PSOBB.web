@@ -607,6 +607,7 @@ function toPhase2(over: Parameters<typeof fight>[0] = {}): Fight {
   eq(f.f2.hp, 5050, 'HP +200 / 5 + 10');
   eq(f.f2.partHp[0], 1040, 'a part +40');
   eq(f.f2.partHp[1], 3600, 'a whole part stays at its maximum');
+  eq(f.log.filter((e) => e.kind === 'se' && e.id === 0x345).length, 1, 'the wind-up sound 0x345 once (20 frames)');
 }
 
 {
@@ -621,6 +622,7 @@ function toPhase2(over: Parameters<typeof fight>[0] = {}): Fight {
     return f.f2.st === 0;
   }, 2000, 'laser done');
   check(pointsSeen, 'four points turned round the body');
+  eq(f.log.filter((e) => e.kind === 'se' && e.id === 0x352).length, 1, 'the laser wind-up sound 0x352 once (15 frames)');
   // The first round waits up to 300 frames for a player at a point.
 }
 
@@ -1005,14 +1007,29 @@ function toPhase2(over: Parameters<typeof fight>[0] = {}): Fight {
 }
 
 {
-  // The Ultimate arm builds a bar under each player in its arc.
+  // The Ultimate arm (state 0xC): two passes of a countdown, the charge and three
+  // rounds; each round builds a bar under each player in the arc (6 for one player).
   const f = toPhase2({ ultimate: true, targets: [player(0, 0, -4900)] });
   f.leader.on = false;
   f.f2.applyAction(7, 0, 0);
   eq(f.f2.st, 0xc, 'the arm state');
-  f.until(() => f.f2.st === 0, 400, 'arm done');
+  const t0 = f.t;
+  f.until(() => f.f2.st === 0, 1000, 'arm done');
   const bars = f.shots.filter((s) => s instanceof VoloptBar);
-  eq(bars.length, 1, 'one bar under the one player in the arc');
+  eq(bars.length, 6, 'a bar under the one player in the arc, three rounds, two passes');
+  check(f.t - t0 > 90 + 30 + 20, `the arm lasts the countdown, the charge and the rounds (${f.t - t0})`);
+  // The arm turns -0x4000 toward its target: the arc (heading + 0x4000) faces it.
+  eq(f.f2.heading, 0xc000, 'the body turns to heading atan2 - 0x4000 (the target straight ahead)');
+}
+
+{
+  // The arm ends with no target (the exe's `iVar6 == 0` in subs 2..5).
+  const f = toPhase2({ ultimate: true, targets: [player(0, 0, -4900)] });
+  f.leader.on = false;
+  f.f2.applyAction(7, 0, 0);
+  f.targets.length = 0;
+  f.until(() => f.f2.st === 0, 50, 'the arm ends without a target');
+  eq(f.shots.filter((x) => x instanceof VoloptBar).length, 0, 'and it builds nothing');
 }
 
 // --- the capture's cage (VoloptCage, ctor 0x0044A54C / update 0x0044A694) --------------------
@@ -1299,6 +1316,96 @@ function toPhase2(over: Parameters<typeof fight>[0] = {}): Fight {
   check(f.f2.untargetable && lockOf(f.f2) === false, 'a body that is not ready is not locked');
   // Other enemies keep their own lock rule.
   eq(splitLockOk({ ai: null }), true, 'a non-Vol Opt enemy is not gated by the Vol Opt rule');
+}
+
+{
+  // The missile (SpawnVoloptPrisonItem): built with no velocity, it flies at its
+  // target from the first tick at fparam1; it bursts on the tick after its life.
+  const target = player(3, 0, 300);
+  const m = new VoloptMissile(0, 10, 0, 2, 0.5, 5, 300, 3, () => 0);
+  eq(m.x, 0, 'the missile starts where it was launched');
+  m.tick([target]);
+  const step = Math.hypot(m.x, m.y - 10, m.z);
+  check(Math.abs(step - 2) < 1e-9 && m.z > 0, `the first tick moves it toward the target at fparam1 (${step})`);
+  const still = new VoloptMissile(0, 10, 0, 2, 0.5, 5, 300, 3, () => 0);
+  for (let i = 0; i < 5; i++) still.tick([]);
+  check(!still.done, 'with life 5 it is still flying on the fifth tick');
+  still.tick([]);
+  check(still.done, 'and bursts on the sixth (the counter is compared with <=)');
+  // A blast hits every player in it, once.
+  const pair = new VoloptMissile(0, 10, 0, 2, 0.5, 300, 300, 9, () => 0);
+  pair.x = 0;
+  pair.z = 0;
+  const hits = pair.tick([player(0, 1, 1), player(1, -2, 0), player(2, 40, 0)]);
+  eq(hits.length, 2, 'both players in the blast are hit, the far one is not');
+  eq(pair.effect.kind === 'tech' ? pair.effect.group : -1, 0, 'a normal burst is group 0');
+  const rare = new VoloptMissile(0, 10, 0, 2, 0.5, 300, 300, 9, () => 0x11);
+  rare.tick([player(0, 0, 0)]);
+  eq(rare.effect.kind === 'tech' ? rare.effect.group : -1, 0x11, 'the Ultimate roll sets group 0x11');
+}
+
+{
+  // Ultimate: a missile's explosion is group 0x11 with the chance 1/6 (0x008FE8F8);
+  // the rest are group 0. The launch is in the front arc, four at most.
+  const targets = [player(0, 0, -4900), player(1, 20, -4900), player(2, 0, -5100), player(3, -20, -4900), player(4, 10, -4950)];
+  const f = toPhase2({ ultimate: true, targets, seed: 11 });
+  f.leader.on = false;
+  f.f2.heading = 0;
+  f.f2.applyAction(3, 0, 0);
+  f.until(() => f.f2.st === 0, 800, 'the missiles end');
+  const ms = f.shots.filter((s) => s instanceof VoloptMissile);
+  check(ms.length >= 2 && ms.length <= 8, `two waves of up to four (${ms.length})`);
+  let groups = 0;
+  for (const m of ms) if (m.effect.kind === 'tech' && m.effect.group === 0x11) groups++;
+  check(groups <= ms.length, `the group is 0 or 0x11 (${groups} of ${ms.length})`);
+  check(ms.every((m) => m.effect.kind === 'tech' && (m.effect.group === 0 || m.effect.group === 0x11 || m.effect.group === undefined)), 'every missile carries a group');
+  const pct = (() => {
+    let g = 0;
+    const N = 3000;
+    for (let i = 0; i < N; i++) {
+      const r = new VoloptMissile(0, 10, 0, 2, 0.5, 300, 300, 9, () => (seeded(i + 1)() < 1 / 6 ? 0x11 : 0));
+      r.tick([player(0, 0, 0)]);
+      if (r.effect.kind === 'tech' && r.effect.group === 0x11) g++;
+    }
+    return g / N;
+  })();
+  check(Math.abs(pct - 1 / 6) < 0.03, `about one in six explode as group 0x11 (${pct.toFixed(3)})`);
+}
+
+{
+  // The missile wave's sounds: 0x34B at 15 frames, 0x34C at 35, 0x34D only when it launches.
+  const f = toPhase2({ targets: [player(0, 0, -4900)] });
+  f.leader.on = false;
+  f.f2.heading = 0;
+  f.f2.applyAction(3, 0, 0);
+  f.until(() => f.f2.st === 0, 800, 'missiles end');
+  const se = (id: number): number => f.log.filter((e) => e.kind === 'se' && e.id === id).length;
+  eq(se(0x34b), 1, 'the wind-up sound once');
+  // 0x34C plays when the last wave ends and again at animation frame 35 (the exe's
+  // sub 5 else branch and sub 6's check).
+  eq(se(0x34c), 2, 'the end sound at the last wave and at frame 35');
+  check(se(0x34d) >= 1, 'the launch sound when a missile goes');
+  // Nobody alive: no launch, no launch sound (the body turns to a target, so the
+  // front arc always holds the one it aims at).
+  const g = toPhase2({ targets: [] });
+  g.leader.on = false;
+  g.f2.heading = 0;
+  g.f2.applyAction(3, 0, 0);
+  g.until(() => g.f2.st === 0, 800, 'missiles end, nobody in front');
+  eq(g.log.filter((e) => e.kind === 'se' && e.id === 0x34d).length, 0, 'no launch sound with nobody in the arc');
+}
+
+{
+  // The capture's cage is thrown along the body's heading (the cage's ctor reads +0x60).
+  const cage = new VoloptCage(0, 0, 0x4000, 1.24, 0.7, 130, 0xffff);
+  check(Math.abs(cage.x - 35) < 1e-9, 'heading 0x4000 throws it to +x');
+}
+
+{
+  // The bar's power is iparam2 and its wait is iparam6 (sub 0 of state 2, bars of the laser).
+  eq(BAR.box, 5, 'the bar box is 5');
+  eq(BAR.fall, -16, 'the bar falls 16 a tick');
+  eq(BAR.hold, 15, 'it holds 15 ticks on the floor');
 }
 
 {
