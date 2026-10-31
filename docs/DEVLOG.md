@@ -23988,3 +23988,46 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 - The missile model (the `SaintEmilionPart`'s njcm from `g_SaintEmilionBmlData`, its file name not identified here), the trail effect 0xf, and the SEs 0x6f6 / 0x6f7: not drawn or played. The missile is still the coloured shot ball.
 - The flag `0x2000000` (skipped as dead) and `0x800` (the 240-frame jump) are unknown.
 - The wave, storm and sand sonic: not re-read in this pass (their entries of 2026-10-21 stand as written).
+
+## 2026-10-31: Guild Card add-from-entity ported (Block list > Add > Entity); the classic client never started the guild card sync
+
+**Question.** TODO section B, Classic HUD line: the menu leaf no-ops (Symbol Chat Home option list and icon editor, the capture picture, Info Board, Guild Card add-from-entity, word select state 0x14 name step, quick menu tools tab: material unit terms and the state-4 tool slot action). Ported: Guild Card add-from-entity. Checked and not ported: the rest (below).
+
+**Exe (`PsoBB.exe`, dump `src/Psobb.exe-05112026.c`, names with addresses):**
+- Entity list, states 0x4a / 0x4b of `GuildCardMenuStateHandler_00746bdc` (0x00746bdc): the list at get_gui_position(0x98) = (194, 256), title unitxt(11, 0x41) (the same id the mail list uses), one row per `g_EntityCount` entity from `GetEntityByIndex_0081364c` (0x0081364c, 0x1bc-byte records: name at +8, value = the id at +4). No self filter in the loop. None -> the greyed unitxt(11, 0xf0).
+- Cancel in the list (0x4c, flag 4) -> state 1 (the menu). A row (flag 2) -> 0x4d.
+- 0x4d `GuildCardMenu_CreateSubMenuConfirmation_00747dec` (0x00747dec): title unitxt(11, 0x33), question unitxt(11, 0x11f) at get_gui_position(0x9a) = (419, 256), width 213, selected index 1 (No).
+- 0x4e: Yes (value 0) -> `HandleGuildCardMenuGuestDataStack_00782594` (0x00782594) -> `GuildCardUpdateAndSendFromGuest_007825b4` (0x007825b4): clear the 0x108-byte card; `GuildCard_LoadGuestData_007817f0` (0x007817f0) finds the entity with `GetEntityById_00813670` (0x00813670), copies the name (+8, 0x17 units), flags |= 3, class 0xc, section 10, the player id byte +0x105 = 8, and the card number from the entity's first dword (+0). No entity: nothing. Then `GuildCard_CopyDataWithFlags_00781534` (returns 1 when the number is already blocked: nothing sent), else `GuildCardCopyDataAndSendPacket_00782510` -> 07E8 (send_packet0xe8_subcommand7).
+- No / cancel in the confirm -> the entity list (0x4b).
+
+**Newserv (vendor/newserv/src, read only):** `ReceiveCommands.cc:3841` (07E8): the card goes into the first free blocked slot, with no duplicate check. The client's copy-if-new is the only guard, as in the port (`GuildCardBook.isBlocked` before `block`).
+
+**Port:**
+- `client/src/classic/guildcardmenu.ts`: `GuildEntity`, `entityRows` (value = id, greyed when none), `guildCardFromEntity` (the number, name and the three guest literals), the host's `entities()`. A decided row opens the existing yes / no (phase `addAsk`, back `addEntity`); Yes -> `addFromEntity` (copy-if-new, 07E8); No / cancel -> the entity list / menu. The header carries the exe chain.
+- `client/src/classic/homeleaves.ts`: the host's `entities()` = every lobby player (`clientId`, name, guild card number).
+- `client/src/classic/main.ts` `enterLobby`: `session?.startGuildCardSync(lobby.conn)`.
+- **Bug found on the way:** the classic client joins through `BBSession.connectGameServer`, which never starts the guild card sync (only `BBSession.enterLobby` and the Meet path do). `session.guildCards` stayed null for every classic login, so the Guild Card book, the Block list add row (greyed without a book) and the card list were empty. The sync now starts when the lobby is shown; `startGuildCardSync` is once per session.
+
+**ASSUMED:**
+- The lobby's entity table holds the lobby players, the local one included (the exe's loop has no self filter; the table's writers are not traced). The entity id is the client id.
+- Entity +0 is the player's guild card number (the dump copies +0 for any entity; the player record's case is not traced).
+- The confirm's title unitxt(11, 0x33) is not drawn (the port's `Question` has no title). The entity list's title is the exe's unitxt(11, 0x41), which reads "Message List" in this build's text.
+
+**Checks (Node 24):**
+- `node tests/guildcardmenu.test.ts`: ALL PASS (new section 24: rows, the guest card fields, the ask, No back to the list, Yes sends 07E8 with card 88, the greyed row, Escape, an already-blocked entity sends nothing, drawing).
+- `node tests/guildcard.test.ts`, `node tests/lobbymain.test.ts`: ALL PASS.
+- `node tests/homeleaves.test.ts`: throws in `HomeLeaves.tickMaster` (homeleaves.ts:506, `recv` undefined in the test's host). That path is not in this diff (the diff adds one `entities` line to the host). Not fixed here.
+- `node client/node_modules/typescript/bin/tsc --noEmit -p client`: clean.
+- Playwright `client/e2e/guildcard-entity.spec.ts` (new; fresh accounts chla / chlb, `PW_BASE_URL=http://127.0.0.1:5194 --trace off`): PASS (1.2 min). A opens the Guild Card leaf, Block list > Add > Entity, finds B's row by its client id (the window hooks), asks, Yes -> B's guild card number is in A's blocked list. A second pass answers No (blocked list unchanged), then Escape goes back to the menu.
+- Screenshot (`test-results/.../guildcard-entity-confirm.png`, looked at): the Select menu at the left, the entity list "Message List" with two rows "Tallie" (both characters carry the default name), and the "Add to the list?" Yes / No box over it with No highlighted.
+- Regression: `client/e2e/team-master.spec.ts` (two accounts, the classic lobby path) run after the sync fix; result in the report.
+
+**Checked, not ported (exe evidence for the next item):**
+- **Word select state 0x14 name step.** `WordSelectMenu_ProcessState_007023c8` (0x007023c8): state 9 -> `State0x14_Update_00702e1c` (0x00702e1c), state 0x14 -> `State0x14_Confirm_0070244c` (0x0070244c): accept -> `WordSelectMenu_ResetAndCloseMenus_00706c94` (0x00706c94, copies +0xc4..+0xdc to the output at +0xc0, state 2); the special key -> state 0x12 (0x00702488). Entry: `ProcessConfirmation_0070305c` (0x0070305c, dump 659316) sets 0xb4 = 0x14 when +0x8c == -0x3c (a name row); `WordSelectMenu_Update_007028d4` (0x007028d4) rebuilds the player name list (`InitializePlayerNameList_007060ec`) on entering 0x14 or 0xc. **Blocker:** the -0x3c branch sets nothing in the buffer, so where a chosen name enters the sentence is not traced (the copy-out is the only other writer found). Also the port's `wordPlayers` host is not wired (wordselectmenu.ts, DEVLOG 2026-10-23).
+- **Quick menu state 4.** `UpdateQuickMenuToolTechSlotState_00741c08` (0x00741c08, dump 712261): when `Player_CanPerformAction_007a3790` passes for (4, slot), the player's pending action is set (unk1 +0x10b4 = 4, +0x10b5 = the slot, +0x10b6 bit 0 cleared). `toolPendingAction` (quickmenu.ts) is the pure rule with no caller. The readers of +0x10b4 / +0x10b5 are in the combat per-frame code (dump ~784745), which the port does not have as a player-action state. Not wired: setting it would be dead state.
+- **Quick menu material unit terms.** Needs `CalculateSpecialAttackPower` of the four unit slots (+0x174 / +0x176); the port has no unit specials (quickmenu.ts:640).
+- **Info Board.** Wired: `lobby.ts:434` opens `InfoBoardMenu` (infoboard.ts, DEVLOG 2026-10-23). The TODO's "status unclear" is stale; the no-op note in ROADMAP (DEVLOG 2026-10-23) is also stale.
+- **Symbol Chat Home option list, icon editor, capture picture.** Not traced this round (the Home leaf keeps the preview only, homeleaves.ts:143).
+- **Guild Card, still no-ops** (guildcardmenu.ts header): the row 0x65 send (state 6, 0x62) and rename (state 9, 06E8), the own card window 0x84, the search result window 0x8d, and send packet 0xc0.
+
+**Left:** confirm the lobby entity table and entity +0 (the id and the card number) in the exe's writers; decide the 0x33 title; the Guild Card items above; the word select name insertion trace; the state-4 consumer (combat).

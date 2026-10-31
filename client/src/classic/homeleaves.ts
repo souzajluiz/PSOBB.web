@@ -116,6 +116,9 @@ export class HomeLeaves {
             [...h.lobby.players.values()]
               .filter((p) => p.clientId !== h.lobby.selfId)
               .map((p) => ({ slot: p.clientId, name: p.name, guildCardNumber: p.guildCardNumber, sectionId: p.sectionId, charClass: p.charClass })),
+          // The add-from-entity list (GetEntityByIndex): ASSUMED to be every lobby player, the local one
+          // included; the id is the client id and the card is the player's guild card number.
+          entities: () => [...h.lobby.players.values()].map((p) => ({ id: p.clientId, name: p.name, guildCardNumber: p.guildCardNumber })),
           loggedIn: true,
           unitxt: text,
         };
