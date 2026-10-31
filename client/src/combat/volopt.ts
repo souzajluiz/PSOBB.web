@@ -35,9 +35,9 @@
 // behind a wall (the sign of the sweep), the fade / camera waits (the exe waits
 // for an overlay object and a camera event that this client does not have),
 // the hatch lids (tracked, not drawn: VoloptLid), the laser bars' and the cage's
-// look (balls, volopt2.ts), the lightning
-// of the Ultimate difficulty (a plain bolt instead of the Gizonde / Foie /
-// Gibarta objects), and the heights the hit tests use.
+// look (balls, volopt2.ts), the Ultimate pillar's technique 0 (the exe's
+// Gizonde-chain object is not traced: a plain bolt here), the level of the
+// Ultimate objects, and the heights the hit tests use.
 
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyBrain } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
@@ -45,6 +45,13 @@ import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { VOLOPT_MONITOR_OFFSET, VOLOPT_PILLAR_RADIUS } from '../formats/enemymodels.ts';
 import { chopToInt } from './chop.ts';
+import { trapFire } from './techfire.ts';
+import { TECH } from './techniques.ts';
+
+// The level the Ultimate pillar objects are made at (the exe passes 0x1d to the
+// Foie / Gibarta constructors, 0x006e3480 / 0x006e4058). ASSUMED: the argument is
+// the 0-based object level (29, Ultimate's top level).
+export const VO_ULTIMATE_LEVEL = 0x1d;
 
 export type Vec3 = [number, number, number];
 const BAMS = BAMS_TO_RAD;
@@ -298,12 +305,16 @@ export type VoloptEvent =
 
 // --- the lightning --------------------------------------------------------
 
-// VoloptMonitorExecuteAttack0:
-// every live player is hit by entity_hit_by_tech group 3 with the pillar row's
-// iparam1 (the same ASSUMED group-0 damage formula as the other bolts, no
-// shock roll).
 // What a shot returns when it hit nobody (shared, never changed).
 export const NO_HITS: AiTarget[] = [];
+
+// VoloptMonitorExecuteAttack0 (PsoBB.exe 0x004437ec, read 2026-10-31): every
+// live player (flags 0x2000800 clear, index < 0x1000) is hit at once by
+// entity_hit_by_tech(attacker = the pillar, group 3, power = the pillar row's
+// iparam1 (`g_pVoloptMonitorAnimSpeeds + 0x18`), 0, -1, -1): the Zonde family,
+// (100 - ETH) * 0.002 * (MST * 0.5 + power) with the shock roll (the port's
+// enemyTechOnPlayer). The effect is group 3, not the fixed group 0 used before.
+export const VO_BOLT_GROUP = 3;
 
 export class VoloptBolt extends EnemyShot {
   override readonly absolute = true;
@@ -311,7 +322,7 @@ export class VoloptBolt extends EnemyShot {
   readonly look: ShotLook = { color: 0xa8c8ff, size: 2.5 };
   constructor(x: number, y: number, z: number, power: number) {
     super(x, y, z);
-    this.effect = { kind: 'tech', power: Math.max(0, power) };
+    this.effect = { kind: 'tech', power: Math.max(0, power), group: VO_BOLT_GROUP };
   }
   tick(targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return NO_HITS;
@@ -1320,6 +1331,12 @@ export class VoloptAi extends BrainBase implements VoloptFight {
   // 6x85's three delays (SetVoloptGlobalOffsets 0x00a44bcc..); nothing else reads them here.
   readonly delays: number[] = [0, 0, 0];
   private readonly pending: EnemyShot[] = [];
+  // Ultimate pillar attacks waiting for a target list (the objects are aimed at each
+  // live player's feet in tick()).
+  private readonly ultimateFire: { pillar: number; technique: number }[] = [];
+  // DAT_00a44790: the Ultimate attack type the leader sent (6x84 technique 0..3); -1
+  // until one arrives (the ctor and 6x16's clear set it to -1).
+  technique = -1;
   private readonly framesOf: (motion: number) => number;
   private readonly leaderOf: () => boolean;
   private readonly hpOf: (client: number) => number;
@@ -1422,10 +1439,53 @@ export class VoloptAi extends BrainBase implements VoloptFight {
   leader(): boolean {
     return this.leaderOf();
   }
+  // A pillar's attack (UpdateVoloptMonitor state 7, 0x00442ec0): Normal is the bolt
+  // (VoloptMonitorExecuteAttack0, SE 0x90); Ultimate switches on DAT_00a44790.
   bolt(pillar: number): void {
+    if (this.ultimate) {
+      this.ultimateFire.push({ pillar, technique: this.technique });
+      return;
+    }
     const p = this.pillars[pillar];
     this.pending.push(new VoloptBolt(p.baseX, 60, p.baseZ, this.movement.bolt));
     this.events.push({ kind: 'se', id: 0x90 });
+  }
+
+  // The Ultimate branch of the pillar's attack (0x00442ec0 state 7, DAT_00a447c0 != 0),
+  // run with the live players in hand (the exe's loop skips flags 0x2000800 and ids >= 0x1000):
+  //   0: FUN_006e54a8 (a lightning chain over the list, 0x18c-byte object) — NOT traced here;
+  //      ASSUMED the normal bolt (group 3, row 34 power).
+  //   1: create_directed_foie_object (FUN_006e3408 -> FUN_006e3480) per live player, aimed at
+  //      the player's feet (+0x300), group 1.
+  //   2: FUN_006e4058 (a 0x178-byte object, Gibarta's size) per live player, aimed at the feet,
+  //      group 2 (ASSUMED the Gibarta flight: its heading is the aim's bearing).
+  //   3: no case in the switch: nothing is cast (the attack still runs its two fires).
+  // Every object is made at level 0x1d (the exe's last argument; ASSUMED the level).
+  private flushUltimate(targets: readonly AiTarget[]): void {
+    for (const job of this.ultimateFire.splice(0)) {
+      const p = this.pillars[job.pillar];
+      if (!p) continue;
+      if (job.technique === 0) {
+        this.pending.push(new VoloptBolt(p.baseX, 60, p.baseZ, this.movement.bolt));
+        continue;
+      }
+      if (job.technique !== 1 && job.technique !== 2) continue;
+      const tech = job.technique === 1 ? TECH.foie : TECH.gibarta;
+      for (const t of targets) {
+        if (t.dead) continue;
+        const shot = trapFire({
+          tech,
+          level: VO_ULTIMATE_LEVEL,
+          x: p.baseX,
+          y: 60,
+          z: p.baseZ,
+          heading: Math.atan2(t.x - p.baseX, t.z - p.baseZ),
+          aim: { x: t.x, y: t.y ?? 0, z: t.z },
+          enemy: true,
+        });
+        if (shot) this.pending.push(shot);
+      }
+    }
   }
   sustain(id: number): void {
     this.sustained.add(id);
@@ -1486,9 +1546,10 @@ export class VoloptAi extends BrainBase implements VoloptFight {
 
   // 6x16 / 6x84 (ClearVoloptPlayerEntities 0x0043e658 / SetVoloptPlayerEntities
   // 0x0043e6e8): the first `count` entries of the table rise, the first as the
-  // red pillar.
-  applyPillars(table: readonly number[], count: number): void {
+  // red pillar. The 6x84 technique (packet +0xc, Ultimate only) becomes DAT_00a44790.
+  applyPillars(table: readonly number[], count: number, technique = -1): void {
     const n = Math.min(Math.trunc(count), VO_PILLARS, table.length);
+    this.technique = technique;
     for (let i = 0; i < n; i++) this.pillars[Math.abs(table[i]) % VO_PILLARS].start(i === 0);
   }
 
@@ -1534,6 +1595,7 @@ export class VoloptAi extends BrainBase implements VoloptFight {
     }
     // The parts update whenever the game runs, until the pillars are deleted.
     if (this.ai >= VO_AI.intro && this.ai <= VO_AI.fight) this.tickParts();
+    if (this.ultimateFire.length) this.flushUltimate(targets);
     if (this.pending.length) out.shots = this.pending.splice(0);
     return out;
   }

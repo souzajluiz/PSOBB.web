@@ -411,6 +411,8 @@ const act = (log: VoloptEvent[], action: number) => log.filter((e) => e.kind ===
   const hit = b.tick(all);
   eq(hit.length, 2, 'the bolt hits every live player');
   eq((b.effect as { power: number }).power, 280, 'with the pillar row\'s iparam1');
+  // VoloptMonitorExecuteAttack0 (0x004437ec): entity_hit_by_tech group 3 (the Zonde family, ETH and shock).
+  eq((b.effect as { group?: number }).group, 3, 'the bolt is group 3 (PsoBB.exe 0x004437ec)');
   eq(b.tick(all).length, 0, 'once');
 }
 
@@ -782,6 +784,35 @@ function toPhase2(over: Parameters<typeof fight>[0] = {}): Fight {
   const p = f.log.find((e) => e.kind === 'pillars') as Extract<VoloptEvent, { kind: 'pillars' }>;
   check(p.technique !== null && p.technique >= 0 && p.technique <= 3, `Ultimate sends 6x84 with a technique (${p.technique})`);
   eq(f.c.rodDown(), false, 'there is no rod in Ultimate');
+}
+
+{
+  // Ultimate pillar attacks (0x00442ec0 state 7, DAT_00a447c0 != 0): the 6x84 technique (DAT_00a44790)
+  // picks what each of the two fires makes. Leader off, so no director sends its own pillars.
+  const live = [player(0, 0, 40), player(1, 10, 40), player(2, 20, 40, true)];
+  const run = (technique: number) => {
+    const f = fight({ ultimate: true, targets: live, leader: false });
+    f.until(() => f.c.ai === VO_AI.fight, 600, 'intro');
+    f.c.applyPillars([0, 1, 2, 3, 4, 5], 1, technique);
+    const shots: { effect?: { kind: string; group?: number; power?: number } }[] = [];
+    for (let i = 0; i < 700; i++) {
+      f.step();
+      while (f.shots.length) shots.push(f.shots.shift() as (typeof shots)[number]);
+      if (f.c.pillars[0].st === 0 && i > 5) break;
+    }
+    return shots;
+  };
+  const tech = (shots: { effect?: { kind: string } }[]) => shots.filter((s) => s.effect?.kind === 'tech');
+  const s3 = run(3);
+  eq(tech(s3).length, 0, 'technique 3: the switch has no case, nothing is cast');
+  const s1 = run(1);
+  const foie = tech(s1).filter((s) => s.effect?.group === 1);
+  eq(foie.length, 4, 'technique 1: a Foie per live player per fire (2 fires, 2 live, the dead one skipped)');
+  check(foie.every((s) => (s.effect?.power ?? 0) > 0), 'the Foie objects carry a power');
+  const s2 = run(2);
+  eq(tech(s2).filter((s) => s.effect?.group === 2).length, 4, 'technique 2: a Gibarta-class object per live player per fire');
+  const s0 = run(0);
+  eq(tech(s0).filter((s) => s.effect?.group === 3).length, 2, 'technique 0 (not traced): the normal bolt, once per fire');
 }
 
 {

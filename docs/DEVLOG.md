@@ -24237,3 +24237,44 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 - `can_olga_hit_player`'s `character_flags & 0x2000800` test is not ported (the local player and the port's `dead` flag only, ASSUMED).
 - `int_sin` (0x0082dcbc, a table) is taken as the sine (ASSUMED).
 - Not ported: the tail swipe's hit (the anchor, map 17), the mines (no objects), form 2, the lancer's push-out and orbit (map 16.6), the lancer's anchors A / B (ASSUMED).
+
+## 2026-10-31: Vol Opt phase 1 pillar attacks re-read against the exe: the bolt is group 3, Ultimate's technique picks the objects
+
+**Question.** The Vol Opt entries of 2026-10-19 .. 10-25 were never re-checked against the exe. This pass covers the phase 1 pillar attacks (the lightning and the Ultimate objects). Phase 2 (volopt2.ts: the laser bars, the cage, the missiles, the heal, the Ultimate arm) is NOT re-checked here (open list below). There is no "ceiling spike" attack in the port's Vol Opt code (grep of volopt*.ts: none); the TODO's "ceiling fragments of the bars" are phase 2's bar visuals.
+
+**Outcome.** Two mismatches fixed, one is a new rule. (1) The normal bolt is `entity_hit_by_tech` group 3 (Zonde family: (100 - ETH) x 0.002 x (MST x 0.5 + power), shock roll), not the fixed group 0 the port had (the port's own comment marked it ASSUMED). (2) Ultimate's pillar attack was a plain bolt for every technique. The exe's 6x84 technique picks: 0 a lightning chain, 1 a Foie per live player, 2 a 0x178 object per live player, 3 nothing.
+
+**Exe (`PsoBB.exe`, Ephinea image; dump names in brackets; decompiled with `tools/ghidra/decomp.sh`, read with objdump / `tools/exedata.py`).**
+- Pillar vtable 0x00af5ee0 (ctor 0x004422d4, `PTR_LAB_00af5ee0`); its per-frame update 0x004425d8 dispatches the state (`FUN_00442730`): state 2 is `FUN_00442ec0` (the attack, [UpdateVoloptMonitor] state 7 is its fire step).
+- Attack timeline (0x00442ec0, `param_1[0xe1]` sub-states): sub 0 (entry, +0x10000 flag) sets the pillar's rise; sub 1 waits `0x14` (20) frames, plays SE 0x340; sub 2 rises (0x00442c28); sub 3 waits the anim slot 2; sub 4 holds `0x19` (25) frames with the sustained SE 0xa5 (sub 5); sub 6 waits the strike frame (`anim` reaches 8); sub 7 fires; sub 8 waits `0x78` (120) frames; sub 9 waits the anim flag to leave 4, and goes back to sub 4 while `param_1[0xe9] < 2`, i.e. TWO fires per attack; then sub 10 plays SE 0x34a and sub 0xb lowers (0x00442bdc). An inactive pillar (flag 0xec clear) at sub 3 goes to sub 0xc with `0xaf` (175) frames. All of these match the port's `tickAttack` (no change).
+- Normal (`g_VoloptDifficultyMode == 0`, `DAT_00a447c0`): `FUN_004437ec` [VoloptMonitorExecuteAttack0]. For every live player (flags `0x2000800` clear, index < 0x1000) it spawns a 0x260-byte particle effect and calls the player's `entity_hit_by_tech` (vtable +0x60, the same shape as the other enemy sites): attacker = the pillar, group 3, power = `(float)*(g_pVoloptMonitorAnimSpeeds + 0x18)` = the pillar row's iparam1 (row 34; 280 in Normal), tech id -1. At the end, SE 0x90 (only if at least one live player). The rod's 6x15 action 2 follows when the rod is down (the port's known deviation: the leader only).
+- Difficulty: `InitializeVoloptModelAndState` sets `g_VoloptDifficultyMode = is_ultimate_mode()` (dump 182604): non-zero in Ultimate only.
+- Ultimate (`DAT_00a447c0 != 0`): the attack type is `DAT_00a44790`. It is written -1 by the ctor (`0x0043e3b0`, dump 189573 area) and by the 6x16 / 6x84 handler `0x0043e6e8` from the packet's +0xc (the `technique` short). The leader's sender (`Volopt__ExecuteAttackPhase`, dump ~181956) draws `technique = round(get_random_float * 3.0)` (0x008fdbdc = 3.0), so 0..3, and sends 6x84 only in Ultimate. The switch in 0x00442ec0 (sub 7):
+  - 0: `FUN_006e54a8` -> `FUN_006e5520` (a 0x18c-byte object over the list of pillar targets, the player ids at pillar +0xf2). NOT traced: its damage and shape are not decoded. The port keeps the normal bolt here (ASSUMED).
+  - 1: `FUN_006e3408` -> `FUN_006e3480` (create_directed_foie_object, 0x134 bytes) for each live player; origin = the pillar's muzzle point, aim = the player's +0x300 (the feet), level argument 0x1d. Group 1 (the Foie object's own group).
+  - 2: `FUN_006e4058` (0x178 bytes, the Gibarta's size) for each live player, same arguments. Group 2 is ASSUMED (its flight not traced).
+  - 3: no case. Nothing is cast; the two fires still run.
+  No SE 0x90 in Ultimate (the switch's branches play none).
+
+**Port changes.**
+- `client/src/combat/volopt.ts`: `VoloptBolt` effect `group: VO_BOLT_GROUP` (3). `VoloptAi.technique` (DAT_00a44790, -1 by default). `applyPillars(table, count, technique)`. `bolt(pillar)`: Normal as before; Ultimate queues the fire in `ultimateFire`, and `flushUltimate(targets)` (called from `tick`) makes the objects: technique 0 a plain bolt (ASSUMED), 1 and 2 `trapFire` (techfire.ts) per live target (dead skipped), aimed at the feet, group from the object, level `VO_ULTIMATE_LEVEL` = 0x1d (ASSUMED the level), 3 nothing. The header's "Ultimate lightning is a plain bolt" line is updated.
+- `client/src/render/combat.ts`: the leader's local apply passes `ev.technique`; the 6x84 receiver reads the technique at packet +0xc (`dv.getUint16(12)`, the same offset `net/game.ts sendVoloptPillars` writes); 6x16 passes -1.
+- `TODO.md` Vol Opt line (2026-10-31 note).
+
+**Checks (Node 24, `/Users/junior/.nvm/versions/node/v24.18.0/bin/node`).**
+- `node tests/volopt.test.ts`: volopt tests passed (new: the bolt's group is 3; Ultimate technique 3 casts nothing; technique 1 gives 4 Foie objects of group 1 for 2 live players over 2 fires (the dead one skipped); technique 2 gives 4 of group 2; technique 0 gives 2 group-3 bolts).
+- `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts`: 5860 checks, 0 failures.
+- `node tests/bossrooms.test.ts`: ALL PASS.
+- `node tests/objectcollision.test.ts`, `node tests/barbaray.test.ts`: pass (they reference Vol Opt code).
+- `client`: `node client/node_modules/typescript/bin/tsc --noEmit -p client`: clean.
+- Not run in Chrome or Playwright (no e2e this pass).
+
+**ASSUMED / open.**
+- Phase 2 (volopt2.ts): not re-verified. Open: the laser bars (ctor 0x0044B0BC, update 0x0044B1B8), the cage (0x0044A54C / 0x0044A694), the missiles (`ConstructVoloptPrisonCoreEntity`, the port's "group 0x11" claim), the heal and the Ultimate arm. The numbers in `F2` are the port's and still unchecked.
+- The bolt's MST term: the exe's attacker is the pillar, so MST is the pillar row's (`ep1_VolOptPillar`); the port passes the control enemy's type stats[0] (`enemyTechHitsPlayer`). BattleParamEntry_on.dat is not on this machine, so the value is not read. Open: a check of the pillar row's MST.
+- The bolt's origin: the exe transforms the pillar's model origin with its rise (+0x394, -40 hidden) and the model matrix at frame +0xc0; the port uses (base, 60, base). The visual height is ASSUMED.
+- Ultimate technique 0 (`FUN_006e5520`, a 0x18c-byte chain) is not traced; a plain bolt stands in.
+- The Ultimate object level 0x1d: ASSUMED that it is the 0-based level.
+- The Gibarta-class object (`FUN_006e4058`, 0x178): group 2 and its flight are ASSUMED.
+- SE 0x90 plays in the port even with no live player (the exe plays it only with one). Not changed.
+- The leader's own rod action 2 (see above) still runs on the leader only.

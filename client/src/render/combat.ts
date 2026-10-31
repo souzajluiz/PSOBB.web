@@ -4187,7 +4187,7 @@ export class CombatView {
       }
       case 'pillars': {
         this.game.sendVoloptPillars(id, ev.table, ev.count, ev.technique);
-        ai.applyPillars(ev.table, ev.count);
+        ai.applyPillars(ev.table, ev.count, ev.technique ?? -1);
         this.opts.log(`${what}: ${ev.count} pillars rise, the red one is ${ev.table[0]}${ev.technique !== null ? ` (technique ${ev.technique})` : ''}`);
         return;
       }
@@ -4402,7 +4402,8 @@ export class CombatView {
         if (body.length < 0x0c) return;
         const table: number[] = [];
         for (let i = 0; i < 6; i++) table.push(body[4 + i]);
-        ai.applyPillars(table, dv.getUint16(10, true));
+        // 6x84 carries the Ultimate technique at +0xc (net/game.ts sendVoloptPillars); 6x16 has none.
+        ai.applyPillars(table, dv.getUint16(10, true), sub === 0x84 ? dv.getUint16(12, true) : -1);
         return;
       }
       case 0x17:
