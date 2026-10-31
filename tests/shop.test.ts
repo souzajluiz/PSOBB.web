@@ -39,6 +39,7 @@ import {
   BANK_DEPOSIT,
   BANK_LEAVE,
   BANK_TAKE,
+  bankRoom,
   parseBankContents,
   parseShopContents,
 } from '../client/src/net/items.ts';
@@ -347,6 +348,61 @@ eq(buyCheck(saber, 10, { meseta: 5, inventory: [] } as unknown as CharacterFile,
   eq([dep.state().capacity, dep.state().list?.length], [null, 1], 'deposit list: no line, the equipped saber left out');
   dep.close();
   await tick(dep);
+}
+
+{
+  // Partial deposit (the exe's state 1 0x006da7ac and Player_WithdrawMeseta_0068f344): the
+  // spinner's most is min(carried, the bank's room); 6xBD carries the amount in byte 13 and the
+  // inventory keeps the rest under its id.
+  const bankRoomCases = [
+    [[], '030000000003000000000000', 10, 'no stack in the bank: a new stack of 10'],
+    [[{ data: itemFromHex('030000000003000000000000'), amount: 9 }], '030000000003000000000000', 1, 'a stack of 9: room 1'],
+    [[{ data: itemFromHex('030000000003000000000000'), amount: 10 }], '030000000003000000000000', 0, 'a full stack: no room'],
+    [[{ data: itemFromHex('030100000003000000000000'), amount: 2 }], '030000000003000000000000', 10, 'another tool type does not join'],
+    [Array(200).fill({ data: itemFromHex('000100000000000000000000'), amount: 1 }), '030000000003000000000000', 0, 'a full bank takes no new stack'],
+    [[{ data: itemFromHex('030000000003000000000000'), amount: 10 }], '000100000000000000000000', 1, 'a weapon needs one slot'],
+  ] as const;
+  for (const [items, hex, want, label] of bankRoomCases) eq(bankRoom(items as never, itemFromHex(hex)), want, `bank room: ${label}`);
+
+  const calls: string[] = [];
+  const mate3 = inv('030000000003000000000000 01000100 00000000');
+  const ch = { charClass: 0, level: 5, meseta: 300, inventory: [mate3], stats: { atp: 100, mst: 0, ata: 100 } } as unknown as CharacterFile;
+  const base = makeEnv(ch, calls, []);
+  const withBank = (items: Array<{ data: ItemData; amount: number }>) => ({ ...base, items: { ...base.items, get bank() { return { meseta: 0, items }; } } });
+  const dep = new BankCounter(withBank([]));
+  dep.start();
+  await tick(dep);
+  await press(dep, 'Enter', 'ArrowDown', 'Enter');
+  eq([dep.state().list?.length, dep.state().amount], [1, null], 'deposit list: the Monomate x3, no spinner yet');
+  await press(dep, 'Enter');
+  eq(dep.state().amount, 1, 'the spinner opens at 1 (most 3 for a stack of 3 with room 10)');
+  await press(dep, 'ArrowUp', 'Enter');
+  await press(dep, 'Enter');
+  eq(calls.filter((x) => x.startsWith('deposit item')), ['deposit item 10001 x2'], 'Yes deposits the spinner amount 2 (6xBD byte 13)');
+  dep.close();
+  await tick(dep);
+
+  // A stack of 9 in the bank: the room is 1, so the spinner is not asked and one goes in.
+  calls.length = 0;
+  const dep2 = new BankCounter(withBank([{ data: itemFromHex('030000000003000000000000'), amount: 9 }]));
+  dep2.start();
+  await tick(dep2);
+  await press(dep2, 'Enter', 'ArrowDown', 'Enter', 'Enter');
+  eq(dep2.state().amount, null, 'room 1: no spinner, the Yes / No comes straight after the pick');
+  await press(dep2, 'Enter');
+  eq(calls.filter((x) => x.startsWith('deposit item')), ['deposit item 10001 x1'], 'room 1: one Monomate goes in');
+  dep2.close();
+  await tick(dep2);
+
+  // A full stack in the bank: no room, the 0x3c line.
+  calls.length = 0;
+  const dep3 = new BankCounter(withBank([{ data: itemFromHex('030000000003000000000000'), amount: 10 }]));
+  dep3.start();
+  await tick(dep3);
+  await press(dep3, 'Enter', 'ArrowDown', 'Enter', 'Enter');
+  eq([dep3.state().message, calls.filter((x) => x.startsWith('deposit item')).length], ['#3c', 0], 'full stack: 0x3c and nothing sent');
+  dep3.close();
+  await tick(dep3);
 }
 
 {

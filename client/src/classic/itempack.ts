@@ -81,7 +81,7 @@ import { statContribution } from '../combat/playerstats.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { DISABLED, drawListWindow, drawPill, drawTextWindow, drawWindowTitle, INSET, listKey, listWindowHeight, ROW, TITLE_GAP, type ListItem } from './fieldwindows.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
-import { EQUIP_PANEL, equipStatRows, hasEquipPanel, IQ_LABEL, MAG_LEVEL_LABEL, magRows, SYNCHRO_LABEL, type StatBlock } from './itemdetail.ts';
+import { EQUIP_PANEL, equipStatRows, hasEquipPanel, IQ_LABEL, MAG_LEVEL_LABEL, magRows, magStatRows, SYNCHRO_LABEL, type StatBlock } from './itemdetail.ts';
 import { wipeElement, WindowAnim, withElementWipe, withWindowAnim } from './windowanim.ts';
 import { menuValueForStatusRow, MENU_LABEL, statusRowsView, STATUS_LABEL_GROUP } from '../quest/battleitems.ts';
 
@@ -1106,6 +1106,33 @@ export function drawEquipPanel(
   const x0 = rect.x + INSET;
   const y0 = rect.y + INSET;
   withElementWipe(wipe, x0, y0, rect.w - 2 * INSET, () => drawEquipStatRows(ctx, env, item, equipped, rc, x0, rect.x + rect.w - INSET, y0));
+}
+
+// A mag's detail in a counter list (the bank's take list): the list's page 0, the six stat
+// labels with the character's current values and no candidate (magStatRows; the mag menu's page
+// 0 draws the same rows). ASSUMED: the rows' place (ROW spacing from the top inset, the value
+// right-aligned as the equipment rows).
+export function drawMagStatPanel(
+  ctx: CanvasRenderingContext2D,
+  skin: WindowSkin,
+  env: EquipPanelEnv,
+  rc: RowContext,
+  rect: { x: number; y: number; w: number; h: number },
+): void {
+  drawWindowFrame(ctx, skin.frame, rect.x, rect.y, rect.w, rect.h);
+  const s = rc.stats;
+  const current: StatBlock = { atp: s.atp, dfp: s.dfp ?? 0, mst: s.mst, ata: s.ata, evp: s.evp ?? 0, lck: s.lck ?? 0 };
+  const x0 = rect.x + INSET;
+  const xr = rect.x + rect.w - INSET;
+  let y = rect.y + INSET;
+  for (const r of magStatRows(current)) {
+    const label = `${env.text(11, r.label)}:`;
+    const value = String(r.value);
+    const vx = xr - gameTextWidth(value);
+    wipeElement(ctx, x0, y, ROW, () => drawGameText(ctx, label, x0, y, '#ffffff'));
+    wipeElement(ctx, vx, y, ROW, () => drawGameText(ctx, value, vx, y, '#ffffff'));
+    y += ROW;
+  }
 }
 
 // The digit spinner window (CreateNumericDisplayListWindow_00728ac4), with a

@@ -53,7 +53,7 @@ import type { ItemPMT } from '../formats/itempmt.ts';
 import { hasEquipPanel } from './itemdetail.ts';
 import { maxStackSize, type ItemData } from '../formats/itemnames.ts';
 import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
-import { MEDICAL_COST, stackSize } from '../net/items.ts';
+import { bankRoom, MEDICAL_COST, stackSize } from '../net/items.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { anchorX, InfoWindow } from './ingame.ts';
 import { drawListWindow, drawTextWindow, drawWindowTitle, INSET, LINE, ROW, TITLE_GAP, type ListItem, type WindowRect } from './fieldwindows.ts';
@@ -70,6 +70,7 @@ import {
   itemRow,
   itemRowName,
   drawEquipPanel,
+  drawMagStatPanel,
   type ItemPackTextures,
   type ItemRow,
   type RowContext,
@@ -693,6 +694,7 @@ abstract class CounterBase {
         const rect = { x: anchorX(R.x, R.w, extra), y: R.y, w: R.w, h: R.h };
         const rc = this.env.rowContext();
         if (l.panel && rc.names && hasEquipPanel(item)) drawEquipPanel(ctx, skin, this.env, item, false, rc, rect);
+        else if (l.panel && rc.names && item.data1[0] === 2) drawMagStatPanel(ctx, skin, this.env, rc, rect);
         else drawTextWindow(ctx, skin, rect, itemDescription(item, rc.names));
       }
       if (l.quantity && item) this.drawCount(ctx, skin, QUANTITY_WINDOW, this.env.text(12, 1), l.quantity(l.cursor));
@@ -1129,14 +1131,23 @@ export class BankCounter extends CounterBase {
       const i = await this.pick();
       if (i === null) break;
       const it = inv[i];
+      // State 1 (0x006da7ac): the most that goes in is the carried count or the bank's room for
+      // the item, whichever is less; a full room is the 0x3c line and the list again. The
+      // spinner is only asked when that most is above 1 (the exe's `1 < local_1c`).
+      const room = bankRoom(this.env.items.bank?.items ?? [], it.data);
+      if (room === 0) {
+        await this.tell(MSG.bankItemsFull);
+        continue;
+      }
       let amount = 1;
-      if (stackSize(it.data) > 1) {
-        const n = await this.spin(stackSize(it.data));
+      const most = Math.min(stackSize(it.data), room);
+      if (maxStackSize(it.data) > 1 && most > 1) {
+        const n = await this.spin(most);
         if (n === null) continue;
         amount = n;
       }
       if (!(await this.yesNo())) continue;
-      if ((this.env.items.bank?.items.length ?? 0) >= BANK_ITEMS_MAX) {
+      if (bankRoom(this.env.items.bank?.items ?? [], it.data) < amount) {
         await this.tell(MSG.bankItemsFull);
         continue;
       }
