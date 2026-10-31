@@ -16,7 +16,7 @@
 // unnamed: the vtables, the dispatcher jump tables, the float constants).
 // Sound effects are cited, not played.
 
-import { BAMS_TO_RAD, lineOfSightBlocked, lockonPoint, type AiFrame, type AiTarget, type EnemyAiMotion, type MapRay } from './enemyai.ts';
+import { BAMS_TO_RAD, lineOfSightBlocked, lockonPoint, weaponVisibleFrom, type AiFrame, type AiTarget, type EnemyAiMotion, type MapRay, type RayPoint } from './enemyai.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, once, turnToward, wrap } from './enemyfsm.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
@@ -81,17 +81,39 @@ const fr = Math.fround;
 // The handlers are in the exe (6 at 0x0055ebb8, 10 at 0x0055d8d4) and are left
 // out: porting unreachable code would be guesswork.
 //
-// Not reproduced: the line-of-sight rays (a Gee sees a player through walls;
-// OPEN, 2026-10-31: melee's visibility test is CheckEnemyTargetVisibility_00521238 at
-// 0x0055ddc7, whose retry counter (enemy+0x3c0 / +0x3c4) and its target re-resolve are not
-// traced yet; the map ray itself is lineOfSightBlocked / weaponVisibleFrom in enemyai.ts),
-// the knockback slide in the flinch (0x30c velocity), the ground height
-// (ASSUMED flat: heights are above the ground under the Gee), the death
-// effect (a killed Gee goes to state 14, which only plays SE 0x250 / 0x2f3 and
-// deletes it: the owner removes it), and the spike's collision with walls.
+// Map rays (2026-10-31, the re-trace; DEVLOG 2026-10-31):
+// - The eye is the Gee's cursor enemy+0x300, which SinowberillCopyTargetVectors_0055ce28
+//   (0x0055ce28, every update) sets to (x, enemy+0x400, z): the altitude, with NO
+//   +15 (the Gibbles' DerolleUpdateLockonCursorPosition is not this). The ground under it is
+//   ASSUMED 0, so the eye's y is `alt`.
+// - Target search (FindEnemyTarget -> vt+0x1a8 = FindDerolleTarget_00521010): the nearest
+//   player with a clear ray from the eye (FindNearestPlayer_00521160). ASSUMED: enemy+0x30 bit
+//   0x10 is clear for a Gee (the other branch searches the entities; not traced).
+// - Visibility (CheckEnemyTargetVisibility_00521238 -> cast_ray_from_enemy_to_target): the
+//   retry counter enemy+0x3c0 starts at (entity_index + 3) % 45 and its limit enemy+0x3c4 is 45
+//   (InitializeEnemyStateInterval_005217fc, called by the Gee's init 0x0055fbc4 with 0x2d).
+//   While the counter is below the limit it counts up and only re-resolves the target (no ray);
+//   at the limit it resets and casts the ray (IsPlayerWeaponVisibleFromPoint_005212ec, from the
+//   eye to the player's weapon position). A blocked ray or a lost target clears the target.
+//   Melee sub != 0 and shoot sub != 1 use it. The weapon position is ASSUMED to be the feet.
+// - The spike stops on the map: GiGuesProjectile_CheckCollision_007ace1c casts prev -> now with
+//   mask 0x100 each frame and ends the shot on a hit.
+// - Strafe's dash stops short of a wall: DerolleCalculateAttackTarget_00520a04 casts from the
+//   eye 10 units past the step (mask 0x88e0) and keeps the distance to the hit minus 10.
+// Not reproduced: the wall slide of the lunge and the lost walk (CalculateMovementVector_005207f4
+// slides along the wall's tangent; OPEN, the tangent needs the hit's face normal), the knockback
+// slide in the flinch (0x30c velocity, GalGryphonProcessMovement), the ground height (ASSUMED flat:
+// heights are above the ground under the Gee), the death effect (a killed Gee goes to state 14,
+// which only plays SE 0x250 / 0x2f3 and deletes it: the owner removes it), and the 0x32e gate of
+// the hit-while-idle alert (SinowberillSetTargetEntity_0055d7b4 needs enemy+0x32e == 3; the Gee's
+// own code writes only 0 there, the value 3 comes from outside, OPEN).
 export const GEE = {
   search: 200, // FindEnemyTarget_00520ea0(this, 200.0)
-  retarget: 45, // unknown_set_state_interval_maybe(this, 0x2d)
+  retarget: 45, // unknown_set_state_interval_maybe(this, 0x2d): the timer's threshold (+0x3bc)
+  retryLimit: 45, // InitializeEnemyStateInterval_005217fc(this, 0x2d): the ray's period (+0x3c4)
+  spikeWallMask: 0x100, // GiGuesProjectile_CheckCollision_007ace1c
+  stripWallMask: 0x88e0, // GetGalGryphonAttackTargetRaycast_00520940 (the strafe's stop)
+  bodyRadius: 10, // enemy+0x384 (0x41200000), the stop's margin
   hover: 15, // enemy+0x3f4 (0x41700000)
   high: 45, // enemy+0x3f0 (0x42340000)
   ceiling: 150, // 0x009256a4: the drop's start above the ground
@@ -101,10 +123,7 @@ export const GEE = {
   emergeFrames: BOOMA_MELEE.emergeFrames, // InitializeEnemyStateTimer_00576c48
   spawnFrames: 4, // state 0: the check passes once the counter exceeds 3
   // state 7
-  shootRange: 70, // 0x009256b4
   aimStep: fr(0.6), // 0x009256bc
-  shootTurn: 0x200, // BAMS a frame
-  shootMove: fr(0.5),
   fireFrames: 14, // the volley's release: counter > 0xe
   shotLife: 150, // GiGues_Constructor_0055fecc: enemy+0xc0 = 0x96
   shotRange: 1000, // GiGuesProjectile_CheckLifetime_007ace88 (0x20)
@@ -159,9 +178,10 @@ export type GeeState = 'spawn' |'rise' | 'drop' | 'idle' | 'alert' | 'climb' | '
 
 // The Gee's spike (GiGues_Constructor_0055fecc over GiGuesProjectile
 // _Constructor_007acaf8): flies straight from the muzzle toward the aim point
-// at the spike speed a frame, dies after 150 frames, 1000 units, or on the
-// ground; the first player in its 5-unit body takes entity_hit_by_tech group 0
-// with MovementData fparam2.
+// at the spike speed a frame, dies on the first map hit of each frame's segment
+// (prev -> now, mask 0x100, GiGuesProjectile_CheckCollision_007ace1c), after 150 frames,
+// or past 1000 units; the first player in its 5-unit body takes entity_hit_by_tech group 0
+// with MovementData fparam2. Without a map ray the floor at y 0 stands in (ASSUMED).
 export class GeeSpike extends EnemyShot {
   readonly effect: ShotEffect;
   readonly look: ShotLook = { color: 0xe0c040, size: 1.2 };
@@ -171,9 +191,11 @@ export class GeeSpike extends EnemyShot {
   private travelled = 0;
   private life = GEE.shotLife;
   private speed: number;
+  private ray: MapRay | null;
 
-  constructor(x: number, y: number, z: number, toX: number, toY: number, toZ: number, speed: number, power: number) {
+  constructor(x: number, y: number, z: number, toX: number, toY: number, toZ: number, speed: number, power: number, ray: MapRay | null = null) {
     super(x, y, z);
+    this.ray = ray;
     const dx = toX - x;
     const dy = toY - y;
     const dz = toZ - z;
@@ -188,20 +210,27 @@ export class GeeSpike extends EnemyShot {
   tick(targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return [];
     this.frames++;
-    // ProcessState_007acda0: UpdatePosition, then CheckLifetime.
+    // ProcessState_007acda0: UpdatePosition (which casts prev -> now against the map,
+    // mask 0x100, and ends the shot on a hit), then CheckLifetime.
+    const prev = { x: this.x, y: this.y, z: this.z };
     this.x += this.vx;
     this.y += this.vy;
     this.z += this.vz;
+    if (this.ray) {
+      if (this.ray(prev, { x: this.x, y: this.y, z: this.z }, GEE.spikeWallMask)) {
+        this.done = true;
+        return [];
+      }
+    } else if (this.y <= 0) {
+      // ASSUMED without a map: the floor at 0 ends the shot.
+      this.done = true;
+      return [];
+    }
     if (GEE.shotRange < this.travelled) {
       this.done = true;
       return [];
     }
     this.travelled += this.speed;
-    // ASSUMED flat ground: the map ray-cast that ends it is the floor.
-    if (this.y <= 0) {
-      this.done = true;
-      return [];
-    }
     // The player's box is tested on the XZ plane (EXE: CheckTwoHitboxCollision_007b5e40,
     // dump 800093); ASSUMED the spike uses that test too, radius 5 as before.
     for (const t of targets) {
@@ -249,6 +278,8 @@ export class GeeAi extends BrainBase {
   private timer = 0; // the 0x3d4 state timer
   private fadeWait = 0; // enemy+0x40c
   private searchTimer = 0; // enemy+0x3b8
+  private retry = 0; // enemy+0x3c0: the ray counter (cast_ray_from_enemy_to_target)
+  private ray: MapRay | null = null;
   private row = 0; // enemy+0xb8
   private frames = 0; // current_animation_elapsed
   private immune = false; // SetEnemyInvulnerableAndImmune
@@ -274,8 +305,24 @@ export class GeeAi extends BrainBase {
   private fadeValue = 0;
   private fadeMode = 0;
 
-  constructor(opts: { x: number; z: number; angle: number; params: readonly number[]; movement: EnemyMovementData | null; rng?: () => number }) {
+  constructor(opts: {
+    x: number;
+    z: number;
+    angle: number;
+    params: readonly number[];
+    movement: EnemyMovementData | null;
+    rng?: () => number;
+    // The entity index (InitializeEnemyStateInterval_005217fc: the timer and the ray counter start at
+    // index % 45 and (index + 3) % 45). ASSUMED: the port's head.index is the exe's entity_index.
+    entityIndex?: number;
+    // The owner's map ray (mask-taking; GEE.stripWallMask, GEE.spikeWallMask and ENEMY_WALL_MASK).
+    ray?: MapRay | null;
+  }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
+    this.ray = opts.ray ?? null;
+    const index = Math.max(0, Math.floor(opts.entityIndex ?? 0));
+    this.searchTimer = index % GEE.retarget;
+    this.retry = (index + 3) % GEE.retryLimit;
     const p = (i: number) => opts.params[i] ?? 0;
     this.meleeOnly = Math.floor(p(0)) === 0;
     this.ground = Math.floor(p(1)) === 0;
@@ -382,6 +429,8 @@ export class GeeAi extends BrainBase {
       if (t.dead) continue;
       const d = (t.x - this.x) ** 2 + (t.z - this.z) ** 2;
       if (d >= bestSq) continue;
+      // FindNearestPlayer_00521160: only a player the eye can see (the ray from the cursor).
+      if (!this.sees(t)) continue;
       best = t;
       bestSq = d;
     }
@@ -389,11 +438,39 @@ export class GeeAi extends BrainBase {
     return best;
   }
 
-  // EnemyResolveTarget_00520f04 and the rest of CheckEnemyTargetVisibility
-  // (ASSUMED always visible).
+  // The eye: the cursor enemy+0x300 (SinowberillCopyTargetVectors_0055ce28 = (x, enemy+0x400, z)).
+  private eye(): RayPoint {
+    return { x: this.x, y: this.alt, z: this.z };
+  }
+
+  // The player's point the ray ends on: ASSUMED the feet (the exe's weapon_position is not in the port).
+  private sees(t: AiTarget): boolean {
+    return weaponVisibleFrom(this.eye(), { x: t.x, y: t.y ?? 0, z: t.z }, this.ray);
+  }
+
+  // EnemyResolveTarget_00520f04: the target is still a valid player.
   private resolve(targets: readonly AiTarget[]): AiTarget | null {
     const t = this.target(targets);
     if (!t) this.targetId = null;
+    return t;
+  }
+
+  // CheckEnemyTargetVisibility_00521238 -> cast_ray_from_enemy_to_target (0x00521238 / 0x0052126c):
+  // a target that is not valid is cleared. While the counter is below its limit the counter counts
+  // up and the target stays (no ray); at the limit the counter resets and the ray decides (a blocked
+  // ray clears the target). The counter starts at (index + 3) % 45 (see the constructor).
+  private visible(targets: readonly AiTarget[]): AiTarget | null {
+    const t = this.resolve(targets);
+    if (!t) return null;
+    if (this.retry < GEE.retryLimit) {
+      this.retry++;
+      return t;
+    }
+    this.retry = 0;
+    if (!this.sees(t)) {
+      this.targetId = null;
+      return null;
+    }
     return t;
   }
 
@@ -442,6 +519,9 @@ export class GeeAi extends BrainBase {
   }
 
   private enter(out: AiFrame, s: GeeState, prev: GeeState): void {
+    // Every enter but the spawn clears enemy+0x3d0 bit 0x400000 (the immune flag,
+    // `& 0xffbfffff` in each state's enter); the spawn and the strafe set it again below.
+    if (s !== 'spawn') this.immune = false;
     switch (s) {
       case 'spawn':
         this.enterSpawn(out);
@@ -497,6 +577,10 @@ export class GeeAi extends BrainBase {
         this.cnt = 0;
         this.cnt2 = 0;
         this.immune = true;
+        // The strafe's enter zeroes enemy+0x45c..0x464 (0x0055dd34 / 0x0055dd3e): the aim slots.
+        this.aimX = 0;
+        this.aimY = 0;
+        this.aimZ = 0;
         break;
       case 'flinch':
         // Hit while idle: SinowberillSetTargetEntity_0055d7b4 alerts it.
@@ -726,36 +810,24 @@ export class GeeAi extends BrainBase {
 
   // 0x0055e488.
   private shootFrame(out: AiFrame, targets: readonly AiTarget[]): void {
-    const t = this.sub === 1 ? this.find(targets, GEE.search) : this.resolve(targets);
+    // exe: FindEnemyTarget only in sub 1 (the charge), CheckEnemyTargetVisibility after it.
+    const t = this.sub === 1 ? this.find(targets, GEE.search) : this.visible(targets);
     if (!t) return;
     this.tx = t.x;
     this.tz = t.z;
     switch (this.sub) {
-      case 1:
-        // Aim: fly toward the player until within 70.
-        this.velocity();
-        if (this.gap < GEE.shootRange) {
-          this.sub = 2;
-          this.locked = true;
+      case 1: {
+        // The charge (exe sub 1): the aim point creeps toward the player at 0.6 a frame (XZ), the
+        // height by 0.6 of the gap; the Gee does not move. ASSUMED: the aim slot is seeded at the
+        // player when the first charge of a shoot starts (its seeding is not traced).
+        if (this.cnt === 0 && this.shots === 0) {
+          this.aimX = t.x;
+          this.aimY = t.y ?? 0;
+          this.aimZ = t.z;
         }
-        this.moveAhead(GEE.shootTurn, GEE.shootMove);
-        break;
-      case 2:
-        this.velocity();
-        this.turnToVelocity();
-        this.sub = 3;
-        this.fadeValue = 1;
-        this.aimX = t.x;
-        this.aimY = 0;
-        this.aimZ = t.z;
-        break;
-      case 3: {
-        // Charge: the aim point creeps toward the player at 0.6 a frame.
-        this.velocity();
-        this.turnToVelocity();
         const dx = t.x - this.aimX;
         const dz = t.z - this.aimZ;
-        const dy = 0 - this.aimY;
+        const dy = (t.y ?? 0) - this.aimY;
         const len = Math.hypot(dx, dz);
         if (GEE.aimStep <= len) {
           this.aimX += (dx / len) * GEE.aimStep;
@@ -763,7 +835,7 @@ export class GeeAi extends BrainBase {
           this.aimZ += (dz / len) * GEE.aimStep;
         } else {
           this.aimX = t.x;
-          this.aimY = 0;
+          this.aimY = t.y ?? 0;
           this.aimZ = t.z;
         }
         if (this.charge < ++this.cnt) {
@@ -779,7 +851,7 @@ export class GeeAi extends BrainBase {
           this.locked = false;
           this.fadeValue = 1;
           this.shots++;
-          out.shots = [new GeeSpike(this.x, GEE.muzzleHeight, this.z, this.aimX, this.aimY, this.aimZ, this.spikeSpeed, this.spikePower)];
+          out.shots = [new GeeSpike(this.x, GEE.muzzleHeight, this.z, this.aimX, this.aimY, this.aimZ, this.spikeSpeed, this.spikePower, this.ray)];
           this.cnt = 0;
         }
         break;
@@ -797,7 +869,8 @@ export class GeeAi extends BrainBase {
 
   // 0x0055dd78.
   private meleeFrame(out: AiFrame, targets: readonly AiTarget[]): void {
-    const t = this.sub === 0 ? this.find(targets, GEE.search) : this.resolve(targets);
+    // exe 0x0055dd78: FindEnemyTarget in sub 0, CheckEnemyTargetVisibility after it.
+    const t = this.sub === 0 ? this.find(targets, GEE.search) : this.visible(targets);
     if (!t) return;
     switch (this.sub) {
       case 0:
@@ -911,7 +984,8 @@ export class GeeAi extends BrainBase {
         this.aimAt(t);
         const rr = this.rng() * 2 - 1;
         const base = 0 <= GEE.strafeSpread * rr ? GEE.strafeBase : -GEE.strafeBase;
-        this.turnRate = Math.trunc((base + GEE.strafeSpread * rr) * GEE.strafeStep);
+        // ROUND in the exe (0x0055d9cc: (int)ROUND(...)), not a truncation. ASSUMED: nearest.
+        this.turnRate = Math.round((base + GEE.strafeSpread * rr) * GEE.strafeStep);
         this.radialStep = fr((GEE.strafeRadius - this.gap) * GEE.strafeStep);
         this.altStep = fr(GEE.strafeStep * (GEE.high - this.altRef));
         this.ux = -this.dirX;
@@ -935,8 +1009,7 @@ export class GeeAi extends BrainBase {
       this.radial += this.radialStep;
       const px = this.ux * this.radial + this.tx;
       const pz = this.uz * this.radial + this.tz;
-      this.x = px;
-      this.z = pz;
+      this.stepToward(px, pz);
       this.angle = Math.atan2(this.ux, this.uz) + Math.PI;
     } else if (this.sub === 0) {
       this.aimAt(t);
@@ -948,6 +1021,29 @@ export class GeeAi extends BrainBase {
       }
     }
     void out;
+  }
+
+  // The strafe's step (DerolleSpawnEffect_00520b10 -> DerolleCalculateAttackTarget_00520a04): the
+  // length is the distance to (px, pz); a wall cuts it short: the ray from the eye 10 units past the
+  // step (mask 0x88e0), and the length becomes the hit distance minus 10. The minimum horizontal
+  // distance of GetGalGryphonAttackTargetRaycast is not ported (OPEN). The hit point stands for the
+  // exe's ground_info object position (ASSUMED).
+  private stepToward(px: number, pz: number): void {
+    const dx = px - this.x;
+    const dz = pz - this.z;
+    const len = Math.hypot(dx, dz);
+    if (len <= 0) return;
+    const ux = dx / len;
+    const uz = dz / len;
+    let step = len;
+    if (this.ray) {
+      const eye = this.eye();
+      const reach = len + GEE.bodyRadius;
+      const hit = this.ray(eye, { x: this.x + ux * reach, y: eye.y, z: this.z + uz * reach }, GEE.stripWallMask);
+      if (hit) step = Math.hypot(hit.x - this.x, hit.z - this.z) - GEE.bodyRadius;
+    }
+    this.x += ux * step;
+    this.z += uz * step;
   }
 
   // 0x0055d4e8.

@@ -6,7 +6,7 @@
 // a run with several lengths guards against a state that waits on a length.
 // Nothing may hang.
 // Run: node tests/enemyfsmep2a.test.ts
-import { GEE, GIBBLES, GIGUE, GeeAi, GibblesAi, GiGueAi, GiGueBomb, GiGueSpit, GroundBlast, type GeeState, type GibblesState } from '../client/src/combat/enemyfsmep2a.ts';
+import { GEE, GIBBLES, GIGUE, GeeAi, GeeSpike, GibblesAi, GiGueAi, GiGueBomb, GiGueSpit, GroundBlast, type GeeState, type GibblesState } from '../client/src/combat/enemyfsmep2a.ts';
 import { ENEMY_WALL_MASK, lineOfSightBlocked, lockonPoint, weaponVisibleFrom, type AiFrame, type AiTarget, type MapRay, type RayPoint } from '../client/src/combat/enemyai.ts';
 import { STATUS } from '../client/src/combat/status.ts';
 import { motionFrames, realLen } from './lib/motionframes.ts';
@@ -287,7 +287,9 @@ const gee = (params: number[], rng: () => number = () => 0.3, o = {}) => new Gee
     let worst = 0;
     for (let i = 0; i < 20000; i++) {
       const phase = Math.floor(i / 700) % 3;
-      const targets = phase === 0 ? [] : [player(Math.sin(i / 90) * 120, 40 + (i % 300) / 3)];
+      // A slow walker (about 0.3 a frame): the exe's melee closes only by its 31-unit side steps
+      // (2026-10-31), so a player that outruns them keeps the melee cycling; that is not a hang.
+      const targets = phase === 0 ? [] : [player(Math.sin(i / 400) * 120, 40 + (i % 300) / 3)];
       if (r() < 0.004) g11.onDamage(0);
       rig11.step(targets);
       if (g11.state === lastState && phase !== 0 && g11.state !== 'idle' && g11.state !== 'lost') stuck++;
@@ -300,6 +302,105 @@ const gee = (params: number[], rng: () => number = () => 0.3, o = {}) => new Gee
       }
     }
     check(worst < 900, `Gee (motions ${tag(len)}): no state hangs with a target (${worst})`);
+  }
+}
+
+// --- Gee map rays (2026-10-31: the re-trace) ----------------------------------
+{
+  type GeeInner = {
+    retry: number;
+    searchTimer: number;
+    targetId: number | null;
+    visible(t: readonly AiTarget[]): AiTarget | null;
+    stepToward(px: number, pz: number): void;
+    alt: number;
+  };
+  const inner = (g: GeeAi) => g as unknown as GeeInner;
+  // The retry counter starts at (index + 3) % 45 and the timer at index % 45 (InitializeEnemyStateInterval).
+  eq([inner(new GeeAi({ x: 0, z: 0, angle: 0, params: [1, 0, 0, 0], movement: null, entityIndex: 0 })).retry, inner(new GeeAi({ x: 0, z: 0, angle: 0, params: [1, 0, 0, 0], movement: null, entityIndex: 42 })).retry], [3, 0], 'Gee: the ray counter starts at (index + 3) % 45');
+  eq(inner(new GeeAi({ x: 0, z: 0, angle: 0, params: [1, 0, 0, 0], movement: null, entityIndex: 50 })).searchTimer, 5, 'Gee: the search timer starts at index % 45');
+
+  // A ray that blocks every cast: the target is kept for 42 frames without a ray (counter 3 -> 45),
+  // then one ray decides and clears it (the counter resets).
+  {
+    let casts = 0;
+    const blocked: MapRay = () => {
+      casts++;
+      return { x: 1, y: 1, z: 1 };
+    };
+    const g = new GeeAi({ x: 0, z: 0, angle: 0, params: [1, 0, 0, 0], movement: null, ray: blocked });
+    const p = player(0, 20, 7);
+    inner(g).targetId = 7;
+    let kept = 0;
+    for (let i = 0; i < 42; i++) if (inner(g).visible([p])) kept++;
+    eq([kept, casts], [42, 0], 'Gee: 42 frames keep the target with no ray (the counter counts up)');
+    eq(inner(g).visible([p]) === null && casts === 1 && inner(g).targetId === null, true, 'Gee: the 43rd check casts the ray; blocked, the target is cleared');
+  }
+
+  // The search (FindNearestPlayer): the nearer player behind a wall is skipped; the ray starts at the
+  // Gee's altitude (the cursor enemy+0x300 is (x, enemy+0x400, z), no +15).
+  {
+    const froms: RayPoint[] = [];
+    const wall: MapRay = (from, to) => {
+      froms.push(from);
+      return to.x < 30 && to.x > 10 ? { x: 20, y: 0, z: 0 } : null;
+    };
+    const g = new GeeAi({ x: 0, z: 0, angle: 0, params: [1, 0, 0, 0], movement: null, ray: wall });
+    const near = player(20, 0, 1);
+    const far = player(60, 0, 2);
+    (g as unknown as { searchTimer: number }).searchTimer = GEE.retarget;
+    (g as unknown as { find(t: readonly AiTarget[], r: number): AiTarget | null }).find([near, far], GEE.search);
+    eq(g.targetId, 2, 'Gee: the search skips the player behind a wall and takes the next');
+    check(froms.length > 0 && froms.every((f) => f.x === 0 && f.y === GEE.hover && f.z === 0), `Gee: the eye is (x, altitude, z) (${JSON.stringify(froms[0])})`);
+  }
+
+  // The spike ends on the first map hit of a segment (mask 0x100), not on a flat floor.
+  {
+    const masks: number[] = [];
+    let calls = 0;
+    const ray: MapRay = (_from, to, mask) => {
+      masks.push(mask);
+      calls++;
+      return calls >= 3 ? { x: to.x, y: to.y, z: to.z } : null;
+    };
+    const s = new GeeSpike(0, 45, 0, 0, 0, 1000, 10, 0, ray);
+    let hits = 0;
+    for (let i = 0; i < 5; i++) hits += s.tick([]).length;
+    eq([s.done, hits, calls, masks[0]], [true, 0, 3, GEE.spikeWallMask], 'Gee spike: a map hit ends it on the third segment, no player hit');
+  }
+
+  // The strafe's step stops 10 short of a wall (the hit distance minus 10, mask 0x88e0).
+  {
+    let mask = -1;
+    const wall: MapRay = (from, to, m) => {
+      mask = m;
+      void from;
+      return { x: 20, y: to.y, z: 0 };
+    };
+    const g = new GeeAi({ x: 0, z: 0, angle: 0, params: [1, 0, 0, 0], movement: null, ray: wall });
+    inner(g).stepToward(100, 0);
+    near(g.x, 10, 1e-9, 'Gee strafe: a wall 20 away stops the step at 10');
+    eq(mask, GEE.stripWallMask, 'Gee strafe: the stop ray has mask 0x88e0');
+    const free = new GeeAi({ x: 0, z: 0, angle: 0, params: [1, 0, 0, 0], movement: null });
+    inner(free).stepToward(100, 0);
+    near(free.x, 100, 1e-9, 'Gee strafe: no ray, the step reaches the radial point');
+  }
+
+  // The charge does not move the Gee (the exe's shoot has no approach phase): hold position while
+  // the aim creeps, then fire.
+  {
+    const g = gee([1, 0, 0, 0], () => 0.3);
+    const rig = new Rig(g);
+    const p = player(0, 150);
+    rig.until([p], 'shoot', 1200);
+    check(g.state === 'shoot', 'Gee: reaches the shoot');
+    const at = { x: g.x, z: g.z };
+    let moved = false;
+    for (let i = 0; i < 60 && g.state === 'shoot' && (g as unknown as { sub: number }).sub === 1; i++) {
+      rig.step([p]);
+      if (g.x !== at.x || g.z !== at.z) moved = true;
+    }
+    check(!moved, 'Gee: the charge holds position');
   }
 }
 
