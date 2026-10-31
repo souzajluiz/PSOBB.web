@@ -23678,3 +23678,32 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 **Not changed, unresolved.** Challenge mode (line 302): the 2026-10-30 `CM_STAGE` e2e runs the stage picker for Stage1, but the line's "not run in Chrome" note about the stage-selection dialog was left as is; stages 2-9 and Episode 2 stay open per TODO A. The `ROADMAP.md` prose paragraphs (the "Next up" list, item 2 and item 1) still describe the Dragon, De Rol Le, Vol Opt and TOKurage / plant / slime shape motions as open; they are not `- [ ]` lines and were not edited.
 
 **Docs only.** No code, no tests, no Vite or Playwright run.
+
+## 2026-10-31: Minimap owners of the +0xd0 bit 0 mapped; the Challenge "Area n" title is a warp-menu label
+
+**Question.** TODO's Minimap line: which owner sets or reads `+0xd0` bit 0 for the boss door (0x0103), the Seabed dolphin, and the Dark Falz hazard / form 3 icons, and does each draw a radar icon; and where the Challenge "Area n" title is drawn.
+
+**Result.** No code change. Every radar owner is mapped and drawn already; the open item is the title, which is a warp-menu label, not a radar icon.
+
+**Owners (exe, from the 2026-10-23 entries; checked here in the dump):**
+- **0x0103 boss door:** not a door. `CreateMapObjectDoor_00615a9c` builds the CapMoto capsule machine (`bm_fs_obj_cap_moto.bml`, box 0x009c4a5c). No lock, no state word, no icon call (ctor 0x00615b14). `+0xd0` is not touched. Draws no icon.
+- **Seabed dolphin = the 0x0202 door** (ctor `InitializeSeabedDolphinMapObject_00657a80`, vtable 0x00b32240). Lock `FUN_00657b20` sets bit 0 when every switch flag `+0xc8 + i` (i < `+0xd4`) is set. Icon `UpdateSeabedDolphinPlayerMinimapIcon_00657718` (dump 519977): icon4 `0xff00ff00` with bit 0, else `0xffff0000`. The port: `render/gameview.ts` `doorMinimapIcons` with `doorMapLocked`, `render/fieldobjects.ts` `bitRule` / `bit0`.
+- **0x0204 beam door** (update `BeamDoorMapObjectUpdate_00657e00`, dump 520187): the same colours on bit 0, icon4 at +0x38, yaw +0x60. Ported (2026-10-23 entry).
+- **0x0080 TObjDoor** (the Forest door): slot 1 is `UpdatePlayerActionState_00656e28`, the state icon (red at state 0). Not a bit 0 owner. Ported as the state icon (2026-10-23 entry).
+- **Dark Falz form 2 beam balls** (`UpdateVoloptForm7Hazard`, dump 197706): forced icon3 `0xffffa24c`, scale 2.5, shape 1 per ball. Ported: `combat/darkfalz2.ts`, `DfForm2.minimapIcons()` (2026-10-23 entry).
+- **Dark Falz form 3** (`dark_falz_form3_minimap_icons`, dump 198990): colour from `g_DarkFalzForm3MinimapIconColors[+0x3c2]` (default `0xffffa24c`), faded per channel toward `+0x3cc`. Ported: `classic/minimap.ts` (the form 3 block, around line 475; 2026-10-23 entry "forced boss icons").
+
+**Challenge "Area n" title (searched; not a radar icon).**
+- `cmode_area_title_buffer` (dump line 127597) is written by `challenge_set_area_title` (dump 257566, `_wcsncpy` of 0x1f wide; the optcall variant `challenge_set_area_title_optcall` at 257586), which `opcode_set_area_title` (dump 607557, quest opcode 0xF857 `set_area_title`) calls with the quest's string. `cmode_area_title_number` is written by `opcode_set_area_title_number` (dump 607515).
+- Its reader is `maybe_update_mainwarp` (dump 510944), the Ragol teleporter menu of TObjCityMainWarp (0x0043, FUN_00649cec). When `get_room_type() == 1` (`get_room_type` dump 766028: `g_ChallengeObject != NULL`), each row's label is `cmode_area_title_buffer` instead of unitxt group 10 (dump 511219, 511242, 511265; the same for episodes 1 and 2; the optcall variant of the function at dump 511303 has the same three labels at 511578, 511601, 511624). Otherwise the label is `unitxt_get_string(10, MainWarpBitmask[i])`.
+- The rows: `mainwarp_bitmask` is the state `g_SeabedTuriganeState_00a8f500` (dump 510964: the else branch, a quest running; with no quest it is set by `UpdateSeabedTuriganeState_0064a428`, dump 510961). `set_mainwarp(floor)` (`UpdateMainwarpState_0064ab70`, dump 512138) sets bit `g_FloorWarpFlags[floor + 1]` (`CheckFloorMainwarpEligibility_0064aab0`, dump 512059: the table at 0x00936160, 47 dwords; `-1` for a boss map via `map_is_not_boss_map`). Table values read with `tools/exedata.py read 00936160 u 188`: `[0] = -1`, `[1..17] = 0..16`, `[18] = -1`, `[19..] = 0, 1, 2, ...`. The second block's meaning (episode or floor ids above 17) is not settled.
+
+**Why not ported.** The label is only one part. Porting it needs (a) the floor-to-bit mapping with the boss-map test (`GetFloorMapId_0080c2dc` and `map_is_not_boss_map` (the call target at 0x00807dc8; its name is not in the dump), not decoded), (b) the quest mask as the row set (the port's `quest/vm.ts` keeps `mainwarpFloors` as floor numbers, not bits, and `render/gamefield.ts` `openMenu` calls `mainWarpItems(episode, warpType)` with no quest bits), and (c) a challenge floor that holds a 0x0043 object, which was not found in the data checked. Without (a) and (b) the rows would be wrong, so the title stays open.
+
+**Not done this session.** No Playwright e2e: nothing changed in the port, and the boss-door check (no icon for 0x0103) is covered by `tests/minimap.test.ts` ("0x0103 is not in the door list").
+
+**Checks:** `node tests/minimap.test.ts` with `client/node_modules` linked from the worktree for the run (unlinked after): "minimap: all checks passed" (Node 24).
+
+**Left:**
+- The Challenge "Area n" title: items (a)-(c) above. The exe's chain is traced; the port's floor-to-bit table and the boss-map test are the first step.
+- The `TObjCityMainWarpChallenge` (object 0x0055 in newserv's `formats/entitynames.ts`; its params are "Destination floor" and "Switch flag number") is not checked against this label path.
