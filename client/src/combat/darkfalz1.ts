@@ -181,6 +181,73 @@ export interface Form1Row {
 export const F1_BOX_FLAGS = 0x801b;
 export const F1_BOX_COUNT = 3;
 
+// EnforceVoloptForm7ArenaBoundaries (PsoBB.exe 0x004551F4; the dump's Volopt name
+// is a mislabel): the body's six circles, in the frame of the heads (x = cx + lx
+// cos + lz sin, z = cz - lx sin + lz cos, as updateHeads). The table is written by
+// the init 0x00457798..0x00457924: the points at 0x00A456C4 (x at +8 i, z at +4
+// past it, the 5 fixed ones), the radii at 0x00A456F4, and the sixth point by the
+// variant (+0x3B0: 0x00A456AC / 0x00A456B0, (130, 0), (0, 130), (-130, 0)), the
+// count is 6 (+0x3D8, 0x0045792E). The margin 0.75 (0x00A45248, set 0x00455379).
+// ASSUMED: the ground probe (Enemygetgroundinfo, 0x007B4C58) is taken to find
+// ground everywhere, so the exe's lift of 5 (the probe height) is not applied:
+// the push is in the XZ plane only.
+export const BODY_CIRCLES = {
+  points: [
+    [0, 0],
+    [50, 0],
+    [0, 50],
+    [-50, 0],
+    [0, -80],
+  ] as const,
+  sixth: [
+    [130, 0],
+    [0, 130],
+    [-130, 0],
+  ] as const,
+  radii: [75, 60, 60, 60, 40, 30] as const,
+  margin: 0.75,
+} as const;
+
+// The XZ push of a player out of the body's circles (EnforceVoloptForm7ArenaBoundaries):
+// each circle the player is in (distance <= radius) puts the player on the circle
+// at radius + margin, along the direction from the centre (or from the world origin
+// when the player is on the centre, (1, 0) when that is the origin too). The
+// circles are tested in order, each on the position the last one left. Returns
+// the total move, or null when no circle holds the player.
+export function pushedOutOfBody(body: { x: number; z: number; yaw: number; variant: number }, p: { x: number; z: number }): { dx: number; dz: number } | null {
+  const c = cosB(body.yaw);
+  const s = sinB(body.yaw);
+  const v = Math.min(2, Math.max(0, body.variant));
+  const local: readonly (readonly [number, number])[] = [...BODY_CIRCLES.points, BODY_CIRCLES.sixth[v]];
+  let x = p.x;
+  let z = p.z;
+  for (let i = 0; i < local.length; i++) {
+    const [lx, lz] = local[i];
+    const cx = body.x + lx * c + lz * s;
+    const cz = body.z - lx * s + lz * c;
+    const r = BODY_CIRCLES.radii[i];
+    let vx = x - cx;
+    let vz = z - cz;
+    let d = Math.hypot(vx, vz);
+    if (d > r) continue;
+    if (d === 0) {
+      vx = x;
+      vz = z;
+      d = Math.hypot(vx, vz);
+      if (d === 0) {
+        vx = 1;
+        vz = 0;
+        d = 1;
+      }
+    }
+    const k = (r + BODY_CIRCLES.margin) / d;
+    x = cx + vx * k;
+    z = cz + vz * k;
+  }
+  if (x === p.x && z === p.z) return null;
+  return { dx: x - p.x, dz: z - p.z };
+}
+
 export class DfForm1 extends DfEntity {
   st: number = F1.appear;
   timer = 0;
@@ -386,6 +453,7 @@ export class DfForm1 extends DfEntity {
     this.anim.tick();
     this.updateHeads();
     this.trackPose();
+    if (!this.dead) this.pushPlayers();
     if (this.hp <= 0 && !this.dead) this.die();
     // The control sets 0x800 from the HP; WAITNEXT's lead then asks for WAITKILL.
   }
@@ -595,6 +663,18 @@ export class DfForm1 extends DfEntity {
   // The radar icons of the body, the heads and the ring (form1Icons).
   minimapIcons(): Icon[] {
     return form1Icons({ x: this.x, z: this.z }, this.heads, sinB(this.yaw), cosB(this.yaw));
+  }
+
+  // The living players are pushed out of the body (pushedOutOfBody). ASSUMED: the
+  // exe runs the push from the camera composition of this form (0x00454EF9), once
+  // a frame; here it runs once a tick, for the players alive now. Dead players and
+  // the other clients' copies are not moved (the render layer applies the local one).
+  private pushPlayers(): void {
+    const f = this.fight;
+    for (const p of f.alive()) {
+      const d = pushedOutOfBody({ x: this.x, z: this.z, yaw: this.yaw, variant: this.newV }, p);
+      if (d) f.events.push({ kind: 'push', clientId: p.clientId, dx: d.dx, dz: d.dz });
+    }
   }
 
   // The three hit spheres in the world: the heads turn with the yaw.
