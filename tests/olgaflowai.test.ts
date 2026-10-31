@@ -25,6 +25,7 @@ import {
   lancerQuad,
   lancerTouches,
   olgaBattlePower,
+  olgaStabPower,
   olgaLancerLeadHold,
   olgaLancerProgress,
   olgaStabRange,
@@ -254,6 +255,21 @@ const sends = (ai: OlgaFlowAi): OlgaEvent[] => ai.drainEvents().filter((ev) => e
   eq(olgaBattlePower(-3), 20, 'a negative animation speed falls back to 20');
   eq(olgaBattlePower(43.4), 43, 'the animation speed is an int');
   eq(olgaBattlePower(43.9), 43, 'the animation speed truncates (fistp under RC = truncate)');
+  eq(olgaStabPower(0), 20, 'the stab power: an exact 0 gives 20 (0x004917c8 against 0.0)');
+  eq(olgaStabPower(-3), -3, 'the stab power keeps a negative field (no fallback in the stab constructor)');
+  eq(olgaStabPower(43.9), 43, 'the stab power truncates (fist under RC = truncate)');
+  // randomly_adjust_value_by_fraction (0x0048e9d4, 2026-10-31): both int conversions truncate (RC = 11).
+  // rnd 0.25 -> _rand 8192 -> angle trunc(16383.75) = 16383 (the round would give 16384); sin there is just under 1,
+  // so 10 + 1.0 - eps truncates to 10 (round: 11). ASSUMED: int_sin is accurate at the peak (its table is not read).
+  eq(randomlyAdjust(10, 0.1, 0.25), 10, 'the adjusted power truncates (the exe fistp under RC = truncate)');
+  let truncOk = true;
+  for (let i = 0; i < 200; i++) {
+    const rnd = i / 200;
+    const angle = Math.trunc((Math.floor(rnd * 32768) / 32768) * 65535);
+    const want = Math.max(1, Math.trunc(37 + Math.sin(angle * (Math.PI * 2 / 65536)) * 0.1 * 37));
+    if (randomlyAdjust(37, 0.1, rnd) !== want) truncOk = false;
+  }
+  check(truncOk, 'the adjusted power is trunc(value + sin * fraction * value), at least 1, for 200 rand values');
 }
 
 {

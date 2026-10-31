@@ -927,3 +927,41 @@ section. Mark: PROVEN unless noted.
 - Constants (exedata, PROVEN): 0x00902668 = 10.5, 0x00902664 = 15.0, the tail chunk index at 0x009a6ea8 = 51.
 - Verdict: the tail hit stays NOT PORTED. The beast's +0x640..+0x654 has no decoded writer; the port has no exe anchor
   to copy. DEVLOG 2026-10-25 "Olga tail anchor, pass 8".
+
+## 18. Pass 9 (2026-10-31): re-check of the ported attack objects (wave, stab, lancer)
+
+Sources: the dump (`Psobb.exe-05112026.c`: CheckForSwordWaveHittingPlayers 214878, CheckOlga1SwordStab 215080,
+olga1_sword_stab_update 212391, create_olga_sword_stab_objects 212446), the asm (`objdump -d -M intel`, PsoBB.exe), `tools/exedata.py read`,
+`tools/ghidra/decomp.sh 0x0083a0dc`. Every address below is a VA. PROVEN unless marked.
+
+### 18.1 Sword wave (rows 5..10, the test at 0x00494f58)
+- Window: the chunk (0x00494f83..0x00494f8e) and `animation_counter` in [12.5, 22.0] (0x00494f9a / 0x00494fac: 0x0090262c, 0x00902628). The port uses ticks since the state entered (ASSUMED anim time).
+- The line: A = +0x5e0 (XZ), tip = +0x5ec (XZ), D = tip - A with Y zeroed (vec3_subtract at 0x0049504d..0x0049507b; the direction stored at esp+0x24..0x2c with esp+0x28 = 0). The distance is to the INFINITE line (FUN_0083a0dc, decompile: `t = dot(p - a, d) / |d|^2`, no clamp to [0, 1]). Hit when dist <= 15.0 (0x00902b04, 0x004950c5).
+- Dot: `dot(a - c, tip - c) <= 0.0` (0x00902b14, 0x00495135). **UNCLEAR:** the first vector's Z is stack slot esp+0x44, which this function never writes (its Y is a.z, stored at esp+0x40 and zeroed at 0x00495118 before the dot). The exe's dot therefore has a stale-stack Z term; the port keeps the intended XZ dot.
+- Power: `randomly_adjust_value_by_fraction(+0x484, 0.1)` (0x00495140..0x0049514b). +0x484 = `InitializeOlga1AnimationSpeeds` field0 (see 18.4).
+- Damage: `entity_hit_by_tech(player, beast, 0, power, NULL, ~foie, -1)`, group 0 (unchanged).
+- Hit set: every player with `can_olga_hit_player` (0x0048e100: `is_player_in_olga_map && (character_flags & 0x2000800) == 0`). The port tests the local player only (ASSUMED) and does not test the flags (ASSUMED).
+
+### 18.2 Sword stab (rows 11..20: CheckOlga1SwordStab 0x00495508, the object 0x004916a0 / 0x0049171c, the update 212391)
+- Count: one object per frame where the gate passes (the create call has no loop). The mult-4 flag (`+0x410 & 3 == 0`, 0x00495628..0x0049562e) is passed to the create: it gates only the particles (0x212 / 0x213, in the ctor) and, in the caller, the sound 0x3c4 and the lock-on (`unknown_olga_launcher_attacks_hit_player_check` 100.0, 0xc0, 0xf). The spawn itself runs every tick (PROVEN, unchanged).
+- Position: the ground point (0x00495508..0x004955c5: `t = -a.y / (tip.y - a.y)` when `tip.y - a.y > 1e-5`, else 1; y = 0). Range: `maybe_olga1_sword_stab_ranges[g_CurrentDifficulty]` (0x0090264c, index from 0xa9cd68 at 0x004955f3; outside 0..3 reads row 0). The dump names this index `g_CurrentFloor`: that is a mislabel; the port's difficulty index is the exe's.
+- Life and hit: each update (`olga1_sword_stab_update`, dump 212391, vtable binding by name only: ASSUMED, the address is not bound) hits every `can_olga_hit_player` whose XZ distance is `<=` the range (`vec3_length` after `Y = 0`), with power `randomly_adjust(+0x34, 0.1)`, then adds 1 to the counter and sets the dead bit when the counter is above 7: 8 updates, the last one still hits. `unknown_photon_blast_related_() != 0` skips the whole update (not modelled).
+- Power (+0x34) is set in the ctor (0x0049171c): `fist` of field0 under RC = 11 (truncation, 0x004917c2), `fcomp` against 0.0 (0x009021e4, 0x004917c8): equal -> 0x14 (0x00491876). Otherwise the truncated value, negative kept. **Fixed in the port** (`olgaStabPower`): the port used the InitializeOlga1AnimationSpeeds rule (positive or 20), which is not the stab's.
+- **OPEN (new):** the gate needs `tip.y` and `a.y` on opposite sides of the plane 0.0 (0x00495508..0x0049553a, 0x00902af0). The only decoded writers of the sword Y (+0x5e4, +0x5f0, +0x5fc) are `SetOlga1SwordAttackYPosition_0049536c` (0x0049536c..0x0049538a: 10.0 each), which runs only inside the sword wave's window (0x00494ffd). No literal store to +0x5e0..+0x600 (X or Z either) exists in 0x00488000..0x004a2000 (grep of the objdump, base registers e?? and lea forms). So with the decoded writers both Y values are 10.0 and the gate is never true: the stab would never spawn. Either the sword points are written by an unbound path (a computed offset or a generic copy), or the stab does not fire in this build. The port keeps the bone-based gate (ASSUMED) until the writer is found.
+- The sword points' X/Z: the same (no decoded literal writer). `SetOlga1SwordAttackVectors_00495390` (0x00495390) reads them and calls `UpdateOlgaAttackVectors_004a053c` (0x004954fc), it writes none of them.
+
+### 18.3 Fire lancer (row 22, 0x0049876c, the hit 0x0049592c)
+- Timer order (asm): the frame reads the pre-decrement timer `+0x418` (0x00498781), hits when `0x1e <= timer <= +0x4a8` (0x004987d0..0x004987df), progress first (0x004967ec on the hit tick, 0x00496810 otherwise). The port's `lancerUpdate` does the same (before the timer decrement). PROVEN.
+- The gate: `ValidateDoorAnimation_00836208(A, B) >= 10.0`, the call at 0x00495960 with A = +0x5b0 and B = +0x5c8, `fcomp [0x902670]` at 0x00495968 and `jae` on the pass (0x00495971). 0x00836208 returns `g_DoorAnimThresholds` (0x0098a600 = 0.0) when the squared distance is below `g_DoorAnimDistanceThreshold` (0x0098a604 = 0.025), else the 3D length. The port's `lancerGate` matches.
+- Constants (exedata): 0x00902ac4 = -500, 0x00902ac8 = 0.5, 0x00902acc = 0.0, 0x00902670 = 10.0, 0x009026ac = 1/30, 0x009026b0 = -2/15, 0x00902a8c = 0, 0x00902a90 = 1. The power is `randomly_adjust(+0x48c)` (field3); the port's fparam4 path (18.4) matches.
+- ASSUMED: the anchors A (+0x5b0) and B (+0x5c8), no decoded writer (map 16.5); the push-out and the orbit (16.6).
+
+### 18.4 The animation-speed row (InitializeOlga1AnimationSpeeds 0x00497bc8, PROVEN)
+- +0x484 = field0, +0x488 = field2, +0x48c = field3: each `fistp` under RC = 11 (truncation), kept when `0 < int`, else 0x14. The port's `olgaBattlePower` matches this rule (truncate, else 20).
+- `randomly_adjust_value_by_fraction` (0x0048e9d4): the angle is `trunc(rand / 32768 * 65535)` (0x009015a8 = 32768, 0x009015ac = 65535) and the result `trunc(value + sin * fraction * value)`, at least 1 (0x0048ea50). **Fixed in the port** (`randomlyAdjust` used Math.round for both: the angle and the result). ASSUMED: int_sin (0x0082dcbc, a table) is the sine of the BAMS angle.
+
+### 18.5 Port (this pass)
+- `client/src/combat/olgaflowhits.ts`: `randomlyAdjust` truncates; `olgaStabPower` (new); comments on the dot and the Y gate.
+- `client/src/render/combat.ts` `olgaSwordStab`: the stab power is `olgaStabPower(fparam1)`.
+- `tests/olgaflowai.test.ts`: the truncation checks (rnd 0.25 gives 10 for value 10), the 200-value formula check, and the stab power cases.
+- Not changed: the sword points (ASSUMED bones), the stab's spawn gate (OPEN, 18.2), the tail (16.x / 17.x), the mines, form 2.
