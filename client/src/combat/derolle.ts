@@ -360,16 +360,19 @@ export class DrlRockEmitter {
     this.power = power;
     this.angle = -DRL_ROCK_TYPES[type].spread / 2;
   }
+  // 0x004376d8: the countdown [+0x34] drops a tick and fires below 1 (the
+  // first tick fires, the countdown then starts at the interval); the turn is
+  // spread / count in integer BAMS (the exe divides two ints).
   tick(): DrlSegmentRock[] {
     const t = DRL_ROCK_TYPES[this.type];
     const out: DrlSegmentRock[] = [];
     if (this.done) return out;
-    if (++this.timer >= t.interval) {
-      this.timer = 0;
+    if (--this.timer < 1) {
+      this.timer = t.interval;
       const a = (this.dir + this.angle) * BAMS;
       // ASSUMED: the "speed x 1.5" the emitter passes is the rolling speed.
       out.push(new DrlSegmentRock(this.origin[0], this.origin[1], this.origin[2], Math.sin(a), Math.cos(a), t.speed * 1.5, this.power));
-      this.angle += t.spread / t.count;
+      this.angle += Math.trunc(t.spread / t.count);
       if (++this.fired >= t.count) this.done = true;
     }
     return out;
@@ -674,83 +677,145 @@ export class DrlSting {
 // The 4 objects the ctor makes with DerolleRockProjectile_Constructor
 // _00437ba4 (the dump's name; they are the tentacles, model 4 cloned by
 // DerolleInitializeParameters_00439444), each on an attach matrix the body's
-// draw writes (+0x624 + i * 0x40). State +0x20:
-//   0 sway (enter 0x00439b6c): yaw = +-round(K * (1 + sin(phase))),
-//     phase += 0x5ef a tick;
-//   1 raise (0x00439b50, 0x004393a8 when the bite leap lands): pitch +0x120
-//     -> 0x4000 at 0x280 a tick;
-//   2 aim (0x00439b2c, DerolleSetStateAndTarget_004393b0): yaw -> 0 at 0x80;
-//   3 reach (0x00439890): the length grows 8.0 a tick to the target's xz
-//     distance; the grab (DerolleInitializeStats_00434108) is try_hit with
-//     mult 1.0 and attack row 15 around the target point (radius 8.0,
-//     0x009a4738), SE 0x32e; held `frames`, then back 8.0 a tick under 20;
-//   4 home (0x00439878): yaw -> 0x008fd70c[i] at 0x80 a tick;
-//   5 lower: +0x120 -> 0 at 0x280, then 0.
+// draw writes (+0x624 + i * 0x40). Update 0x00437ef0: the wanted state is
+// +0x20 and the current one +0x1c; when they differ the ENTRY of the wanted
+// state runs first (0x00439b6c / 0x00439b50 / 0x00439b2c / 0x00439890 /
+// 0x00439878), then its body runs in the same tick. Yaw +0x11c and lift
+// +0x120 are plain registers (BAMS).
+//   0 sway: entry yaw = lift = 0; body yaw = sign * round(K * (1 + sin(phase)))
+//     with phase (+0x128) += 0x5ef a tick, K = round(DAT_00a441d4) = 1365
+//     (0x0043942e writes 0x44aaaaab), sign - for even index, + for odd.
+//   1 raise (0x004393a8 when the bite leap lands): entry yaw = home[i], lift 0;
+//     body lift -> 0x4000 at 0x280 a tick.
+//   2 aim (0x004393b0 sets the target, hold and state): entry yaw = home[i],
+//     lift 0x4000; body yaw -> 0 at 0x80, then state 3.
+//   3 reach: entry yaw 0, lift 0, length 20, sub 0. Sub 0 (extend) lasts 9
+//     ticks (+0x150 eases 1.0 -> 0.1, 0.1 per tick, 0x00437ef0 at sub 0).
+//     Sub 1: yaw aims at the target, lift -> DAT_008fd6f0[i] at 0x100, the
+//     length grows 8.0 a tick; when reach < length + 8 the length is the
+//     reach and the grab is made (FUN_00432a30, the target point), sub 2.
+//     Sub 2 holds `frames` ticks (+0x154, 1..599 else 120): the hold ends on
+//     the tick after the count passes the frames. Sub 3: lift -> 0 at 0x100,
+//     the length drops 8.0 a tick; below 20 + 8 it is 20 and the state is 4.
+//   4 home: entry yaw 0, lift 0x4000; body yaw -> DAT_008fd70c[i] at 0x80.
+//   5 lower: entry yaw 0, lift 0x4000 (0x00439878); body lift -> 0 at 0x280,
+//     then state 0.
 export const DRL_TENTACLE = {
   swayStep: 0x5ef,
-  // ASSUMED: K comes from the model asset at run time; this amplitude is a guess.
-  swayAmp: 0x400,
+  // round(DAT_00a441d4), DAT_00a441d4 = 4096 / 3 (0x0043942e).
+  swayAmp: 1365,
   raise: 0x280,
   aim: 0x80,
   reachStep: 8,
   rest: 20,
+  extendTicks: 9,
   grabRadius: 8,
-  pitch: [4096, -4096, 6144, -6144],
-  home: [-2048, 2048, -4864, 4864], // 0x008fd70c = JP PTR_DAT_008fb6ec
+  pitch: [4096, -4096, 6144, -6144], // DAT_008fd6f0 (exe ints)
+  home: [-2048, 2048, -4864, 4864], // DAT_008fd70c (exe ints)
   pitchStep: 0x100,
 } as const;
 
 export class DrlTentacle {
+  // +0x20 (wanted) and +0x1c (current) state.
   state: 0 | 1 | 2 | 3 | 4 | 5 = 0;
-  yaw = 0; // BAMS, relative to the attach matrix
-  pitch = 0; // BAMS
-  lift = 0; // +0x120, BAMS
-  length: number = DRL_TENTACLE.rest;
+  private cur: 0 | 1 | 2 | 3 | 4 | 5 = 0;
+  yaw = 0; // +0x11c, BAMS, relative to the attach matrix
+  lift = 0; // +0x120, BAMS (the render pitches the tentacle by -lift)
+  length: number = DRL_TENTACLE.rest; // +0x138
   target: Vec3 | null = null;
-  private phase = 0;
-  private hold = 0;
-  private grabbed = false;
-  private retracting = false;
+  private sub = 0; // +0x24 of state 3
+  private cnt = 0; // +0x14c
+  private extend = 0; // the sub 0 ticks
+  private hold = 0; // +0x154
+  private phase = 0; // +0x128
 
   readonly index: number;
   constructor(index: number) {
     this.index = index;
   }
 
-  raise(): void {
-    if (this.state === 0) this.state = 1;
+  // The current state (+0x1c): the wall waits for every tentacle at 4
+  // (FUN_00439414).
+  get current(): number {
+    return this.cur;
   }
 
-  // DerolleSetStateAndTarget_004393b0: frames outside 1..599 become 120.
+  // FUN_004393a8: the wanted state becomes 1 (the bite's landing).
+  raise(): void {
+    this.state = 1;
+  }
+
+  // FUN_004393b0: frames outside 1..599 become 120.
   send(target: Vec3, frames: number): void {
     this.target = target;
     this.hold = frames >= 1 && frames <= 599 ? frames : 120;
-    this.grabbed = false;
-    this.retracting = false;
     this.state = 2;
   }
 
+  // FUN_004393f4: the wanted state becomes 5.
   lower(): void {
     this.state = 5;
   }
 
+  // ASSUMED: the death's tentacle reset (FUN_004393fc) is not traced; the
+  // port drops the tentacle to rest.
   reset(): void {
     this.state = 0;
+    this.cur = 0;
     this.lift = 0;
     this.length = DRL_TENTACLE.rest;
     this.target = null;
   }
 
-  // One tick; `attach` is where the tentacle hangs. Returns a grab when the
-  // reach got there this tick.
+  private enterState(s: number): void {
+    const T = DRL_TENTACLE;
+    const home = T.home[this.index] ?? 0;
+    switch (s) {
+      case 0:
+        this.lift = 0;
+        this.yaw = 0;
+        return;
+      case 1:
+        this.yaw = home;
+        this.lift = 0;
+        return;
+      case 2:
+        this.yaw = home;
+        this.lift = 0x4000;
+        this.sub = 0;
+        return;
+      case 3:
+        this.yaw = 0;
+        this.lift = 0;
+        this.length = T.rest;
+        this.sub = 0;
+        this.cnt = 0;
+        this.extend = 0;
+        return;
+      case 4:
+      case 5:
+        this.yaw = 0;
+        this.lift = 0x4000;
+        return;
+    }
+  }
+
+  // One tick; `attach` is where the tentacle hangs. Returns the grab point
+  // when the reach gets there this tick.
   tick(attach: Vec3): Vec3 | null {
     const T = DRL_TENTACLE;
     const toward = (v: number, goal: number, step: number) => (Math.abs(goal - v) <= step ? goal : v + Math.sign(goal - v) * step);
-    switch (this.state) {
-      case 0:
+    if (this.state !== this.cur) {
+      this.enterState(this.state);
+      this.cur = this.state;
+    }
+    switch (this.cur) {
+      case 0: {
         this.phase = (this.phase + T.swayStep) & 0xffff;
-        this.yaw = (this.index & 1 ? -1 : 1) * Math.round(T.swayAmp * (1 + Math.sin(this.phase * BAMS)));
+        const amp = Math.round(T.swayAmp * (1 + Math.sin(this.phase * BAMS)));
+        this.yaw = this.index & 1 ? amp : -amp;
         return null;
+      }
       case 1:
         this.lift = toward(this.lift, 0x4000, T.raise);
         return null;
@@ -758,34 +823,8 @@ export class DrlTentacle {
         this.yaw = toward(this.yaw, 0, T.aim);
         if (this.yaw === 0) this.state = 3;
         return null;
-      case 3: {
-        const t = this.target;
-        if (!t) {
-          this.state = 4;
-          return null;
-        }
-        this.yaw = Math.round(Math.atan2(t[0] - attach[0], t[2] - attach[2]) / BAMS + 0x8000) & 0xffff;
-        this.pitch = toward(this.pitch, T.pitch[this.index] ?? 0, T.pitchStep);
-        const reach = Math.hypot(t[0] - attach[0], t[2] - attach[2]);
-        if (this.retracting) {
-          this.length -= T.reachStep;
-          if (this.length < T.rest) {
-            this.length = T.rest;
-            this.state = 4;
-          }
-          return null;
-        }
-        if (!this.grabbed) {
-          this.length = Math.min(this.length + T.reachStep, reach);
-          if (this.length >= reach) {
-            this.grabbed = true;
-            return t;
-          }
-          return null;
-        }
-        if (--this.hold <= 0) this.retracting = true;
-        return null;
-      }
+      case 3:
+        return this.reach(attach);
       case 4: {
         const home = T.home[this.index] ?? 0;
         const y = ((this.yaw + 0x8000) & 0xffff) - 0x8000;
@@ -794,7 +833,56 @@ export class DrlTentacle {
       }
       case 5:
         this.lift = toward(this.lift, 0, T.raise);
-        if (this.lift === 0) this.reset();
+        if (this.lift === 0) this.state = 0;
+        return null;
+    }
+  }
+
+  // State 3 (0x00437ef0, the `iVar12 == 3` branch).
+  private reach(attach: Vec3): Vec3 | null {
+    const T = DRL_TENTACLE;
+    const toward = (v: number, goal: number, step: number) => (Math.abs(goal - v) <= step ? goal : v + Math.sign(goal - v) * step);
+    const t = this.target;
+    if (!t) {
+      // ASSUMED: the port has no vector for a missing target; it homes.
+      this.state = 4;
+      return null;
+    }
+    // Yaw from the target (0x00437ef0: atan2 * 0x8000 / pi, truncated, + 0x8000).
+    this.yaw = Math.trunc(Math.atan2(t[0] - attach[0], t[2] - attach[2]) / BAMS) + 0x8000;
+    const reach = Math.hypot(t[0] - attach[0], t[2] - attach[2]);
+    switch (this.sub) {
+      case 0:
+        if (++this.extend >= T.extendTicks) {
+          this.sub = 1;
+          this.cnt = 0;
+        }
+        return null;
+      case 1: {
+        this.lift = toward(this.lift, T.pitch[this.index] ?? 0, T.pitchStep);
+        if (reach < this.length + T.reachStep) {
+          this.length = reach;
+          this.sub = 2;
+          this.cnt = 0;
+          return t;
+        }
+        this.length += T.reachStep;
+        return null;
+      }
+      case 2: {
+        const n = this.cnt + 1;
+        if (this.hold < n) {
+          this.cnt = 0;
+          this.sub = 3;
+        } else this.cnt = n;
+        return null;
+      }
+      default:
+        this.lift = toward(this.lift, 0, T.pitchStep);
+        if (this.length - T.reachStep < T.rest) {
+          this.length = T.rest;
+          this.state = 4;
+        } else this.length -= T.reachStep;
         return null;
     }
   }
@@ -1430,8 +1518,8 @@ export class DeRolLeAi extends BrainBase {
       case S.bite2:
       case S.sink0:
       case S.sink2:
+        // Phase 5 (0x0042d304 / 0x0042e348) only clears flag 4: the roll stays.
         this.flags &= ~4;
-        this.roll = 0;
         return;
       case S.wall0:
       case S.wall2:
@@ -1769,6 +1857,11 @@ export class DeRolLeAi extends BrainBase {
   // State 1 (ProcessDerolleCeilingRockAttack 0x00431c6c): the entrance.
   private tickEnter(): void {
     this.animate();
+    // 0x004318ac phase 0 (after the animation step): while the flag 4 is clear
+    // the speed (+0xc8) eases -0.03 a tick (DAT_008fce34) down to 0.6
+    // (DAT_008fce28), then sits at 0.6.
+    if (0.6000000238418579 <= -0.029999999329447746 + this.speed) this.speed += -0.029999999329447746;
+    else this.speed = 0.6000000238418579;
     if (this.sub === 0) {
       // 55 ticks (0x36), then (0, 7, -190) and the enter motion runs on.
       if (++this.s3 > 0x36) {
@@ -2088,7 +2181,8 @@ export class DeRolLeAi extends BrainBase {
     const f = this.mframe;
     const d = this.v704;
     if (this.sub === 0) {
-      if (++this.s2 > 11) {
+      // 0x0042d304 phase 0: the counter [0x1bb] goes up to 10 and the 11th tick moves on.
+      if (++this.s2 >= 11) {
         this.sub = 1;
         this.v704 = this.corner === 0 ? -1 : 1;
         this.setSlot(this.corner === 0 ? 7 : 8);
@@ -2150,7 +2244,11 @@ export class DeRolLeAi extends BrainBase {
         this.s2 = 0;
       }
     } else if (this.sub === 1) {
-      if (this.s2++ % this.interval === 0) {
+      // 0x0042dd68 sub 1: the countdown [0x1bb] reaches the interval [0x1bd]
+      // (180, or MovementData[15] iparam 3 in Ultimate) and the tentacle [0x1bc]
+      // is sent; the fourth send ends the sub.
+      if (++this.s2 >= this.interval) {
+        this.s2 = 0;
         const k = this.s3++;
         this.tentacles[k]?.send(this.reachPoint(targets), this.delay);
         if (this.s3 >= 4) {
@@ -2159,13 +2257,16 @@ export class DeRolLeAi extends BrainBase {
         }
       }
     } else if (this.sub === 2) {
-      if (this.tentacles.every((t) => t.state === 4) || ++this.s2 > 600) this.sub = 3;
+      // FUN_00439414: every tentacle at state 4 (its current state), or 600 ticks.
+      if (this.tentacles.every((t) => t.current === 4) || ++this.s2 > 600) this.sub = 3;
     }
   }
 
+  // 0x0042dd68 sub 1 target: a player's own position (+0x38..+0x40 of the
+  // entity, its feet is AiTarget.y, ASSUMED the same), or a random point.
   private reachPoint(targets: readonly AiTarget[]): Vec3 {
     const t = targets.find((p) => p.clientId === this.targetId && !p.dead);
-    if (t) return [t.x, this.opts.ground?.(t.x, t.z) ?? 0, t.z];
+    if (t) return [t.x, t.y ?? this.opts.ground?.(t.x, t.z) ?? 0, t.z];
     const d = this.rng() * 120;
     const a = this.rng() * TWO_PI;
     const x = d * Math.sin(a);

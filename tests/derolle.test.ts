@@ -16,6 +16,7 @@ import {
   DrlSegmentRock,
   DRL_STING,
   DRL_TENTACLE,
+  DrlTentacle,
   bigJumpArcSpeeds,
   bigJumpLaunchSpeed,
   DRL_CORNERS,
@@ -28,6 +29,7 @@ import {
   drlVariant,
   type DeRolLeOptions,
   type DrlEvent,
+  type Vec3,
 } from '../client/src/combat/derolle.ts';
 import { radarConcealed } from '../client/src/render/combat.ts';
 import {
@@ -882,6 +884,88 @@ for (const ultimate of [false, true]) {
     { count: 5, interval: 1, spread: 0x2000, speed: 5.0 },
     { count: 5, interval: 1, spread: 0x4000, speed: 5.0 },
   ]), 'segment rock types read from 0x008fd678');
+}
+
+// 25. Re-read 2026-10-31 (2) against the exe: the tentacles' sway, raise,
+//     aim, reach (extend, grab, hold, retract) and entries (0x00437ef0 and the
+//     entries 0x00439b6c / 0x00439b50 / 0x00439b2c / 0x00439890 / 0x00439878),
+//     the bite's windup count (0x0042d304 phase 0), the wall's first send
+//     (0x0042dd68 sub 1), the rock emitter's countdown and turn (0x004376d8),
+//     the entrance's speed ramp (0x004318ac phase 0).
+{
+  const att: Vec3 = [0, 0, 0];
+  // Sway: the phase steps 0x5ef, the yaw is -round(1365 (1 + sin)) for an even
+  // index (DAT_00a441d4 = 4096 / 3) and + for an odd one.
+  const s0 = new DrlTentacle(0);
+  const s1 = new DrlTentacle(1);
+  s0.tick(att);
+  s1.tick(att);
+  const swayAmp = Math.round(1365 * (1 + Math.sin(0x5ef * (Math.PI * 2 / 0x10000))));
+  eq(s0.yaw, -swayAmp, 'tentacle 0 sways to the negative side (0x00437ef0 state 0)');
+  eq(s1.yaw, swayAmp, 'tentacle 1 sways to the positive side');
+  // Raise: the entry sets the home yaw (DAT_008fd70c[0] = -2048) and lift 0; the
+  // body lifts 0x280 a tick to 0x4000.
+  const r = new DrlTentacle(0);
+  r.raise();
+  r.tick(att);
+  eq(r.yaw, -2048, 'raise entry: yaw is the home yaw (0x00439b50)');
+  eq(r.lift, 0x280, 'raise: lift 0x280 on the first tick');
+  for (let i = 0; i < 100; i++) r.tick(att);
+  eq(r.lift, 0x4000, 'raise: lift stops at 0x4000');
+  // Reach: the target at 100 along +x gives yaw atan2 * 0x8000 / pi + 0x8000
+  // (truncated) = 49152. The extend is 9 ticks, then the reach steps 8 a tick
+  // and grabs when reach < length + 8: 10 reach ticks, so 19 ticks after the
+  // first state 3 tick. The hold ends on the 121st tick after the grab and the
+  // retract's first step is the 122nd.
+  const g = new DrlTentacle(2);
+  g.send([100, 0, 0], 120);
+  let first = -1;
+  let grab = -1;
+  let yawAtReach = 0;
+  const lengths: number[] = [];
+  for (let i = 1; i <= 500; i++) {
+    const out = g.tick(att);
+    if (g.current === 3 && first < 0) {
+      first = i;
+      yawAtReach = g.yaw;
+    }
+    if (out && grab < 0) grab = i;
+    if (grab > 0 && i > grab) lengths.push(g.length);
+  }
+  check(first > 0 && grab > 0, 'reach: a state 3 tick and a grab happen');
+  eq(grab - first, 19, 'reach: the grab is 19 ticks after the first reach tick (9 extend + 10 steps)');
+  eq(lengths[120], 100, 'hold: the length stays at the reach for 120 ticks after the grab');
+  eq(lengths[121], 92, 'retract: the first 8.0 step is the 122nd tick after the grab');
+  eq(yawAtReach, 49152, 'aim: yaw = trunc(atan2(100, 0) * 0x8000 / pi) + 0x8000');
+  // Bite: the forward slot runs 10 ticks of the windup and the 11th starts the
+  // r_bite slot (7 for corner 0).
+  const b = brain();
+  const bt = player(1, 0, 60);
+  b.setState(DRL_STATE.bite0, true, [bt]);
+  run(b, [bt], 10);
+  eq(b.slotIndex, 1, 'bite: 10 windup ticks stay in the forward slot');
+  run(b, [bt], 1);
+  eq(b.slotIndex, 7, 'bite: the 11th windup tick starts r_bite (0x0042d304 sub 0)');
+  // Wall: 41 ticks of sub 0, then the first send is the 180th tick of sub 1.
+  const w = brain();
+  const wt = player(1, 0, 60);
+  w.setState(DRL_STATE.wall0, true, [wt]);
+  run(w, [wt], 41 + 179);
+  check(w.tentacles.every((tt) => tt.state === 0), 'wall: no tentacle is sent before the 180th tick of sub 1');
+  run(w, [wt], 1);
+  eq(w.tentacles[0].state, 2, 'wall: tentacle 0 is sent on the 180th tick of sub 1 (0x0042dd68)');
+  // Rock emitter: type 0 (count 3, interval 1) fires on each of its first
+  // three ticks, then is done.
+  const em = new DrlRockEmitter([0, 0, 0], 0, 0, 10);
+  const fired = [em.tick(), em.tick(), em.tick(), em.tick()].map((x) => x.length);
+  eq(fired.join(','), '1,1,1,0', 'segment rock emitter: one rock a tick for count 3, then done');
+  eq(em.done, true, 'segment rock emitter: done after its count');
+  // Entrance: the speed eases 0.03 a tick from 0.8 to 0.6, then sits there.
+  const en = brain();
+  run(en, [player(1, 0, 0)], 1);
+  check(near(en.speed, 0.77, 1e-5), 'entrance: speed 0.8 - 0.03 after the first tick (0x004318ac phase 0)');
+  run(en, [player(1, 0, 0)], 6);
+  check(near(en.speed, 0.6, 1e-5), 'entrance: speed reaches 0.6 and stops there');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
