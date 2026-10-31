@@ -38,6 +38,7 @@ import {
   TRAP_VISION_FLAG,
   trapSe,
   trapVisionSeen,
+  zondeTrapPower,
   withinViewDistance,
   type TrapEvent,
   type TrapPlayer,
@@ -108,6 +109,29 @@ const run = (t: PillarTrap, n: number, players: TrapPlayer[], self = 0, area = 6
   const nor = new PillarTrap({ type: TRAP_TECH, x: 0, z: 0, params: [0, 0, 40, 0, 0x100, 0], difficulty: 0 });
   check(nor.level === 0x0e && nor.tech === 'foie' && nor.switchFlag === -1, 'other difficulties clamp at 14');
   check(trapSe(3) === 0x456 && trapSe(0x15) === 0x4b5 && trapSe(1) === null, 'area SE table');
+  // The 02R's cast (ProcessEnemyAttackState_0063b930): index 2 is the Gibarta object (unknown_create_sorc_tech),
+  // the origin is the trap's point lifted by the two rises, the aim the target's point (feet + 20), the heading the
+  // BAMS angle of origin -> aim (atan2(x, z) = pi/2 here, BAMS 16384).
+  const g = new PillarTrap({ type: TRAP_TECH, x: 0, y: 100, z: 0, params: [0, 0, 0, 0, 0, 2], difficulty: 0 });
+  check(g.tech === 'gibarta', `param6 2 = ${g.tech} (exe index 2: unknown_create_sorc_tech, the Gibarta object)`);
+  const gev = run(g, 40, [{ clientId: 0, x: 10, y: 100, z: 0, radius: 5 }], 0, 8, () => true).find((e) => e.kind === 'tech');
+  check(!!gev && gev.kind === 'tech' && gev.tech === 'gibarta' && gev.clientId === 0, 'the Gibarta fires at the player');
+  if (gev && gev.kind === 'tech') {
+    check(gev.origin.x === 0 && gev.origin.z === 0 && Math.abs(gev.origin.y - (100 + RISE_1 + RISE_2)) < 1e-4, `origin is (0, 100 + rises, 0): ${JSON.stringify(gev.origin)}`);
+    check(gev.aim.x === 10 && gev.aim.y === 120 && gev.aim.z === 0, `aim is the target's point (feet + 20): ${JSON.stringify(gev.aim)}`);
+    check(Math.abs(gev.heading - Math.PI / 2) < 1e-9, `heading atan2(10, 0) = pi/2 (${gev.heading.toFixed(4)})`);
+    check(gev.ground === 100 && gev.power === 0, 'ground is the trap height; no Zonde power for an object');
+  }
+  // The Zonde (index 1): the power is (level * 20 + 240) times 1, 2, 3, 6 by difficulty (FUN_0063da1c).
+  check(zondeTrapPower(9, 3) === 2520 && zondeTrapPower(0, 0) === 240 && zondeTrapPower(2, 1) === 560, 'Zonde power (level * 20 + 240) * 1 / 2 / 3 / 6');
+  const z = new PillarTrap({ type: TRAP_TECH, x: 0, y: 0, z: 0, params: [0, 0, 2, 0, 0, 1], difficulty: 3 });
+  check(z.tech === 'zonde' && z.level === 9, `param6 1 = ${z.tech}, level ${z.level}`);
+  const zev = run(z, 40, [{ clientId: 0, x: 0, z: 0, radius: 5 }], 0, 8, () => true).find((e) => e.kind === 'tech');
+  check(!!zev && zev.kind === 'tech' && zev.power === 2520, `the Zonde's event carries power 2520 (${zev && zev.kind === 'tech' ? zev.power : 'none'})`);
+  // Heading wraps: a target behind the trap (negative x, negative z) is in the BAMS range 0..0xffff.
+  const back = new PillarTrap({ type: TRAP_TECH, x: 0, y: 0, z: 0, params: [0, 0, 0, 0, 0, 0], difficulty: 0 });
+  const bev = run(back, 40, [{ clientId: 0, x: -8, z: -8, radius: 5 }], 0, 8, () => true).find((e) => e.kind === 'tech');
+  check(!!bev && bev.kind === 'tech' && Math.abs(bev.heading - ((Math.atan2(-8, -8) + 2 * Math.PI) % (2 * Math.PI))) < 1e-3, 'heading to a target behind: atan2(-8, -8) in BAMS');
 }
 
 // 3. Seal door.

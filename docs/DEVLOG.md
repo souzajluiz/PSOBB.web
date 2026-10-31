@@ -24079,3 +24079,32 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 - The sand's g [0xa9b0a4] and the snap to the ground at the launch.
 - The area's default path (0x0051fc9c +0x34) taken as the 100 scan.
 - Not ported: the models and draw of the three objects, SEs 0x6f7 / 0x6f9 / 0x6fa / 0x6fc / 0x6fd / 0x6f0, the camera quakes, and the effect 0x6f9.
+
+## 2026-10-31: 02R pillar casts: the objects, the Zonde's group and factor, index 2 is Gibarta (corrects 2026-10-18)
+
+**What changed:** TOTrapAncient02R's cast (ProcessEnemyAttackState_0063b930, sub-state 2) now makes the technique objects the exe creates instead of landing the hit at once. Foie, Gibarta and Gifoie fly from the trap's point (the origin lifted by the two rises) and hit on arrival; Megid flies as a MegidOrb aimed at the target; the Zonde still hits at once, through entity_hit_by_tech group 3 (not the fixed group 0). Index 2 was labelled Grants; the exe calls Gibarta there. Code: `render/traps.ts` (the event carries origin, aim, heading, ground and the Zonde power), `combat/techfire.ts` (`trapFire`, `TrapFireShot`), `render/combat.ts` (`trapEvent` / `trapTech`, `trapTechHitsPlayer`, shots with no owner), `render/gamefield.ts` (the trap's and the players' heights).
+
+**Details** (Ephinea `PsoBB.exe`, the named reference dump for the source, the bytes checked with `tools/exedata.py`):
+- **Dispatch** (switch on +0x364 = param6 clamped 0..4, ctor 0x0063b5b4): 0 `create_directed_foie_object` (0x006e3408, object 0x134); 1 Zonde: `entity_hit_by_tech` on the target with group 3 (`zonde_gizonde_razonde`), the sixth argument `~foie` (-1, no tech), power from the trap's vtable +0x164 (FUN_0063da1c) called with level * 20 + 240 (0x00934144 = 20.0, 0x00934148 = 240.0), times `DAT_00a9cd68` picked from {1, 2, 3, 6} (Normal to Ultimate); 2 `unknown_create_sorc_tech` (0x006e38e0, object 0x178) = the Gibarta with a heading, not Grants; 3 `create_megid` (0x006e9e14, object 0x17c) aimed at the target; 4 `create_gifoie` (0x006e46ac, object 0x13c) at the origin.
+- **Origin** (DAT_00aab4f0..f8): x and z of the trap; y = the trap's y (+0x3c) + rise1 (+0x34c) + rise2 (+0x350).
+- **Target point**: the target's weapon position (+0xc0..+0xc2), which is passed as the aim of Foie and Megid. The exe's value is not decoded; the port uses the target's feet + 20 (ASSUMED, the same guess as `WEAPON_HEIGHT`).
+- **Heading** (Gibarta): direction = aim - origin, normalised (below 1e-5 the exe uses (0, 0, 1) turned by the trap's heading, ASSUMED 0 here); heading = `ROUND(atan2(x, z) * 65536 / 2pi)` BAMS (0x00934108 / 0x00934100 = 65536 / 2pi).
+- **Level** (+0x368, `FUN_0063bf48`): round(1 + 2 * difficulty + param3), clamped to 0..14 (0..29 in Ultimate). The port already did this.
+- **Hits**: no packet. The 02R's sub-state 2 sends nothing (the 6x2C is the 02's branch only); the objects and the Zonde call `entity_hit_by_tech` on the target. Object power is the object's own (`TechniqueObject_ApplyPowerAndSpeedStats_006e31e8`), group 1 for Foie and Gifoie, 2 for Gibarta, the Megid kill roll for Megid (`enemytechplayer.ts`).
+- **Visuals**: the Zonde plays `create_particle_effect` 0xb9 and 0xba at the point, a Gizonde visual (0x260 bytes, not ported) and SE 0x8f. The area SE (0x456 / 0x46b / 0x489 / 0x4b5) is the trap's own sound on the spring, as before.
+
+**Compared with the port before this entry:** the 02R's technique was applied at once for every index with the group-0 formula (`trunc(power * 0.2)`, no resist), Zonde's power had no difficulty factor, index 2 was Grants, and no object was drawn. The 2026-10-18 entry's "42 damage from Foie" was that formula, not the exe's (suspect, as the earlier entries warned).
+
+**Checks.**
+- `node tests/traps.test.ts`: traps: all checks passed (new: index 2 is Gibarta, origin (0, 100 + rises, 0), aim (10, 120, 0), heading pi/2, the Zonde's power 2520 at level 9 and difficulty 3, a heading behind the trap in BAMS).
+- `node tests/techniques.test.ts`: all checks passed (new: `trapFire` makes an absolute Foie (group 1), Gibarta (group 2) and Gifoie object; Megid is not a FireObject).
+- Also run, all passing: `tests/techfire.test.ts`, `tests/techlightning.test.ts`, `tests/tech48.test.ts`, `tests/enemytechplayer.test.ts`, `tests/battletraps.test.ts`, `tests/derolle.test.ts`, `tests/enemyfsmruins.test.ts`, `tests/enemyfsmep2c.test.ts`, `tests/enemyfsmcaves.test.ts`, `tests/enemystate.test.ts`, `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` (5860 checks, 0 failures).
+- client `tsc --noEmit`: clean.
+- Not run in Chrome: the 02R is placed in free-play only on VR Temple, Jungle and Seabed (DEVLOG 2026-10-18), not the Ruins or Caves, and reaching one needs a live session, so the e2e was skipped.
+
+**Assumed / open.**
+- The target's weapon point (feet + 20) and the Megid aim's height.
+- The trap's heading (0) for the zero-length direction; the trap's MST (0) and entity id (0x1000) in the hit; no Episode 2 room gate for the trap's hits.
+- The room check of ProcessEnemyAttackState (the target's +0x3f0 against DAT_00aafca0, and the trap's and target's +0x2e / [10] fields) is not ported; the port fires on range alone.
+- The Zonde's Gizonde visual (GizondeVisualEffect, 0x260 bytes) is not ported; only particles 0xb9 / 0xba and SE 0x8f play.
+- Not decoded: the exe's weapon_position (+0xc0) per player; the body of EnemyGetNearestTargetInRange (`FUN_007714cc`) is not in the dump, so the nearest-player rule is taken from the port's existing targeting.

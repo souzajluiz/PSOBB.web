@@ -1164,3 +1164,20 @@ export function enemyFire(r: FireShotOptions): FireShot | null {
   const effect: ShotEffect = { kind: 'tech', power, group: techGroup(r.tech), ...(r.knockback ? { knockback: r.knockback } : {}) };
   return new FireShot(fire, effect);
 }
+
+/** A pillar trap's (TOTrapAncient02R) object: the same constructors as an enemy's cast, but the owner
+ * is a map object, so y is a world height (absolute) and not a height above the launch ground. */
+export class TrapFireShot extends FireShot {
+  override readonly absolute = true;
+}
+
+/** The object a 02R casts for the Foie family (ProcessEnemyAttackState_0063b930's switch):
+ * create_directed_foie_object (0), unknown_create_sorc_tech = Gibarta (2), create_gifoie (4).
+ * Not here: the Zonde (1) is a direct entity_hit_by_tech (render/combat.ts), the Megid (3) is a
+ * MegidOrb (combat/techlightning.ts), which makeFireObject does not build. */
+export function trapFire(r: FireShotOptions): TrapFireShot | null {
+  const fire = makeFireObject(r);
+  if (!fire) return null;
+  const effect: ShotEffect = { kind: 'tech', power: r.power ?? fire.power, group: techGroup(r.tech) };
+  return new TrapFireShot(fire, effect);
+}

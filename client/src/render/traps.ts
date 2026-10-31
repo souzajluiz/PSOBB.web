@@ -52,11 +52,30 @@ export const RISE_1 = 7; // 0x00934138
 export const RISE_2 = Math.fround(10.15); // 0x0093413c
 export const SPIN_PER_FRAME = 0x888;
 
-// The techniques the 02R casts (+0x364): create_directed_foie_object,
-// entity_hit_by_tech Zonde, unknown_create_sorc_tech (Grants), create_megid,
-// create_gifoie.
-export const TRAP_TECHS = ['foie', 'zonde', 'grants', 'megid', 'gifoie'] as const;
+// The techniques the 02R casts (+0x364, ProcessEnemyAttackState_0063b930's switch, VERIFIED):
+//   0 create_directed_foie_object (0x006e3408; a Foie object aimed at the target's weapon point)
+//   1 Zonde: entity_hit_by_tech on the target, group 3 (zonde_gizonde_razonde), no object
+//   2 unknown_create_sorc_tech (0x006e38e0 = the Gibarta object, heading variant; NOT Grants)
+//   3 create_megid (0x006e9e14; a Megid object aimed at the target's weapon point)
+//   4 create_gifoie (0x006e46ac; a Gifoie ring at the origin)
+// The Zonde's power is (level * 20 + 240) (0x00934144 / 0x00934148) times the difficulty factor
+// 1, 2, 3, 6 (vtable +0x164 = FUN_0063da1c, DAT_00a9cd68).
+export const TRAP_TECHS = ['foie', 'zonde', 'gibarta', 'megid', 'gifoie'] as const;
 export type TrapTech = (typeof TRAP_TECHS)[number];
+
+// The factor of the Zonde's power per difficulty (FUN_0063da1c: local_10[DAT_00a9cd68]).
+const ZONDE_DIFFICULTY_FACTOR = [1, 2, 3, 6] as const;
+const f32 = Math.fround;
+
+// The Zonde's power the trap's hit carries (before the target's resist): f32(f32(level * 20 + 240) * factor).
+export function zondeTrapPower(level: number, difficulty: number): number {
+  const f = ZONDE_DIFFICULTY_FACTOR[Math.min(3, Math.max(0, Math.trunc(difficulty)))];
+  return f32(f32(f32(level) * 20 + 240) * f);
+}
+
+// ASSUMED: the point of a player an object aims at is its feet + this height (the weapon point
+// of the player's +0xc0 is not decoded; combat/techfire.ts WEAPON_HEIGHT is the same guess).
+export const TARGET_POINT_HEIGHT = 20;
 
 // The area's trap SE (UpdateTreeObject_0063cbe4), by area id.
 export function trapSe(area: number): number | null {
@@ -70,6 +89,7 @@ export function trapSe(area: number): number | null {
 export interface TrapParams {
   type: number; // 0x0154 or 0x0167
   x: number;
+  y?: number; // the world height of the placed object (+0x3c); 0 when not given
   z: number;
   params: readonly number[]; // o.dat param1..6
   difficulty: number;
@@ -78,20 +98,33 @@ export interface TrapParams {
 export interface TrapPlayer {
   clientId: number;
   x: number;
+  y?: number; // the feet's world height (0 when not given)
   z: number;
   radius: number; // collision radius (player +0xa4 -> +0x0c)
+}
+
+export interface TrapVec3 {
+  x: number;
+  y: number;
+  z: number;
 }
 
 export type TrapEvent =
   | { kind: 'hold'; clientId: number; frames: number; x: number; z: number; radius2: number }
   | { kind: 'release'; clientId: number }
-  | { kind: 'tech'; clientId: number; tech: TrapTech; level: number }
+  // A 02R's technique. `origin` is the trap's point (ProcessEnemyAttackState: y = +0x3c + the two rises),
+  // `aim` the target's weapon point, `heading` the BAMS angle of origin -> aim as radians (fpatan of the
+  // XZ part, rounded to BAMS: unknown_create_sorc_tech's heading), `ground` the trap's own height.
+  // `power` is the Zonde's power (zondeTrapPower); the other techniques are objects with their own power.
+  | { kind: 'tech'; clientId: number; tech: TrapTech; level: number; origin: TrapVec3; aim: TrapVec3; heading: number; ground: number; power: number }
   | { kind: 'sound'; id: number };
 
 export class PillarTrap {
   readonly type: number;
   readonly x: number;
+  readonly y: number;
   readonly z: number;
+  readonly difficulty: number;
   readonly radius: number;
   readonly holdTime: number;
   readonly switchFlag: number; // -1 = none (02R)
@@ -109,7 +142,9 @@ export class PillarTrap {
   constructor(p: TrapParams) {
     this.type = p.type;
     this.x = p.x;
+    this.y = p.y ?? 0;
     this.z = p.z;
+    this.difficulty = p.difficulty;
     const [p1 = 0, , p3 = 0, p4 = 0, p5 = 0, p6 = 0] = p.params;
     this.radius = Math.fround(Math.fround(p1 * 0.5) + 30);
     this.holdTime = Math.max(0, Math.trunc(p4) + 30);
@@ -213,12 +248,41 @@ export class PillarTrap {
             out.push({ kind: 'hold', clientId: t.clientId, frames: this.counter, x: this.x, z: this.z, radius2: Math.fround(r * r) });
             this.held = t.clientId;
           }
-        } else out.push({ kind: 'tech', clientId: t.clientId, tech: this.tech, level: this.level });
+        } else out.push(this.techEvent(t));
         this.state = 3;
         this.sub = 2;
       } else this.target = -1;
     }
     if (this.target < 0 && this.state === 2) this.sub = 3;
+  }
+
+  // The 02R's cast at the target (ProcessEnemyAttackState_0063b930, sub-state 2). The origin is
+  // (x, y + rise1 + rise2, z) (DAT_00aab4f0..f8). The aim is the target's weapon point: the exe
+  // reads the target's +0xc0 (ASSUMED here: its feet + TARGET_POINT_HEIGHT). The direction is
+  // aim - origin normalised; below 1e-5 the exe uses (0, 0, 1) turned by the trap's heading
+  // (ASSUMED 0 here), and the heading is fpatan(x, z) of that vector, rounded to BAMS
+  // (ROUND(angle * 65536 / 2pi), the 4th argument of unknown_create_sorc_tech).
+  private techEvent(t: TrapPlayer): TrapEvent {
+    const origin = { x: this.x, y: this.y + this.rise1 + this.rise2, z: this.z };
+    const aim = { x: t.x, y: (t.y ?? 0) + TARGET_POINT_HEIGHT, z: t.z };
+    const dx = aim.x - origin.x;
+    const dy = aim.y - origin.y;
+    const dz = aim.z - origin.z;
+    const len = Math.hypot(dx, dy, dz);
+    const angle = len < 1e-5 ? 0 : Math.atan2(dx, dz);
+    const bams = Math.round((angle * 65536) / (Math.PI * 2));
+    const heading = ((bams & 0xffff) * (Math.PI * 2)) / 65536;
+    return {
+      kind: 'tech',
+      clientId: t.clientId,
+      tech: this.tech,
+      level: this.level,
+      origin,
+      aim,
+      heading,
+      ground: this.y,
+      power: this.tech === 'zonde' ? zondeTrapPower(this.level, this.difficulty) : 0,
+    };
   }
 
   private hold(players: readonly TrapPlayer[], self: number, out: TrapEvent[]): void {

@@ -157,7 +157,7 @@ import {
 import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MECHGUN_KIND, MUZZLE_PARTICLE, movedTowards, pelletAllowed, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, RIFLE_HOOK_MUZZLE_ATTACH, rifleHookMuzzle, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, slotSetType, slotVariant, VOLOPT_SET_TYPE } from '../formats/enemyboxes.ts';
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
-import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, techCastPoint, type Candidate, type TechTarget } from '../combat/techfire.ts';
+import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, trapFire, rowsAimHeight, rowsRadius, techCastPoint, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { gunBulletStart, SECOND_START_BODY_NODE, weaponPositionY, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, SUPPORT_ORIENT, SUPPORT_PARTICLE, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { STATUS_ICON_BLAST_FIRST } from '../classic/hud.ts';
@@ -787,6 +787,11 @@ export interface CombatOptions {
 // Sound of the local player's level-up (PlayDirectionalSoundBasedOnAction_00692bf4,
 // played when player +0x32c == 1, the local player).
 const SE_LEVEL_UP = 0x58d;
+
+// The log label of an enemy's shot (the enemy's index and its set type).
+function enemyLabel(e: { index: number; slot: { type: number | string } }): string {
+  return `E-${e.index.toString(16)} (${e.slot.type})`;
+}
 
 // Enemy attacker stats out of the BattleParamEntry rows, as
 // set_enemy_stats_from_battleparams (0x007621xx) builds them: ATP = stats.atp,
@@ -4856,7 +4861,8 @@ export class CombatView {
 
   // --- Caves / Mines FSM projectiles (combat/enemyshots.ts) -------------------
 
-  private shots: Array<{ shot: EnemyShot; owner: EnemyRuntime; baseY: number; mesh: THREE.Mesh | null; model: THREE.Object3D | null }> = [];
+  // owner: the casting enemy, or null for a pillar trap's object (render/traps.ts); `what` labels its log lines.
+  private shots: Array<{ shot: EnemyShot; owner: EnemyRuntime | null; what: string; baseY: number; mesh: THREE.Mesh | null; model: THREE.Object3D | null }> = [];
 
   // ASSUMED look: a coloured ball per shot (the client's own effects and
   // models are not drawn).
@@ -4865,7 +4871,7 @@ export class CombatView {
     if (original instanceof FireShot) {
       const baseY = original.absolute ? 0 : e.instance.root.position.y - e.lift;
       this.techFire.attach(original, baseY);
-      this.shots.push({ shot: original, owner: e, baseY, mesh: null, model: null });
+      this.shots.push({ shot: original, owner: e, what: enemyLabel(e), baseY, mesh: null, model: null });
       return;
     }
     // An enemy's Gizonde, Grants or Megid is the player's technique object in
@@ -4886,7 +4892,15 @@ export class CombatView {
     const baseY = shot.absolute ? 0 : e.instance.root.position.y - e.lift;
     mesh?.position.set(shot.x, baseY + shot.y, shot.z);
     if (model) this.poseShotModel(model, shot, baseY);
-    this.shots.push({ shot, owner: e, baseY, mesh, model });
+    this.shots.push({ shot, owner: e, what: enemyLabel(e), baseY, mesh, model });
+    if (shot instanceof TechShot) this.techfx?.drainShot(shot);
+  }
+
+  // A pillar trap's technique object (render/traps.ts 02R; combat/techfire.ts trapFire, or a MegidOrb). Its
+  // y is a world height (absolute); it hits the players only, so it has no owner enemy.
+  private launchTrapShot(shot: EnemyShot, what: string): void {
+    if (shot instanceof FireShot) this.techFire.attach(shot, 0);
+    this.shots.push({ shot, owner: null, what, baseY: 0, mesh: null, model: null });
     if (shot instanceof TechShot) this.techfx?.drainShot(shot);
   }
 
@@ -4958,7 +4972,7 @@ export class CombatView {
   private tickShots(targets: AiTarget[]): void {
     for (const s of this.shots) {
       // The Pofuilly Slime's arm also hits the other enemies (its branch B): they come in as 0x1000 | index.
-      const hits = s.shot.tick(targets, s.shot instanceof SlimeArm ? this.enemyTargets(s.owner) : undefined);
+      const hits = s.shot.tick(targets, s.shot instanceof SlimeArm && s.owner ? this.enemyTargets(s.owner) : undefined);
       // The Dragon's fireball particles (its table, the fireball update 0x00426790): the flight, the impact.
       if (s.shot instanceof DragonFireball) {
         for (const id of s.shot.drainParticles()) void this.fx?.spawn({ id }, new THREE.Vector3(s.shot.x, s.baseY + s.shot.y, s.shot.z));
@@ -4968,34 +4982,38 @@ export class CombatView {
           this.sePlayer?.play(id);
         }
       }
-      if (s.shot.spawned?.length) for (const n of s.shot.spawned.splice(0)) this.launchShot(s.owner, n);
+      if (s.shot.spawned?.length) for (const n of s.shot.spawned.splice(0)) if (s.owner) this.launchShot(s.owner, n);
       if (s.shot instanceof TechShot) this.techfx?.drainShot(s.shot);
       s.mesh?.position.set(s.shot.x, s.baseY + s.shot.y, s.shot.z);
       if (s.model && !s.shot.done) this.poseShotModel(s.model, s.shot, s.baseY);
       for (const hit of hits) {
         if (hit.clientId >= 0x1000) {
           // The arm's hit on an enemy: the confused-enemy path (ASSUMED: every client resolves it).
-          this.enemyHitsEnemy(s.owner, hit.clientId & 0xfff, 0, s.shot.effect.kind === 'melee' ? s.shot.effect.mult : 1);
+          if (s.owner) this.enemyHitsEnemy(s.owner, hit.clientId & 0xfff, 0, s.shot.effect.kind === 'melee' ? s.shot.effect.mult : 1);
           continue;
         }
         if (hit.clientId !== this.game.selfId) continue; // each client resolves its own player
         const fx = s.shot.effect;
-        const what = `E-${s.owner.index.toString(16)} (${s.owner.slot.type})`;
-        if (fx.kind === 'tech') {
+        const what = s.what;
+        const owner = s.owner;
+        if (fx.kind === 'tech' && !owner) {
+          // A pillar trap's object (02R): entity_hit_by_tech with the trap as the attacker (no MST, no room gate).
+          this.trapTechHitsPlayer(fx.power, fx.group ?? 0, s.shot.x, s.shot.z, what, fx.knockback ?? 0);
+        } else if (fx.kind === 'tech' && owner) {
           const wasDying = this.damage.dying;
-          this.enemyTechHitsPlayer(s.owner, fx.power, s.shot.x, s.shot.z, what, fx.knockback ?? 0, fx.group ?? 0);
+          this.enemyTechHitsPlayer(owner, fx.power, s.shot.x, s.shot.z, what, fx.knockback ?? 0, fx.group ?? 0);
           // A Nano Dragon hit that kills its target starts the power-up
           // (EnemyAI_Projectile hit 0x00580380 / breath 0x0057fed6: the victim's
           // flag 0x800 is set by the hit). ASSUMED: only the local player's
           // death is seen here.
-          if (!wasDying && this.damage.dying && s.owner.ai instanceof NanoDragonAi) s.owner.ai.powerUp();
+          if (!wasDying && this.damage.dying && owner.ai instanceof NanoDragonAi) owner.ai.powerUp();
           if (fx.status && this.rng() < fx.status.chance) this.inflictStatus(fx.status.type as StatusType, what);
-        } else if (fx.kind === 'melee') {
-          this.enemyHitsPlayer(s.owner, hit.clientId, fx.knockback, fx.mult, undefined, fx.attack);
+        } else if (fx.kind === 'melee' && owner) {
+          this.enemyHitsPlayer(owner, hit.clientId, fx.knockback, fx.mult, undefined, fx.attack);
           if (fx.status && this.rng() < fx.status.chance) this.inflictStatus(fx.status.type as StatusType, what);
-        } else if (fx.kind === 'blast') this.enemyBlastHitsPlayer(s.owner, fx.damage, s.shot.x, s.shot.z, what, fx.knockback);
-        else if (fx.kind === 'megid') this.enemyMegidHitsPlayer(fx.power, what, s.owner);
-        else this.inflictStatus(fx.status as StatusType, what);
+        } else if (fx.kind === 'blast' && owner) this.enemyBlastHitsPlayer(owner, fx.damage, s.shot.x, s.shot.z, what, fx.knockback);
+        else if (fx.kind === 'megid') this.enemyMegidHitsPlayer(fx.power, what, owner ?? undefined);
+        else if (fx.kind === 'status') this.inflictStatus(fx.status as StatusType, what);
       }
     }
     for (const s of this.shots.filter((x) => x.shot.done)) {
@@ -5107,13 +5125,14 @@ export class CombatView {
 
   // A pillar trap (render/traps.ts) acting on the local player.
   //   hold: TOTrapAncient02's 6x2C; release: its 6x2D when the hold time ends.
-  //   tech: TOTrapAncient02R's technique (ProcessEnemyAttackState_0063b930).
-  //     ASSUMED: it lands at once (the exe launches create_directed_foie_object
-  //     / create_gifoie / unknown_create_sorc_tech / create_megid projectiles,
-  //     Zonde hits directly) with the group-0 formula of enemyTechHitsPlayer
-  //     with MST 0 and power techPower(tech, level) (Zonde: level * 20 + 240,
-  //     0x00934144 / 0x00934148, through a vtable call not traced), and Megid
-  //     with megidChance(level, 0).
+  //   tech: TOTrapAncient02R's cast (ProcessEnemyAttackState_0063b930, VERIFIED through the reference
+  //     dump's named source and the exe bytes). The technique is an object (Foie 0, Gibarta 2, Gifoie 4,
+  //     Megid 3) created at the trap's point and aimed at the target's weapon point; it flies, and hits
+  //     the target on arrival with the group of its technique (trapTechHitsPlayer / enemyMegidHitsPlayer).
+  //     The Zonde (1) hits at once: entity_hit_by_tech group 3 with power zondeTrapPower.
+  //     Every client creates the objects and the Zonde's visuals; only the target's own client applies the
+  //     damage (each client runs the traps, render/gamefield.ts). ASSUMED: the trap is the attacker with
+  //     MST 0 and id 0x1000, no Episode 2 room gate; the target's weapon point is traps.ts TARGET_POINT_HEIGHT.
   trapEvent(ev: TrapEvent, trap: PillarTrap): void {
     const what = `trap 0x${trap.type.toString(16)}`;
     if (ev.kind === 'hold') this.imposeHold({ ...ev, particle: 0 }, what);
@@ -5121,19 +5140,54 @@ export class CombatView {
       if (this.holdTicks > 0) this.game.sendReleaseHold();
       this.holdTicks = 0;
       this.opts.log(`${what}: hold released`);
-    } else if (ev.kind === 'tech' && ev.clientId === this.game.selfId && !this.damage.dead) {
-      if (ev.tech === 'megid') {
-        this.enemyMegidHitsPlayer(Math.max(0, techPower(TECH.megid, ev.level)), what);
-        return;
-      }
-      const power = ev.tech === 'zonde' ? ev.level * 20 + 240 : Math.max(0, techPower(TECH[ev.tech], ev.level));
-      const damage = Math.trunc(power * Math.fround(0.2));
-      const me = this.view?.playerPositions().get(this.game.selfId);
-      const angle = me ? Math.atan2(me.x - trap.x, me.z - trap.z) : 0;
-      this.damage.hit(damage, angle, 0, 0);
-      if (damage >= 1) this.gainPb(damage, true);
-      this.opts.log(`${what}: ${ev.tech} level ${ev.level + 1} hit for ${damage}`);
+    } else if (ev.kind === 'tech') this.trapTech(ev, what);
+  }
+
+  private trapTech(ev: Extract<TrapEvent, { kind: 'tech' }>, what: string): void {
+    const from = { x: ev.origin.x, y: ev.origin.y, z: ev.origin.z };
+    if (ev.tech === 'zonde') {
+      // create_particle_effect 0xb9 and 0xba at the point, the Gizonde visual, SE 0x8f at the point.
+      const at = new THREE.Vector3(from.x, from.y, from.z);
+      this.particle({ id: 0xb9, delay: 0 }, at);
+      this.particle({ id: 0xba, delay: 0 }, at);
+      this.playSeAt(0x8f, at);
+      if (ev.clientId === this.game.selfId && !this.damage.dead) this.trapTechHitsPlayer(ev.power, ENEMY_HIT_GROUP.zonde, from.x, from.z, what, 0);
+      this.opts.log(`${what}: zonde (power ${Math.round(ev.power)}) at the point`);
+      return;
     }
+    const level = ev.level;
+    const aim = { x: ev.aim.x, y: ev.aim.y, z: ev.aim.z };
+    let shot: EnemyShot | null = null;
+    if (ev.tech === 'foie') shot = trapFire({ tech: TECH.foie, level, x: from.x, y: from.y, z: from.z, heading: ev.heading, aim, enemy: true });
+    else if (ev.tech === 'gibarta') shot = trapFire({ tech: TECH.gibarta, level, x: from.x, y: from.y, z: from.z, heading: ev.heading, enemy: true });
+    else if (ev.tech === 'gifoie') shot = trapFire({ tech: TECH.gifoie, level, x: from.x, y: from.y, z: from.z, heading: 0, enemy: true });
+    else if (ev.tech === 'megid') {
+      // create_megid: the orb flies at the aimed point (the MegidOrb of the enemy casts, its power is the Megid's own).
+      shot = new MegidOrb(from, ev.heading, level, techData(TECH.megid, level).rangeH, techPower(TECH.megid, level), PLAYER_RADIUS, ev.ground, aim, this.techWall());
+    }
+    if (!shot) return;
+    this.launchTrapShot(shot, what);
+    this.opts.log(`${what}: ${ev.tech} object (level ${level + 1}) from the point`);
+  }
+
+  // entity_hit_by_tech with a pillar trap as the attacker (the 02R's Zonde and the objects' hits). The
+  // trap has no battleparams here, so the MST term is 0 (ASSUMED); the attacker id is an enemy's (0x1000).
+  private trapTechHitsPlayer(power: number, group: number, fromX: number, fromZ: number, what: string, knockback: number): void {
+    const view = this.view;
+    if (!view || this.damage.dead) return;
+    const me = view.playerPositions().get(this.game.selfId);
+    const out = enemyTechOnPlayer({ group, power, mst: 0, bossMap: this.inBossArea(), elements: this.selfElements(), defenderState: this.damage.controlState, rng: () => this.rng() });
+    if (!out.handled) {
+      this.opts.log(`${what}: technique group ${group} not a damage group here`);
+      return;
+    }
+    const damage = out.damage;
+    const angle = me ? Math.atan2(me.x - fromX, me.z - fromZ) : 0;
+    this.damage.hit(damage, angle, knockback, 0x1000);
+    if (damage >= 1) this.gainPb(damage, true);
+    if (!this.damage.dead && out.freeze) this.inflictStatus(STATUS.freeze, what);
+    if (!this.damage.dead && out.shock) this.inflictStatus(STATUS.shock, what);
+    this.opts.log(`${what}: technique hit for ${damage}${out.freeze ? ' (freeze)' : ''}${out.shock ? ' (shock)' : ''}`);
   }
 
   // The Seabed capture trap (TOTrapSeabed01; render/traps.ts CaptureTrap): its hold is the 6x2C on
