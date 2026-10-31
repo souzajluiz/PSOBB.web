@@ -237,6 +237,27 @@ export class DrlEasing {
   }
 }
 
+// The big jump's (state 0xd, 0x00431058) two speed fits. a = DAT_00a43ca8 =
+// 6 / 0.195 (0x004342bc: the fdivs by DAT_00a43cb0 = 0.195, the 6 is the x87
+// value below it) and b = DAT_00a43cac = 0x4192aaaa (18.3333), both written by
+// InitializeDerolleGlobals (0x00434322..0x004342c8).
+const BIG_JUMP_A = 6 / 0.19499999582767487;
+const BIG_JUMP_B = 18.333333969116211;
+// 1bb == 0 (frame 10.5): the launch speed of z. 0.5 = DAT_008fce98, 300 =
+// DAT_008fce5c: ((a + b) * -v70c + (300 - z)) / ((0.5 * b + a) * b).
+export function bigJumpLaunchSpeed(z: number, v70c: number): number {
+  const a = BIG_JUMP_A;
+  const b = BIG_JUMP_B;
+  return (300 - z - (a + b) * v70c) / ((0.5 * b + a) * b);
+}
+// 1bb == 1 (frame 16): up = (40 - y) * 4 / a with y the body's own y (+0x3c, 7.0
+// at corner 3; 40 = DAT_008fce64, 4 = DAT_008fce90), down = up * 2 / a (the 2 is
+// the function's fVar1, DAT_008fce8c).
+export function bigJumpArcSpeeds(y: number): { up: number; down: number } {
+  const up = ((40 - y) * 4) / BIG_JUMP_A;
+  return { up, down: (up * 2) / BIG_JUMP_A };
+}
+
 // --- children: shots --------------------------------------------------------
 
 // Shots of this fight carry absolute heights (the body swims at its own y).
@@ -1891,15 +1912,13 @@ export class DeRolLeAi extends BrainBase {
       return;
     }
     if (this.sub !== 2) return;
-    const a = 6 / 0.195;
-    const b = 18.333;
     if (this.s2 === 0 && f >= 10.5) {
-      this.v710 = (300 - this.z - 49.102 * this.v70c) / (40.936 * b);
+      this.v710 = bigJumpLaunchSpeed(this.z, this.v70c);
       this.s2 = 1;
     } else if (this.s2 === 1 && f >= 16) {
-      // ASSUMED: the ground height there is 0.
-      this.v704 = ((40 - 0) * 4) / a;
-      this.v708 = (this.v704 * 2) / a;
+      const arc = bigJumpArcSpeeds(this.y);
+      this.v704 = arc.up;
+      this.v708 = arc.down;
       this.s2 = 2;
     } else if (this.s2 === 2 && f >= 22) {
       this.v70c *= 0.5;

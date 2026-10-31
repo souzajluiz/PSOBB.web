@@ -14,6 +14,10 @@ import {
   DrlEasing,
   DrlRockEmitter,
   DrlSegmentRock,
+  DRL_STING,
+  DRL_TENTACLE,
+  bigJumpArcSpeeds,
+  bigJumpLaunchSpeed,
   DRL_CORNERS,
   DRL_ROCK_TYPES,
   DRL_SEQUENCE_NORMAL,
@@ -840,6 +844,44 @@ for (const ultimate of [false, true]) {
   check(!tags.includes(2), 'ownMaterials: node 2 has no own material');
   eq(tags.length, 1, 'ownMaterials: the only strip is node 1\'s, so one material');
   eq((mesh.material as THREE.Material[])[tags.indexOf(1)]?.userData.node, 1, 'ownMaterials: tagged with the node');
+}
+
+// 24. Re-read 2026-10-31 against the exe (0x00431058 big jump, 0x0042e824 /
+//     0x00435f68 stings, 0x0042ce8c rocks, 0x00439890 / 0x004393b0 tentacles).
+{
+  // The big jump's arc: v704 = (40 - y) * 4 / a with y = 7 at corner 3 (the
+  // old code used 40, the ground 0): 132 / a, not 160 / a.
+  const a = 6 / 0.19499999582767487;
+  const arc = bigJumpArcSpeeds(7);
+  check(near(arc.up, 132 / a, 1e-9), 'big jump: up = (40 - 7) * 4 / a (0x00431058 1bb == 1, y = +0x3c)');
+  check(near(arc.down, (132 / a) * 2 / a, 1e-9), 'big jump: down = up * 2 / a (fVar1 = 2.0)');
+  // The launch speed of z: ((a + b) * -v70c + (300 - z)) / ((0.5 b + a) b).
+  const b = 18.333333969116211;
+  check(near(bigJumpLaunchSpeed(-250, 0), 550 / ((0.5 * b + a) * b), 1e-9), 'big jump: launch speed from corner 3 (0.5 = DAT_008fce98, the denominator is (0.5 b + a) b)');
+  check(near(bigJumpLaunchSpeed(-250, -7), (550 + (a + b) * 7) / ((0.5 * b + a) * b), 1e-9), 'big jump: launch speed with the back-step speed -7');
+  // The big jump goes up to the ceiling and lands at corner 1 (z 500).
+  const ai = brain({ leader: () => false, frames: realFrames });
+  ai.setState(DRL_STATE.bigJump, false);
+  const r = run(ai, [], 600, () => (ai as unknown as { sub: number }).sub === 3);
+  check((ai as unknown as { sub: number }).sub === 3, 'big jump: reaches its landing phase within 600 ticks');
+  check(r.shots.length === 0 && Number.isFinite(ai.z) && Number.isFinite(ai.h), 'big jump: no NaN in the arc');
+
+  // The stings: 5 floor stings at frame 18, the ring stings' 3 ; the blast is
+  // the area hit of radius 50 (0x004372d0 writes 0x42480000 = 50.0 to 0x009a48bc),
+  // group 1 (0x009a48b4 = 1), and it fires on the 31st tick of the explode
+  // phase (0x00435f68: the counter runs to > 30).
+  eq(DRL_STING.blast, 50, 'sting blast radius 50 (0x004372d0, 0x009a48bc)');
+  eq(DRL_STING.fuse, 30, 'sting fuse: the blast on the 31st tick (0x00435f68 counter > 30)');
+  // The tentacle grab: radius 8.0 written at 0x0043430e (0x009a4740 = 0x41000000),
+  // reach rest 20.0 (0x00439890: +0x138 = 0x41a00000), default hold 120 (0x004393b0).
+  eq(DRL_TENTACLE.grabRadius, 8, 'tentacle grab radius 8 (0x0043430e writes 0x009a4740)');
+  eq(DRL_TENTACLE.rest, 20, 'tentacle rest length 20 (0x00439890)');
+  // The segment rock types (0x008fd678 .. 0x008fd6a4): count, interval, spread, speed.
+  eq(JSON.stringify(DRL_ROCK_TYPES), JSON.stringify([
+    { count: 3, interval: 1, spread: 0x3000, speed: 3.5 },
+    { count: 5, interval: 1, spread: 0x2000, speed: 5.0 },
+    { count: 5, interval: 1, spread: 0x4000, speed: 5.0 },
+  ]), 'segment rock types read from 0x008fd678');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
