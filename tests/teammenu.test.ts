@@ -1437,6 +1437,98 @@ async function openMaster(h: TeamHost) {
   await tick();
   eq(sent, [], 'a failed 11EA sends no 07EA');
 }
+// --- the 07EA of promotion, demotion, dismissal and dissolution (2026-10-31) ----------------------
+{
+  // team_member_promotion_success_display 0x0079e8a8: 11EA 0x30 answer 0 -> 07EA [15:0x6f] with the row's
+  // label (the exe passes one argument); the answer 3 sends none.
+  const sent: string[] = [];
+  const h1 = host(team(PRIVILEGE.master));
+  h1.host.operationNotice = (t: string) => sent.push(t);
+  const a = await openMaster(h1.host);
+  a.m.key(k('Enter'));
+  await tick();
+  a.m.key(k('Enter')); // Rook (902), the only member below leader
+  a.m.key(k('ArrowUp'));
+  a.m.key(k('Enter'));
+  await tick();
+  eq(h1.calls.privileges, [[902, PRIVILEGE.leader]], 'promotion sends 11EA flag 0x30');
+  check(sent.length === 1 && sent[0].startsWith('T15[6f] ') && sent[0].includes('Rook'), 'promotion 07EA: [15:0x6f] with the row label');
+  check(a.m.phase.kind === 'notice' && a.m.phase.info.text === sent[0], 'and the notice shows the same text');
+
+  const sent2: string[] = [];
+  const h2 = host(team(PRIVILEGE.master), { privilege: 3 });
+  h2.host.operationNotice = (t: string) => sent2.push(t);
+  const b = await openMaster(h2.host);
+  b.m.key(k('Enter'));
+  await tick();
+  b.m.key(k('Enter'));
+  b.m.key(k('ArrowUp'));
+  b.m.key(k('Enter'));
+  await tick();
+  eq(sent2, [], 'a failed promotion (11EA 3) sends no 07EA');
+}
+{
+  // team_member_demotion_success_display 0x0079e7f8: 11EA 0 -> 07EA [15:0x74] with the row's label.
+  const sent: string[] = [];
+  const h1 = host(team(PRIVILEGE.master));
+  h1.host.operationNotice = (t: string) => sent.push(t);
+  const a = await openMaster(h1.host);
+  a.m.key(k('ArrowDown'));
+  a.m.key(k('Enter'));
+  await tick();
+  a.m.key(k('Enter')); // Lead (901), the only leader
+  a.m.key(k('ArrowUp'));
+  a.m.key(k('Enter'));
+  await tick();
+  eq(h1.calls.privileges, [[901, PRIVILEGE.member]], 'demotion sends 11EA flag 0');
+  check(sent.length === 1 && sent[0].startsWith('T15[74] ') && sent[0].includes('Lead'), 'demotion 07EA: [15:0x74] with the row label');
+  check(a.m.phase.kind === 'notice' && a.m.phase.info.text === sent[0], 'and the notice shows the same text');
+}
+{
+  // team_member_dismissal_success_display 0x0079e720: 05EA answer 0 -> 07EA [15:0x79] with the row's label and
+  // the team name (the second argument, g_pKeyTeamConfig + 0x2cc). Text with two %s to see both.
+  const sent: string[] = [];
+  const h = host(team(PRIVILEGE.master, 'Gamma'));
+  h.host.operationNotice = (t: string) => sent.push(t);
+  const dtext = { t11, t15: (i: number) => `D${i.toString(16)} %s / %s`, t12 };
+  const m = new TeamMenus(h.host, dtext);
+  m.begin(2);
+  m.key(k('ArrowDown'));
+  m.key(k('ArrowDown'));
+  m.key(k('Enter'));
+  await tick();
+  m.key(k('Enter')); // Lead (901), the first member listed
+  m.key(k('ArrowUp'));
+  m.key(k('Enter'));
+  await tick();
+  eq(h.calls.removed, [901], 'dismissal sends 05EA');
+  check(sent.length === 1 && sent[0].startsWith('D79 <') && sent[0].includes('Lead') && sent[0].endsWith(' / Gamma'), 'dismissal 07EA: [15:0x79] with the row label and the team name');
+  check(m.phase.kind === 'notice' && m.phase.info.text === sent[0], 'and the notice shows the same text');
+}
+{
+  // team_dissolution_success_display 0x0079e564: 10EA answer 0 -> 07EA [15:0x82] with the team name; a failure sends none.
+  const sent: string[] = [];
+  const { host: h, calls } = host(team(PRIVILEGE.master, 'Gamma'));
+  h.operationNotice = (t: string) => sent.push(t);
+  const a = await openMaster(h);
+  for (let i = 0; i < 4; i++) a.m.key(k('ArrowDown'));
+  a.m.key(k('Enter'));
+  a.m.key(k('ArrowUp'));
+  a.m.key(k('Enter'));
+  await tick();
+  eq(calls.disbanded, 1, 'dissolution sends 10EA');
+  eq(sent, ['T15[82] Gamma'], 'the dissolution 07EA: [15:0x82] with the team name');
+  const sent2: string[] = [];
+  const bad = host(team(PRIVILEGE.master, 'Gamma'), { disband: 1 });
+  bad.host.operationNotice = (t: string) => sent2.push(t);
+  const b = await openMaster(bad.host);
+  for (let i = 0; i < 4; i++) b.m.key(k('ArrowDown'));
+  b.m.key(k('Enter'));
+  b.m.key(k('ArrowUp'));
+  b.m.key(k('Enter'));
+  await tick();
+  eq(sent2, [], 'a failed dissolution sends no 07EA');
+}
 
 // --- Team name change (Buying Privileges row 0x1a, 2026-10-31) -------------------------------------
 {
