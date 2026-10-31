@@ -36,6 +36,9 @@ export interface WeaponReach {
   heading: number;
   maxDist: number; // horizontal + vertical range
   halfAngle: number; // radians
+  // The reticle test of the same weapon (inMeleeReach), when the caller has it: the weapon
+  // point and the ItemPMT aim. The talk (npcview nearestInReach) uses it; absent, the cone test.
+  melee?: { weapon: { x: number; y: number; z: number }; aim: MeleeAim };
 }
 
 // Whether a point is in the weapon's target reach. find_targets_for_weapons_and_techs

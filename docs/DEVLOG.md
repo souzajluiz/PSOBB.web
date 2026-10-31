@@ -23843,3 +23843,40 @@ The Ep2 watch branch fixed the same local-kill gap as the boss kill branch with 
 - Which event leaves state 0x17 in a lobby with no hit: the callers of `SetPlayerInputState_00694390` (24 call sites, dump 575340) that can run from state 0x17.
 - The writers of `field409_0x330` during the sit (state 0x18): does Alt+U stand the sitter up.
 - The meaning of `g_KeyboardSharedState[0xc..0xe]` as palette descriptor bits (the writers of `this[2]` and `this[3][2]`).
+
+## 2026-10-31: NPCs 0x118: the per-floor weapon table and the talk reach traced and ported; the walk row and the 0x33 id still open
+
+**Question.** TODO NPCs line: the 0x118 walk row, the 0x33 per-class motion id, the 0x118 per-floor weapon table, and the talk reach. This pass pins the weapon table and the talk reach from `PsoBB.exe` (dump `Psobb.exe-05112026.c` by line; VAs by objdump and `tools/exedata.py`; Ghidra for `FUN_` names), ports both, re-reads the walk row, and leaves the 0x33 id open.
+
+**1. The 0x118 weapon table (PROVEN for the table, the index and the floor).**
+- The dispatcher's state 1 and 2 weapon load (`ChallengeEntityStateDispatcher_00602c1c`, .c:463595 and .c:463708; objdump 0x00603393 and 0x0060370d) reads `*(int *)((&g_ChallengeEntityWeaponData)[g_CurrentFloor] + obj+0x3c0 * 4)`. The global is **0x009c3e58** (`exedata.py read 009c3e58 p 4`: four pointers, 0x00a038a0 + 0x100 * floor, then zero).
+- Each block is 64 dwords (one per template, `obj+0x3c0` = the set entry's param6 bits 8..13, `questNpcTemplate`). A dword V is the address of an item's data1: the dispatcher passes **V + 8** to `LoadItemAsset_005d7868` (objdump 0x006033a7). data1[0] is 0 (weapon) in all 256 entries, data1[1] is the kind, data1[2] the variant. No entry is the `-8` sentinel the dispatcher tests at .c:465091.
+- `g_CurrentFloor` is the `difficulty_level` (0 normal to 3 ultimate: the menu clamps it to 0..3, .c:753442..753467; the map load copies the difficulty, .c:773381). So the block is the difficulty, not a floor of the map.
+- The table is `QUEST_NPC_WEAPONS` in `client/src/formats/npcmodels.ts` (4 x 64 `[kind, variant]`, generated from the exe, and `questNpcWeapon(difficulty, template)`).
+- **Not traced:** the dispatcher loads the weapon only in the logged-in scene on a safe map (`is_current_map_safe`, .c:463605); the port draws it on any Episode 4 floor carrying the 0x118. ASSUMED: those are the same maps. The NPC's weapon spin and texture reuse the lobby's held-weapon path, not checked against the NPC.
+
+**2. The talk reach (PROVEN for the shape; the NPC radius is ASSUMED).**
+- The Middle key's palette path: `FUN_0068a40c` (the palette dispatch; its call to `FUN_0068c190` is at 0x0068a475) calls `FUN_0068c190`. In `FUN_0068c190`, with the player ready (`FUN_0068c0b4`), the target's vtable +0x2c is called with the player index (objdump 0x0068c31d, `calll *0x2c(%ebx)`).
+- The target: `FUN_0068c160` is true when the player's `+0x45c` object has the target flag, and `FUN_007b4d18` maps the id at `+0x45c +0x108c` to the object. So the talk takes the reticle's lock target, the same pick as the melee (`check_enemy_is_targetable`, 0x007a2b5c; DEVLOG 2026-10-25, melee reticle). The reach is `|P - W|^2 <= (box radius + horizontal + vertical)^2` on the target's box centre, with the apex, the horizontal and elevation cones, and no height window.
+- **Port:** `render/combat.ts` `middleReach` now also returns the melee aim (the same `MeleeAim` and weapon point as `weaponTargets`), `combat/weaponaim.ts` `WeaponReach.melee`, and `render/npcview.ts` `nearestInReach` tests the NPC with `inMeleeReach(..., NPC_RADIUS)` when the melee aim is there (the cone test otherwise). Net change: the NPC talk reach is the weapon's horizontal + vertical + 5, not horizontal + vertical; the 40-unit height window is gone. The floor items keep `inWeaponReach` (not traced).
+- **ASSUMED:** the NPC's box centre is its root (feet); its radius is `NPC_RADIUS` = 5 (the walk box; `SetupEnemyObject_00606bc8` pushes `0x009c3ecc` at 0x00606be5, but the file reads 0 there, so the runtime value is not read); the box's enabled bit and kind mask pass for an NPC; an NPC object is in the reticle list (not traced); and the `FUN_0068c190` branch is the Middle key's (the palette index 0 is not traced).
+
+**3. The walk row (not resolved).** The dispatcher still plays exactly one row (`Player__ApplyWeaponAnimationData` at .c:463562 and .c:463676, row 0 = the idle). No other call in the dispatcher plays a walk. The walk stays ASSUMED (the town walk).
+
+**4. The 0x33 per-class motion id (not resolved in this pass).** Not re-traced beyond DEVLOG 2026-10-25.
+
+**Port.**
+- `client/src/formats/npcmodels.ts`: `QUEST_NPC_WEAPON_TABLE_VA`, `QUEST_NPC_WEAPONS`, `questNpcWeapon`; `NpcModelContext.questWeapon` (difficulty and the ItemPMT).
+- `client/src/render/npcview.ts`: `questWeapon()` (table, `ItemPMT.getWeapon`, `HeldWeaponFiles.load`); `buildQuestNpc` builds the body with `{ weapon }` (hand node, as the lobby's markers); `nearestInReach` uses the melee reticle test.
+- `client/src/render/gameview.ts`: `showNpcs(placed, area, difficulty)` loads ItemPMT and passes the difficulty.
+- `client/src/render/combat.ts` `middleReach` and `client/src/combat/weaponaim.ts` `WeaponReach.melee`.
+- `TODO.md` NPCs line updated.
+
+**Tests.**
+- `tests/npctalkreach.test.ts` (new): table shape, exact lookups (difficulty 0 template 0 is kind 6 variant 0; difficulty 1 template 0 differs only in the variant; template 34 is kind 137 variant 3; difficulty 3 template 63 is kind 22), out-of-range nulls, and the reach boundary (NPC 37 ahead of a sword-row weapon is inside, 38 outside, 33 inside; the old cone stopped at 32; 10 behind the weapon is inside because the apex is 18 behind it, 25 behind is outside; 30 up at 20 ahead is outside the elevation cone). `node tests/npctalkreach.test.ts`: ALL PASS.
+- `node tests/npcs.test.ts`, `node tests/meleereach.test.ts`, `node tests/rangedaim.test.ts`: pass.
+- `cd client && node node_modules/typescript/bin/tsc --noEmit -p .`: clean on Node 24.
+- `client/e2e/npc-talk-reach.spec.ts` (new): a fresh account (prefix `npm`) in the Pioneer 2 party field; the reach is read from the weapon's aim (14 + 18 + 5 = 37 for the starting weapon, BAMS 4733 / 4733) and the Hunter's Guild clerk's position (action 1011). At 36.5 units the clerk is the talk target (`nearestInReach` non-null), at 37.5 he is not. Run with `PW_BASE_URL=http://127.0.0.1:5192 --trace off`: 1 passed (49 s).
+- **Not covered:** the port has no talk prompt; the check is the window hook (`classicGame.view.npcs.nearestInReach` on `combat.middleReach`), not a key press. The 0x118 weapon is not seen in the browser (no Episode 4 hub run); the table is covered by the unit test only.
+
+**Still open.** The 0x118 walk row (no walk call in the dispatcher; the player's move code is not traced for this object). The 0x33 per-class motion id. The NPC box radius and kind mask (the value at 0x009c3ecc is written at runtime). The safe-map condition of the weapon load.

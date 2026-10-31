@@ -7099,7 +7099,11 @@ export class CombatView {
     const attackType = (slot && !slot.disabled && slot.group1 === 2 && slot.group2 <= 2 ? slot.group2 : 0) as AttackType;
     const range = this.weaponRange(attackType);
     const p = me.position;
-    return { x: p.x, y: p.y, z: p.z, heading: me.angle, maxDist: range.horizontal + range.vertical, halfAngle: range.horizontalHalfAngle * BAMS_TO_RAD };
+    // The talk's test is the melee reticle (check_enemy_is_targetable, the same aim and weapon
+    // point as weaponTargets below); see npcview.ts nearestInReach.
+    const aim: MeleeAim = { heading: me.angle, horizontal: range.horizontal, vertical: range.vertical, hAngle: range.horizontalHalfAngle, vAngle: range.verticalHalfAngle };
+    const melee = { weapon: { x: p.x, y: weaponPositionY(p.y), z: p.z }, aim };
+    return { x: p.x, y: p.y, z: p.z, heading: me.angle, maxDist: range.horizontal + range.vertical, halfAngle: range.horizontalHalfAngle * BAMS_TO_RAD, melee };
   }
 
   // The enemies the weapon reaches from `from` inside its cone around the

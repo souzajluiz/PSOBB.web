@@ -638,7 +638,7 @@ export class GameView {
       const info = this.game.info!;
       const modeled = await this.enemyLayer.show(placed, { area, episode: this.episode(), difficulty: info.difficulty, event: info.event ?? 0 });
       if (this.disposed) return;
-      const npcModels = await this.showNpcs(placed, area);
+      const npcModels = await this.showNpcs(placed, area, info.difficulty);
       if (this.disposed) return;
       for (const p of npcModels) modeled.add(p);
       const s = this.enemyLayer.stats;
@@ -677,7 +677,7 @@ export class GameView {
       const info = this.game.info!;
       const modeled = await this.enemyLayer.show(placed, { area, episode: info.episode, difficulty: info.difficulty, event: info.event ?? 0 });
       if (this.disposed) return;
-      const npcModels = await this.showNpcs(placed, area);
+      const npcModels = await this.showNpcs(placed, area, info.difficulty);
       if (this.disposed) return;
       for (const p of npcModels) modeled.add(p);
       const s = this.enemyLayer.stats;
@@ -822,8 +822,10 @@ export class GameView {
   }
 
   // NPC models of the floor (render/npcview.ts); returns the entries drawn.
-  private async showNpcs(placed: ReturnType<typeof placeEntities>, area: number): Promise<Set<(typeof placed)[number]>> {
-    const done = await this.npcs.show(placed, { area, sectionId: this.game.self?.sectionId ?? 0 });
+  private async showNpcs(placed: ReturnType<typeof placeEntities>, area: number, difficulty: number): Promise<Set<(typeof placed)[number]>> {
+    // The quest NPC's weapon needs ItemPMT (its kind / variant key); loaded before the build.
+    const pmt = await this.combat.itemPmt();
+    const done = await this.npcs.show(placed, { area, sectionId: this.game.self?.sectionId ?? 0, questWeapon: { difficulty, pmt } });
     // The enemy-built NPCs (0x33, 0x45, 0x46, 0xa9) are drawn by the enemy layer; they
     // talk through the NPC layer (NpcLayer.adoptEnemyNpcs).
     const adopted: { placed: (typeof placed)[number]; root: THREE.Object3D }[] = [];
